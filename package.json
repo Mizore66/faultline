@@ -1,0 +1,29 @@
+{
+  "name": "faultline",
+  "version": "0.1.0",
+  "description": "Executable evidence for regressions introduced during Codex-assisted development.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "fl": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "dev": "tsx src/server.ts",
+    "fl": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
