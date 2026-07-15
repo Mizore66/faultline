@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
-import { canonicalJson, sha256 } from "./canonical.js";
-import { DemoAnalysisSchema, type DemoAnalysis, type RunRecord } from "./domain.js";
+import { canonicalJson, digestJson, sha256 } from "./canonical.js";
+import { DemoAnalysisSchema, MinimizationAttemptSchema, RunRecordSchema, WitnessSchema, type DemoAnalysis, type RunRecord, type Verdict } from "./domain.js";
 import { analysisDigest } from "./engine.js";
 
 const ManifestSchema = z.object({
@@ -18,6 +18,22 @@ const ManifestSchema = z.object({
   integrityScope: z.literal("complete-declared-file-set")
 });
 
+const StoredMinimizationSchema = z.object({
+  budget: z.object({ used: z.number().int().nonnegative(), max: z.number().int().positive() }),
+  attempts: z.array(MinimizationAttemptSchema),
+  candidate: z.array(z.string()),
+  sufficiency: RunRecordSchema,
+  necessity: RunRecordSchema,
+  termination: z.enum(["BIDIRECTIONALLY_VALIDATED", "NOT_EXECUTED"])
+});
+
+const StoredPreventionSchema = z.object({
+  lastGood: RunRecordSchema,
+  firstBad: RunRecordSchema,
+  repaired: RunRecordSchema,
+  verified: z.boolean()
+});
+
 export type ExternalRootStatus = "NOT_PROVIDED" | "MATCH" | "MISMATCH";
 export type BundleVerification = {
   valid: boolean;
@@ -27,6 +43,64 @@ export type BundleVerification = {
   externalRootStatus: ExternalRootStatus;
   manifest?: z.infer<typeof ManifestSchema>;
 };
+
+export type ProofBundleWriteOptions = {
+  /** Override for a controlled embedding or an isolated test root. */
+  proofRoot?: string;
+};
+
+export function defaultProofRoot(): string {
+  return resolve(".faultline", "bundles");
+}
+
+function assertNoLinksOrSpecialFiles(directory: string): void {
+  const stat = lstatSync(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`Proof bundle destination must be a real directory: ${directory}`);
+  }
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const child = join(directory, entry.name);
+    const childStat = lstatSync(child);
+    if (childStat.isSymbolicLink() || (!childStat.isDirectory() && !childStat.isFile())) {
+      throw new Error(`Proof bundle destination contains a symbolic link or special file: ${child}`);
+    }
+    if (childStat.isDirectory()) assertNoLinksOrSpecialFiles(child);
+  }
+}
+
+/**
+ * Proof bundles are replace-on-write, so their destination must stay inside
+ * FaultLine's managed evidence directory. This prevents a typo such as
+ * `--output .` from turning an evidence refresh into a repository deletion.
+ */
+export function assertSafeProofOutput(outputDirectory: string, proofRoot = defaultProofRoot()): string {
+  const output = resolve(outputDirectory);
+  const root = resolve(proofRoot);
+  const nestedPath = relative(root, output);
+  if (!nestedPath || nestedPath.startsWith("..") || isAbsolute(nestedPath)) {
+    throw new Error(`Proof bundle output must be a child directory of ${root}`);
+  }
+  const pathParts = nestedPath.split(/[\\/]+/).filter(Boolean);
+  let current = root;
+  if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
+    throw new Error(`Proof bundle root cannot be a symbolic link: ${root}`);
+  }
+  for (const part of pathParts) {
+    current = join(current, part);
+    if (!existsSync(current)) continue;
+    const stat = lstatSync(current);
+    if (stat.isSymbolicLink()) throw new Error(`Proof bundle output cannot traverse a symbolic link: ${current}`);
+    if (current === output && !stat.isDirectory()) throw new Error(`Proof bundle output must be a directory: ${output}`);
+  }
+  if (existsSync(output)) {
+    assertNoLinksOrSpecialFiles(output);
+    const existing = verifyProofBundle(output);
+    if (!existing.valid) {
+      throw new Error(`Proof bundle output can only replace a verified FaultLine bundle: ${output}`);
+    }
+  }
+  return output;
+}
 
 function safeRunFileName(run: RunRecord): string {
   return run.id.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -106,6 +180,134 @@ function validateAnalysisCoverage(analysis: DemoAnalysis, errors: string[]): voi
   }
 }
 
+function readJsonArtifact(path: string, label: string, errors: string[]): unknown | undefined {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    errors.push(`${label} JSON validation failed: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
+function sameCanonical(left: unknown, right: unknown): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+function stableExecutedRuns(records: RunRecord[], expectedStateId: string, expectedVerdict: Verdict): boolean {
+  if (records.length !== 3 || new Set(records.map((record) => record.id)).size !== records.length) return false;
+  const first = records[0]!;
+  return records.every((record) => record.executionKind === "EXECUTED"
+    && record.verdict === expectedVerdict
+    && record.stateId === expectedStateId
+    && record.witnessDigest === first.witnessDigest
+    && record.environmentDigest === first.environmentDigest);
+}
+
+function validateSemanticEvidence(analysis: DemoAnalysis, output: string, errors: string[]): void {
+  const witnessPayload = readJsonArtifact(join(output, "witness", "witness.json"), "witness artifact", errors);
+  if (witnessPayload !== undefined) {
+    try {
+      const witness = WitnessSchema.parse(witnessPayload);
+      if (!sameCanonical(witness, analysis.witness)) errors.push("witness artifact does not match analysis.witness");
+      const { digest, ...unsignedWitness } = witness;
+      if (digestJson(unsignedWitness) !== digest) errors.push("witness artifact digest is invalid");
+    } catch (error) {
+      errors.push(`witness artifact schema validation failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const minimizationPayload = readJsonArtifact(join(output, "minimization", "attempts.json"), "minimization artifact", errors);
+  if (minimizationPayload !== undefined) {
+    try {
+      const minimization = StoredMinimizationSchema.parse(minimizationPayload);
+      if (!sameCanonical(minimization, analysis.minimization)) errors.push("minimization artifact does not match analysis.minimization");
+    } catch (error) {
+      errors.push(`minimization artifact schema validation failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const preventionPayload = readJsonArtifact(join(output, "prevention", "three-state.json"), "prevention artifact", errors);
+  if (preventionPayload !== undefined) {
+    try {
+      const prevention = StoredPreventionSchema.parse(preventionPayload);
+      if (!sameCanonical(prevention, analysis.prevention)) errors.push("prevention artifact does not match analysis.prevention");
+    } catch (error) {
+      errors.push(`prevention artifact schema validation failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const catalog = new Map(analysis.runCatalog.map((record) => [record.id, record]));
+  for (const run of analysis.runCatalog) {
+    const base = join(output, "runs", safeRunFileName(run));
+    const persistedPayload = readJsonArtifact(join(base, "result.json"), `run ${run.id}`, errors);
+    if (persistedPayload !== undefined) {
+      try {
+        const persisted = RunRecordSchema.parse(persistedPayload);
+        if (!sameCanonical(persisted, run)) errors.push(`persisted run does not match catalog: ${run.id}`);
+      } catch (error) {
+        errors.push(`persisted run schema validation failed for ${run.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    try {
+      if (readFileSync(join(base, "stdout.log"), "utf8") !== run.stdout) errors.push(`stdout does not match catalog for ${run.id}`);
+      if (readFileSync(join(base, "stderr.log"), "utf8") !== run.stderr) errors.push(`stderr does not match catalog for ${run.id}`);
+    } catch (error) {
+      errors.push(`run log read failed for ${run.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  for (const transition of analysis.transitions) {
+    const boundary = transition.boundaryRunIds.map((id) => catalog.get(id)).filter((run): run is RunRecord => run !== undefined);
+    if (boundary.length !== transition.boundaryRunIds.length) continue;
+    if (new Set(transition.boundaryRunIds).size !== transition.boundaryRunIds.length) {
+      errors.push(`transition contains duplicate boundary run IDs: ${transition.beforeStateId} -> ${transition.afterStateId}`);
+    }
+    const beforeRuns = boundary.filter((run) => run.stateId === transition.beforeStateId);
+    const afterRuns = boundary.filter((run) => run.stateId === transition.afterStateId);
+    const shouldBeStable = stableExecutedRuns(beforeRuns, transition.beforeStateId, transition.beforeVerdict)
+      && stableExecutedRuns(afterRuns, transition.afterStateId, transition.afterVerdict);
+    if (transition.stable !== shouldBeStable) errors.push(`transition stability does not match executed boundary evidence: ${transition.beforeStateId} -> ${transition.afterStateId}`);
+    const expectedKind = transition.beforeVerdict === "PASS" && transition.afterVerdict === "FAIL"
+      ? "PASS_TO_FAIL"
+      : transition.beforeVerdict === "FAIL" && transition.afterVerdict === "PASS"
+        ? "FAIL_TO_PASS"
+        : undefined;
+    if (!expectedKind || transition.kind !== expectedKind) errors.push(`transition kind does not match verdicts: ${transition.beforeStateId} -> ${transition.afterStateId}`);
+    if (analysis.mode === "REPLAY" && transition.stable) errors.push("cached replay cannot certify a stable transition");
+  }
+
+  const sufficiency = catalog.get(analysis.minimization.sufficiency.id);
+  const necessity = catalog.get(analysis.minimization.necessity.id);
+  const minimizationProof = analysis.minimization.termination === "BIDIRECTIONALLY_VALIDATED";
+  if (minimizationProof) {
+    if (!sufficiency || !necessity || analysis.mode !== "RERUN"
+      || sufficiency.executionKind !== "EXECUTED" || necessity.executionKind !== "EXECUTED"
+      || sufficiency.verdict !== "FAIL" || necessity.verdict !== "PASS"
+      || sufficiency.witnessDigest !== necessity.witnessDigest
+      || sufficiency.environmentDigest !== necessity.environmentDigest
+      || analysis.minimization.candidate.length === 0) {
+      errors.push("bidirectional minimization claim is not supported by executed evidence");
+    }
+  } else if (analysis.mode === "REPLAY" && analysis.minimization.termination !== "NOT_EXECUTED") {
+    errors.push("cached replay minimization must be marked NOT_EXECUTED");
+  }
+
+  const preventionRuns = [analysis.prevention.lastGood, analysis.prevention.firstBad, analysis.prevention.repaired];
+  if (analysis.prevention.verified) {
+    const [lastGood, firstBad, repaired] = preventionRuns;
+    if (analysis.mode !== "RERUN" || preventionRuns.some((run) => run.executionKind !== "EXECUTED")
+      || lastGood!.verdict !== "PASS" || firstBad!.verdict !== "FAIL" || repaired!.verdict !== "PASS"
+      || new Set(preventionRuns.map((run) => run.witnessDigest)).size !== 1
+      || new Set(preventionRuns.map((run) => run.environmentDigest)).size !== 1) {
+      errors.push("three-state prevention claim is not supported by executed evidence");
+    }
+  }
+  if (analysis.grade.value === "A" && (!analysis.transitions.some((transition) => transition.stable && transition.kind === "PASS_TO_FAIL")
+    || !minimizationProof || !analysis.prevention.verified)) {
+    errors.push("A-grade claim is not supported by stable, minimized, and prevention evidence");
+  }
+}
+
 function stageDirectory(output: string): string {
   return `${output}.staging-${randomUUID()}`;
 }
@@ -131,8 +333,8 @@ function writeFiles(directory: string, files: Map<string, string>): void {
   }
 }
 
-export function writeProofBundle(outputDirectory: string, analysis: DemoAnalysis): { directory: string; manifestDigest: string; rootDigest: string } {
-  const output = resolve(outputDirectory);
+export function writeProofBundle(outputDirectory: string, analysis: DemoAnalysis, options: ProofBundleWriteOptions = {}): { directory: string; manifestDigest: string; rootDigest: string } {
+  const output = assertSafeProofOutput(outputDirectory, options.proofRoot);
   const files = new Map<string, string>();
   const coverageErrors: string[] = [];
   validateAnalysisCoverage(analysis, coverageErrors);
@@ -194,8 +396,12 @@ function collectFiles(directory: string, current = directory): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(current, { withFileTypes: true })) {
     const path = join(current, entry.name);
-    if (entry.isDirectory()) files.push(...collectFiles(directory, path));
-    else if (entry.isFile()) files.push(relative(directory, path).replaceAll("\\", "/"));
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) {
+      throw new Error(`bundle contains a symbolic link or special file: ${path}`);
+    }
+    if (stat.isDirectory()) files.push(...collectFiles(directory, path));
+    else files.push(relative(directory, path).replaceAll("\\", "/"));
   }
   return files;
 }
@@ -203,20 +409,28 @@ function collectFiles(directory: string, current = directory): string[] {
 export function verifyProofBundle(directory: string, expectedRoot?: string): BundleVerification {
   const output = resolve(directory);
   const errors: string[] = [];
+  let rootDigest: string | null = null;
+  let externalRootStatus: ExternalRootStatus = expectedRoot ? "MISMATCH" : "NOT_PROVIDED";
+  let manifest: z.infer<typeof ManifestSchema> | undefined;
+  try {
+    if (!existsSync(output)) {
+      return { valid: false, checkedFiles: 0, errors: ["bundle directory does not exist"], rootDigest: null, externalRootStatus };
+    }
+    assertNoLinksOrSpecialFiles(output);
   const hashesPath = join(output, "hashes.txt");
   const rootPath = join(output, "ROOT.sha256");
   const manifestPath = join(output, "manifest.json");
   const analysisPath = join(output, "analysis.json");
   if (!existsSync(hashesPath) || !existsSync(rootPath) || !existsSync(manifestPath) || !existsSync(analysisPath)) {
-    return { valid: false, checkedFiles: 0, errors: ["bundle is missing hashes.txt, ROOT.sha256, manifest.json, or analysis.json"], rootDigest: null, externalRootStatus: expectedRoot ? "MISMATCH" : "NOT_PROVIDED" };
+      return { valid: false, checkedFiles: 0, errors: ["bundle is missing hashes.txt, ROOT.sha256, manifest.json, or analysis.json"], rootDigest: null, externalRootStatus };
   }
   const hashes = readFileSync(hashesPath, "utf8");
-  const calculatedRoot = `sha256:${sha256(hashes)}`;
+    const calculatedRoot = `sha256:${sha256(hashes)}`;
+    rootDigest = calculatedRoot;
   const storedRoot = readFileSync(rootPath, "utf8").trim();
   if (storedRoot !== calculatedRoot) errors.push("ROOT.sha256 does not match hashes.txt");
-  const externalRootStatus: ExternalRootStatus = expectedRoot ? (expectedRoot === calculatedRoot ? "MATCH" : "MISMATCH") : "NOT_PROVIDED";
+    externalRootStatus = expectedRoot ? (expectedRoot === calculatedRoot ? "MATCH" : "MISMATCH") : "NOT_PROVIDED";
   if (externalRootStatus === "MISMATCH") errors.push("externally supplied bundle root does not match");
-  let manifest: z.infer<typeof ManifestSchema> | undefined;
   let analysis: DemoAnalysis | undefined;
   try {
     manifest = ManifestSchema.parse(JSON.parse(readFileSync(manifestPath, "utf8")));
@@ -246,6 +460,10 @@ export function verifyProofBundle(directory: string, expectedRoot?: string): Bun
       errors.push(`duplicate declared file: ${match.groups.file}`);
       continue;
     }
+      if (match.groups.file.includes("\\") || match.groups.file.startsWith("/") || match.groups.file.split("/").some((part) => !part || part === "." || part === "..")) {
+        errors.push(`invalid declared path: ${match.groups.file}`);
+        continue;
+      }
     declared.set(match.groups.file, match.groups.digest);
   }
   if (analysis) {
@@ -270,10 +488,17 @@ export function verifyProofBundle(directory: string, expectedRoot?: string): Bun
   for (const file of collectFiles(output)) {
     if (!expectedPhysical.has(file)) errors.push(`undeclared file exists in bundle: ${file}`);
   }
-  if (manifest) {
-    return { valid: errors.length === 0, checkedFiles: declared.size, errors, rootDigest: calculatedRoot, externalRootStatus, manifest };
+    if (analysis) validateSemanticEvidence(analysis, output, errors);
+    if (manifest) {
+      return { valid: errors.length === 0, checkedFiles: declared.size, errors, rootDigest, externalRootStatus, manifest };
+    }
+    return { valid: errors.length === 0, checkedFiles: declared.size, errors, rootDigest, externalRootStatus };
+  } catch (error) {
+    errors.push(`bundle verification failed safely: ${error instanceof Error ? error.message : String(error)}`);
+    return manifest
+      ? { valid: false, checkedFiles: 0, errors, rootDigest, externalRootStatus, manifest }
+      : { valid: false, checkedFiles: 0, errors, rootDigest, externalRootStatus };
   }
-  return { valid: errors.length === 0, checkedFiles: declared.size, errors, rootDigest: calculatedRoot, externalRootStatus };
 }
 
 export function describeBundlePath(directory: string): string {

@@ -156,7 +156,7 @@ function verdictFor(result: ReturnType<typeof spawnSync>): { verdict: Verdict; r
   return { verdict: "ERROR", reasonCode: "FIXTURE_COMPILE_ERROR" };
 }
 
-export function executeFixtureState(input: FixtureState, witness: Witness): RunRecord {
+export function executeFixtureState(input: FixtureState, witness: Witness, executionAttempt = 0): RunRecord {
   const started = Date.now();
   const runDirectory = join(tmpdir(), "faultline-sample", `${input.id}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(runDirectory, { recursive: true });
@@ -173,7 +173,7 @@ export function executeFixtureState(input: FixtureState, witness: Witness): RunR
     const stdout = result.stdout ?? "";
     const stderr = `${result.stderr ?? ""}${result.error ? `${result.error.message}\n` : ""}`;
     return {
-      id: digestJson({ state: input.id, witness: witness.digest, started, stdout, stderr }),
+      id: digestJson({ state: input.id, witness: witness.digest, executionAttempt, started, stdout, stderr }),
       stateId: input.id,
       witnessDigest: witness.digest,
       environmentDigest,

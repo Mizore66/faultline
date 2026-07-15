@@ -111,7 +111,7 @@ export const DemoAnalysisSchema = z.object({
     candidate: z.array(z.string()),
     sufficiency: RunRecordSchema,
     necessity: RunRecordSchema,
-    termination: z.literal("BIDIRECTIONALLY_VALIDATED")
+    termination: z.enum(["BIDIRECTIONALLY_VALIDATED", "NOT_EXECUTED"])
   }),
   prevention: z.object({
     lastGood: RunRecordSchema,

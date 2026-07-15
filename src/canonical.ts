@@ -15,6 +15,9 @@ function normalize(value: unknown): JsonValue {
         return result;
       }, {});
   }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw new TypeError("Value is not finite JSON: number");
+  }
   if (value === null || typeof value === "boolean" || typeof value === "number" || typeof value === "string") {
     return value;
   }

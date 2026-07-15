@@ -11,13 +11,22 @@ import {
 } from "./fixture.js";
 import type { DemoAnalysis, FixtureState, RunMode, RunRecord, Transition, Verdict } from "./domain.js";
 
-function run(mode: RunMode, state: FixtureState, witness = createFrozenWitness()): RunRecord {
-  return mode === "RERUN" ? executeFixtureState(state, witness) : replayRun(state, witness);
+function run(mode: RunMode, state: FixtureState, witness = createFrozenWitness(), executionAttempt = 0): RunRecord {
+  return mode === "RERUN" ? executeFixtureState(state, witness, executionAttempt) : replayRun(state, witness);
 }
 
 function verdictIsStable(mode: RunMode, state: FixtureState, witness = createFrozenWitness()): { stable: boolean; runs: RunRecord[] } {
-  const runs = [run(mode, state, witness), run(mode, state, witness), run(mode, state, witness)];
-  return { stable: new Set(runs.map((record) => record.verdict)).size === 1, runs };
+  if (mode === "REPLAY") return { stable: false, runs: [run(mode, state, witness)] };
+  const runs = [1, 2, 3].map((executionAttempt) => run(mode, state, witness, executionAttempt));
+  const baseline = runs[0]!;
+  const stable = new Set(runs.map((record) => record.id)).size === runs.length
+    && runs.every((record) => record.executionKind === "EXECUTED"
+      && (record.verdict === "PASS" || record.verdict === "FAIL")
+      && record.verdict === baseline.verdict
+      && record.stateId === baseline.stateId
+      && record.witnessDigest === baseline.witnessDigest
+      && record.environmentDigest === baseline.environmentDigest);
+  return { stable, runs };
 }
 
 function transitionKind(before: Verdict, after: Verdict): "PASS_TO_FAIL" | "FAIL_TO_PASS" | undefined {
@@ -80,7 +89,7 @@ function minimize(mode: RunMode, witness = createFrozenWitness()): { minimizatio
     candidate: [sourceHunk, rendererHunk],
     sufficiency: candidate,
     necessity,
-      termination: "BIDIRECTIONALLY_VALIDATED"
+      termination: mode === "RERUN" ? "BIDIRECTIONALLY_VALIDATED" : "NOT_EXECUTED"
     }
   };
 }
@@ -107,7 +116,7 @@ export function createDemoAnalysis(mode: RunMode): DemoAnalysis {
   const firstBad = run(mode, fixtureStates.firstBad, witness);
   const repaired = run(mode, fixtureStates.repaired, witness);
   const firstStableRegression = localized.transitions.find((transition) => transition.kind === "PASS_TO_FAIL" && transition.stable);
-  const verified = lastGood.verdict === "PASS" && firstBad.verdict === "FAIL" && repaired.verdict === "PASS";
+  const verified = mode === "RERUN" && lastGood.verdict === "PASS" && firstBad.verdict === "FAIL" && repaired.verdict === "PASS";
   const analysis: DemoAnalysis = {
     schemaVersion: "faultline.demo.v1",
     mode,
@@ -135,24 +144,32 @@ export function createDemoAnalysis(mode: RunMode): DemoAnalysis {
     minimization,
     prevention: { lastGood, firstBad, repaired, verified },
     grade: {
-      value: verified && firstStableRegression ? "A" : "D",
+      value: verified && firstStableRegression && minimization.termination === "BIDIRECTIONALLY_VALIDATED" ? "A" : "D",
       reasons: [
         "One approved witness digest is used for all comparable sample runs.",
         "The contribution and turn boundaries are stable across three reruns.",
         "The two-hunk candidate is validated in both counterfactual directions.",
-        "The same witness passes on last-good, fails on first-bad, and passes on the repaired state.",
+        mode === "RERUN"
+          ? "The same witness passes on last-good, fails on first-bad, and passes on the repaired state."
+          : "Cached replay is non-evidentiary and cannot establish stability, counterfactual proof, or prevention.",
         "This is a deterministic sample fixture; it demonstrates the protocol, not a claim about an external repository."
       ]
     },
     claims: [
-      { kind: "EXECUTED", statement: "The frozen witness passes before and fails after Session Cedar turn 5.", evidenceIds: [firstStableRegression?.beforeStateId ?? "", firstStableRegression?.afterStateId ?? ""] },
-      { kind: "DERIVED", statement: "Session Cedar / turn 5 is the first stable pass-to-fail transition in recorded order.", evidenceIds: firstStableRegression ? firstStableRegression.boundaryRunIds : [] },
-      { kind: "DERIVED", statement: "The two-edit candidate is sufficient on last-good and necessary to preserve the sample failure.", evidenceIds: minimization.attempts.map((attempt) => attempt.runId ?? "").filter(Boolean) },
+      mode === "RERUN"
+        ? { kind: "EXECUTED" as const, statement: "The frozen witness passes before and fails after Session Cedar turn 5.", evidenceIds: [firstStableRegression?.beforeStateId ?? "", firstStableRegression?.afterStateId ?? ""] }
+        : { kind: "UNKNOWN" as const, statement: "Cached replay does not establish an executed transition.", evidenceIds: [] },
+      mode === "RERUN"
+        ? { kind: "DERIVED" as const, statement: "Session Cedar / turn 5 is the first stable pass-to-fail transition in recorded order.", evidenceIds: firstStableRegression ? firstStableRegression.boundaryRunIds : [] }
+        : { kind: "UNKNOWN" as const, statement: "No stable boundary is certified from cached replay.", evidenceIds: [] },
+      mode === "RERUN"
+        ? { kind: "DERIVED" as const, statement: "The two-edit candidate is sufficient on last-good and necessary to preserve the sample failure.", evidenceIds: minimization.attempts.map((attempt) => attempt.runId ?? "").filter(Boolean) }
+        : { kind: "UNKNOWN" as const, statement: "Cached counterfactual results are not a proof.", evidenceIds: [] },
       { kind: "INFERRED", statement: "Settlement and display-currency invariants were mixed at the boundary.", evidenceIds: [firstBad.id] },
       { kind: "UNKNOWN", statement: "Whether an agent intended that tradeoff is not evidenced.", evidenceIds: [] }
     ],
     warning: mode === "REPLAY"
-      ? "Cached sample replay. Use Re-run all evidence to execute the reviewed built-in sample locally."
+      ? "Cached sample replay. It is non-evidentiary: use Re-run all evidence before relying on a boundary, minimization, or prevention claim."
       : "Executed built-in sample. The runner only materializes the reviewed fixture; it is not a general-purpose sandbox."
   };
   return analysis;

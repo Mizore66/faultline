@@ -8,4 +8,9 @@ describe("canonical JSON", () => {
     expect(canonicalJson(left)).toBe('{"a":{"x":"value","z":true},"b":2}');
     expect(digestJson(left)).toBe(digestJson(right));
   });
+
+  it("rejects non-finite values instead of collapsing them into JSON null", () => {
+    expect(() => canonicalJson(Number.NaN)).toThrow(/not finite JSON/);
+    expect(() => canonicalJson({ nested: [Infinity, -Infinity] })).toThrow(/not finite JSON/);
+  });
 });

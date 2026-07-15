@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { digestJson } from "./canonical.js";
+import { redactValue, type RedactionReport } from "./redaction.js";
 
 const BlindIncidentPacketSchema = z.object({
   symptom: z.string().min(1),
@@ -57,8 +58,10 @@ export function defaultWitnessProposal(): WitnessProposal {
   };
 }
 
-export async function proposeWitnessWithGpt(input: unknown, options: { apiKey?: string; model?: string } = {}): Promise<{ proposal: WitnessProposal; incidentPacketDigest: string }> {
-  const { packet, digest } = makeBlindIncidentPacket(input);
+export async function proposeWitnessWithGpt(input: unknown, options: { apiKey?: string; model?: string } = {}): Promise<{ proposal: WitnessProposal; incidentPacketDigest: string; redaction: RedactionReport }> {
+  const { packet } = makeBlindIncidentPacket(input);
+  const redacted = redactValue(packet);
+  const redactedPacket = BlindIncidentPacketSchema.parse(redacted.value);
   const apiKey = options.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is required for a live GPT-5.6 witness proposal. The judge demo does not require one.");
@@ -77,7 +80,7 @@ export async function proposeWitnessWithGpt(input: unknown, options: { apiKey?: 
         "Do not assign verdicts, name a culprit, or make causal claims.",
         "Return only the required structured proposal."
       ].join(" "),
-      input: JSON.stringify(packet),
+      input: JSON.stringify(redactedPacket),
       text: {
         format: {
           type: "json_schema",
@@ -92,5 +95,5 @@ export async function proposeWitnessWithGpt(input: unknown, options: { apiKey?: 
     throw new Error(`OpenAI Responses request failed: ${response.status} ${await response.text()}`);
   }
   const proposal = WitnessProposalSchema.parse(JSON.parse(responseText(await response.json())));
-  return { proposal, incidentPacketDigest: digest };
+  return { proposal, incidentPacketDigest: digestJson(redactedPacket), redaction: redacted.report };
 }

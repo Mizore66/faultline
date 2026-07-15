@@ -2,13 +2,14 @@ import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createDemoAnalysis } from "./engine.js";
-import { writeProofBundle } from "./proof-bundle.js";
+import { assertSafeProofOutput, writeProofBundle } from "./proof-bundle.js";
 import { renderIncidentPage } from "./ui.js";
 import type { DemoAnalysis } from "./domain.js";
 
 export type FaultLineServer = { url: string; close: () => Promise<void> };
 
 export async function startFaultLineServer(options: { analysis: DemoAnalysis; outputDirectory: string; port?: number }): Promise<FaultLineServer> {
+  assertSafeProofOutput(options.outputDirectory);
   let analysis = options.analysis;
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -56,6 +57,6 @@ export async function startFaultLineServer(options: { analysis: DemoAnalysis; ou
 
 const launchedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
 if (launchedPath === import.meta.url) {
-  const server = await startFaultLineServer({ analysis: createDemoAnalysis("REPLAY"), outputDirectory: resolve(".faultline/judge-demo") });
+  const server = await startFaultLineServer({ analysis: createDemoAnalysis("REPLAY"), outputDirectory: resolve(".faultline/bundles/judge-demo") });
   process.stdout.write(`FaultLine incident page: ${server.url}\n`);
 }
