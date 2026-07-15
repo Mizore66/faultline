@@ -53,7 +53,9 @@ export const SessionStartedPayloadSchema = StrictObject({
   transport: CodexTransportSchema,
   workingDirectory: z.string().min(1),
   codexThreadId: IdentifierSchema.optional(),
-  model: z.string().min(1).max(200).optional()
+  model: z.string().min(1).max(200).optional(),
+  /** Human-readable attribution for the observed session, not proof of authorship. */
+  actor: z.string().min(1).max(200).optional()
 });
 
 export const TurnStartedPayloadSchema = StrictObject({
@@ -68,7 +70,9 @@ export const TurnCompletedPayloadSchema = StrictObject({
   turnOrdinal: z.number().int().positive(),
   outcome: TurnOutcomeSchema,
   /** Optional because an interrupted turn may not produce a final result. */
-  outputDigest: HashSchema.optional()
+  outputDigest: HashSchema.optional(),
+  /** Optional reviewer-supplied contribution/session attribution; not turn-level blame. */
+  contribution: z.string().min(1).max(240).optional()
 });
 
 export const UnsignedGitCheckpointSchema = StrictObject({
