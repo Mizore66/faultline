@@ -83,9 +83,16 @@ The minimizer derives binary-safe Git patch units, keeps patch conflicts and exe
 Record observed lifecycle events and clean checkpoints first:
 
 ```powershell
-pnpm fl -- record init --session <session-id> --repo . --transport SIDE_CAR
-Get-Content .\events.ndjson | pnpm fl -- record stdin --ledger .faultline\recordings\<session-id>.json
-pnpm fl -- record checkpoint --ledger .faultline\recordings\<session-id>.json --repo . --after-turn 1
+pnpm fl -- record init --session <session-id> --repo . --transport SIDE_CAR --actor you@example.com
+pnpm fl -- record attach `
+  --ledger .faultline\recordings\<session-id>.json `
+  --repo . `
+  --turn turn-1 `
+  --ordinal 1 `
+  --prompt-digest sha256:<64-lowercase-hex> `
+  --output-digest sha256:<64-lowercase-hex> `
+  --contribution "short observed change label" `
+  --checkpoint
 ```
 
 Pass `--ledger .faultline/recordings/<session-id>.json` to `fl investigate git` to embed and validate matching lifecycle checkpoints in the Git package. If every state should be bound to an ordered checkpoint, create a strict sidecar record:
@@ -98,7 +105,7 @@ pnpm fl -- ledger bind `
 pnpm fl -- ledger verify .faultline\bindings\<investigation>.json
 ```
 
-The ledger is observed evidence, not a claim that FaultLine reads private model reasoning.
+`record attach` is a convenience path for sidecar session attribution: it appends a started/completed turn pair and, when requested, a clean Git checkpoint for the completed turn. The attribution fields are reviewer-supplied context, not identity proof, private Codex interception, model intent, or turn-level blame. The ledger is observed evidence, not a claim that FaultLine reads private model reasoning.
 
 ## Verify and retain integrity evidence
 
