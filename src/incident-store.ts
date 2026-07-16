@@ -7,6 +7,11 @@ import {
   verifyIncidentDraft,
   type IncidentDraft
 } from "./incident.js";
+import {
+  relativeTrustedSystemPath,
+  resolveSafeDirectorySegment,
+  resolveTrustedSystemPath
+} from "./safe-directory.js";
 
 /**
  * A small, write-once local store for review-only intake records.
@@ -20,16 +25,17 @@ export type StoredIncidentDraft = {
   draft: IncidentDraft;
 };
 
-function assertNonSymlinkDirectory(path: string): void {
-  const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+function assertNonSymlinkDirectory(path: string): string {
+  const safe = resolveSafeDirectorySegment(path);
+  if (safe === null) {
     throw new Error(`Incident draft store path must be a real non-symlink directory: ${path}`);
   }
+  return safe;
 }
 
 /** Create each directory segment while rejecting symlink traversal. */
 function ensureSafeDirectory(path: string): void {
-  const target = resolve(path);
+  const target = resolveTrustedSystemPath(path);
   const volumeRoot = parse(target).root;
   const relativePath = relative(volumeRoot, target);
   const segments = relativePath.split(/[\\/]+/).filter(Boolean);
@@ -37,13 +43,13 @@ function ensureSafeDirectory(path: string): void {
   for (const segment of segments) {
     current = join(current, segment);
     if (!existsSync(current)) mkdirSync(current, { mode: 0o700 });
-    assertNonSymlinkDirectory(current);
+    current = assertNonSymlinkDirectory(current);
   }
 }
 
 /** Check existing parent segments only; reads must never create paths. */
 function assertSafeExistingDirectory(path: string): void {
-  const target = resolve(path);
+  const target = resolveTrustedSystemPath(path);
   const volumeRoot = parse(target).root;
   const relativePath = relative(volumeRoot, target);
   const segments = relativePath.split(/[\\/]+/).filter(Boolean);
@@ -51,12 +57,12 @@ function assertSafeExistingDirectory(path: string): void {
   for (const segment of segments) {
     current = join(current, segment);
     if (!existsSync(current)) throw new Error(`Incident draft store directory does not exist: ${current}`);
-    assertNonSymlinkDirectory(current);
+    current = assertNonSymlinkDirectory(current);
   }
 }
 
 function storeRoot(storeDirectory: string): string {
-  return resolve(storeDirectory);
+  return resolveTrustedSystemPath(storeDirectory);
 }
 
 function draftDirectory(storeDirectory: string): string {
@@ -67,7 +73,7 @@ function draftPath(storeDirectory: string, draftId: string): string {
   const id = IncidentDraftIdSchema.parse(draftId);
   const root = storeRoot(storeDirectory);
   const path = resolve(draftDirectory(root), `${id}.json`);
-  const nested = relative(root, path);
+  const nested = relativeTrustedSystemPath(root, path);
   if (!nested || nested.startsWith("..") || nested.includes(":")) {
     throw new Error("Incident draft path escaped its configured store");
   }

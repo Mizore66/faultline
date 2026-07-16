@@ -315,7 +315,10 @@ describe("FaultLine CLI workflows", () => {
       runFl(["doctor", "--repo", repository], { cwd: directory });
       expect(existsSync(marker)).toBe(false);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      // Git for Windows can briefly retain an index/monitor handle after the
+      // spawned diagnostic exits. Retrying cleanup makes this security test
+      // deterministic without weakening the assertion above.
+      rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
