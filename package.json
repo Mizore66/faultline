@@ -6,6 +6,7 @@
   "files": [
     "dist",
     "README.md",
+    "docs/faultline-self-incident.md",
     "docs/first-incident.md",
     "docs/github-action.md"
   ],

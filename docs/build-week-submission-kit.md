@@ -18,12 +18,12 @@ It demonstrates the frozen witness, evidence labels, stable-boundary rules, coun
 
 | Time | Screen | Narration point |
 | --- | --- | --- |
-| 0:00–0:18 | A real CI regression and FaultLine's incident screen | "When an agent-assisted change turns CI red, FaultLine answers a narrower, useful question: where does a reviewed executable witness first become bad?" |
+| 0:00–0:18 | A recorded FaultLine self-incident and its incident screen | "When an agent-assisted change turns CI red, FaultLine answers a narrower, useful question: where does a reviewed executable witness first become bad?" Do not call it recorded until the [self-incident runbook](faultline-self-incident.md) has produced a verified bundle/root. |
 | 0:18–0:40 | `fl witness propose`, approval, and freeze output | "A human freezes the exact predicate before localization. The model may suggest it, but never decides the verdict." |
 | 0:40–1:10 | `fl demo live-git --export-only` plus the Docker policy in the verified proof view | "FaultLine replays that immutable witness over real Git states, three times per state, in a constrained Docker environment. It only calls a boundary when the executions support it." |
-| 1:10–1:35 | `fl serve --bundle … --expect-root …` | "A teammate can inspect and verify the portable package without rerunning repository code. The package rejects rehashed contradictions, not just changed checksums." |
-| 1:35–1:55 | `fl minimize git` results | "It then asks whether the selected diff is actually sufficient and necessary, preserving conflicts and unknowns instead of guessing." |
-| 1:55–2:20 | `fl repair brief --bundle … --live` and `fl repair verify …` | "GPT-5.6 receives a privacy-minimized packet of verified facts and returns only cited, explicitly inferred repair guidance. It cannot manufacture a proof or blame a model." |
+| 1:10–1:35 | `fl minimize git` results | "It then asks whether the selected diff is actually sufficient and necessary, preserving conflicts and unknowns instead of guessing." |
+| 1:35–2:05 | `fl repair brief --bundle … --live` and `fl repair verify …` | "GPT-5.6 receives a privacy-minimized packet of verified facts and returns only cited, explicitly inferred repair guidance. It cannot manufacture a proof or blame a model." |
+| 2:05–2:20 | `fl serve --bundle … --expect-root … --minimization … --expect-minimization … --repair … --expect-repair …` | "A teammate sees the verified boundary, certified minimization, and citation summary in one read-only incident page. The downstream records are independently checked against retained digests and explicitly not claimed as part of the original Git root." |
 | 2:20–2:45 | `pnpm test`, proof verification, and GitHub Actions | "Codex accelerated the implementation, tests, adversarial review, and product hardening. The live Docker boundary is exercised in CI; local systems without Docker fail closed." |
 | 2:45–3:00 | FaultLine proof view and repository README | "FaultLine makes agent-assisted debugging auditable: freeze, replay, prove, fix, and prevent — without pretending the evidence says more than it does." |
 

@@ -14,6 +14,7 @@ describe("package distribution contract", () => {
     expect(packageJson.bin.fl).toBe("./dist/cli.js");
     expect(packageJson.files).toContain("dist");
     expect(packageJson.files).toContain("README.md");
+    expect(packageJson.files).toContain("docs/faultline-self-incident.md");
     expect(packageJson.scripts.prepack).toBe("pnpm build");
     expect(packageJson.scripts["pack:check"]).toBe("pnpm pack --dry-run");
   });

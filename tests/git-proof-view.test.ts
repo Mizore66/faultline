@@ -230,7 +230,7 @@ describe("read-only Git proof view", () => {
       });
 
       const view = loadVerifiedGitProofView(directory, rootDigest);
-      expect(verifyGitProofBundle).toHaveBeenCalledTimes(2);
+      expect(verifyGitProofBundle).toHaveBeenCalledTimes(3);
       expect(view).toMatchObject({
         rootDigest,
         checkedFiles: 17,
@@ -251,14 +251,51 @@ describe("read-only Git proof view", () => {
       expect(page).toContain("Lifecycle binding");
       expect(page).toContain("NATIVE DOCKER");
       expect(page).toContain("registry.example/faultline");
-      expect(page).toContain("Minimization artifact not attached to this bundle.");
-      expect(page).toContain("Repair artifact not attached to this bundle.");
+      expect(page).toContain("No minimization record was supplied to this read-only view.");
+      expect(page).toContain("No repair artifact was supplied to this view.");
       expect(page).not.toContain("/private/customer/repository");
+      expect(page).not.toContain("A published price remains nonnegative.");
       expect(page).not.toContain(Buffer.from("private-overlay-bytes\n", "utf8").toString("base64"));
       expect(page).not.toContain("Re-run all evidence");
       expect(page).not.toContain("/api/rerun");
       expect(page).not.toMatch(/<script\b/i);
       expect(page).not.toMatch(/<button\b/i);
+
+      const attachedPage = renderGitProofIncidentPage({
+        ...view,
+        attachments: {
+          minimization: {
+            result: {
+              proof: { isProof: true, reason: "Raw diagnostic from /private/customer/repository must not render." },
+              candidateUnitIds: [digest("1"), digest("2")],
+              minimality: { oneMinimal: true },
+              certification: { sufficiency: { status: "CERTIFIED" }, necessity: { status: "CERTIFIED" } }
+            } as never,
+            resultDigest: digest("a"),
+            externalDigestStatus: "MATCH"
+          },
+          repair: {
+            manifest: { manifestDigest: digest("b") } as never,
+            packet: {} as never,
+            brief: {
+              proposedInvariant: { statement: "Do not render /private/customer/repository or sk-proj-secret-value.", evidenceIds: ["E1"] },
+              repairDirections: [{ statement: "node -e private command", evidenceIds: ["E2"] }],
+              prevention: {
+                hardEnforcement: [{ statement: "private source text", evidenceIds: ["E1"] }],
+                softGuidance: []
+              }
+            } as never,
+            externalDigestStatus: "MATCH"
+          }
+        }
+      });
+      expect(attachedPage).toContain("BIDIRECTIONALLY CERTIFIED");
+      expect(attachedPage).toContain("Cited repair directions");
+      expect(attachedPage).toContain("Validated citations");
+      expect(attachedPage).toContain("Free-form guidance remains in the private repair artifact");
+      expect(attachedPage).not.toContain("Raw diagnostic from");
+      expect(attachedPage).not.toContain("node -e private command");
+      expect(attachedPage).not.toContain("sk-proj-secret-value");
 
       const server = await startGitProofServer({ proof: view, port: 0 });
       try {

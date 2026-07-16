@@ -53,11 +53,14 @@ export const RepairBriefArtifactManifestSchema = z.object({
 
 export type RepairBriefArtifactManifest = z.infer<typeof RepairBriefArtifactManifestSchema>;
 export type RepairBriefArtifactSource = z.infer<typeof RepairBriefArtifactSourceSchema>;
+export type RepairBriefArtifactExternalDigestStatus = "NOT_PROVIDED" | "MATCH" | "MISMATCH";
 
 export type RepairBriefArtifactVerification = {
   readonly valid: boolean;
   readonly errors: readonly string[];
   readonly manifest: RepairBriefArtifactManifest | null;
+  /** Whether a separately retained manifest digest was supplied and matched. */
+  readonly externalDigestStatus: RepairBriefArtifactExternalDigestStatus;
 };
 
 export type WrittenRepairBriefArtifact = {
@@ -183,14 +186,23 @@ function readJson(path: string, label: string, errors: string[]): unknown {
   }
 }
 
+function isLegacyRepairEvidencePacket(value: unknown): boolean {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && (value as Record<string, unknown>).schemaVersion === "faultline.repair-evidence.v1";
+}
+
 /** Recheck a stored package without executing repository code or a model request. */
-export function verifyRepairBriefArtifact(directory: string): RepairBriefArtifactVerification {
+export function verifyRepairBriefArtifact(
+  directory: string,
+  expectedManifestDigest?: string
+): RepairBriefArtifactVerification {
   const errors: string[] = [];
   let manifest: RepairBriefArtifactManifest | null = null;
+  let externalDigestStatus: RepairBriefArtifactExternalDigestStatus = expectedManifestDigest === undefined ? "NOT_PROVIDED" : "MISMATCH";
   try {
     const root = resolve(directory);
     if (!existsSync(root)) {
-      return { valid: false, errors: ["Repair brief directory does not exist"], manifest: null };
+      return { valid: false, errors: ["Repair brief directory does not exist"], manifest: null, externalDigestStatus };
     }
     assertNoLinksOrSpecialFiles(root);
     const physical = new Set(readdirSync(root, { withFileTypes: true }).map((entry) => entry.name));
@@ -212,9 +224,20 @@ export function verifyRepairBriefArtifact(directory: string): RepairBriefArtifac
       if (manifest.manifestDigest !== digestJson(unsignedManifest(manifest))) {
         errors.push("Repair brief manifest digest does not match its canonical contents.");
       }
+      if (expectedManifestDigest !== undefined) {
+        externalDigestStatus = manifest.manifestDigest === expectedManifestDigest ? "MATCH" : "MISMATCH";
+        if (externalDigestStatus === "MISMATCH") {
+          errors.push("Repair brief manifest digest does not match the externally supplied digest.");
+        }
+      }
     }
-    const packetParsed = RepairEvidencePacketSchema.safeParse(readJson(join(root, "evidence-packet.json"), "repair evidence packet", errors));
-    if (!packetParsed.success) errors.push(`Repair evidence packet schema validation failed: ${packetParsed.error.message}`);
+    const packetValue = readJson(join(root, "evidence-packet.json"), "repair evidence packet", errors);
+    const packetParsed = RepairEvidencePacketSchema.safeParse(packetValue);
+    if (!packetParsed.success) {
+      errors.push(isLegacyRepairEvidencePacket(packetValue)
+        ? "Repair evidence packet uses legacy faultline.repair-evidence.v1 witness binding; recreate the repair artifact with the current FaultLine version."
+        : `Repair evidence packet schema validation failed: ${packetParsed.error.message}`);
+    }
     const briefParsed = RepairBriefSchema.safeParse(readJson(join(root, "repair-brief.json"), "repair brief", errors));
     if (!briefParsed.success) errors.push(`Repair brief schema validation failed: ${briefParsed.error.message}`);
 
@@ -231,7 +254,7 @@ export function verifyRepairBriefArtifact(directory: string): RepairBriefArtifac
   } catch (error) {
     errors.push(`Repair brief package verification failed safely: ${errorMessage(error)}`);
   }
-  return { valid: errors.length === 0, errors, manifest };
+  return { valid: errors.length === 0, errors, manifest, externalDigestStatus };
 }
 
 /**

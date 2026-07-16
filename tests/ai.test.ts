@@ -42,7 +42,7 @@ describe("live OpenAI proposal boundaries", () => {
 
   it("accepts a cited repair brief from the official raw Responses API output shape", async () => {
     const unsignedPacket = {
-      schemaVersion: "faultline.repair-evidence.v1" as const,
+      schemaVersion: "faultline.repair-evidence.v2" as const,
       investigationDigest: `sha256:${"a".repeat(64)}`,
       frozenWitnessDigest: `sha256:${"b".repeat(64)}`,
       recorder: "git-commit-range-replay" as const,

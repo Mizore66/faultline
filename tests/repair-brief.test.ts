@@ -35,6 +35,7 @@ describe("post-localization GPT repair boundary", () => {
   it("minimizes a verified Git result into a citation-addressable private packet", () => {
     const packet = createRepairEvidencePacket(completedInvestigation());
     expect(packet.facts).toHaveLength(3);
+    expect(packet.frozenWitnessDigest).toBe(digest("f"));
     const { packetDigest, ...unsigned } = packet;
     expect(packetDigest).toBe(digestJson(unsigned));
   });

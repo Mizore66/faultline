@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { canonicalJson } from "./canonical.js";
 import {
   GitInvestigationResultSchema,
   type GitInvestigationResult,
@@ -10,6 +11,11 @@ import {
   type GitProofBundleManifest,
   type GitProofBundleExternalRootStatus
 } from "./git-proof-bundle.js";
+import {
+  loadVerifiedIncidentAttachments,
+  type IncidentAttachmentOptions,
+  type VerifiedIncidentAttachments
+} from "./incident-attachments.js";
 import {
   escapeHtml,
   renderIncidentPageDocumentEnd,
@@ -32,6 +38,7 @@ export type VerifiedGitProofView = {
   readonly manifest: GitProofBundleManifest;
   readonly investigation: GitInvestigationResult;
   readonly frozenWitness: FrozenWitness;
+  readonly attachments: VerifiedIncidentAttachments;
 };
 
 function readJson(path: string, label: string): unknown {
@@ -42,12 +49,42 @@ function readJson(path: string, label: string): unknown {
   }
 }
 
+type ProofPresentationArtifacts = {
+  readonly investigation: GitInvestigationResult;
+  readonly frozenWitness: FrozenWitness;
+};
+
+/**
+ * Read only the two proof artifacts whose parsed values reach the renderer.
+ * Callers pair this with a verifier pass after the read so that a mutable
+ * directory cannot substitute an unrelated schema-valid JSON document.
+ */
+function readProofPresentationArtifacts(root: string, manifest: GitProofBundleManifest): ProofPresentationArtifacts {
+  return {
+    investigation: GitInvestigationResultSchema.parse(
+      readJson(join(root, manifest.artifacts.investigation), "investigation artifact")
+    ),
+    frozenWitness: FrozenWitnessSchema.parse(
+      readJson(join(root, manifest.artifacts.frozenWitness), "frozen witness artifact")
+    )
+  };
+}
+
+function sameProofPresentationArtifacts(left: ProofPresentationArtifacts, right: ProofPresentationArtifacts): boolean {
+  return canonicalJson(left.investigation) === canonicalJson(right.investigation)
+    && canonicalJson(left.frozenWitness) === canonicalJson(right.frozenWitness);
+}
+
 /**
  * Verify first, then construct a presentation-only projection. Requiring a
  * valid result is important: this view must never make an invalid bundle look
  * authoritative merely because a few JSON fields happen to render.
  */
-export function loadVerifiedGitProofView(directory: string, expectedRoot?: string): VerifiedGitProofView {
+export function loadVerifiedGitProofView(
+  directory: string,
+  expectedRoot?: string,
+  attachmentOptions: IncidentAttachmentOptions = {}
+): VerifiedGitProofView {
   const root = resolve(directory);
   const verification = verifyGitInvestigationProofBundle(root, expectedRoot);
   if (!verification.valid || !verification.manifest || !verification.rootDigest) {
@@ -55,32 +92,41 @@ export function loadVerifiedGitProofView(directory: string, expectedRoot?: strin
     throw new Error(`Refusing to render an invalid Git proof bundle: ${detail}`);
   }
 
-  // The verifier has already checked that these manifest paths are safe,
-  // regular files and that their canonical contents match the manifest.
-  const investigation = GitInvestigationResultSchema.parse(
-    readJson(join(root, verification.manifest.artifacts.investigation), "investigation artifact")
-  );
-  const frozenWitness = FrozenWitnessSchema.parse(
-    readJson(join(root, verification.manifest.artifacts.frozenWitness), "frozen witness artifact")
-  );
-
-  // Detect a package changed while its presentation artifacts were being
-  // loaded. Use the first root as the comparison anchor without changing the
-  // user-facing external-root status (an internal recheck is not an external
-  // retention claim).
+  // The verifier has checked that these manifest paths are safe, regular
+  // files and canonical. Read twice around verifier passes and retain only
+  // matching parsed snapshots. This is deliberately stronger than a plain
+  // verify-then-read sequence: a schema-valid transient replacement is not a
+  // verified proof artifact.
+  const initialArtifacts = readProofPresentationArtifacts(root, verification.manifest);
   const recheck = verifyGitInvestigationProofBundle(root, verification.rootDigest);
   if (!recheck.valid || !recheck.manifest || recheck.rootDigest !== verification.rootDigest) {
     const detail = recheck.errors.length > 0 ? recheck.errors.join("; ") : "the bundle changed while its artifacts were being read";
     throw new Error(`Refusing to render a Git proof bundle that changed during verification: ${detail}`);
   }
+  const recheckedArtifacts = readProofPresentationArtifacts(root, recheck.manifest);
+  const finalCheck = verifyGitInvestigationProofBundle(root, verification.rootDigest);
+  if (!finalCheck.valid || !finalCheck.manifest || finalCheck.rootDigest !== verification.rootDigest
+    || canonicalJson(verification.manifest) !== canonicalJson(recheck.manifest)
+    || canonicalJson(verification.manifest) !== canonicalJson(finalCheck.manifest)
+    || !sameProofPresentationArtifacts(initialArtifacts, recheckedArtifacts)) {
+    const detail = finalCheck.errors.length > 0 ? finalCheck.errors.join("; ") : "the bundle presentation artifacts changed during verification";
+    throw new Error(`Refusing to render a Git proof bundle that changed during verification: ${detail}`);
+  }
+
+  const attachments = loadVerifiedIncidentAttachments(
+    attachmentOptions,
+    recheckedArtifacts.investigation,
+    recheckedArtifacts.frozenWitness
+  );
 
   return {
     rootDigest: verification.rootDigest,
-    checkedFiles: recheck.checkedFiles,
+    checkedFiles: finalCheck.checkedFiles,
     externalRootStatus: verification.externalRootStatus,
-    manifest: recheck.manifest,
-    investigation,
-    frozenWitness
+    manifest: finalCheck.manifest,
+    investigation: recheckedArtifacts.investigation,
+    frozenWitness: recheckedArtifacts.frozenWitness,
+    attachments
   };
 }
 
@@ -191,6 +237,63 @@ function recoveryPanel(transitions: readonly StableGitTransition[]): string {
   return `<article class="card panel"><h3>Recorded recovery</h3><p><strong>Recorded stable recovery</strong><small>Each displayed state has three distinct Docker executions under the same frozen witness. This establishes recovery only, not prevention.</small></p>${rows}</article>`;
 }
 
+function minimizationPanel(view: VerifiedGitProofView): string {
+  const attachment = view.attachments.minimization;
+  if (attachment === null) {
+    return `<article class="card panel"><h3>Counterfactual minimization</h3><p class="empty-state"><strong>Not attached</strong><br>No minimization record was supplied to this read-only view.</p><small>A stable Git boundary does not by itself establish a 1-minimal set, agent intent, or a unique semantic root cause.</small></article>`;
+  }
+  const result = attachment.result;
+  const proof = result.proof.isProof ? "BIDIRECTIONALLY CERTIFIED" : "NOT CERTIFIED AS COUNTERFACTUAL PROOF";
+  const summary = result.proof.isProof
+    ? "The attached record certifies both counterfactual directions for its selected units."
+    : "The attached record did not establish both counterfactual directions.";
+  return `<article class="card panel"><h3>Counterfactual minimization</h3>
+    <p><strong>${escapeHtml(proof)}</strong><br><small>${escapeHtml(summary)}</small></p>
+    <div class="proof"><span>Candidate units</span><strong>${result.candidateUnitIds.length}</strong></div>
+    <div class="proof"><span>1-minimal</span><small>${result.minimality.oneMinimal ? "recorded" : "not established"}</small></div>
+    <div class="proof"><span>Sufficiency</span><small>${escapeHtml(result.certification.sufficiency.status.replaceAll("_", " "))}</small></div>
+    <div class="proof"><span>Necessity</span><small>${escapeHtml(result.certification.necessity.status.replaceAll("_", " "))}</small></div>
+    <div class="proof"><span>Attachment digest</span><code title="${escapeHtml(attachment.resultDigest)}">${escapeHtml(shortDigest(attachment.resultDigest))}</code></div>
+    <small>Separately verified record; external digest: ${escapeHtml(attachment.externalDigestStatus)}. File paths, patch bytes, raw output, and free-form diagnostic text are intentionally omitted.</small>
+  </article>`;
+}
+
+function citationSummary(items: readonly { evidenceIds: readonly string[] }[]): string {
+  const citations = [...new Set(items.flatMap((item) => item.evidenceIds))].sort();
+  return `<div class="proof"><span>Validated citations</span><small>[${escapeHtml(citations.join(", "))}]</small></div>`;
+}
+
+function repairPanel(view: VerifiedGitProofView): string {
+  const attachment = view.attachments.repair;
+  if (attachment === null) {
+    return `<article class="card panel"><h3>Evidence-bounded repair packet</h3><p>FaultLine can hand a repair workflow the frozen witness, verified boundary, and evidence digests without choosing a model culprit.</p><p class="empty-state"><strong>Repair not attached</strong><br>No repair artifact was supplied to this view.</p><small>No repair claim is rendered from a boundary-only proof package.</small></article>`;
+  }
+  const brief = attachment.brief;
+  return `<article class="card panel"><h3>Evidence-bounded repair guidance</h3>
+    <p><span class="pill">INFERRED</span> Citation-validated guidance from a separately verified repair artifact; it is not an executed repair or proof of model intent.</p>
+    <div class="proof"><span>Cited invariant</span><small>${brief.proposedInvariant.evidenceIds.length} evidence reference${brief.proposedInvariant.evidenceIds.length === 1 ? "" : "s"}</small></div>
+    <div class="proof"><span>Cited repair directions</span><strong>${brief.repairDirections.length}</strong></div>
+    ${citationSummary([brief.proposedInvariant, ...brief.repairDirections])}
+    <small>Artifact ${escapeHtml(shortDigest(attachment.manifest.manifestDigest))} is bound to this proof's investigation and frozen-witness digests; external digest: ${escapeHtml(attachment.externalDigestStatus)}. Free-form guidance remains in the private repair artifact and is deliberately not rendered in this shareable proof view.</small>
+  </article>`;
+}
+
+function preventionGuidancePanel(view: VerifiedGitProofView): string {
+  const attachment = view.attachments.repair;
+  if (attachment === null) {
+    return `<article class="card panel"><h3>Prevention guidance</h3><p class="empty-state"><strong>Not attached</strong><br>No evidence-cited prevention guidance was supplied.</p><small>Recovery evidence and a stable boundary do not establish prevention.</small></article>`;
+  }
+  const prevention = attachment.brief.prevention;
+  const items = [...prevention.hardEnforcement, ...prevention.softGuidance];
+  return `<article class="card panel"><h3>Prevention guidance</h3>
+    <p><span class="pill">INFERRED</span> These are cited recommendations, not a three-state prevention proof.</p>
+    <div class="proof"><span>Hard enforcement directions</span><strong>${prevention.hardEnforcement.length}</strong></div>
+    <div class="proof"><span>Soft guidance directions</span><strong>${prevention.softGuidance.length}</strong></div>
+    ${citationSummary(items)}
+    <small>Free-form prevention text remains in the private repair artifact. A repaired state must still be executed under the same frozen witness before FaultLine can call prevention verified.</small>
+  </article>`;
+}
+
 /** Render only verified, privacy-minimized evidence from a Git proof package. */
 export function renderGitProofIncidentPage(view: VerifiedGitProofView): string {
   const { manifest, investigation, frozenWitness } = view;
@@ -202,21 +305,21 @@ export function renderGitProofIncidentPage(view: VerifiedGitProofView): string {
     ? `${executionSummary} All recorded states reached a stable pass/fail verdict.`
     : `${executionSummary} ${omittedUnstableStateCount} recorded ${omittedUnstableStateCount === 1 ? "state did" : "states did"} not reach a stable pass/fail verdict and ${omittedUnstableStateCount === 1 ? "is" : "are"} omitted from this table.`;
   const proofStatus = investigation.proof.isProof ? "VERIFIED PROOF" : "NOT CERTIFIED AS PROOF";
-  const proofDetail = investigation.proof.isProof
-    ? "Stable transition evidence is retained for this frozen witness."
-    : investigation.proof.reason;
+  const attachmentSummary = view.attachments.minimization === null && view.attachments.repair === null
+    ? "It distinguishes an observed boundary from downstream artifacts that were not supplied."
+    : "It separately verifies each supplied downstream artifact and its applicable evidence binding before rendering it.";
 
   return `${renderIncidentPageDocumentStart("verified Git proof")}
 ${renderIncidentPageProductChrome({
   command: "fl serve --bundle",
   notice: "Read-only verified bundle: FaultLine checked its complete declared file set before rendering. This page does not execute repository code or rerun the witness."
 })}
-<section class="hero" id="break"><div><div class="eyebrow">FAULTLINE - PORTABLE GIT INVESTIGATION</div><h1>Verified <em>evidence</em>,<br>one product path.</h1><p class="lede">The same incident experience that explains the sample now renders a retained Git proof package. It distinguishes an observed boundary from minimization, repair, and prevention artifacts that were not attached.</p><span class="readonly-badge">READ-ONLY REVIEW</span></div><aside class="card metric-card" aria-label="Verified proof summary"><div class="metric"><b>${view.checkedFiles}</b><small>declared files checked</small></div><div class="metric"><b>${investigation.runs.length}</b><small>recorded executions</small></div><div class="metric"><b>${investigation.states.length}</b><small>Git states</small></div><div class="metric"><b>${investigation.transitions.length}</b><small>stable transitions</small></div></aside></section>
-<section class="section" id="find"><div class="section-head"><span class="number">01</span><h2>BREAK &rarr; FIND</h2></div><div class="grid"><article class="card panel witness"><h3>Frozen witness</h3><p><strong>${escapeHtml(frozenWitness.proposal.witness.behavior)}</strong></p><span class="pill">human-approved before freeze</span><span class="pill">network disabled</span><span class="pill">read-only review</span><p class="hash">${escapeHtml(frozenWitness.witnessDigest)}</p><small>Command text, overlay bytes, incident-packet contents, and reviewer identity are intentionally omitted from this view.</small></article><article class="card panel"><h3>Package verification</h3><p><strong>${escapeHtml(proofStatus)}</strong></p><div class="proof"><span>Bundle root</span><code title="${escapeHtml(view.rootDigest)}">${escapeHtml(shortDigest(view.rootDigest))}</code></div><div class="proof"><span>External root</span><small>${escapeHtml(externalRootCopy(view.externalRootStatus))}</small></div><div class="proof"><span>Human approval</span><small>${escapeHtml(approval.approvedAt)} recorded before freeze</small></div></article></div></section>
+<section class="hero" id="break"><div><div class="eyebrow">FAULTLINE - PORTABLE GIT INVESTIGATION</div><h1>Verified <em>evidence</em>,<br>one product path.</h1><p class="lede">The same incident experience that explains the sample now renders a retained Git proof package. ${escapeHtml(attachmentSummary)}</p><span class="readonly-badge">READ-ONLY REVIEW</span></div><aside class="card metric-card" aria-label="Verified proof summary"><div class="metric"><b>${view.checkedFiles}</b><small>declared files checked</small></div><div class="metric"><b>${investigation.runs.length}</b><small>recorded executions</small></div><div class="metric"><b>${investigation.states.length}</b><small>Git states</small></div><div class="metric"><b>${investigation.transitions.length}</b><small>stable transitions</small></div></aside></section>
+<section class="section" id="find"><div class="section-head"><span class="number">01</span><h2>BREAK &rarr; FIND</h2></div><div class="grid"><article class="card panel witness"><h3>Frozen witness</h3><p><strong>Human-reviewed executable predicate</strong></p><span class="pill">human-approved before freeze</span><span class="pill">network disabled</span><span class="pill">read-only review</span><p class="hash">${escapeHtml(frozenWitness.witnessDigest)}</p><small>Behavior text, command text, overlay bytes, incident-packet contents, and reviewer identity are intentionally omitted from this shareable view.</small></article><article class="card panel"><h3>Package verification</h3><p><strong>${escapeHtml(proofStatus)}</strong></p><div class="proof"><span>Bundle root</span><code title="${escapeHtml(view.rootDigest)}">${escapeHtml(shortDigest(view.rootDigest))}</code></div><div class="proof"><span>External root</span><small>${escapeHtml(externalRootCopy(view.externalRootStatus))}</small></div><div class="proof"><span>Human approval</span><small>${escapeHtml(approval.approvedAt)} recorded before freeze</small></div></article></div></section>
 <section class="section"><div class="section-head"><span class="number">02</span><h2>FIND</h2></div><div class="grid"><article class="card panel"><h3>Stable Git states</h3><div class="table-wrap"><table class="data-table"><thead><tr><th>Index</th><th>Commit</th><th>Verdict</th><th>Evidence</th></tr></thead><tbody>${stableStateRows(view)}</tbody></table></div><small>${escapeHtml(stableStateSummary)}</small></article><article class="card panel"><h3>Stable transitions</h3><p>Three reruns on either side prevent a single noisy result from becoming attribution.</p><div class="table-wrap"><table class="data-table"><thead><tr><th>Transition</th><th>Before</th><th></th><th>After</th><th>Evidence</th></tr></thead><tbody>${transitionRows(investigation.transitions)}</tbody></table></div><p><strong>${firstRegression === undefined ? "No stable pass-to-fail transition" : "First stable pass-to-fail transition"}</strong></p><small>${firstRegression === undefined ? "FaultLine refuses to name a first bad state without a stable bracket." : `${shortCommit(firstRegression.before.commit)} -> ${shortCommit(firstRegression.after.commit)}`}</small></article></div></section>
-<section class="section" id="prove"><div class="section-head"><span class="number">03</span><h2>PROVE</h2></div><div class="grid"><article class="card panel"><h3>Sandbox evidence</h3><p>Recorded execution trust: <strong>${escapeHtml(investigation.proof.executionTrust.replaceAll("_", " "))}</strong>.</p><div class="table-wrap"><table class="data-table"><thead><tr><th>Kind</th><th>Executor</th><th>Policy</th><th>Runtime constraints</th><th>Coverage</th></tr></thead><tbody>${sandboxRows(view)}</tbody></table></div><small>Policy and command values are represented by digests; raw output and overlay bytes are intentionally omitted.</small></article><article class="card panel"><h3>Counterfactual minimization</h3><p class="empty-state"><strong>Not attached</strong><br>Minimization artifact not attached to this bundle.</p><p><strong>${escapeHtml(proofStatus)}</strong><small>${escapeHtml(proofDetail)}</small></p><small>A stable Git boundary does not by itself establish a 1-minimal set, agent intent, or a unique semantic root cause.</small></article></div></section>
-<section class="section"><div class="section-head"><span class="number">04</span><h2>FIX</h2></div><div class="grid"><article class="card panel"><h3>Evidence-bounded repair packet</h3><p>FaultLine can hand a repair workflow the frozen witness, verified boundary, and evidence digests without choosing a model culprit.</p><p class="empty-state"><strong>Repair not verified</strong><br>Repair artifact not attached to this bundle.</p><small>No repair claim is rendered from a boundary-only proof package.</small></article>${lifecyclePanel(view)}</div></section>
-<section class="section" id="prevent"><div class="section-head"><span class="number">05</span><h2>PREVENT</h2></div><div class="grid">${recoveryPanel(investigation.transitions)}<article class="card panel"><h3>Portable proof bundle</h3><div class="proof"><span>Integrity scope</span><small>${escapeHtml(manifest.integrityScope)}</small></div><div class="proof"><span>Bundle root</span><code title="${escapeHtml(view.rootDigest)}">${escapeHtml(shortDigest(view.rootDigest))}</code></div><div class="proof"><span>Verified command</span><code>fl verify &lt;bundle&gt; --expect-root ${escapeHtml(view.rootDigest)}</code></div><details><summary>Integrity boundary</summary><pre>Verifies the complete declared file set against an externally retained root. It does not execute repository code, reveal raw witness material, or turn inspection into a new run.</pre></details></article></div></section>
+<section class="section" id="prove"><div class="section-head"><span class="number">03</span><h2>PROVE</h2></div><div class="grid"><article class="card panel"><h3>Sandbox evidence</h3><p>Recorded execution trust: <strong>${escapeHtml(investigation.proof.executionTrust.replaceAll("_", " "))}</strong>.</p><div class="table-wrap"><table class="data-table"><thead><tr><th>Kind</th><th>Executor</th><th>Policy</th><th>Runtime constraints</th><th>Coverage</th></tr></thead><tbody>${sandboxRows(view)}</tbody></table></div><small>Policy and command values are represented by digests; raw output and overlay bytes are intentionally omitted.</small></article>${minimizationPanel(view)}</div></section>
+<section class="section"><div class="section-head"><span class="number">04</span><h2>FIX</h2></div><div class="grid">${repairPanel(view)}${lifecyclePanel(view)}</div></section>
+<section class="section" id="prevent"><div class="section-head"><span class="number">05</span><h2>PREVENT</h2></div><div class="grid">${recoveryPanel(investigation.transitions)}${preventionGuidancePanel(view)}<article class="card panel"><h3>Portable proof bundle</h3><div class="proof"><span>Integrity scope</span><small>${escapeHtml(manifest.integrityScope)}</small></div><div class="proof"><span>Bundle root</span><code title="${escapeHtml(view.rootDigest)}">${escapeHtml(shortDigest(view.rootDigest))}</code></div><div class="proof"><span>Verified command</span><code>fl verify &lt;bundle&gt; --expect-root ${escapeHtml(view.rootDigest)}</code></div><details><summary>Integrity boundary</summary><pre>Verifies the complete declared file set against an externally retained root. Separately supplied attachments are re-verified and linked before rendering, but are not retroactively included in this Git proof root.</pre></details></article></div></section>
 ${renderIncidentPageDocumentEnd({
   footer: "FaultLine reports verified predicate-specific evidence, states when minimization or repair artifacts are absent, and does not claim private model reasoning, a unique semantic cause, or native Codex interception."
 })}`;

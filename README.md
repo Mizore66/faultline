@@ -9,10 +9,10 @@ It deliberately does **not** claim model intent, a unique semantic root cause, o
 ## What is implemented
 
 - `fl judge-demo` is a deterministic, runnable five-beat product demo: **BREAK -> FIND -> PROVE -> FIX -> PREVENT**.
-- `fl serve --bundle <proof>` renders that same five-beat incident experience from a verified, real Git proof package; it stays read-only and labels artifacts that were not attached rather than filling them with fixture claims.
+- `fl serve --bundle <proof>` renders that same five-beat incident experience from a verified, real Git proof package. Optionally supplied minimization and repair records require separately retained digests, are independently re-verified, and appear in the same page only when their applicable evidence binding matches; they are never mislabeled as part of the original proof root.
 - `fl doctor` makes Git, clean-worktree, Node, Docker CLI/daemon, and likely-runtime prerequisites explicit before a user starts an incident. `fl incident start` records a review-only command/range draft and human-origin witness proposal without executing, approving, or freezing it.
 - `fl runtime resolve node|python|go` and guided incident intake resolve only an already-local curated image to Docker's immutable `RepoDigest`; they never pull an image implicitly or treat a mutable tag as proof input.
-- `fl witness review <id>` opens a local, token-protected human review workbench for the exact command, canonical overlay bytes, and policy. Approval and freeze are separate explicit actions; malformed or unblinded proposals are refused before a freeze record can be written.
+- `fl witness review <id>` starts a local, token-protected human review workbench and prints its URL for the exact command, canonical overlay bytes, and policy. Approval and freeze are separate explicit actions; malformed or unblinded proposals are refused before a freeze record can be written.
 - Witness proposals, human approval, and freeze records are immutable, content-addressed, and verified before an investigation can run.
 - `fl record` stores a hash-chained, versioned Codex-compatible lifecycle ledger and captures real clean-Git checkpoints. It labels the transport (`CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR`) rather than pretending to intercept private Codex internals.
 - `fl investigate git` materializes a real Git commit range into detached temporary worktrees and runs the frozen witness three times per state.
@@ -36,6 +36,8 @@ The demo writes a managed bundle beneath `.faultline/bundles/` and starts a loca
 When supplied, `--output` must also be a new or previously verified child directory under this managed root; FaultLine intentionally rejects arbitrary output paths.
 
 For the actual user path—not the deterministic sample—start with [your first FaultLine incident](docs/first-incident.md). It documents the early `fl doctor` preflight, conservative human-reviewed intake, explicit runtime digest resolution, freeze, proof-grade replay, and verified incident page.
+
+For the project’s own reproducible historical CI case, use the clearly scoped [FaultLine self-incident runbook](docs/faultline-self-incident.md). It remains a prepared runbook until a human-reviewed Docker proof bundle and externally retained root have actually been recorded.
 
 ## CI and distribution boundary
 
@@ -98,11 +100,11 @@ pnpm fl -- runtime resolve node
 pnpm fl -- incident start --repo . --command "pnpm test -- checkout" --runtime node
 ```
 
-The draft and human-origin proposal are write-once local records. Run `pnpm fl -- witness review <id>` to review the exact command, overlay bytes, and policy in a local browser workbench; it requires separate human approval and freeze clicks before continuing to Git investigation. The full happy path, support boundary, CI handoff, and failure modes are in [docs/first-incident.md](docs/first-incident.md) and [docs/github-action.md](docs/github-action.md).
+The draft and human-origin proposal are write-once local records. Run `pnpm fl -- witness review <id>` to review the exact command, overlay bytes, and policy in a local browser workbench; it requires separate human approval and freeze clicks. Retain the freeze digest outside the witness store, then use `pnpm fl -- incident status <id>` and `pnpm fl -- incident continue <id> --expect-digest <retained-frozen-digest>` to carry that same immutable incident into proof-grade replay without retyping its range or witness identifier. The full happy path, support boundary, CI handoff, and failure modes are in [docs/first-incident.md](docs/first-incident.md) and [docs/github-action.md](docs/github-action.md).
 
 ## Real Git investigation
 
-First create and freeze a reviewed witness. The proposal input is a blinded incident packet plus the exact overlay bytes to execute.
+The guided path is `fl incident start` → `fl witness review` → `fl incident continue`. The lower-level commands below remain available for automation or a pre-existing witness store. First create and freeze a reviewed witness. The proposal input is a blinded incident packet plus the exact overlay bytes to execute.
 
 ```powershell
 pnpm fl -- witness propose --input .\proposal.json
@@ -294,6 +296,22 @@ Verify an existing inferred repair artifact without re-running a model or any re
 ```powershell
 pnpm fl -- repair verify .faultline\repair-briefs\<repair-id>
 ```
+
+`fl repair brief` prints an `artifactDigest`; retain it outside the directory and pass it to `fl repair verify --expect-digest ...` or `fl serve --expect-repair ...`.
+
+After retaining the minimization result digest and generating a repair brief, bring those separately verified records into the **same read-only incident page**:
+
+```powershell
+pnpm fl -- serve `
+  --bundle .faultline\git-proof-bundles\<investigation> `
+  --expect-root sha256:<recorded-root> `
+  --minimization .faultline\minimizations\<result>.json `
+  --expect-minimization sha256:<retained-minimization-digest> `
+  --repair .faultline\repair-briefs\<repair-id> `
+  --expect-repair sha256:<retained-repair-artifact-digest>
+```
+
+The page re-verifies each attachment against its retained digest. A minimization must match the proof's frozen witness and stable pass-to-fail transition; a repair artifact must match the exact investigation and frozen witness. The shareable page renders only certification status, counts, and evidence IDs—free-form repair text stays in the private repair artifact. Attachments remain outside the original Git proof root.
 
 ## How Codex and GPT-5.6 are used
 

@@ -68,9 +68,20 @@ The screen verifies the strict blinded-packet shape and proposal digests before 
 
 The freeze screen contains the externally retainable frozen digest. Keep it with the incident record before asking FaultLine to localize anything. A displayed reviewer name remains an assertion unless you add the optional reviewer signature workflow.
 
-## 5. Replay the frozen witness and share the real incident page
+## 5. Continue the same incident and share the real incident page
 
-Use the exact range, frozen digest, and image digest recorded in the previous steps:
+Do not retype the Git range, proposal ID, or selected runtime. `fl incident continue` re-reads the immutable draft and the frozen witness, refuses any mismatch, and uses the recorded bracket. Check the durable state first. Proof-grade continuation requires the frozen digest retained outside the witness store after review; without it, `status` reports `RETAIN_DIGEST_REQUIRED` and `continue` refuses to publish proof:
+
+```powershell
+pnpm fl -- incident status <id> --expect-digest <frozen-digest>
+pnpm fl -- incident continue <id> --image <resolved-image@sha256:...> --expect-digest <frozen-digest>
+```
+
+If intake recorded `--runtime node`, `python`, or `go`, its resolved digest is already bound to the draft, so omit `--image`. An explicit `--image` must exactly match that recorded digest. `continue` does not select a new base, mutate the draft, approve/freeze a witness, or pull an image. Its default output stays under the incident repository’s `.faultline/git-proof-bundles/` root.
+
+For local diagnosis only, `fl incident continue <id> --unsafe-local` makes the non-proof boundary explicit: it can help validate wiring when Docker is unavailable, but it returns `INVESTIGATION_NOT_PROOF` and cannot publish a portable bundle. It is not a substitute for the Docker-isolated path in a demo or incident claim.
+
+The lower-level command remains available for automation or an already-managed witness store:
 
 ```powershell
 pnpm fl -- investigate git `
@@ -90,7 +101,21 @@ pnpm fl -- serve `
   --expect-root <retained-root-digest>
 ```
 
-That page is read-only and verifies the package before rendering. It shows the real boundary, verification status, lifecycle binding when recorded, and explicit "not attached" states for minimization or repair artifacts that were not included. It never exposes the raw command, overlay bytes, repository path, or raw output.
+That page is read-only and verifies the package before rendering. It shows the real boundary, verification status, lifecycle binding when recorded, and explicit "not attached" states for minimization or repair artifacts that were not included. It never exposes witness behavior text, the raw command, overlay bytes, repository path, or raw output.
+
+If you later run the counterfactual minimizer and generate a citation-validated repair brief, render them in this **same incident page** rather than switching back to a fixture-only story:
+
+```powershell
+pnpm fl -- serve `
+  --bundle .faultline\git-proof-bundles\<investigation> `
+  --expect-root <retained-root-digest> `
+  --minimization .faultline\minimizations\<result>.json `
+  --expect-minimization <retained-minimization-digest> `
+  --repair .faultline\repair-briefs\<repair-id> `
+  --expect-repair <retained-repair-artifact-digest>
+```
+
+FaultLine independently re-verifies each optional record against its retained digest. A minimization must match the displayed proof's frozen witness and stable pass-to-fail transition; a repair packet must match the exact investigation and frozen witness. The shareable page exposes only certification status, counts, and evidence IDs; free-form repair text stays in the private repair artifact. It labels attachments as separately verified downstream evidence, not as files retroactively covered by the Git bundle root.
 
 ## Failure modes and support boundary
 
@@ -100,6 +125,8 @@ That page is read-only and verifies the package before rendering. It shows the r
 | Dirty worktree | Doctor reports an actionable count without leaking changed paths. | Commit, stash, or explicitly model changes before recording a checkpoint. |
 | Root or merge `HEAD` | Intake refuses a guessed predecessor. | Supply both `--from` and `--to` after human review. |
 | Image tag exists but has no local digest | Runtime resolution refuses the mutable/unresolved tag. | Pull a reviewed tag yourself and resolve it again, or use a known digest-pinned image. |
+| Draft and frozen witness disagree | `fl incident status` marks the incident invalid and `continue` refuses execution. | Review the immutable records; start a new incident rather than changing an approved witness. |
+| Frozen digest was not retained outside the witness store | `status` reports `RETAIN_DIGEST_REQUIRED` and proof-grade `continue` refuses to run. | Retrieve the reviewed digest from the freeze screen, retain it independently, and supply `--expect-digest`; do not copy it from the stored record and call that external retention. |
 | Command needs installs or network | The Docker runner's isolated policy prevents a proof-grade run. | Prepare a suitable image with dependencies or use an explicit non-proof local diagnostic outside the claim. |
 | Runs are noisy or Docker errors | FaultLine records an inconclusive/non-proof result and does not publish a portable proof package. | Fix the witness/environment and preserve the distinction from proof. |
 

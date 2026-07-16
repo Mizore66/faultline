@@ -10,7 +10,11 @@ import { redactValue } from "./redaction.js";
  * verdicts, causal proof, or a replacement witness. This module turns only a
  * verified Git investigation into a compact, citation-checked prompt.
  */
-export const REPAIR_EVIDENCE_PACKET_VERSION = "faultline.repair-evidence.v1" as const;
+// v2 binds guidance to the exact *frozen review record*, rather than only to
+// the command-and-overlay witness digest used by the older v1 packet.  The
+// version bump makes older packets fail closed instead of silently changing
+// the meaning of the frozenWitnessDigest field.
+export const REPAIR_EVIDENCE_PACKET_VERSION = "faultline.repair-evidence.v2" as const;
 export const REPAIR_BRIEF_VERSION = "faultline.repair-brief.v1" as const;
 
 const DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -105,7 +109,10 @@ export function createRepairEvidencePacket(input: unknown): RepairEvidencePacket
   const unsigned = {
     schemaVersion: REPAIR_EVIDENCE_PACKET_VERSION,
     investigationDigest: resultDigest(result),
-    frozenWitnessDigest: result.witness.witnessDigest,
+    // Bind repair guidance to the reviewed approval/freeze record, not merely
+    // to the command-and-overlay digest. A later review chain must never be
+    // interchangeable with the exact frozen witness that produced the proof.
+    frozenWitnessDigest: result.witness.frozenDigest,
     recorder: result.recorder,
     nativeCodexInterception: false as const,
     facts,

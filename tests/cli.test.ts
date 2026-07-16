@@ -290,6 +290,96 @@ describe("FaultLine CLI workflows", () => {
     }
   });
 
+  it("continues one immutable incident after a human freeze without retyping its range or witness digest", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-incident-continue-"));
+    try {
+      const repository = join(directory, "source");
+      const store = join(directory, "witnesses");
+      git(directory, ["init", "source"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine CLI test"]);
+      const ancestor = commit(repository, "good", "known good");
+      const descendant = commit(repository, "bad", "reported failure");
+      const id = "continue-incident";
+
+      expect(runFl([
+        "incident", "start", "--repo", repository, "--command", "node -e \"process.exit(0)\"",
+        "--id", id, "--store", store
+      ], { cwd: directory }).status).toBe(0);
+
+      const pending = runFl(["incident", "status", id, "--repo", repository, "--store", store], { cwd: directory });
+      expect(pending.status).toBe(0);
+      expect(JSON.parse(pending.stdout)).toMatchObject({
+        status: "REVIEW_REQUIRED",
+        incident: { id, range: { ancestor, descendant } },
+        frozenWitness: { valid: false }
+      });
+
+      expect(runFl(["witness", "approve", id, "--approved-by", "reviewer@example.test", "--store", store], { cwd: directory }).status).toBe(0);
+      const frozen = runFl(["witness", "freeze", id, "--store", store], { cwd: directory });
+      expect(frozen.status).toBe(0);
+      const frozenDigest = (JSON.parse(frozen.stdout) as { frozenDigest: string }).frozenDigest;
+
+      const retentionRequired = runFl(["incident", "status", id, "--repo", repository, "--store", store], { cwd: directory });
+      expect(retentionRequired.status).toBe(0);
+      expect(JSON.parse(retentionRequired.stdout)).toMatchObject({
+        status: "RETAIN_DIGEST_REQUIRED",
+        frozenWitness: { valid: true, frozenDigest, externalDigestStatus: "NOT_PROVIDED" }
+      });
+
+      const ready = runFl([
+        "incident", "status", id, "--repo", repository, "--store", store, "--expect-digest", frozenDigest
+      ], { cwd: directory });
+      expect(ready.status).toBe(0);
+      expect(JSON.parse(ready.stdout)).toMatchObject({
+        status: "READY_TO_INVESTIGATE",
+        frozenWitness: { valid: true, frozenDigest, externalDigestStatus: "MATCH" }
+      });
+
+      const withoutRetainedDigest = runFl([
+        "incident", "continue", id, "--repo", repository, "--store", store, "--image", pinnedImage
+      ], { cwd: directory });
+      expect(withoutRetainedDigest.status).toBe(1);
+      expect(withoutRetainedDigest.stderr).toMatch(/requires --expect-digest/i);
+
+      // This local escape hatch is intentionally not proof-grade, but it
+      // exercises the durable handoff without retyping the selected range,
+      // proposal id, or frozen digest into `fl investigate git`.
+      const continued = runFl([
+        "incident", "continue", id, "--repo", repository, "--store", store, "--unsafe-local"
+      ], { cwd: directory });
+      expect(continued.status).toBe(1);
+      expect(JSON.parse(continued.stdout)).toMatchObject({
+        status: "INVESTIGATION_NOT_PROOF",
+        incident: {
+          id,
+          range: { ancestor, descendant },
+          frozenDigest,
+          frozenDigestExternalStatus: "NOT_PROVIDED"
+        },
+        proofBundle: null
+      });
+      expect(continued.stdout).not.toContain("node -e");
+      expect(runFl(["incident", "status", id, "--repo", directory, "--store", store], { cwd: directory }).status).toBe(1);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses incomplete shareable attachment flags instead of silently serving a boundary-only page", () => {
+    const missingRepair = runFl(["serve", "--bundle", "placeholder", "--repair"]);
+    expect(missingRepair.status).toBe(1);
+    expect(missingRepair.stderr).toContain("Missing required option: --repair");
+
+    const missingMinimization = runFl(["serve", "--bundle", "placeholder", "--minimization"]);
+    expect(missingMinimization.status).toBe(1);
+    expect(missingMinimization.stderr).toContain("Missing required option: --minimization");
+
+    const missingRepairDigest = runFl(["serve", "--bundle", "placeholder", "--repair", "repair-directory"]);
+    expect(missingRepairDigest.status).toBe(1);
+    expect(missingRepairDigest.stderr).toContain("shareable repair attachment requires both");
+  });
+
   it("keeps doctor Git diagnostics from invoking a repository-local fsmonitor command", () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-cli-doctor-fsmonitor-"));
     try {
