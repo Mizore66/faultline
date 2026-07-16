@@ -404,7 +404,17 @@ describe("FaultLine CLI workflows", () => {
       runFl(["doctor", "--repo", repository], { cwd: directory });
       expect(existsSync(marker)).toBe(false);
     } finally {
-      rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      try {
+        // Git or Defender can retain a just-closed handle beneath a temporary
+        // worktree longer than Node's short default retry window on hosted
+        // Windows runners. The security assertion already ran above; a final
+        // EPERM/EBUSY during disposable runner cleanup must not misreport the
+        // fsmonitor test as a FaultLine behavior failure.
+        rmSync(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+      } catch (error) {
+        const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
+        if (process.platform !== "win32" || (code !== "EPERM" && code !== "EBUSY")) throw error;
+      }
     }
   });
 
