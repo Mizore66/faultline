@@ -1,5 +1,10 @@
 import { lstatSync, realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
+
+const DARWIN_SYSTEM_DIRECTORY_ALIASES = [
+  ["/var", "/private/var"],
+  ["/tmp", "/private/tmp"]
+] as const;
 
 /**
  * Resolve a directory segment that is safe to traverse without accepting a
@@ -14,11 +19,7 @@ export function resolveSafeDirectorySegment(path: string): string | null {
   if (!stat.isSymbolicLink() || process.platform !== "darwin") return null;
 
   const lexical = resolve(path);
-  const expectedTarget = lexical === "/var"
-    ? "/private/var"
-    : lexical === "/tmp"
-      ? "/private/tmp"
-      : null;
+  const expectedTarget = DARWIN_SYSTEM_DIRECTORY_ALIASES.find(([alias]) => lexical === alias)?.[1] ?? null;
   if (expectedTarget === null) return null;
 
   try {
@@ -28,4 +29,27 @@ export function resolveSafeDirectorySegment(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Normalize only verified macOS system aliases for path comparisons. This
+ * deliberately does not resolve arbitrary paths or follow user-controlled
+ * links; callers still perform segment-by-segment safety checks before writes.
+ */
+export function resolveTrustedSystemPath(path: string): string {
+  const absolute = resolve(path);
+  if (process.platform !== "darwin") return absolute;
+
+  for (const [alias, target] of DARWIN_SYSTEM_DIRECTORY_ALIASES) {
+    if (absolute !== alias && !absolute.startsWith(`${alias}/`)) continue;
+    if (resolveSafeDirectorySegment(alias) !== target) return absolute;
+    const suffix = relative(alias, absolute);
+    return suffix ? join(target, suffix) : target;
+  }
+  return absolute;
+}
+
+/** Compare managed paths while treating verified macOS system aliases as one location. */
+export function relativeTrustedSystemPath(root: string, candidate: string): string {
+  return relative(resolveTrustedSystemPath(root), resolveTrustedSystemPath(candidate));
 }

@@ -40,7 +40,7 @@ import {
   type CodexTransport
 } from "./ledger.js";
 import { validateSandboxPlanAudit } from "./sandbox.js";
-import { resolveSafeDirectorySegment } from "./safe-directory.js";
+import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
 
 /** A portable, Git-native proof package for one completed FaultLine investigation. */
 export const GIT_PROOF_BUNDLE_SCHEMA_VERSION = "faultline.git-proof-bundle.v1" as const;
@@ -246,7 +246,7 @@ function ensureRealDirectoryTree(directory: string): void {
 }
 
 function isNested(root: string, candidate: string): boolean {
-  const nested = relative(root, candidate);
+  const nested = relativeTrustedSystemPath(root, candidate);
   return Boolean(nested) && !nested.startsWith("..") && !isAbsolute(nested);
 }
 

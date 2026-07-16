@@ -40,7 +40,7 @@ import {
 import { readModelOverlayInput } from "./overlay-input.js";
 import { describeBundlePath, verifyProofBundle, writeProofBundle } from "./proof-bundle.js";
 import { redactValue } from "./redaction.js";
-import { resolveSafeDirectorySegment } from "./safe-directory.js";
+import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
 import {
   createRepairEvidencePacket,
   proposeRepairBriefWithGpt,
@@ -128,7 +128,7 @@ function attestationStore(args: string[]): string {
 function safeManagedFileOutput(outputFile: string, managedRoot: string, label: string): string {
   const root = resolve(managedRoot);
   const output = resolve(outputFile);
-  const nested = relative(root, output);
+  const nested = relativeTrustedSystemPath(root, output);
   if (!nested || nested.startsWith("..") || isAbsolute(nested)) {
     throw new Error(`${label} output must be a file beneath ${root}`);
   }

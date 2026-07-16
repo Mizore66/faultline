@@ -14,7 +14,7 @@ import { isAbsolute, join, parse, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson, digestJson } from "./canonical.js";
-import { resolveSafeDirectorySegment } from "./safe-directory.js";
+import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
 
 /**
  * A bundle attestation is deliberately not a signature. It gives a reviewer a
@@ -115,7 +115,7 @@ function canonicalTimestamp(value: string | Date | undefined): string {
 }
 
 function isDescendantOrSame(root: string, candidate: string): boolean {
-  const pathFromRoot = relative(root, candidate);
+  const pathFromRoot = relativeTrustedSystemPath(root, candidate);
   return pathFromRoot === "" || (!pathFromRoot.startsWith("..") && !isAbsolute(pathFromRoot));
 }
 

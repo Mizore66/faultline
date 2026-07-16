@@ -5,7 +5,7 @@ import { z } from "zod";
 import { canonicalJson, digestJson, sha256 } from "./canonical.js";
 import { DemoAnalysisSchema, MinimizationAttemptSchema, RunRecordSchema, WitnessSchema, type DemoAnalysis, type RunRecord, type Verdict } from "./domain.js";
 import { analysisDigest } from "./engine.js";
-import { resolveSafeDirectorySegment } from "./safe-directory.js";
+import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
 
 const ManifestSchema = z.object({
   schemaVersion: z.literal("faultline.proof-bundle.v2"),
@@ -102,7 +102,7 @@ function ensureRealDirectoryTree(directory: string): void {
 export function assertSafeProofOutput(outputDirectory: string, proofRoot = defaultProofRoot()): string {
   const output = resolve(outputDirectory);
   const root = resolve(proofRoot);
-  const nestedPath = relative(root, output);
+  const nestedPath = relativeTrustedSystemPath(root, output);
   if (!nestedPath || nestedPath.startsWith("..") || isAbsolute(nestedPath)) {
     throw new Error(`Proof bundle output must be a child directory of ${root}`);
   }

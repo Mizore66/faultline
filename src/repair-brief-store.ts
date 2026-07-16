@@ -22,7 +22,7 @@ import {
   type RepairBrief,
   type RepairEvidencePacket
 } from "./repair-brief.js";
-import { resolveSafeDirectorySegment } from "./safe-directory.js";
+import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
 
 /** A private, write-once package containing inferred repair guidance. */
 export const REPAIR_BRIEF_ARTIFACT_VERSION = "faultline.repair-brief-artifact.v1" as const;
@@ -125,7 +125,7 @@ function ensureRealDirectoryTree(directory: string): void {
 }
 
 function isNested(root: string, candidate: string): boolean {
-  const nested = relative(root, candidate);
+  const nested = relativeTrustedSystemPath(root, candidate);
   return Boolean(nested) && !nested.startsWith("..") && !isAbsolute(nested);
 }
 

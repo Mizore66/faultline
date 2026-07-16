@@ -2,7 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveSafeDirectorySegment } from "../src/safe-directory.js";
+import {
+  relativeTrustedSystemPath,
+  resolveSafeDirectorySegment,
+  resolveTrustedSystemPath
+} from "../src/safe-directory.js";
 
 describe("safe directory segments", () => {
   const itOnDarwin = process.platform === "darwin" ? it : it.skip;
@@ -10,6 +14,11 @@ describe("safe directory segments", () => {
   itOnDarwin("accepts only the verified macOS system temporary-directory aliases", () => {
     expect(resolveSafeDirectorySegment("/var")).toBe("/private/var");
     expect(resolveSafeDirectorySegment("/tmp")).toBe("/private/tmp");
+    expect(resolveTrustedSystemPath("/var/folders/faultline-cli")).toBe("/private/var/folders/faultline-cli");
+    expect(relativeTrustedSystemPath(
+      "/private/var/folders/faultline-cli/.faultline/bundles",
+      "/var/folders/faultline-cli/.faultline/bundles/receipt-demo"
+    )).toBe("receipt-demo");
   });
 
   it("rejects a user-controlled directory symlink", () => {
