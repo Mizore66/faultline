@@ -161,9 +161,10 @@ describe("FaultLine deterministic sample", () => {
     expect(page).toContain("PROVE");
     expect(page).toContain("FIX");
     expect(page).toContain("PREVENT");
-    expect(page).toContain("Re-run all evidence");
-    expect(page).toContain("Not executed — cached replay only");
-    expect(page).toContain("NOT VERIFIED — cached replay only");
+    expect(page).toContain("DETERMINISTIC SAMPLE");
+    expect(page).toContain("Re-run fixture evidence");
+    expect(page).toContain("Not executed - cached replay only");
+    expect(page).toContain("SAMPLE ONLY - cached replay is not evidence");
     expect(page).not.toContain("Bidirectionally validated");
     expect(page).not.toContain("VERIFIED PREVENTION");
   });

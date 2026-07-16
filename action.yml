@@ -1,0 +1,100 @@
+name: FaultLine incident intake
+description: Record a human-review-required FaultLine incident draft from a failed CI command without executing it, pulling an image, approving a witness, or freezing a witness.
+inputs:
+  command:
+    description: The failing command to preserve for human witness review. It is passed as data and is never executed by this action.
+    required: true
+  from:
+    description: Optional explicit known-good Git revision. Supply this together with `to`, or leave both blank for the conservative local HEAD-parent fallback.
+    required: false
+  to:
+    description: Optional explicit known-bad Git revision. Supply this together with `from`, or leave both blank for the conservative local HEAD-parent fallback.
+    required: false
+  runtime:
+    description: Optional already-local curated runtime alias: node, python, or go. FaultLine will inspect only; it will not pull an image.
+    required: false
+  draft-id:
+    description: Optional safe, deterministic identifier for the immutable intake record.
+    required: false
+outputs:
+  doctor-report:
+    description: Absolute runner path to the JSON prerequisite report. Upload this path as an artifact if you need to retain it.
+    value: ${{ steps.intake.outputs.doctor-report }}
+  intake-report:
+    description: Absolute runner path to the JSON review-required intake report. Upload this path as an artifact if you need to retain it.
+    value: ${{ steps.intake.outputs.intake-report }}
+  draft-path:
+    description: Absolute workspace path to the immutable incident draft.
+    value: ${{ steps.intake.outputs.draft-path }}
+  proposal-id:
+    description: ID of the proposed witness that still needs a human approval and explicit freeze.
+    value: ${{ steps.intake.outputs.proposal-id }}
+  doctor-exit-code:
+    description: The `fl doctor` status captured without treating a non-ready machine as a failed review-only intake.
+    value: ${{ steps.intake.outputs.doctor-exit-code }}
+runs:
+  using: composite
+  steps:
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - name: Set up pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10.32.1
+    - name: Build FaultLine
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        pnpm install --frozen-lockfile
+        pnpm build
+    - name: Record review-required incident intake
+      id: intake
+      shell: bash
+      env:
+        FL_COMMAND: ${{ inputs.command }}
+        FL_FROM: ${{ inputs.from }}
+        FL_TO: ${{ inputs.to }}
+        FL_RUNTIME: ${{ inputs.runtime }}
+        FL_DRAFT_ID: ${{ inputs.draft-id }}
+      run: |
+        set -euo pipefail
+        doctor_report="$RUNNER_TEMP/faultline-doctor.json"
+        intake_report="$RUNNER_TEMP/faultline-intake.json"
+
+        # Doctor is intentionally non-zero when proof-grade prerequisites are
+        # unavailable. Retain that honest report; intake itself remains
+        # review-only and does not certify a proof.
+        set +e
+        node "$GITHUB_ACTION_PATH/dist/cli.js" doctor --repo "$GITHUB_WORKSPACE" --json > "$doctor_report"
+        doctor_status=$?
+        set -e
+
+        args=(incident start --repo "$GITHUB_WORKSPACE" --command "$FL_COMMAND")
+        if [[ -n "$FL_FROM" || -n "$FL_TO" ]]; then
+          if [[ -z "$FL_FROM" || -z "$FL_TO" ]]; then
+            echo "FaultLine action requires from and to together." >&2
+            exit 1
+          fi
+          args+=(--from "$FL_FROM" --to "$FL_TO")
+        fi
+        if [[ -n "$FL_RUNTIME" ]]; then args+=(--runtime "$FL_RUNTIME"); fi
+        if [[ -n "$FL_DRAFT_ID" ]]; then args+=(--id "$FL_DRAFT_ID"); fi
+
+        node "$GITHUB_ACTION_PATH/dist/cli.js" "${args[@]}" > "$intake_report"
+        node --input-type=module - "$doctor_report" "$intake_report" "$GITHUB_OUTPUT" "$doctor_status" <<'NODE'
+        import { appendFileSync, readFileSync } from "node:fs";
+
+        const [, , doctorPath, intakePath, outputPath, doctorStatus] = process.argv;
+        const intake = JSON.parse(readFileSync(intakePath, "utf8"));
+        const lines = [
+          `doctor-report=${doctorPath}`,
+          `intake-report=${intakePath}`,
+          `draft-path=${intake.draft.path}`,
+          `proposal-id=${intake.witnessProposal.proposalId}`,
+          `doctor-exit-code=${doctorStatus}`
+        ];
+        appendFileSync(outputPath, `${lines.join("\n")}\n`, "utf8");
+        NODE

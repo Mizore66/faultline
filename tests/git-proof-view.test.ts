@@ -239,13 +239,26 @@ describe("read-only Git proof view", () => {
       });
       const page = renderGitProofIncidentPage(view);
       expect(page).toContain("Verified <em>evidence</em>");
+      expect(page).toContain("BREAK");
+      expect(page).toContain("FIND");
+      expect(page).toContain("PROVE");
+      expect(page).toContain("FIX");
+      expect(page).toContain("PREVENT");
+      expect(page).toContain("Stable Git states");
       expect(page).toContain("Stable transitions");
+      expect(page).toContain("Recovery evidence");
+      expect(page).not.toContain("Recovery and prevention");
       expect(page).toContain("Lifecycle binding");
       expect(page).toContain("NATIVE DOCKER");
       expect(page).toContain("registry.example/faultline");
+      expect(page).toContain("Minimization artifact not attached to this bundle.");
+      expect(page).toContain("Repair artifact not attached to this bundle.");
       expect(page).not.toContain("/private/customer/repository");
       expect(page).not.toContain(Buffer.from("private-overlay-bytes\n", "utf8").toString("base64"));
       expect(page).not.toContain("Re-run all evidence");
+      expect(page).not.toContain("/api/rerun");
+      expect(page).not.toMatch(/<script\b/i);
+      expect(page).not.toMatch(/<button\b/i);
 
       const server = await startGitProofServer({ proof: view, port: 0 });
       try {

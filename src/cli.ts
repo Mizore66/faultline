@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { defaultWitnessProposal, proposeWitnessWithGpt } from "./ai.js";
@@ -16,6 +18,9 @@ import {
   writeGithubProvenanceReceipt
 } from "./github-provenance.js";
 import { createDemoAnalysis } from "./engine.js";
+import { runFaultLineDoctor, type FaultLineDoctorReport } from "./doctor.js";
+import { createIncidentDraft } from "./incident.js";
+import { defaultIncidentDraftStore, writeIncidentDraft } from "./incident-store.js";
 import { defaultJudgePreviewPath, writeJudgePreview } from "./judge-preview.js";
 import { captureCleanGitSnapshot, writeGitSidecarSnapshot } from "./git-snapshot.js";
 import { GitInvestigationResultSchema, investigateGitRange } from "./git-investigation.js";
@@ -50,6 +55,7 @@ import { readModelOverlayInput } from "./overlay-input.js";
 import { describeBundlePath, verifyProofBundle, writeProofBundle } from "./proof-bundle.js";
 import { redactValue } from "./redaction.js";
 import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
+import { resolveCuratedRuntime } from "./runtime.js";
 import {
   createRepairEvidencePacket,
   proposeRepairBriefWithGpt,
@@ -58,6 +64,8 @@ import {
 } from "./repair-brief.js";
 import { defaultRepairBriefRoot, verifyRepairBriefArtifact, writeRepairBriefArtifact } from "./repair-brief-store.js";
 import { startFaultLineServer, startGitProofServer } from "./server.js";
+import { startWitnessReviewServer } from "./witness-review-server.js";
+import { openWitnessReview } from "./witness-review.js";
 import {
   approveWitnessProposal,
   freezeApprovedWitness,
@@ -75,7 +83,11 @@ const usage = `FaultLine — executable evidence for agent-assisted code
 
 Usage:
   fl judge-demo [--replay | --rerun-all] [--output <managed-bundle-directory>] [--export-only]
+  fl --version
   fl judge-preview [--output <static-preview.html>]
+  fl doctor [--repo <directory>] [--json]
+  fl incident start --repo <directory> --command <failing-command> [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go>] [--store <directory>]
+  fl runtime resolve <node|python|go>
   fl demo live-git [--image <digest-pinned-image>] [--export-only] [--port <number>]
   fl verify <proof-bundle-directory> [--expect-root <sha256:...>]
   fl serve [--port <number>]
@@ -96,6 +108,7 @@ Usage:
   fl repair verify <repair-brief-directory>
   fl witness propose --input <proposal.json> [--store <directory>]
   fl witness propose --live --incident <incident.json> --proposal-id <id> --overlay-root <directory> [--model <model>] [--store <directory>]
+  fl witness review <proposal-id> [--json | --port <number>] [--store <directory>] [--draft-store <directory>]
   fl witness approve <proposal-id> --approved-by <actor> [--store <directory>]
   fl witness freeze <proposal-id> [--store <directory>]
   fl witness sign <proposal-id> --private-key <ed25519-private.pem> --keyring <trusted-reviewers.json> [--store <directory>]
@@ -119,6 +132,15 @@ function requiredOption(args: string[], flag: string): string {
   const value = option(args, flag);
   if (!value || value.startsWith("--")) throw new Error(`Missing required option: ${flag}`);
   return value;
+}
+
+function faultLineVersion(): string {
+  try {
+    const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: unknown };
+    return typeof packageJson.version === "string" ? packageJson.version : "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 function readJsonInput(file: string): unknown {
@@ -177,6 +199,215 @@ async function readStandardInput(): Promise<string> {
     process.stdin.once("error", rejectInput);
     process.stdin.once("end", () => resolveInput(body));
   });
+}
+
+function doctorSummary(report: FaultLineDoctorReport): string {
+  const diagnostics = report.diagnostics.map((diagnostic) => {
+    const observation = diagnostic.observation === null ? "" : ` (${diagnostic.observation})`;
+    const remediation = diagnostic.remediation === null ? "" : `\n    Fix: ${diagnostic.remediation}`;
+    return `[${diagnostic.status}] ${diagnostic.id}: ${diagnostic.summary}${observation}${remediation}`;
+  });
+  const runtime = report.likelyRuntime.kind === "UNKNOWN"
+    ? "unknown; choose an explicit digest-pinned image"
+    : `${report.likelyRuntime.kind.toLowerCase()} (${report.likelyRuntime.markers.join(", ") || "no markers"})`;
+  return [
+    "FaultLine doctor",
+    `Repository: ${report.repositoryRoot ?? report.repository}`,
+    `Machine preflight: ${report.dockerInvestigationPreflight}`,
+    `Image selection: ${report.imageSelection} (run fl runtime resolve after you choose a reviewed image)`,
+    `Likely runtime: ${runtime}`,
+    "",
+    ...diagnostics,
+    "",
+    "Limits:",
+    ...report.limitations.map((limitation) => `- ${limitation}`)
+  ].join("\n");
+}
+
+async function doctorCommand(args: string[]): Promise<void> {
+  const repository = resolve(option(args, "--repo") ?? process.cwd());
+  const report = await runFaultLineDoctor({ repository });
+  if (hasFlag(args, "--json")) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  } else {
+    process.stdout.write(`${doctorSummary(report)}\n`);
+  }
+  process.exitCode = report.dockerInvestigationPreflight === "READY" ? 0 : 1;
+}
+
+const INTAKE_SAFE_GIT_CONFIG = [
+  "-c", "core.hooksPath=/nonexistent/faultline-hooks",
+  "-c", "core.fsmonitor=false",
+  "-c", "core.useBuiltinFSMonitor=false",
+  "-c", "core.untrackedCache=false",
+  "-c", "core.preloadIndex=false",
+  "-c", "filter.lfs.process=",
+  "-c", "filter.lfs.smudge=",
+  "-c", "filter.lfs.required=false",
+  "-c", "diff.external=",
+  "-c", "submodule.recurse=false",
+  "-c", "fetch.recurseSubmodules=false",
+  "-c", "protocol.allow=never",
+  "-c", "protocol.file.allow=never",
+  "-c", "protocol.ext.allow=never",
+  "-c", "protocol.git.allow=never",
+  "-c", "protocol.ssh.allow=never",
+  "-c", "protocol.http.allow=never",
+  "-c", "protocol.https.allow=never"
+] as const;
+
+/** Read only the local HEAD and its parents; never infer a remote or PR base. */
+function locallyObservedHead(repository: string): { head: string; parents: string[] } {
+  const result = spawnSync("git", [
+    ...INTAKE_SAFE_GIT_CONFIG,
+    "-C", repository,
+    "show", "-s", "--format=%H%n%P", "HEAD"
+  ], {
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+    env: {
+      PATH: process.env.PATH ?? "",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_OPTIONAL_LOCKS: "0",
+      GIT_NO_REPLACE_OBJECTS: "1",
+      GIT_LFS_SKIP_SMUDGE: "1",
+      GIT_ALLOW_PROTOCOL: "none",
+      ...(process.platform === "win32" && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(process.platform === "win32" && process.env.ComSpec ? { ComSpec: process.env.ComSpec } : {}),
+      ...(process.platform === "win32" && process.env.PATHEXT ? { PATHEXT: process.env.PATHEXT } : {})
+    }
+  });
+  if (result.error || result.status !== 0) {
+    const detail = `${result.stderr ?? ""}${result.error?.message ?? ""}`.trim();
+    throw new Error(`FaultLine could not read a local Git HEAD for incident intake: ${detail || "run fl doctor or supply --from and --to explicitly"}`);
+  }
+  const lines = String(result.stdout ?? "").replace(/\r/g, "").split("\n");
+  const head = lines[0]?.trim();
+  const parentLine = lines[1]?.trim() ?? "";
+  if (!head) throw new Error("FaultLine could not read a local Git HEAD for incident intake; supply --from and --to explicitly.");
+  return { head, parents: parentLine ? parentLine.split(/\s+/).filter(Boolean) : [] };
+}
+
+function generatedIncidentId(): string {
+  return `incident-${new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 17)}-${randomUUID().slice(0, 12)}`;
+}
+
+async function incidentCommand(args: string[]): Promise<void> {
+  if (args[0] !== "start") {
+    throw new Error("Usage: fl incident start --repo <directory> --command <failing-command> [--id <safe-id>] [--from <commit> --to <commit>]");
+  }
+  const repository = resolve(requiredOption(args, "--repo"));
+  const command = requiredOption(args, "--command");
+  const from = option(args, "--from");
+  const to = option(args, "--to");
+  if ((from === undefined) !== (to === undefined)) {
+    throw new Error("Incident intake accepts --from and --to together, or neither for the conservative local HEAD-parent fallback.");
+  }
+  const draftId = option(args, "--id") ?? generatedIncidentId();
+  const requestedRuntime = option(args, "--runtime");
+  const timeoutSeconds = Number(option(args, "--timeout-seconds") ?? "300");
+  if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 3_600) {
+    throw new Error("--timeout-seconds must be an integer from 1 through 3600.");
+  }
+  const runtime = requestedRuntime === undefined ? undefined : await resolveCuratedRuntime(requestedRuntime);
+  // Even an explicit bracket must belong to a local Git worktree.  The
+  // observed facts are used only for the no-range fallback; they never make
+  // FaultLine select a remote base.
+  const localHead = locallyObservedHead(repository);
+  const draftInput = {
+    draftId,
+    createdAt: new Date().toISOString(),
+    repository,
+    command,
+    ...(from === undefined || to === undefined
+      ? { localHead }
+      : { range: { ancestor: from, descendant: to } }),
+    ...(runtime === undefined ? {} : { runtime: { requested: runtime.requested, image: runtime.image } })
+  };
+  // Resolve the range before creating the proposal so the proposal's blinded
+  // packet can describe the exact locally selected bracket. This preliminary
+  // value is never persisted; the persisted draft below binds the immutable
+  // proposal facts returned by the write-once witness store.
+  const preliminaryDraft = createIncidentDraft(draftInput);
+  const store = resolve(option(args, "--store") ?? join(repository, ".faultline", "witnesses"));
+  const proposal = proposeWitness(store, {
+    proposalId: preliminaryDraft.draftId,
+    proposalOrigin: "HUMAN",
+    incidentPacket: {
+      symptom: option(args, "--symptom") ?? "A human-reported command is failing and requires a reviewed, frozen witness before localization.",
+      ciLog: "The exact user-supplied command is stored in the reviewable witness, not executed by incident intake.",
+      repositoryLanguage: option(args, "--language") ?? "Unknown",
+      repositorySummary: `Review-only local Git range ${preliminaryDraft.range.ancestor} to ${preliminaryDraft.range.descendant} (${preliminaryDraft.range.source}). No remote base was selected.${preliminaryDraft.runtime === undefined ? "" : ` The selected local runtime resolves to ${preliminaryDraft.runtime.image}.`}`
+    },
+    witness: {
+      behavior: option(args, "--behavior") ?? "The human-supplied command must exit successfully at the selected immutable Git states.",
+      command,
+      overlays: [],
+      policy: { network: "disabled", credentials: "redacted", timeoutSeconds }
+    }
+  });
+  const draft = createIncidentDraft({
+    ...draftInput,
+    proposal: {
+      proposalId: proposal.proposalId,
+      proposalDigest: proposal.proposalDigest,
+      incidentPacketDigest: proposal.incidentPacketDigest,
+      commandDigest: proposal.witness.commandDigest
+    }
+  });
+  const draftStore = resolve(option(args, "--draft-store") ?? defaultIncidentDraftStore(repository));
+  const storedDraft = writeIncidentDraft(draftStore, draft);
+  process.stdout.write(`${JSON.stringify({
+    status: "DRAFT_REQUIRES_HUMAN_REVIEW",
+    draft: {
+      path: storedDraft.path,
+      digest: draft.draftDigest,
+      range: draft.range,
+      commandDigest: draft.commandDigest,
+      runtime: draft.runtime ?? null,
+      review: draft.review
+    },
+    witnessProposal: {
+      store,
+      proposalId: proposal.proposalId,
+      proposalDigest: proposal.proposalDigest,
+      incidentPacketDigest: proposal.incidentPacketDigest,
+      commandDigest: proposal.witness.commandDigest,
+      overlays: proposal.witness.overlays.length,
+      state: "NOT_APPROVED_NOT_FROZEN"
+    },
+    next: [
+      `fl witness review ${proposal.proposalId} --store ${store} --draft-store ${draftStore} (opens the local human review workbench; approval and freeze are separate explicit clicks)`,
+      draft.runtime === undefined
+        ? "Resolve a local curated runtime with fl runtime resolve <node|python|go>, or provide an explicit digest-pinned image to fl investigate git."
+        : `Use the frozen digest and selected image ${draft.runtime.image} with fl investigate git after human freeze.`,
+      "Proof-grade replay additionally requires a Docker daemon; FaultLine will not treat local debug as proof."
+    ],
+    limitations: [
+      "Incident intake did not execute the command, pull an image, query a remote branch, approve a witness, or freeze a witness.",
+      "The local default is only the exactly observed single-parent HEAD range; merge and root HEADs require an explicit range.",
+      "A local debug result is not proof-grade. Only completed Docker-isolated replay can produce a portable proof package."
+    ]
+  }, null, 2)}\n`);
+}
+
+async function runtimeCommand(args: string[]): Promise<void> {
+  if (args[0] !== "resolve" || !args[1]) {
+    throw new Error("Usage: fl runtime resolve <node|python|go>");
+  }
+  if (hasFlag(args, "--pull")) {
+    throw new Error("FaultLine never pulls a runtime image implicitly. Pull a reviewed catalog tag yourself, then run fl runtime resolve again to record its local digest.");
+  }
+  const resolution = await resolveCuratedRuntime(args[1]);
+  process.stdout.write(`${JSON.stringify({
+    status: "RESOLVED_LOCAL_DIGEST",
+    runtime: resolution.runtime,
+    requested: resolution.requested,
+    image: resolution.image,
+    next: `Run fl incident start ... --runtime ${resolution.runtime.alias} to persist this resolved image, or pass the image value directly to fl investigate git --image.`
+  }, null, 2)}\n`);
 }
 
 async function judgeDemo(args: string[]): Promise<void> {
@@ -283,6 +514,31 @@ async function witnessCommand(args: string[]): Promise<void> {
   const [action, proposalId] = args;
   const store = witnessStore(args);
   switch (action) {
+    case "review": {
+      if (!proposalId) throw new Error("Usage: fl witness review <proposal-id> [--json | --port <number>] [--draft-store <directory>]");
+      if (hasFlag(args, "--json")) {
+        const review = openWitnessReview(store, proposalId);
+        process.stdout.write(`${JSON.stringify({
+          status: "LOCAL_READ_ONLY_REVIEW",
+          review,
+          sensitivity: "This export contains the exact command and base64 overlay bytes. Treat it as sensitive incident material and do not publish it."
+        }, null, 2)}\n`);
+        return;
+      }
+      const port = Number(option(args, "--port") ?? "0");
+      if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+        throw new Error("--port must be an integer from 0 through 65535.");
+      }
+      const draftStore = resolve(option(args, "--draft-store") ?? defaultIncidentDraftStore());
+      const server = await startWitnessReviewServer({ store, proposalId, draftStore, port });
+      process.stdout.write(`FaultLine local witness review: ${server.url}\nReview the exact command, overlays, and policy. Approve and freeze require separate explicit clicks. Press Ctrl+C to stop.\n`);
+      await new Promise<void>((resolveExit) => {
+        process.once("SIGINT", () => {
+          void server.close().finally(resolveExit);
+        });
+      });
+      return;
+    }
     case "propose": {
       const liveIncident = option(args, "--incident");
       if (hasFlag(args, "--live") && liveIncident) {
@@ -381,7 +637,7 @@ async function witnessCommand(args: string[]): Promise<void> {
       return;
     }
     default:
-      throw new Error("Usage: fl witness propose|approve|freeze|sign|verify ...");
+      throw new Error("Usage: fl witness propose|review|approve|freeze|sign|verify ...");
   }
 }
 
@@ -803,11 +1059,24 @@ async function main(): Promise<void> {
     case "-h":
       process.stdout.write(`${usage}\n`);
       return;
+    case "--version":
+    case "-V":
+      process.stdout.write(`FaultLine ${faultLineVersion()}\n`);
+      return;
     case "judge-demo":
       await judgeDemo(args);
       return;
     case "judge-preview":
       judgePreviewCommand(args);
+      return;
+    case "doctor":
+      await doctorCommand(args);
+      return;
+    case "incident":
+      await incidentCommand(args);
+      return;
+    case "runtime":
+      await runtimeCommand(args);
       return;
     case "demo":
       await demoCommand(args);

@@ -26,6 +26,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - run: pnpm pack --dry-run
       - run: node dist/cli.js judge-demo --rerun-all --export-only
       - run: node dist/cli.js verify .faultline/bundles/judge-demo
 

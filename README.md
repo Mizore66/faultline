@@ -9,6 +9,10 @@ It deliberately does **not** claim model intent, a unique semantic root cause, o
 ## What is implemented
 
 - `fl judge-demo` is a deterministic, runnable five-beat product demo: **BREAK -> FIND -> PROVE -> FIX -> PREVENT**.
+- `fl serve --bundle <proof>` renders that same five-beat incident experience from a verified, real Git proof package; it stays read-only and labels artifacts that were not attached rather than filling them with fixture claims.
+- `fl doctor` makes Git, clean-worktree, Node, Docker CLI/daemon, and likely-runtime prerequisites explicit before a user starts an incident. `fl incident start` records a review-only command/range draft and human-origin witness proposal without executing, approving, or freezing it.
+- `fl runtime resolve node|python|go` and guided incident intake resolve only an already-local curated image to Docker's immutable `RepoDigest`; they never pull an image implicitly or treat a mutable tag as proof input.
+- `fl witness review <id>` opens a local, token-protected human review workbench for the exact command, canonical overlay bytes, and policy. Approval and freeze are separate explicit actions; malformed or unblinded proposals are refused before a freeze record can be written.
 - Witness proposals, human approval, and freeze records are immutable, content-addressed, and verified before an investigation can run.
 - `fl record` stores a hash-chained, versioned Codex-compatible lifecycle ledger and captures real clean-Git checkpoints. It labels the transport (`CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR`) rather than pretending to intercept private Codex internals.
 - `fl investigate git` materializes a real Git commit range into detached temporary worktrees and runs the frozen witness three times per state.
@@ -30,6 +34,12 @@ pnpm fl -- judge-demo --rerun-all
 
 The demo writes a managed bundle beneath `.faultline/bundles/` and starts a local incident page. Use `Ctrl+C` to stop it.
 When supplied, `--output` must also be a new or previously verified child directory under this managed root; FaultLine intentionally rejects arbitrary output paths.
+
+For the actual user path—not the deterministic sample—start with [your first FaultLine incident](docs/first-incident.md). It documents the early `fl doctor` preflight, conservative human-reviewed intake, explicit runtime digest resolution, freeze, proof-grade replay, and verified incident page.
+
+## CI and distribution boundary
+
+Use the reusable [CI incident-intake action](docs/github-action.md) to preserve a failed command as a review-required FaultLine proposal without executing it. The package has a checked `bin` entry (`fl --version`) and a lean `pnpm pack --dry-run` contract, but it remains deliberately `private` until the repository owner selects a license and an available public npm namespace. That owner decision is required before claiming an `npx` install path; the GitHub Action is the supported reusable entry point today.
 
 ## Fast judge check (no Docker or API key)
 
@@ -64,14 +74,40 @@ pnpm fl -- demo live-git --export-only
 
 The command pulls `node:22-alpine` only to resolve a concrete immutable image digest; all witness executions then use that digest with `--pull=never`. It creates immutable witness-review records and disposable source material beneath `.faultline\live-git-demo\`, replays the frozen witness in native Docker, writes a verified Git proof package, and prints its root. Omit `--export-only` to open the read-only proof view. Pass `--image registry.example/name@sha256:<64-lowercase-hex>` to use an already-resolved image instead.
 
+## First real incident (guided intake)
+
+Before making a real claim, let FaultLine surface local prerequisites:
+
+```powershell
+pnpm fl -- doctor --repo .
+```
+
+Then record a review-only draft from the command that is failing. It never runs the command, guesses a remote base, approves a witness, or freezes it. With no explicit range, it uses only an unambiguous locally observed one-parent `HEAD~1 -> HEAD` bracket:
+
+```powershell
+pnpm fl -- incident start `
+  --repo . `
+  --command "pnpm test -- checkout"
+```
+
+For a common Node/Python/Go base image, manually pull a reviewed catalog tag, resolve its local immutable Docker digest, and add `--runtime node` (or `python` / `go`) to the intake command. FaultLine will not pull an image for you:
+
+```powershell
+docker pull node:22-alpine
+pnpm fl -- runtime resolve node
+pnpm fl -- incident start --repo . --command "pnpm test -- checkout" --runtime node
+```
+
+The draft and human-origin proposal are write-once local records. Run `pnpm fl -- witness review <id>` to review the exact command, overlay bytes, and policy in a local browser workbench; it requires separate human approval and freeze clicks before continuing to Git investigation. The full happy path, support boundary, CI handoff, and failure modes are in [docs/first-incident.md](docs/first-incident.md) and [docs/github-action.md](docs/github-action.md).
+
 ## Real Git investigation
 
 First create and freeze a reviewed witness. The proposal input is a blinded incident packet plus the exact overlay bytes to execute.
 
 ```powershell
 pnpm fl -- witness propose --input .\proposal.json
-pnpm fl -- witness approve <proposal-id> --approved-by you@example.com
-pnpm fl -- witness freeze <proposal-id>
+pnpm fl -- witness review <proposal-id>
+# Review the local page, then make separate Approve and Freeze clicks.
 pnpm fl -- witness verify <proposal-id> --expect-digest <frozen-digest>
 ```
 
@@ -129,7 +165,7 @@ pnpm fl -- serve `
   --expect-root sha256:<recorded-root>
 ```
 
-FaultLine verifies the complete package before opening this read-only page. It shows the immutable Git range, frozen witness digest, Docker policy/evidence, stable transitions, lifecycle binding when present, and external-root verification status. The view has no rerun endpoint.
+FaultLine verifies the complete package before opening this read-only page. It renders the same **BREAK -> FIND -> PROVE -> FIX -> PREVENT** incident structure as the demo from immutable Git range, frozen-witness digest, Docker evidence, stable transitions, lifecycle binding when present, and external-root status. The view has no rerun endpoint, script, or mutation control; it explicitly says when minimization/repair artifacts are not attached.
 
 To counterfactually minimize the selected adjacent good/bad diff, use the same frozen witness and Docker policy:
 

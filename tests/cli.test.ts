@@ -12,6 +12,7 @@ import {
   type GitInvestigationResult
 } from "../src/git-investigation.js";
 import { writeGitInvestigationProofBundle } from "../src/git-proof-bundle.js";
+import { readIncidentDraft } from "../src/incident-store.js";
 import type { SandboxCommandRunner } from "../src/sandbox.js";
 import {
   approveWitnessProposal,
@@ -43,6 +44,10 @@ function git(repository: string, args: string[]): string {
   const result = spawnSync("git", ["-C", repository, ...args], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(result.stderr || `git ${args.join(" ")} failed`);
   return (result.stdout ?? "").trim();
+}
+
+function quoteFsmonitorCommandPart(value: string): string {
+  return `"${value.replaceAll("\\", "/").replaceAll('"', '\\"')}"`;
 }
 
 const pinnedImage = `registry.example/faultline-node@sha256:${"b".repeat(64)}`;
@@ -166,6 +171,12 @@ async function createVerifiedRepairBundle(root: string): Promise<{ directory: st
 }
 
 describe("FaultLine CLI workflows", () => {
+  it("reports the package version through the installable fl entry point", () => {
+    const version = runFl(["--version"]);
+    expect(version.status).toBe(0);
+    expect(version.stdout.trim()).toBe("FaultLine 0.1.0");
+  });
+
   it("creates an externally retained integrity receipt for a verified bundle", () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-cli-attestation-"));
     try {
@@ -210,6 +221,15 @@ describe("FaultLine CLI workflows", () => {
       }), "utf8");
 
       expect(runFl(["witness", "propose", "--input", inputFile, "--store", store]).status).toBe(0);
+      const review = runFl(["witness", "review", "cli-witness", "--json", "--store", store]);
+      expect(review.status).toBe(0);
+      expect(JSON.parse(review.stdout)).toMatchObject({
+        status: "LOCAL_READ_ONLY_REVIEW",
+        review: {
+          mode: "LOCAL_READ_ONLY",
+          proposal: { proposalId: "cli-witness", witness: { command: "node witness.mjs" } }
+        }
+      });
       expect(runFl(["witness", "approve", "cli-witness", "--approved-by", "reviewer@example.test", "--store", store]).status).toBe(0);
       const freeze = runFl(["witness", "freeze", "cli-witness", "--store", store]);
       expect(freeze.status).toBe(0);
@@ -218,6 +238,105 @@ describe("FaultLine CLI workflows", () => {
       expect(verification.status).toBe(0);
       expect(JSON.parse(verification.stdout)).toMatchObject({ valid: true, externalDigestStatus: "MATCH" });
       expect(existsSync(join(store, "frozen", "cli-witness.json"))).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("creates a conservative, review-only first-incident draft without executing the pasted command", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-incident-intake-"));
+    try {
+      const repository = join(directory, "source");
+      const store = join(directory, "witnesses");
+      git(directory, ["init", "source"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine CLI test"]);
+      const ancestor = commit(repository, "good", "known good");
+      const descendant = commit(repository, "bad", "reported failure");
+      const marker = join(directory, "intake-must-not-execute.txt");
+      const command = `node -e \"require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'should-not-run')\"`;
+
+      const intake = runFl([
+        "incident", "start", "--repo", repository, "--command", command,
+        "--id", "onboarding-incident", "--store", store
+      ], { cwd: directory });
+
+      expect(intake.status).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+      const output = JSON.parse(intake.stdout) as {
+        status: string;
+        draft: { path: string; range: { ancestor: string; descendant: string; source: string } };
+        witnessProposal: { proposalId: string; state: string };
+        next: string[];
+        limitations: string[];
+      };
+      expect(output.status).toBe("DRAFT_REQUIRES_HUMAN_REVIEW");
+      expect(output.draft.range).toEqual({ ancestor, descendant, source: "LOCAL_HEAD_PARENT" });
+      expect(output.witnessProposal).toMatchObject({ proposalId: "onboarding-incident", state: "NOT_APPROVED_NOT_FROZEN" });
+      expect(output.next.join(" ")).toContain("fl witness review onboarding-incident");
+      expect(output.next.join(" ")).toContain("--draft-store");
+      expect(output.limitations.join(" ")).toMatch(/did not execute/i);
+      expect(readIncidentDraft(join(repository, ".faultline", "incidents"), "onboarding-incident").draft.review).toMatchObject({
+        required: true,
+        state: "PENDING_HUMAN_REVIEW",
+        witnessState: "PROPOSED",
+        freezeState: "NOT_FROZEN",
+        autoFreeze: false
+      });
+      expect(existsSync(join(store, "proposals", "onboarding-incident.json"))).toBe(true);
+      expect(existsSync(join(store, "frozen", "onboarding-incident.json"))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps doctor Git diagnostics from invoking a repository-local fsmonitor command", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-doctor-fsmonitor-"));
+    try {
+      const repository = join(directory, "source");
+      git(directory, ["init", "source"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine CLI test"]);
+      commit(repository, "good", "known good");
+      const hook = join(repository, "forbidden-fsmonitor.cjs");
+      const marker = join(repository, "fsmonitor-ran");
+      writeFileSync(hook, 'require("node:fs").writeFileSync(process.argv[2], "invoked", "utf8");\n', "utf8");
+      git(repository, ["update-index", "--fsmonitor"]);
+      const hostileHook = [
+        quoteFsmonitorCommandPart(process.execPath),
+        quoteFsmonitorCommandPart(hook),
+        quoteFsmonitorCommandPart(marker)
+      ].join(" ");
+      git(repository, ["config", "core.fsmonitor", hostileHook]);
+
+      // Docker readiness is environment-dependent and may rightly return a
+      // nonzero preflight. The security assertion is that fixed doctor Git
+      // probes never dispatch the repository's configured executable.
+      runFl(["doctor", "--repo", repository], { cwd: directory });
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("gives consecutive default incident starts collision-resistant identifiers", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-incident-ids-"));
+    try {
+      const repository = join(directory, "source");
+      git(directory, ["init", "source"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine CLI test"]);
+      commit(repository, "good", "known good");
+      commit(repository, "bad", "reported failure");
+      const first = runFl(["incident", "start", "--repo", repository, "--command", "node witness.mjs"], { cwd: directory });
+      const second = runFl(["incident", "start", "--repo", repository, "--command", "node witness.mjs"], { cwd: directory });
+      expect(first.status).toBe(0);
+      expect(second.status).toBe(0);
+      const firstId = (JSON.parse(first.stdout) as { witnessProposal: { proposalId: string } }).witnessProposal.proposalId;
+      const secondId = (JSON.parse(second.stdout) as { witnessProposal: { proposalId: string } }).witnessProposal.proposalId;
+      expect(firstId).not.toBe(secondId);
+      expect(firstId).toMatch(/^incident-\d{17}-[0-9a-f-]{12}$/);
+      expect(secondId).toMatch(/^incident-\d{17}-[0-9a-f-]{12}$/);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
