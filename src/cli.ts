@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { defaultWitnessProposal, proposeWitnessWithGpt } from "./ai.js";
 import {
   defaultAttestationStore,
@@ -15,7 +15,13 @@ import {
   verifyGitInvestigationProofBundle,
   writeGitInvestigationProofBundle
 } from "./git-proof-bundle.js";
-import { minimizeGitDiff, writeGitMinimizationResult } from "./git-minimization.js";
+import { loadVerifiedGitProofView } from "./git-proof-view.js";
+import { runLiveGitDemo } from "./live-git-demo.js";
+import {
+  minimizeGitDiff,
+  verifyGitMinimizationResultFile,
+  writeGitMinimizationResult
+} from "./git-minimization.js";
 import {
   createLedgerBoundInvestigation,
   verifyLedgerBoundInvestigationFile,
@@ -31,9 +37,17 @@ import {
   verifyCodexLifecycleLedgerFile,
   writeCodexLifecycleLedgerAtomic
 } from "./ledger.js";
+import { readModelOverlayInput } from "./overlay-input.js";
 import { describeBundlePath, verifyProofBundle, writeProofBundle } from "./proof-bundle.js";
 import { redactValue } from "./redaction.js";
-import { startFaultLineServer } from "./server.js";
+import {
+  createRepairEvidencePacket,
+  proposeRepairBriefWithGpt,
+  RepairEvidencePacketSchema,
+  validateRepairBrief
+} from "./repair-brief.js";
+import { defaultRepairBriefRoot, verifyRepairBriefArtifact, writeRepairBriefArtifact } from "./repair-brief-store.js";
+import { startFaultLineServer, startGitProofServer } from "./server.js";
 import {
   approveWitnessProposal,
   freezeApprovedWitness,
@@ -46,18 +60,23 @@ import type { RunMode } from "./domain.js";
 const usage = `FaultLine — executable evidence for agent-assisted code
 
 Usage:
-  fl judge-demo [--replay | --rerun-all] [--output <directory>] [--export-only]
+  fl judge-demo [--replay | --rerun-all] [--output <managed-bundle-directory>] [--export-only]
+  fl demo live-git [--image <digest-pinned-image>] [--export-only] [--port <number>]
   fl verify <proof-bundle-directory> [--expect-root <sha256:...>]
   fl serve [--port <number>]
+  fl serve --bundle <git-proof-bundle-directory> [--expect-root <sha256:...>] [--port <number>]
   fl codex --dry-run | --snapshot [--repo <directory>]
   fl codex record <init|stdin|checkpoint|verify> [...]
   fl record <init|stdin|checkpoint|verify> [...]
-  fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <bundle-directory>]
-  fl minimize git --repo <directory> --before <commit> --after <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--max-executions <count>] [--output <result.json>]
+  fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]
+  fl minimize git --repo <directory> --before <commit> --after <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--max-executions <count>] [--output <managed-result.json>]
+  fl minimize verify <result.json> [--expect-digest <sha256:...>]
   fl ledger bind --ledger <ledger.json> --investigation <investigation.json> --output <binding.json>
   fl ledger verify <binding.json> [--expect-digest <sha256:...>]
   fl attest create --bundle <proof-bundle-directory> --receipt <id> --subject <label> --issuer <label> [--store <directory>]
   fl attest verify <receipt-id> [--expect-digest <sha256:...>] [--store <directory>]
+  fl repair brief (--bundle <git-proof-bundle-directory> | --investigation <verified-bundle>/investigation.json) (--live | --input <repair-brief.json>) [--expect-root <sha256:...>] [--model <model>] [--output <managed-directory>]
+  fl repair verify <repair-brief-directory>
   fl witness propose --input <proposal.json> [--store <directory>]
   fl witness propose --live --incident <incident.json> --proposal-id <id> --overlay-root <directory> [--model <model>] [--store <directory>]
   fl witness approve <proposal-id> --approved-by <actor> [--store <directory>]
@@ -66,7 +85,8 @@ Usage:
 
 The judge demo is a reviewed, deterministic Node fixture. It does not require an OpenAI API key.
 The lifecycle adapter accepts observed Codex-compatible events; it does not claim to intercept private Codex internals.
-Use --live for a GPT-5.6 witness proposal after setting OPENAI_API_KEY.`;
+Evidence outputs are intentionally confined to their managed .faultline roots; --output selects a child of that root rather than an arbitrary directory.
+Use --live for a GPT-5.6 witness proposal or an inferred repair brief after setting OPENAI_API_KEY.`;
 
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
@@ -128,22 +148,6 @@ function safeManagedFileOutput(outputFile: string, managedRoot: string, label: s
   return output;
 }
 
-function modelOverlayInput(overlayRoot: string, paths: string[]): Array<{ path: string; bytesBase64: string }> {
-  const root = resolve(overlayRoot);
-  const rootStat = lstatSync(root);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error(`Overlay root must be a real directory: ${root}`);
-  return paths.map((path) => {
-    const target = resolve(root, path);
-    const nested = relative(root, target);
-    if (!nested || nested.startsWith("..") || isAbsolute(nested) || path.includes("\\")) {
-      throw new Error(`Model proposed an unsafe overlay path: ${path}`);
-    }
-    const stat = lstatSync(target);
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`Model overlay must be a regular non-symlink file: ${path}`);
-    return { path: path.replaceAll("\\", "/"), bytesBase64: readFileSync(target).toString("base64") };
-  });
-}
-
 async function readStandardInput(): Promise<string> {
   return new Promise((resolveInput, rejectInput) => {
     let body = "";
@@ -199,6 +203,55 @@ async function witnessProposal(args: string[]): Promise<void> {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
+/** Run the real Git/Docker product path against a disposable built-in incident. */
+async function demoCommand(args: string[]): Promise<void> {
+  if (args[0] !== "live-git") {
+    throw new Error("Usage: fl demo live-git [--image <digest-pinned-image>] [--export-only] [--port <number>]");
+  }
+  const requestedImage = option(args, "--image");
+  const demo = await runLiveGitDemo({
+    workspace: process.cwd(),
+    ...(requestedImage === undefined ? {} : { image: requestedImage })
+  });
+  if (demo.proofBundle === null) {
+    process.stdout.write(`${JSON.stringify({
+      status: "DEMO_NOT_PROVEN",
+      directory: demo.directory,
+      repository: demo.repository,
+      image: demo.image,
+      investigationStatus: demo.investigation.status,
+      proof: demo.investigation.proof,
+      errors: demo.investigation.errors,
+      limitation: "No portable package was published because the native Docker executions did not establish a stable proof."
+    }, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const proof = loadVerifiedGitProofView(demo.proofBundle.directory, demo.proofBundle.rootDigest);
+  process.stdout.write(`${JSON.stringify({
+    status: "DEMO_PROOF_READY",
+    directory: demo.directory,
+    repository: demo.repository,
+    image: demo.image,
+    frozenWitnessDigest: demo.frozenWitness.frozenDigest,
+    proofBundle: {
+      directory: demo.proofBundle.directory,
+      rootDigest: demo.proofBundle.rootDigest,
+      verified: true,
+      transitions: proof.investigation.transitions.length
+    },
+    sensitivity: "The portable package intentionally retains the frozen witness and recorded evidence. Treat it as sensitive incident material before sharing."
+  }, null, 2)}\n`);
+  if (hasFlag(args, "--export-only")) return;
+  const server = await startGitProofServer({ proof, port: Number(option(args, "--port") ?? "4173") });
+  process.stdout.write(`FaultLine live Git proof page: ${server.url}\nPress Ctrl+C to stop.\n`);
+  await new Promise<void>((resolveExit) => {
+    process.once("SIGINT", () => {
+      void server.close().finally(resolveExit);
+    });
+  });
+}
+
 async function witnessCommand(args: string[]): Promise<void> {
   const [action, proposalId] = args;
   const store = witnessStore(args);
@@ -218,7 +271,7 @@ async function witnessCommand(args: string[]): Promise<void> {
           witness: {
             behavior: generated.proposal.behavior,
             command: generated.proposal.command,
-            overlays: modelOverlayInput(overlayRoot, generated.proposal.overlayFiles),
+            overlays: readModelOverlayInput(overlayRoot, generated.proposal.overlayFiles),
             policy: { network: "disabled", credentials: "redacted", timeoutSeconds: generated.proposal.timeoutSeconds }
           }
         });
@@ -415,8 +468,27 @@ async function investigateCommand(args: string[]): Promise<void> {
 }
 
 async function minimizeCommand(args: string[]): Promise<void> {
+  if (args[0] === "verify") {
+    const file = args[1];
+    if (!file) throw new Error("Usage: fl minimize verify <result.json> [--expect-digest <sha256:...>]");
+    const verification = verifyGitMinimizationResultFile(resolve(file), option(args, "--expect-digest"));
+    process.stdout.write(`${JSON.stringify({
+      valid: verification.valid,
+      resultDigest: verification.resultDigest,
+      externalDigestStatus: verification.externalDigestStatus,
+      ...(verification.result === undefined ? {} : {
+        status: verification.result.status,
+        proof: verification.result.proof,
+        usedExecutions: verification.result.budget.usedExecutions
+      }),
+      errors: verification.errors,
+      limitation: "Verification checks the stored minimization record without rerunning Git, Docker, or repository code. An external digest detects rewrites but is not a signature, identity assertion, or host-attestation claim."
+    }, null, 2)}\n`);
+    process.exitCode = verification.valid ? 0 : 1;
+    return;
+  }
   if (args[0] !== "git") {
-    throw new Error("Usage: fl minimize git --repo <directory> --before <commit> --after <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--max-executions <count>] [--output <result.json>]");
+    throw new Error("Usage: fl minimize git|verify ...");
   }
   const proposalId = requiredOption(args, "--proposal");
   const unsafeLocal = hasFlag(args, "--unsafe-local");
@@ -437,11 +509,14 @@ async function minimizeCommand(args: string[]): Promise<void> {
     resolve(".faultline", "minimizations"),
     "Git minimization"
   );
-  const path = await writeGitMinimizationResult(output, result);
+  const written = await writeGitMinimizationResult(output, result);
   process.stdout.write(`${JSON.stringify({
     minimization: result,
-    resultFile: path,
-    proof: result.proof.isProof ? "BIDIRECTIONALLY_CERTIFIED" : "NOT_CERTIFIED"
+    resultFile: written.path,
+    resultDigest: written.resultDigest,
+    proof: result.proof.isProof ? "BIDIRECTIONALLY_CERTIFIED" : "NOT_CERTIFIED",
+    verification: "SELF_CONSISTENT",
+    limitation: "Retain resultDigest outside this JSON before relying on it for rewrite detection. It is not a cryptographic signature, identity assertion, or host-attestation claim."
   }, null, 2)}\n`);
   process.exitCode = result.proof.isProof ? 0 : 1;
 }
@@ -526,6 +601,90 @@ async function attestationCommand(args: string[]): Promise<void> {
   }
 }
 
+/**
+ * A repair brief is deliberately downstream of a verified, proof-grade Git
+ * package. It can only express cited, INFERRED guidance; it cannot turn an
+ * arbitrary JSON file or model response into an execution fact.
+ */
+async function repairCommand(args: string[]): Promise<void> {
+  if (args[0] === "verify") {
+    const directory = args[1];
+    if (!directory) throw new Error("Usage: fl repair verify <repair-brief-directory>");
+    const verification = verifyRepairBriefArtifact(resolve(directory));
+    process.stdout.write(`${JSON.stringify(verification, null, 2)}\n`);
+    process.exitCode = verification.valid ? 0 : 1;
+    return;
+  }
+  if (args[0] !== "brief") {
+    throw new Error("Usage: fl repair brief|verify ...");
+  }
+  const live = hasFlag(args, "--live");
+  const input = option(args, "--input");
+  if (live === Boolean(input)) {
+    throw new Error("Choose exactly one repair brief source: --live or --input <repair-brief.json>.");
+  }
+
+  const bundle = option(args, "--bundle");
+  const investigationFile = option(args, "--investigation");
+  if (Boolean(bundle) === Boolean(investigationFile)) {
+    throw new Error("Choose exactly one proof source: --bundle <directory> or --investigation <verified-bundle>/investigation.json.");
+  }
+  const bundleDirectory = bundle === undefined
+    ? dirname(resolve(investigationFile as string))
+    : resolve(bundle);
+  const proof = loadVerifiedGitProofView(bundleDirectory, option(args, "--expect-root"));
+  if (investigationFile !== undefined) {
+    const expectedInvestigationPath = resolve(bundleDirectory, proof.manifest.artifacts.investigation);
+    if (resolve(investigationFile) !== expectedInvestigationPath) {
+      throw new Error("--investigation must identify the investigation.json artifact in the verified Git proof bundle.");
+    }
+  }
+  const investigation = proof.investigation;
+  const generatedPacket = createRepairEvidencePacket(investigation);
+  // This is normally a no-op because createRepairEvidencePacket only emits an
+  // allowlisted summary. Keep it at the CLI boundary so a future packet field
+  // cannot silently expand what is persisted or sent to a model.
+  const packetRedaction = redactValue(generatedPacket);
+  const packet = RepairEvidencePacketSchema.parse(packetRedaction.value);
+  if (packet.packetDigest !== generatedPacket.packetDigest) {
+    throw new Error("Repair evidence packet changed during redaction and cannot be safely correlated to the verified investigation.");
+  }
+
+  const model = option(args, "--model") ?? "gpt-5.6";
+  const candidate = live
+    ? await proposeRepairBriefWithGpt(packet, { model })
+    : readJsonInput(input as string);
+  // Never retain unredacted model or offline input. Redaction is intentionally
+  // limited, so the generated packet remains minimal as the primary boundary.
+  const candidateRedaction = redactValue(candidate);
+  const validation = validateRepairBrief(packet, candidateRedaction.value);
+  if (!validation.valid || !validation.brief) {
+    throw new Error(`Repair brief was rejected: ${validation.errors.join("; ")}`);
+  }
+
+  const output = option(args, "--output")
+    ?? join(defaultRepairBriefRoot(), `repair-${packet.packetDigest.slice("sha256:".length, "sha256:".length + 16)}-${Date.now()}`);
+  const written = writeRepairBriefArtifact(
+    output,
+    packet,
+    validation.brief,
+    live ? { kind: "GPT-5.6", model } : { kind: "OFFLINE_INPUT" }
+  );
+  process.stdout.write(`${JSON.stringify({
+    status: "PERSISTED",
+    classification: "INFERRED",
+    source: written.manifest.source,
+    directory: written.directory,
+    evidencePacketDigest: packet.packetDigest,
+    repairBriefDigest: written.manifest.repairBrief.digest,
+    privacy: {
+      packet: packetRedaction.report,
+      candidate: candidateRedaction.report
+    },
+    limitation: "INFERRED repair guidance is not an executed verdict, proof of model intent, a unique semantic cause, or an identified culprit."
+  }, null, 2)}\n`);
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
@@ -537,6 +696,9 @@ async function main(): Promise<void> {
       return;
     case "judge-demo":
       await judgeDemo(args);
+      return;
+    case "demo":
+      await demoCommand(args);
       return;
     case "verify": {
       const directory = args[0];
@@ -560,6 +722,18 @@ async function main(): Promise<void> {
       return;
     }
     case "serve": {
+      if (hasFlag(args, "--bundle")) {
+        const bundleDirectory = resolve(requiredOption(args, "--bundle"));
+        const proof = loadVerifiedGitProofView(bundleDirectory, option(args, "--expect-root"));
+        const server = await startGitProofServer({ proof, port: Number(option(args, "--port") ?? "4173") });
+        process.stdout.write(`FaultLine read-only Git proof page: ${server.url}\nPress Ctrl+C to stop.\n`);
+        await new Promise<void>((resolveExit) => {
+          process.once("SIGINT", () => {
+            void server.close().finally(resolveExit);
+          });
+        });
+        return;
+      }
       const outputDirectory = resolve(option(args, "--output") ?? ".faultline/bundles/judge-demo");
       const analysis = createDemoAnalysis("REPLAY");
       const server = await startFaultLineServer({ analysis, outputDirectory, port: Number(option(args, "--port") ?? "4173") });
@@ -601,6 +775,9 @@ async function main(): Promise<void> {
       return;
     case "attest":
       await attestationCommand(args);
+      return;
+    case "repair":
+      await repairCommand(args);
       return;
     default:
       throw new Error(`Unknown command: ${command}\n\n${usage}`);

@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createDemoAnalysis } from "./engine.js";
+import { renderGitProofIncidentPage, type VerifiedGitProofView } from "./git-proof-view.js";
 import { assertSafeProofOutput, writeProofBundle } from "./proof-bundle.js";
 import { renderIncidentPage } from "./ui.js";
 import type { DemoAnalysis } from "./domain.js";
@@ -48,6 +49,48 @@ export async function startFaultLineServer(options: { analysis: DemoAnalysis; ou
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("FaultLine server did not report a TCP address");
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()))
+  };
+}
+
+/**
+ * Serve an already verified portable Git proof package without any mutation or
+ * execution route.  In particular, this server intentionally has no rerun
+ * endpoint: a viewer should never turn inspection of a retained package into
+ * a new, unrecorded execution.
+ */
+export async function startGitProofServer(options: { proof: VerifiedGitProofView; port?: number }): Promise<FaultLineServer> {
+  const page = renderGitProofIncidentPage(options.proof);
+  const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (request.method === "GET" && requestUrl.pathname === "/") {
+      response.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff"
+      });
+      response.end(page);
+      return;
+    }
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
+    response.end("Not found");
+  });
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(options.port ?? 4173, "127.0.0.1", () => {
+      server.off("error", rejectListen);
+      resolveListen();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    await new Promise<void>((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
+    throw new Error("FaultLine Git proof server did not report a TCP address");
   }
   return {
     url: `http://127.0.0.1:${address.port}`,

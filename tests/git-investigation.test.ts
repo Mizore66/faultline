@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -20,6 +20,15 @@ const pinnedImage = `registry.example/faultline-node@sha256:${"a".repeat(64)}`;
 
 function git(repository: string, args: string[]): string {
   return execFileSync("git", ["-C", repository, ...args], { encoding: "utf8" }).trim();
+}
+
+/**
+ * core.fsmonitor stores a shell command. Git accepts double-quoted absolute
+ * paths on the supported POSIX and Git-for-Windows shells; slash-normalizing
+ * keeps a Windows drive path executable when Git dispatches that command.
+ */
+function quoteFsmonitorCommandPart(value: string): string {
+  return `"${value.replaceAll("\\", "/").replaceAll('"', '\\"')}"`;
 }
 
 function commit(repository: string, state: string, message: string): string {
@@ -101,7 +110,7 @@ function requestFor(
 }
 
 describe("Git commit-range investigation", () => {
-  it("replays a verified witness in detached worktrees and proves both nonmonotonic stable boundaries", async () => {
+  it("records repeated detached-worktree observations but never lets an injected runner certify Docker proof", async () => {
     const store = mkdtempSync(join(tmpdir(), "faultline-git-investigation-store-"));
     const repository = createRepository();
     try {
@@ -114,12 +123,13 @@ describe("Git commit-range investigation", () => {
         recorder: "git-commit-range-replay",
         nativeCodexInterception: false,
         nonMonotonic: true,
-        proof: { dockerIsolated: true, isProof: true, proofTransitions: 2 }
+        proof: { dockerIsolated: false, executionTrust: "INJECTED_RUNNER", isProof: false, proofTransitions: 2 }
       });
       expect(result.states).toHaveLength(3);
       expect(result.states[0]).toMatchObject({ commit: repository.ancestor });
       expect(result.states[2]).toMatchObject({ commit: repository.descendant });
       expect(result.runs).toHaveLength(3 * STABLE_EXECUTION_COUNT);
+      expect(result.runs.every((run) => run.result.executor === "INJECTED_RUNNER")).toBe(true);
       expect(result.runs.every((run) => run.commit.length === 40 && run.tree.length === 40)).toBe(true);
       expect(result.runs.every((run) => run.overlays[0]?.bytesLength === Buffer.byteLength("export const frozenWitness = 'exact-approved-bytes';\n"))).toBe(true);
       expect(result.transitions.map((transition) => transition.kind)).toEqual(["PASS_TO_FAIL", "FAIL_TO_PASS"]);
@@ -183,6 +193,28 @@ describe("Git commit-range investigation", () => {
     }
   });
 
+  it("preserves a witness setup failure as execution evidence instead of dropping the run", async () => {
+    const store = mkdtempSync(join(tmpdir(), "faultline-git-investigation-store-"));
+    const repository = createRepository();
+    try {
+      const frozenWitness = createFrozenWitness(store, "setup-error-range");
+      const setupErrorRunner: SandboxCommandRunner = {
+        async run() {
+          return { exitCode: 127, stdout: "", stderr: "node: not found" };
+        }
+      };
+      const result = await investigateGitRange(requestFor(repository.root, frozenWitness, setupErrorRunner));
+
+      expect(result.status).toBe("EXECUTION_ERROR");
+      expect(result.runs).toHaveLength(3 * STABLE_EXECUTION_COUNT);
+      expect(result.runs.every((run) => run.result.verdict === "ERROR" && run.result.reason === "WITNESS_SETUP_ERROR")).toBe(true);
+      expect(result.proof.isProof).toBe(false);
+    } finally {
+      rmSync(store, { recursive: true, force: true });
+      rmSync(repository.root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a mutated frozen witness before it reads Git or invokes the runner", async () => {
     const store = mkdtempSync(join(tmpdir(), "faultline-git-investigation-store-"));
     const repository = createRepository();
@@ -198,6 +230,74 @@ describe("Git commit-range investigation", () => {
       expect(result.runs).toEqual([]);
       expect(result.errors.join("\n")).toMatch(/command digest|frozen digest/);
       expect(calls).toBe(0);
+    } finally {
+      rmSync(store, { recursive: true, force: true });
+      rmSync(repository.root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses checkout-time Git filters before materializing an untrusted worktree", async () => {
+    const store = mkdtempSync(join(tmpdir(), "faultline-git-investigation-store-"));
+    const repository = createRepository();
+    try {
+      writeFileSync(join(repository.root, ".gitattributes"), "*.txt filter=hostile\n", "utf8");
+      git(repository.root, ["add", ".gitattributes"]);
+      git(repository.root, ["commit", "-m", "hostile filter attribute"]);
+      const frozenWitness = createFrozenWitness(store, "hostile-filter-range");
+      let calls = 0;
+      const runner: SandboxCommandRunner = { async run() { calls += 1; return { exitCode: 0, stdout: "", stderr: "" }; } };
+      const result = await investigateGitRange({
+        repository: repository.root,
+        range: { ancestor: "HEAD~3", descendant: "HEAD" },
+        frozenWitness,
+        expectedFrozenDigest: frozenWitness.frozenDigest,
+        sandbox: { mode: "DOCKER_ISOLATED", image: pinnedImage },
+        runner
+      });
+
+      expect(result.status).toBe("RANGE_ERROR");
+      expect(result.errors.join("\n")).toMatch(/filter attribute/);
+      expect(calls).toBe(0);
+      expect(git(repository.root, ["worktree", "list", "--porcelain"]).split("\n").filter((line) => line.startsWith("worktree "))).toHaveLength(1);
+    } finally {
+      rmSync(store, { recursive: true, force: true });
+      rmSync(repository.root, { recursive: true, force: true });
+    }
+  });
+
+  it("neutralizes a repository-local fsmonitor hook before Git materialization", async () => {
+    const store = mkdtempSync(join(tmpdir(), "faultline-git-investigation-store-"));
+    const repository = createRepository();
+    try {
+      // A repo-local fsmonitor command is executable Git configuration. The
+      // investigation wrapper must override it before any pre-Docker Git
+      // command touches the repository or its detached worktrees.
+      const hook = join(repository.root, "faultline-forbidden-fsmonitor-hook.cjs");
+      const marker = join(repository.root, "faultline-fsmonitor-hook-invoked");
+      writeFileSync(
+        hook,
+        'require("node:fs").writeFileSync(process.argv[2], "invoked", "utf8");\n',
+        "utf8"
+      );
+      git(repository.root, ["update-index", "--fsmonitor"]);
+      const hostileHook = [
+        quoteFsmonitorCommandPart(process.execPath),
+        quoteFsmonitorCommandPart(hook),
+        quoteFsmonitorCommandPart(marker)
+      ].join(" ");
+      git(repository.root, ["config", "core.fsmonitor", hostileHook]);
+      expect(git(repository.root, ["config", "--local", "--get", "core.fsmonitor"])).toBe(hostileHook);
+      expect(existsSync(marker)).toBe(false);
+      const frozenWitness = createFrozenWitness(store, "hostile-fsmonitor-range");
+      const result = await investigateGitRange(requestFor(repository.root, frozenWitness, stateReadingRunner([])));
+
+      expect(result.status).toBe("COMPLETED");
+      expect(result.runs).toHaveLength(3 * STABLE_EXECUTION_COUNT);
+      expect(result.errors).toEqual([]);
+      // A nonexistent command only proves Git can fall back. This executable
+      // hook writes a marker before returning, so its absence proves every
+      // FaultLine host-side Git command received core.fsmonitor=false.
+      expect(existsSync(marker)).toBe(false);
     } finally {
       rmSync(store, { recursive: true, force: true });
       rmSync(repository.root, { recursive: true, force: true });

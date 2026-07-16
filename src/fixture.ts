@@ -158,6 +158,9 @@ function verdictFor(result: ReturnType<typeof spawnSync>): { verdict: Verdict; r
 
 export function executeFixtureState(input: FixtureState, witness: Witness, executionAttempt = 0): RunRecord {
   const started = Date.now();
+  // Wall clocks can move backwards (notably after Windows time synchronization).
+  // Evidence durations are measurements, so derive them from Node's monotonic clock.
+  const startedMonotonic = process.hrtime.bigint();
   const runDirectory = join(tmpdir(), "faultline-sample", `${input.id}-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(runDirectory, { recursive: true });
   try {
@@ -181,7 +184,7 @@ export function executeFixtureState(input: FixtureState, witness: Witness, execu
       reasonCode: classified.reasonCode,
       stdout,
       stderr,
-      durationMs: Date.now() - started,
+      durationMs: Number((process.hrtime.bigint() - startedMonotonic) / 1_000_000n),
       executionKind: "EXECUTED",
       executedAt: new Date().toISOString()
     };

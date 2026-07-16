@@ -5,6 +5,7 @@ import {
   createSandboxPlan,
   createUnsafeLocalSandboxPlan,
   executeSandboxPlan,
+  validateSandboxPlanAudit,
   type SandboxCommandRunner,
   type SandboxPlanRequest
 } from "../src/sandbox.js";
@@ -60,6 +61,11 @@ describe("FaultLine frozen-witness sandbox plans", () => {
     expect(JSON.stringify(audit)).not.toContain("sk-should-never-leak");
     expect(audit.environment.passed).toHaveLength(1);
     expect(audit.environment.passed[0]?.key).toBe("FOO");
+    expect(validateSandboxPlanAudit(audit)).toEqual([]);
+    expect(validateSandboxPlanAudit({
+      ...audit,
+      runtime: { ...audit.runtime, limits: { ...audit.runtime.limits, memoryBytes: 9_999_999_999 } }
+    })).toContain("sandbox limit memoryBytes is outside the allowed policy range");
   });
 
   it("fails closed for mutable images, dangerous environment entries, and oversized limits", () => {
@@ -100,7 +106,8 @@ describe("FaultLine frozen-witness sandbox plans", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ executable: "docker", timeoutMs: 7_000, maxOutputBytes: 64 });
 
-    expect(classifySandboxResult(plan, {
+    const dockerUnavailablePlan = createSandboxPlan(dockerRequest({ limits: { maxOutputBytes: 1_024 } }));
+    expect(classifySandboxResult(dockerUnavailablePlan, {
       exitCode: 1,
       stdout: "expected failure",
       stderr: ""
@@ -116,6 +123,11 @@ describe("FaultLine frozen-witness sandbox plans", () => {
       stdout: "x".repeat(65),
       stderr: ""
     })).toMatchObject({ verdict: "ERROR", reason: "OUTPUT_LIMIT_EXCEEDED", outputTruncated: true });
+    expect(classifySandboxResult(dockerUnavailablePlan, {
+      exitCode: 1,
+      stdout: "",
+      stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
+    })).toMatchObject({ verdict: "ERROR", reason: "SANDBOX_UNAVAILABLE" });
   });
 
   it("marks every explicitly unsafe local execution as inapplicable evidence", () => {

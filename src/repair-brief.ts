@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { digestJson } from "./canonical.js";
 import { GitInvestigationResultSchema, type GitInvestigationResult } from "./git-investigation.js";
+import { extractOpenAiResponseText } from "./openai-response.js";
 import { redactValue } from "./redaction.js";
 
 /**
@@ -58,13 +59,6 @@ export type RepairBriefValidation = {
   brief: RepairBrief | null;
 };
 
-function responseText(response: unknown): string {
-  if (typeof response === "object" && response !== null && "output_text" in response && typeof response.output_text === "string") {
-    return response.output_text;
-  }
-  throw new Error("OpenAI response did not contain output_text");
-}
-
 function withoutDigest(packet: RepairEvidencePacket): Omit<RepairEvidencePacket, "packetDigest"> {
   const { packetDigest: _packetDigest, ...unsigned } = packet;
   return unsigned;
@@ -81,7 +75,8 @@ function resultDigest(result: GitInvestigationResult): string {
  */
 export function createRepairEvidencePacket(input: unknown): RepairEvidencePacket {
   const result = GitInvestigationResultSchema.parse(input);
-  if (!result.proof.isProof || result.status !== "COMPLETED" || result.transitions.length === 0 || !result.witness?.witnessDigest) {
+  if (result.proof.executionTrust !== "NATIVE_DOCKER" || !result.proof.dockerIsolated || !result.proof.isProof
+    || result.status !== "COMPLETED" || result.transitions.length === 0 || !result.witness?.witnessDigest) {
     throw new Error("A post-localization repair brief requires a completed Docker-isolated investigation with at least one stable transition.");
   }
 
@@ -221,7 +216,7 @@ export async function proposeRepairBriefWithGpt(
     })
   });
   if (!response.ok) throw new Error(`OpenAI Responses request failed: ${response.status} ${await response.text()}`);
-  const output = JSON.parse(responseText(await response.json())) as unknown;
+  const output = JSON.parse(extractOpenAiResponseText(await response.json())) as unknown;
   const validation = validateRepairBrief(packet, output);
   if (!validation.valid || !validation.brief) {
     throw new Error(`GPT-5.6 repair brief was rejected: ${validation.errors.join("; ")}`);

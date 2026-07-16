@@ -20,7 +20,7 @@ It deliberately does **not** claim model intent, a unique semantic root cause, o
 
 ## Quick start
 
-Requirements: Node.js 22+ and pnpm 10+. Docker is required only for a live proof-grade Git investigation.
+Requirements: Node.js 22+ and pnpm 10+. The CLI is tested on Windows, macOS, and Ubuntu; Docker is required only for a live proof-grade Git investigation. Native Docker replay is exercised on Ubuntu CI.
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -29,6 +29,7 @@ pnpm fl -- judge-demo --rerun-all
 ```
 
 The demo writes a managed bundle beneath `.faultline/bundles/` and starts a local incident page. Use `Ctrl+C` to stop it.
+When supplied, `--output` must also be a new or previously verified child directory under this managed root; FaultLine intentionally rejects arbitrary output paths.
 
 For an export-only judge run:
 
@@ -38,6 +39,16 @@ pnpm fl -- verify .faultline/bundles/judge-demo
 ```
 
 `--replay` is available for the instant sample view, but it is visibly cached and cannot certify a stable boundary, an A-grade claim, prevention, or minimization.
+
+## One-command live Git demo
+
+On a machine with Docker, run the actual product path—not the deterministic sample—against a disposable good → bad → repaired Git repository:
+
+```powershell
+pnpm fl -- demo live-git --export-only
+```
+
+The command pulls `node:22-alpine` only to resolve a concrete immutable image digest; all witness executions then use that digest with `--pull=never`. It creates immutable witness-review records and disposable source material beneath `.faultline\live-git-demo\`, replays the frozen witness in native Docker, writes a verified Git proof package, and prints its root. Omit `--export-only` to open the read-only proof view. Pass `--image registry.example/name@sha256:<64-lowercase-hex>` to use an already-resolved image instead.
 
 ## Real Git investigation
 
@@ -62,7 +73,17 @@ pnpm fl -- investigate git `
   --image registry.example/faultline-node@sha256:<64-lowercase-hex>
 ```
 
-On a completed proof-grade result, FaultLine creates a fresh write-once package under `.faultline/git-proof-bundles/` (or the managed `--output` directory) and prints its root digest. If Docker is unavailable, a command times out, output exceeds the bound, or a result is unstable, FaultLine records an error/inconclusive result and does not publish a proof package.
+On a completed proof-grade result, FaultLine creates a fresh write-once package under `.faultline/git-proof-bundles/` (or a child selected by `--output` under that managed root) and prints its root digest. If Docker is unavailable, a command times out, output exceeds the bound, or a result is unstable, FaultLine records an error/inconclusive result and does not publish a proof package.
+
+Review a completed portable Git package without rerunning its witness or executing repository code:
+
+```powershell
+pnpm fl -- serve `
+  --bundle .faultline\git-proof-bundles\<investigation> `
+  --expect-root sha256:<recorded-root>
+```
+
+FaultLine verifies the complete package before opening this read-only page. It shows the immutable Git range, frozen witness digest, Docker policy/evidence, stable transitions, lifecycle binding when present, and external-root verification status. The view has no rerun endpoint.
 
 To counterfactually minimize the selected adjacent good/bad diff, use the same frozen witness and Docker policy:
 
@@ -76,7 +97,14 @@ pnpm fl -- minimize git `
   --image registry.example/faultline-node@sha256:<64-lowercase-hex>
 ```
 
-The minimizer derives binary-safe Git patch units, keeps patch conflicts and execution failures `UNRESOLVED`, enforces an execution budget, and needs three distinct Docker executions in each counterfactual direction before it calls sufficiency and necessity certified. It writes every result under `.faultline/minimizations/`; an unsafe local run remains explicitly non-proof.
+The minimizer derives binary-safe Git patch units, keeps patch conflicts and execution failures `UNRESOLVED`, enforces an execution budget, and needs three distinct Docker executions in each counterfactual direction before it calls sufficiency and necessity certified. It writes every result under `.faultline/minimizations/`; an unsafe local run remains explicitly non-proof. The write result prints a canonical `resultDigest`; retain it outside the JSON, then verify the stored record without running Git, Docker, or repository code:
+
+```powershell
+pnpm fl -- minimize verify .faultline\minimizations\<result>.json `
+  --expect-digest sha256:<recorded-result-digest>
+```
+
+Verification rechecks schema, nonce-bound run and execution IDs, attempt links, certificates, and the proof claim. It detects a rewritten record only when an externally retained digest is supplied; it is not a cryptographic signature, identity assertion, or host-attestation claim.
 
 ### Optional observed lifecycle ledger
 
@@ -127,6 +155,29 @@ An external digest detects an editor who rewrites both local content and local c
 
 After a completed deterministic investigation, FaultLine also has a typed repair-brief boundary for GPT-5.6. It sends a privacy-minimized packet of verified facts and requires every inferred repair or prevention recommendation to cite a supplied evidence ID. It cannot output verdicts, a replacement witness, or a claim of model intent.
 
+The CLI accepts only a fully verified portable Git proof package—not an arbitrary investigation JSON—and stores the result as a write-once `INFERRED` artifact:
+
+```powershell
+pnpm fl -- repair brief `
+  --bundle .faultline\git-proof-bundles\<investigation> `
+  --expect-root sha256:<recorded-root> `
+  --live
+```
+
+For a reviewed offline response, replace `--live` with `--input .\repair-brief.json`. FaultLine redacts retained text, validates every evidence citation, and writes only the minimized packet and inferred guidance under `.faultline\repair-briefs\`.
+
+Verify an existing inferred repair artifact without re-running a model or any repository code:
+
+```powershell
+pnpm fl -- repair verify .faultline\repair-briefs\<repair-id>
+```
+
+## How Codex and GPT-5.6 are used
+
+Codex accelerated FaultLine's implementation, adversarial testing, and product hardening. At runtime, `fl record` accepts a strictly ordered, hash-chained Codex-compatible NDJSON lifecycle stream and records clean Git checkpoints; it labels the supplied transport as `CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR` rather than claiming private event interception. Start a recording with `pnpm fl -- codex record init --session <id> --repo . --transport CODEX_CLI`, pipe observed events through `fl codex record stdin`, and capture checkpoints with `fl codex record checkpoint`.
+
+GPT-5.6 is used only through the Responses API for a blinded witness proposal or an evidence-cited repair brief. It never decides a pass/fail verdict, identifies a culprit, replaces the frozen witness, or creates proof evidence.
+
 ## Evidence vocabulary
 
 | Label | Meaning |
@@ -151,13 +202,15 @@ Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. A `PA
 
 - FaultLine's included demo is deterministic; it is not a claim of a general arbitrary-code runner.
 - The live implementation is Git commit-range replay. A lifecycle ledger strengthens it only to the degree of its recorded checkpoints; no native Codex interception is implied.
-- The sandbox plans are fail-closed. This repository's tests use injected runners so they do not require Docker; the local development environment must have a Docker daemon to create real proof evidence.
+- The sandbox plans are fail-closed. The CLI labels injected runners `INJECTED_RUNNER` and refuses to certify or publish them as Docker proof. The Ubuntu CI gate exercises the native Docker boundary; a local development environment still needs a Docker daemon to create real proof evidence.
+- `NATIVE_DOCKER` means FaultLine's direct Docker runner on the host that produced the record. Offline verification reconstructs the recorded policy and data, but it is not cryptographic attestation that a host, Docker client, or daemon enforced that policy. Retain an external root or CI receipt when host provenance matters.
 - A proof is predicate-specific. It does not prove intent, semantic causality, or that one edit is the unique cause.
+- Portable Git packages deliberately retain the frozen witness, Git object references, and bounded evidence fields so another engineer can verify them. Treat a package as sensitive incident material before sharing it outside the authorized audience.
 - No software project can honestly guarantee a 100% probability of winning a judged competition.
 
 ## Build Week handoff
 
-The remaining submission actions require a human account or recorded material and are intentionally not automated here:
+The [Build Week submission kit](docs/build-week-submission-kit.md) provides a three-minute narrated demo run of show, concrete judge commands, and a checklist aligned to the Developer Tools track. The remaining submission actions require a human account or recorded material and are intentionally not automated here:
 
 - Capture the qualifying `/feedback` session ID.
 - Record a narrated under-three-minute demo of the actual product path.

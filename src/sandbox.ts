@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, parse, resolve } from "node:path";
 import { digestJson, sha256 } from "./canonical.js";
@@ -21,7 +22,7 @@ export const DEFAULT_SANDBOX_LIMITS = Object.freeze({
   tmpfsBytes: 67_108_864
 });
 
-const MAX_SANDBOX_LIMITS = Object.freeze({
+export const MAX_SANDBOX_LIMITS = Object.freeze({
   timeoutMs: 300_000,
   maxOutputBytes: 8_388_608,
   cpuCount: 4,
@@ -45,6 +46,8 @@ const IMAGE_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$/;
 const WITNESS_DIGEST = /^sha256:[a-f0-9]{64}$/;
 
 export type SandboxKind = "DOCKER_ISOLATED" | "UNSAFE_LOCAL";
+/** Identifies whether FaultLine itself launched Docker or a test double supplied the result. */
+export type SandboxExecutor = "NATIVE_DOCKER" | "INJECTED_RUNNER" | "UNSAFE_LOCAL";
 export type SandboxVerdict = "PASS" | "FAIL" | "ERROR" | "INAPPLICABLE";
 export type SandboxReason =
   | "EXIT_ZERO"
@@ -52,8 +55,11 @@ export type SandboxReason =
   | "TIMEOUT"
   | "OUTPUT_LIMIT_EXCEEDED"
   | "SANDBOX_UNAVAILABLE"
+  | "WITNESS_SETUP_ERROR"
   | "RUNNER_FAILURE"
   | "UNSAFE_LOCAL_NOT_PROOF";
+
+const DOCKER_INFRASTRUCTURE_ERROR = /(?:cannot connect to the docker daemon|is the docker daemon running|error during connect|docker daemon is not running|error response from daemon|unable to find image|pull access denied|no such image)/i;
 
 export interface SandboxLimits {
   readonly timeoutMs: number;
@@ -111,6 +117,18 @@ export interface SandboxPlanAudit {
     /** Names only: values were rejected and are deliberately never logged. */
     readonly redactedKeys: readonly string[];
   };
+  /** Reconstructable non-secret policy facts, not an assertion that Docker ran. */
+  readonly runtime: {
+    readonly image: string | null;
+    readonly entrypoint: string | null;
+    readonly network: "none" | null;
+    readonly rootFilesystemReadOnly: boolean;
+    readonly user: string | null;
+    readonly capDropAll: boolean;
+    readonly noNewPrivileges: boolean;
+    readonly pull: "never" | null;
+    readonly limits: SandboxLimits;
+  };
 }
 
 interface CommonSandboxPlan {
@@ -131,6 +149,8 @@ export interface DockerSandboxPlan extends CommonSandboxPlan {
   readonly kind: "DOCKER_ISOLATED";
   readonly executable: "docker";
   readonly image: string;
+  /** Ephemeral Docker name used to force-remove an orphaned container. */
+  readonly containerName: string;
 }
 
 export interface UnsafeLocalSandboxPlan extends CommonSandboxPlan {
@@ -148,6 +168,7 @@ export interface SandboxCommandInvocation {
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
   readonly environment: Readonly<Record<string, string>>;
+  readonly containerName?: string;
 }
 
 export interface SandboxCommandResult {
@@ -165,6 +186,7 @@ export interface SandboxCommandRunner {
 
 export interface SandboxExecutionResult {
   readonly kind: SandboxKind;
+  readonly executor: SandboxExecutor;
   readonly verdict: SandboxVerdict;
   readonly reason: SandboxReason;
   readonly exitCode: number | null;
@@ -318,7 +340,8 @@ function createAudit(
   witness: FrozenSandboxWitness,
   environment: BuiltEnvironment,
   environmentPolicyDigest: string,
-  policyDigest: string
+  policyDigest: string,
+  runtime: SandboxPlanAudit["runtime"]
 ): SandboxPlanAudit {
   return Object.freeze({
     kind,
@@ -331,7 +354,8 @@ function createAudit(
       allowedKeys: Object.freeze([...environment.policy.allowedKeys]),
       passed: Object.freeze([...environment.policy.passed]),
       redactedKeys: Object.freeze([...environment.redactedKeys])
-    })
+    }),
+    runtime: Object.freeze({ ...runtime, limits: Object.freeze({ ...runtime.limits }) })
   });
 }
 
@@ -353,6 +377,7 @@ function dockerPolicyDigest(
     capDrop: "ALL",
     noNewPrivileges: true,
     pull: "never",
+    entrypoint: "/bin/sh",
     limits,
     environmentPolicyDigest
   });
@@ -387,9 +412,12 @@ export function createDockerSandboxPlan(request: SandboxPlanRequest): DockerSand
   const environment = buildEnvironment(request.environment, allowedKeys);
   const environmentPolicyDigest = digestJson(environment.policy);
   const policyDigest = dockerPolicyDigest(image, witness, limits, environmentPolicyDigest);
+  const containerName = `faultline-${randomUUID().replaceAll("-", "")}`;
   const commandArguments = Object.freeze([
     "run",
     "--rm",
+    "--name",
+    containerName,
     "--init",
     "--pull=never",
     "--network",
@@ -416,8 +444,9 @@ export function createDockerSandboxPlan(request: SandboxPlanRequest): DockerSand
     "--workdir",
     "/workspace",
     ...environmentArguments(environment.values),
-    image,
+    "--entrypoint",
     "/bin/sh",
+    image,
     "-lc",
     witness.command
   ]);
@@ -427,12 +456,23 @@ export function createDockerSandboxPlan(request: SandboxPlanRequest): DockerSand
     arguments: commandArguments,
     sourceDirectory,
     image,
+    containerName,
     limits,
     environment: environment.values,
     environmentPolicy: environment.policy,
     environmentPolicyDigest,
     policyDigest,
-    audit: createAudit("DOCKER_ISOLATED", witness, environment, environmentPolicyDigest, policyDigest)
+    audit: createAudit("DOCKER_ISOLATED", witness, environment, environmentPolicyDigest, policyDigest, {
+      image,
+      entrypoint: "/bin/sh",
+      network: "none",
+      rootFilesystemReadOnly: true,
+      user: "65534:65534",
+      capDropAll: true,
+      noNewPrivileges: true,
+      pull: "never",
+      limits
+    })
   });
 }
 
@@ -466,7 +506,17 @@ export function createUnsafeLocalSandboxPlan(request: SandboxPlanRequest): Unsaf
     environmentPolicy: environment.policy,
     environmentPolicyDigest,
     policyDigest,
-    audit: createAudit("UNSAFE_LOCAL", witness, environment, environmentPolicyDigest, policyDigest)
+    audit: createAudit("UNSAFE_LOCAL", witness, environment, environmentPolicyDigest, policyDigest, {
+      image: null,
+      entrypoint: null,
+      network: null,
+      rootFilesystemReadOnly: false,
+      user: null,
+      capDropAll: false,
+      noNewPrivileges: false,
+      pull: null,
+      limits
+    })
   });
 }
 
@@ -483,6 +533,99 @@ export function createSandboxPlan(request: SandboxPlanRequest): SandboxPlan {
 /** A serializable, value-redacted representation safe for proof bundles. */
 export function auditSandboxPlan(plan: SandboxPlan): SandboxPlanAudit {
   return plan.audit;
+}
+
+/**
+ * Revalidate the serializable audit form before trusting it in an offline
+ * proof package. This validates recorder-declared policy consistency; it does
+ * not itself attest that a host or Docker daemon enforced that policy.
+ */
+export function validateSandboxPlanAudit(audit: SandboxPlanAudit): string[] {
+  const errors: string[] = [];
+  const digest = /^sha256:[a-f0-9]{64}$/;
+  if (!digest.test(audit.witnessDigest)) errors.push("witness digest is invalid");
+  if (!digest.test(audit.commandDigest)) errors.push("command digest is invalid");
+  if (!digest.test(audit.environmentPolicyDigest)) errors.push("environment policy digest is invalid");
+  if (!digest.test(audit.policyDigest)) errors.push("sandbox policy digest is invalid");
+  const expectedFixed = Object.keys(DETERMINISTIC_ENVIRONMENT).sort((left, right) => left.localeCompare(right));
+  if (JSON.stringify([...audit.environment.fixedKeys].sort((left, right) => left.localeCompare(right))) !== JSON.stringify(expectedFixed)) {
+    errors.push("fixed environment keys do not match the deterministic policy");
+  }
+  const allowedNames = new Set(audit.environment.allowedKeys);
+  const passedNames = new Set(audit.environment.passed.map((entry) => entry.key));
+  const redactedNames = new Set(audit.environment.redactedKeys);
+  if (allowedNames.size !== audit.environment.allowedKeys.length || passedNames.size !== audit.environment.passed.length
+    || redactedNames.size !== audit.environment.redactedKeys.length) errors.push("sandbox environment audit contains duplicate names");
+  for (const entry of audit.environment.passed) {
+    if (!ENVIRONMENT_NAME.test(entry.key) || !digest.test(entry.valueDigest)) {
+      errors.push("sandbox environment audit contains an invalid passed value");
+      break;
+    }
+    if (!allowedNames.has(entry.key)) {
+      errors.push("sandbox environment audit passes a value outside its allowlist");
+      break;
+    }
+  }
+  for (const key of [...audit.environment.allowedKeys, ...audit.environment.redactedKeys]) {
+    if (!ENVIRONMENT_NAME.test(key)) {
+      errors.push("sandbox environment audit contains an invalid environment name");
+      break;
+    }
+  }
+  const reconstructedEnvironmentPolicy = {
+    schemaVersion: ENVIRONMENT_POLICY_VERSION,
+    fixed: DETERMINISTIC_ENVIRONMENT,
+    allowedKeys: [...audit.environment.allowedKeys],
+    passed: [...audit.environment.passed]
+  };
+  if (audit.environmentPolicyDigest !== digestJson(reconstructedEnvironmentPolicy)) {
+    errors.push("environment policy digest does not match the serializable audit facts");
+  }
+  const limits = audit.runtime.limits;
+  for (const [name, maximum] of Object.entries(MAX_SANDBOX_LIMITS) as Array<[keyof SandboxLimits, number]>) {
+    const value = limits[name];
+    if (!Number.isInteger(value) || value <= 0 || value > maximum) errors.push(`sandbox limit ${name} is outside the allowed policy range`);
+  }
+  if (audit.kind === "DOCKER_ISOLATED") {
+    const runtime = audit.runtime;
+    if (!runtime.image || !IMAGE_REFERENCE.test(runtime.image)) errors.push("Docker image is not digest-pinned");
+    if (runtime.entrypoint !== "/bin/sh" || runtime.network !== "none" || !runtime.rootFilesystemReadOnly
+      || runtime.user !== "65534:65534" || !runtime.capDropAll || !runtime.noNewPrivileges || runtime.pull !== "never") {
+      errors.push("Docker runtime policy is not locked down");
+    }
+    const reconstructedPolicy = {
+      schemaVersion: SANDBOX_POLICY_VERSION,
+      kind: "DOCKER_ISOLATED" as const,
+      image: runtime.image,
+      witnessDigest: audit.witnessDigest,
+      source: { target: "/workspace", readOnly: true },
+      network: "none" as const,
+      rootFilesystem: "read-only",
+      user: "65534:65534",
+      capDrop: "ALL",
+      noNewPrivileges: true,
+      pull: "never" as const,
+      entrypoint: "/bin/sh",
+      limits,
+      environmentPolicyDigest: audit.environmentPolicyDigest
+    };
+    if (audit.policyDigest !== digestJson(reconstructedPolicy)) errors.push("Docker policy digest does not match the serializable audit facts");
+  } else if (audit.runtime.image !== null || audit.runtime.entrypoint !== null || audit.runtime.network !== null
+    || audit.runtime.rootFilesystemReadOnly || audit.runtime.user !== null || audit.runtime.capDropAll
+    || audit.runtime.noNewPrivileges || audit.runtime.pull !== null) {
+    errors.push("unsafe-local runtime audit contradicts its declared mode");
+  } else {
+    const reconstructedPolicy = {
+      schemaVersion: SANDBOX_POLICY_VERSION,
+      kind: "UNSAFE_LOCAL" as const,
+      witnessDigest: audit.witnessDigest,
+      warning: "No container isolation. Never use as proof.",
+      limits,
+      environmentPolicyDigest: audit.environmentPolicyDigest
+    };
+    if (audit.policyDigest !== digestJson(reconstructedPolicy)) errors.push("unsafe-local policy digest does not match the serializable audit facts");
+  }
+  return errors;
 }
 
 function outputSize(stdout: string, stderr: string): number {
@@ -505,12 +648,17 @@ function truncateOutput(stdout: string, stderr: string, maxOutputBytes: number):
  * Interpret runner output fail-closed. A timeout, missing exit code, Docker
  * infrastructure failure, or output overflow is an ERROR, never a PASS.
  */
-export function classifySandboxResult(plan: SandboxPlan, result: SandboxCommandResult): SandboxExecutionResult {
+export function classifySandboxResult(
+  plan: SandboxPlan,
+  result: SandboxCommandResult,
+  executor: SandboxExecutor = plan.kind === "DOCKER_ISOLATED" ? "NATIVE_DOCKER" : "UNSAFE_LOCAL"
+): SandboxExecutionResult {
   const exceedsOutputLimit = result.outputLimitExceeded === true || outputSize(result.stdout, result.stderr) > plan.limits.maxOutputBytes;
   const clipped = exceedsOutputLimit ? truncateOutput(result.stdout, result.stderr, plan.limits.maxOutputBytes) : result;
   const signal = result.signal ?? null;
   const base = {
     kind: plan.kind,
+    executor,
     exitCode: result.exitCode,
     signal,
     stdout: clipped.stdout,
@@ -532,9 +680,16 @@ export function classifySandboxResult(plan: SandboxPlan, result: SandboxCommandR
   if (result.exitCode === null) {
     return { ...base, verdict: "ERROR", reason: "RUNNER_FAILURE" };
   }
-  // Docker reserves 125 for CLI/daemon failures before the container command runs.
-  if (result.exitCode === 125) {
+  // Docker reserves 125 for CLI/daemon failures before the container command
+  // runs. Its daemon/image failures can also arrive as exit 1; those stderr
+  // signatures are infrastructure errors, never predicate failures.
+  if (result.exitCode === 125 || (plan.kind === "DOCKER_ISOLATED" && DOCKER_INFRASTRUCTURE_ERROR.test(result.stderr))) {
     return { ...base, verdict: "ERROR", reason: "SANDBOX_UNAVAILABLE" };
+  }
+  // Command-not-found and permission-denied are infrastructure/setup errors,
+  // not evidence that the approved predicate failed.
+  if (result.exitCode === 126 || result.exitCode === 127 || /(?:command not found|not found|no such file|cannot find module|permission denied)/i.test(result.stderr)) {
+    return { ...base, verdict: "ERROR", reason: "WITNESS_SETUP_ERROR" };
   }
   if (result.exitCode === 0) {
     return { ...base, verdict: "PASS", reason: "EXIT_ZERO" };
@@ -548,22 +703,31 @@ export function classifySandboxResult(plan: SandboxPlan, result: SandboxCommandR
  */
 export async function executeSandboxPlan(
   plan: SandboxPlan,
-  runner: SandboxCommandRunner = createNodeSandboxRunner()
+  runner?: SandboxCommandRunner
 ): Promise<SandboxExecutionResult> {
+  const executor: SandboxExecutor = plan.kind === "UNSAFE_LOCAL"
+    ? "UNSAFE_LOCAL"
+    : runner === undefined ? "NATIVE_DOCKER" : "INJECTED_RUNNER";
+  // Do not put this construction in a default parameter. A default parameter
+  // makes `runner` defined before provenance is classified, which would turn
+  // every genuine production Docker invocation into an injected one.
+  const effectiveRunner = runner ?? createNodeSandboxRunner();
   try {
-    const result = await runner.run({
+    const result = await effectiveRunner.run({
       kind: plan.kind,
       executable: plan.executable,
       arguments: plan.arguments,
       cwd: plan.sourceDirectory,
       timeoutMs: plan.limits.timeoutMs,
       maxOutputBytes: plan.limits.maxOutputBytes,
-      environment: plan.environment
+      environment: plan.environment,
+      ...(plan.kind === "DOCKER_ISOLATED" ? { containerName: plan.containerName } : {})
     });
-    return classifySandboxResult(plan, result);
+    return classifySandboxResult(plan, result, executor);
   } catch (error) {
     return {
       kind: plan.kind,
+      executor,
       verdict: plan.kind === "UNSAFE_LOCAL" ? "INAPPLICABLE" : "ERROR",
       reason: plan.kind === "UNSAFE_LOCAL" ? "UNSAFE_LOCAL_NOT_PROOF" : "RUNNER_FAILURE",
       exitCode: null,
@@ -598,19 +762,59 @@ export function createNodeSandboxRunner(): SandboxCommandRunner {
         let settled = false;
         let timeout: NodeJS.Timeout | undefined;
 
+        const forceRemoveContainer = (): Promise<string | null> => new Promise((resolveCleanup) => {
+          if (invocation.kind !== "DOCKER_ISOLATED" || !invocation.containerName) {
+            resolveCleanup(null);
+            return;
+          }
+          let cleanup;
+          let timeout: NodeJS.Timeout | undefined;
+          const complete = (detail: string | null): void => {
+            if (timeout) clearTimeout(timeout);
+            resolveCleanup(detail);
+          };
+          try {
+            cleanup = spawn("docker", ["rm", "--force", invocation.containerName], {
+              env: process.env,
+              shell: false,
+              stdio: ["ignore", "ignore", "pipe"],
+              windowsHide: true
+            });
+          } catch (error) {
+            complete(`FaultLine could not force-remove its named container: ${error instanceof Error ? error.message : String(error)}`);
+            return;
+          }
+          let cleanupStderr = "";
+          cleanup.stderr?.on("data", (chunk: Buffer) => { cleanupStderr += Buffer.from(chunk).toString("utf8"); });
+          cleanup.once("error", (error) => complete(`FaultLine could not force-remove its named container: ${error.message}`));
+          cleanup.once("close", (code) => complete(code === 0 ? null : `FaultLine attempted docker rm --force for its named container (exit ${code ?? "unknown"}): ${cleanupStderr.trim()}`));
+          timeout = setTimeout(() => {
+            cleanup.kill("SIGKILL");
+            complete("FaultLine timed out while force-removing its named container.");
+          }, 5_000);
+        });
+
         const finish = (exitCode: number | null, signal: string | null, extraStderr?: string): void => {
           if (settled) return;
           settled = true;
           if (timeout) clearTimeout(timeout);
           if (extraStderr) stderr = Buffer.concat([stderr, Buffer.from(extraStderr, "utf8")]);
-          resolveResult({
-            exitCode,
-            signal,
-            stdout: stdout.toString("utf8"),
-            stderr: stderr.toString("utf8"),
-            timedOut,
-            outputLimitExceeded
-          });
+          const resolveExecution = (cleanupDetail: string | null): void => {
+            if (cleanupDetail) stderr = Buffer.concat([stderr, Buffer.from(`\n${cleanupDetail}`, "utf8")]);
+            resolveResult({
+              exitCode,
+              signal,
+              stdout: stdout.toString("utf8"),
+              stderr: stderr.toString("utf8"),
+              timedOut,
+              outputLimitExceeded
+            });
+          };
+          if (timedOut || outputLimitExceeded || exitCode === null) {
+            void forceRemoveContainer().then(resolveExecution);
+          } else {
+            resolveExecution(null);
+          }
         };
 
         let child;

@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { z } from "zod";
 import { canonicalJson, digestJson, sha256 } from "./canonical.js";
 import { DemoAnalysisSchema, MinimizationAttemptSchema, RunRecordSchema, WitnessSchema, type DemoAnalysis, type RunRecord, type Verdict } from "./domain.js";
@@ -68,6 +68,29 @@ function assertNoLinksOrSpecialFiles(directory: string): void {
   }
 }
 
+/** Create each managed-root segment without ever following a preexisting link. */
+function ensureRealDirectoryTree(directory: string): void {
+  const absolute = resolve(directory);
+  const root = parse(absolute).root;
+  const suffix = relative(root, absolute);
+  const parts = suffix ? suffix.split(/[\\/]+/).filter(Boolean) : [];
+  let current = root;
+  if (existsSync(current)) {
+    const stat = lstatSync(current);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(`Proof bundle root cannot traverse a symbolic link or non-directory: ${current}`);
+    }
+  }
+  for (const part of parts) {
+    current = join(current, part);
+    if (!existsSync(current)) mkdirSync(current, { mode: 0o700 });
+    const stat = lstatSync(current);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error(`Proof bundle root cannot traverse a symbolic link or non-directory: ${current}`);
+    }
+  }
+}
+
 /**
  * Proof bundles are replace-on-write, so their destination must stay inside
  * FaultLine's managed evidence directory. This prevents a typo such as
@@ -80,6 +103,10 @@ export function assertSafeProofOutput(outputDirectory: string, proofRoot = defau
   if (!nestedPath || nestedPath.startsWith("..") || isAbsolute(nestedPath)) {
     throw new Error(`Proof bundle output must be a child directory of ${root}`);
   }
+  // The root may not exist yet. Create every segment deliberately before a
+  // later recursive stage write can follow a hostile .faultline link.
+  ensureRealDirectoryTree(root);
+  ensureRealDirectoryTree(dirname(output));
   const pathParts = nestedPath.split(/[\\/]+/).filter(Boolean);
   let current = root;
   if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
