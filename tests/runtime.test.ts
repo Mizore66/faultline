@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -105,14 +105,15 @@ class FakeDockerProjectImageBuildRunner implements DockerProjectImageBuildRunner
 }
 
 function projectBuildFixture(): { readonly contextDirectory: string; readonly dockerfile: string; cleanup(): void } {
-  const contextDirectory = mkdtempSync(join(tmpdir(), "faultline-project-runtime-"));
+  const createdDirectory = mkdtempSync(join(tmpdir(), "faultline-project-runtime-"));
+  const contextDirectory = realpathSync(createdDirectory);
   const dockerfile = join(contextDirectory, "Dockerfile");
   writeFileSync(dockerfile, "FROM node:22-alpine\nRUN npm --version\n", "utf8");
   return {
     contextDirectory,
     dockerfile,
     cleanup(): void {
-      rmSync(contextDirectory, { recursive: true, force: true });
+      rmSync(createdDirectory, { recursive: true, force: true });
     }
   };
 }

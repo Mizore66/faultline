@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { lstatSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { DOCTOR_SAFE_GIT_CONFIG } from "./doctor.js";
 
@@ -219,12 +219,18 @@ function filesystemErrorCode(error: unknown): string {
   return error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
 }
 
-function assertRealDirectory(path: string, label: string): void {
+/**
+ * Reject a terminal symlink supplied by a caller, then canonicalize platform
+ * aliases such as macOS `/var` -> `/private/var`. Git reports canonical
+ * worktree roots on those systems, so comparison must use the same form.
+ */
+function resolveRealDirectory(path: string, label: string): string {
   try {
     const stat = lstatSync(path);
     if (stat.isSymbolicLink() || !stat.isDirectory()) {
       throw new IncidentIntakeError("UNSAFE_REPOSITORY_PATH", `${label} must be a real directory, not a symlink or file.`);
     }
+    return realpathSync(path);
   } catch (error) {
     if (error instanceof IncidentIntakeError) throw error;
     const availability = filesystemErrorCode(error) === "ENOENT" ? "does not exist" : "is unavailable";
@@ -507,8 +513,7 @@ async function inspectHeadParent(
  * remote, and all returned revisions are resolved commit object ids.
  */
 export async function suggestIncidentRanges(options: SuggestIncidentRangesOptions = {}): Promise<FaultLineIncidentIntake> {
-  const repository = resolve(options.repository ?? process.cwd());
-  assertRealDirectory(repository, "Requested repository directory");
+  const repository = resolveRealDirectory(resolve(options.repository ?? process.cwd()), "Requested repository directory");
   const runner = options.runner ?? createNodeIncidentIntakeRunner();
 
   const insideWorkTree = await requiredGitText(
@@ -532,8 +537,7 @@ export async function suggestIncidentRanges(options: SuggestIncidentRangesOption
   if (!isAbsolute(reportedRoot)) {
     throw new IncidentIntakeError("INVALID_GIT_RESPONSE", "Git did not return an absolute worktree root.");
   }
-  const repositoryRoot = resolve(reportedRoot);
-  assertRealDirectory(repositoryRoot, "Git worktree root");
+  const repositoryRoot = resolveRealDirectory(resolve(reportedRoot), "Git worktree root");
   if (!isInsideDirectory(repository, repositoryRoot)) {
     throw new IncidentIntakeError("UNSAFE_REPOSITORY_PATH", "The requested directory falls outside Git's reported worktree root.");
   }

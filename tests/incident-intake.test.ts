@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -50,7 +50,7 @@ function commandTail(command: IncidentIntakeGitCommand): string[] {
 }
 
 function fakeRepositoryDirectory(label: string): string {
-  return mkdtempSync(join(tmpdir(), `faultline-incident-intake-${label}-`));
+  return realpathSync(mkdtempSync(join(tmpdir(), `faultline-incident-intake-${label}-`)));
 }
 
 function fullCandidateResponse(repository: string, overrides: {

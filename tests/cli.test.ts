@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -196,10 +196,11 @@ describe("FaultLine CLI workflows", () => {
 
   it("shows a reviewable dependency-image build plan and requires confirmation before Dockerfile execution", () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-cli-runtime-project-"));
-    const context = join(directory, "application context");
+      const context = join(directory, "application context");
     try {
       mkdirSync(context, { recursive: true });
       writeFileSync(join(context, "Dockerfile"), "FROM node:22-alpine\nRUN echo prepared\n", "utf8");
+      const canonicalContext = realpathSync(context);
       const args = [
         "runtime", "project", "plan", "--context", context, "--dockerfile", "Dockerfile",
         "--tag", "registry.example/faultline/demo:deps-20260717", "--network", "default"
@@ -210,8 +211,8 @@ describe("FaultLine CLI workflows", () => {
         status: "PROJECT_IMAGE_BUILD_REVIEW_REQUIRED",
         plan: {
           setupOnly: true,
-          contextDirectory: context,
-          dockerfile: join(context, "Dockerfile"),
+          contextDirectory: canonicalContext,
+          dockerfile: join(canonicalContext, "Dockerfile"),
           imageTag: "registry.example/faultline/demo:deps-20260717",
           network: "default",
           effects: {
