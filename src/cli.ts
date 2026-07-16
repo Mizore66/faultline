@@ -99,7 +99,7 @@ Usage:
   fl judge-preview [--output <static-preview.html>]
   fl doctor [--repo <directory>] [--json]
   fl incident suggest --repo <directory>
-  fl incident start --repo <directory> --command <failing-command> [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--store <directory>]
+  fl incident start --repo <directory> (--command <failing-command> | --command-file <utf8-file>) [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--store <directory>]
   fl incident status <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--expect-digest <sha256:...>]
   fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>] [--unsafe-local]
   fl runtime resolve <node|python|go>
@@ -153,6 +153,41 @@ function requiredOption(args: string[], flag: string): string {
   const value = option(args, flag);
   if (!value || value.startsWith("--")) throw new Error(`Missing required option: ${flag}`);
   return value;
+}
+
+/**
+ * Read a reviewable command from a regular UTF-8 text file without asking the
+ * caller's shell to re-quote nested command syntax.  The resulting command
+ * bytes—not the source file path—become the immutable witness input.
+ */
+function incidentCommandInput(args: string[]): { command: string; source: "INLINE" | "FILE"; file?: string } {
+  const inline = option(args, "--command");
+  const commandFile = option(args, "--command-file");
+  if ((inline === undefined) === (commandFile === undefined)) {
+    throw new Error("Incident intake requires exactly one of --command <failing-command> or --command-file <utf8-file>.");
+  }
+  if (inline !== undefined) {
+    if (!inline || inline.startsWith("--")) throw new Error("Missing required option: --command");
+    return { command: inline, source: "INLINE" };
+  }
+  if (!commandFile || commandFile.startsWith("--")) throw new Error("Missing required option: --command-file");
+  const file = resolve(commandFile);
+  let bytes: Buffer;
+  try {
+    const metadata = lstatSync(file);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) {
+      throw new Error("must be a real regular file, not a symbolic link or directory");
+    }
+    bytes = readFileSync(file);
+  } catch (error) {
+    throw new Error(`Unable to read --command-file ${file}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (bytes.byteLength > 32_000) throw new Error("--command-file exceeds the 32 KB witness-command limit.");
+  const command = bytes.toString("utf8");
+  if (!Buffer.from(command, "utf8").equals(bytes)) {
+    throw new Error("--command-file must contain valid UTF-8 without an ambiguous byte encoding.");
+  }
+  return { command, source: "FILE", file };
 }
 
 function faultLineVersion(): string {
@@ -537,7 +572,8 @@ async function incidentCommand(args: string[]): Promise<void> {
     throw new Error("Usage: fl incident suggest|start|status|continue ...");
   }
   const repository = resolve(requiredOption(args, "--repo"));
-  const command = requiredOption(args, "--command");
+  const commandInput = incidentCommandInput(args);
+  const command = commandInput.command;
   const from = option(args, "--from");
   const to = option(args, "--to");
   if ((from === undefined) !== (to === undefined)) {
@@ -610,6 +646,9 @@ async function incidentCommand(args: string[]): Promise<void> {
       digest: draft.draftDigest,
       range: draft.range,
       commandDigest: draft.commandDigest,
+      commandInput: commandInput.source === "INLINE"
+        ? { kind: "INLINE" }
+        : { kind: "FILE", path: commandInput.file },
       runtime: draft.runtime ?? null,
       review: draft.review
     },

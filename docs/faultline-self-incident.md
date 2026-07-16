@@ -23,19 +23,25 @@ pnpm fl -- runtime prepare node
 pnpm fl -- runtime prepare node --yes
 ```
 
-Create a review-only draft. The witness returns nonzero only when the `tee` command exists and is missing a preceding `mkdir -p .faultline` command:
+Create a review-only draft. The witness returns nonzero only when the `tee` command exists and is missing a preceding `mkdir -p .faultline` command. Store this nested-quote command in a UTF-8-without-BOM command file so PowerShell does not reinterpret it before FaultLine freezes its exact bytes:
 
 ```powershell
+$WitnessFile = Join-Path (Resolve-Path .\.faultline).Path "faultline-ci-provenance-directory.command"
+$Witness = @'
+node -e "const fs=require('node:fs'); const y=fs.readFileSync('.github/workflows/verify.yml','utf8'); const tee=y.indexOf('tee .faultline/live-git-demo.json'); const mkdir=y.indexOf('mkdir -p .faultline'); if (tee >= 0 && (mkdir < 0 || mkdir > tee)) process.exit(1);"
+'@.Trim()
+[System.IO.File]::WriteAllText($WitnessFile, $Witness, [System.Text.UTF8Encoding]::new($false))
+
 pnpm fl -- incident start `
   --repo . `
   --id faultline-ci-provenance-directory `
   --from e8e3064 `
   --to 07ee7f1 `
   --runtime node `
-  --command 'node -e "const fs=require(''node:fs''); const y=fs.readFileSync(''.github/workflows/verify.yml'',''utf8''); const tee=y.indexOf(''tee .faultline/live-git-demo.json''); const mkdir=y.indexOf(''mkdir -p .faultline''); if (tee >= 0 && (mkdir < 0 || mkdir > tee)) process.exit(1);"'
+  --command-file $WitnessFile
 ```
 
-The command above **only records a draft**. It does not execute the witness, contact GitHub, approve anything, or freeze anything. Start the review workbench, inspect the exact command, and make the separate human approval and freeze actions:
+The command above **only records a draft**. `--command-file` reads the regular UTF-8 file once and stores the command bytes—not a live file reference—inside the immutable proposal. It does not execute the witness, contact GitHub, approve anything, or freeze anything. Start the review workbench, inspect the exact command, and make the separate human approval and freeze actions:
 
 ```powershell
 pnpm fl -- witness review faultline-ci-provenance-directory

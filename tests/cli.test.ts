@@ -464,6 +464,42 @@ describe("FaultLine CLI workflows", () => {
     }
   });
 
+  it("reads exact nested-quote witness text from a reviewed UTF-8 command file", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-command-file-"));
+    try {
+      const repository = join(directory, "source");
+      const store = join(directory, "witnesses");
+      const commandFile = join(directory, "reviewed-witness.command");
+      const command = `node -e "const value = 'exact nested quote'; process.exit(value ? 0 : 1);"`;
+      git(directory, ["init", "source"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine CLI test"]);
+      commit(repository, "good", "known good");
+      commit(repository, "bad", "reported failure");
+      writeFileSync(commandFile, command, "utf8");
+
+      const intake = runFl([
+        "incident", "start", "--repo", repository, "--command-file", commandFile,
+        "--id", "quoted-command-file", "--store", store
+      ], { cwd: directory });
+
+      expect(intake.status).toBe(0);
+      expect(JSON.parse(intake.stdout)).toMatchObject({
+        draft: { commandInput: { kind: "FILE", path: commandFile } }
+      });
+      expect(readIncidentDraft(join(repository, ".faultline", "incidents"), "quoted-command-file").draft.command).toBe(command);
+
+      const ambiguous = runFl([
+        "incident", "start", "--repo", repository, "--command", command,
+        "--command-file", commandFile, "--id", "ambiguous-command", "--store", store
+      ], { cwd: directory });
+      expect(ambiguous.status).toBe(1);
+      expect(ambiguous.stderr).toMatch(/exactly one of --command/i);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("suggests a locally tracked upstream range without contacting it and can bind an explicit project-image digest", () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-cli-incident-suggest-"));
     try {

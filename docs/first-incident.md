@@ -135,6 +135,10 @@ The command writes two immutable, local artifacts:
 
 It does not execute the command, pull an image, fetch or auto-select a remote base, approve a witness, or freeze a witness. Give `--id <safe-id>` to choose the record identifier, provide both `--from` and `--to` for an explicit bracket, or use `--image <repository@sha256:...>` to bind an already resolved project image instead of a curated `--runtime` alias.
 
+### Preserve nested shell syntax exactly
+
+For an ordinary command, pass `--command`. If the command contains nested quotes, shell metacharacters, or multiple lines that your shell could reinterpret, write its reviewed UTF-8-without-BOM text to a regular file and pass `--command-file <path>` instead. FaultLine reads it once at intake, rejects links, directories, malformed UTF-8, and files over 32 KB, then stores those exact command bytes in the immutable proposal. It does not retain a live reference to the source file.
+
 ## 4. Review, approve, and freeze explicitly
 
 Open the local review workbench returned by intake (or run the command below). It binds only to `127.0.0.1`, disables browser caching, and shows the exact command, canonical base64 overlay bytes, and execution policy without executing or materializing them. Raw CI-log text stays off the browser page. Treat the visible command and overlays as sensitive incident material.
