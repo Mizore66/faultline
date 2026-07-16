@@ -239,7 +239,20 @@ function resolveRealDirectory(path: string, label: string): string {
 }
 
 function isInsideDirectory(child: string, parent: string): boolean {
-  const pathFromParent = relative(parent, child);
+  // Git for Windows, Node's realpath implementation, and the Win32 API can
+  // spell one local directory as `C:\\…`, `C:/…`, or `\\\\?\\C:\\…`. Normalize
+  // those equivalent forms before asking path.relative() about containment.
+  // Without this, a legitimate worktree is rejected only on some Node/runner
+  // combinations even though Git just confirmed it is inside that worktree.
+  const comparable = (value: string): string => {
+    if (process.platform !== "win32") return value;
+    return value
+      .replace(/^\\\\\?\\UNC\\/i, "\\\\")
+      .replace(/^\\\\\?\\/i, "")
+      .replaceAll("/", "\\")
+      .toLocaleLowerCase("en-US");
+  };
+  const pathFromParent = relative(comparable(parent), comparable(child));
   return pathFromParent === "" || (!pathFromParent.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && pathFromParent !== ".." && !isAbsolute(pathFromParent));
 }
 
