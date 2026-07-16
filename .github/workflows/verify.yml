@@ -68,6 +68,7 @@ jobs:
       - name: Create a verified live proof and attestation subject
         shell: bash
         run: |
+          mkdir -p .faultline
           node dist/cli.js demo live-git --export-only | tee .faultline/live-git-demo.json
           bundle="$(node -e "const result = JSON.parse(require('node:fs').readFileSync('.faultline/live-git-demo.json', 'utf8')); if (result.status !== 'DEMO_PROOF_READY') process.exit(1); process.stdout.write(result.proofBundle.directory);")"
           node dist/cli.js provenance create --bundle "$bundle" --output .faultline/provenance/ci-receipt.json
