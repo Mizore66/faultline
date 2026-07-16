@@ -10,12 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Lets FaultLine verify the event's before/base and after/head
+          # commits locally; the action never fetches or contacts GitHub.
+          fetch-depth: 0
       - id: faultline
         uses: Mizore66/faultline@main
         with:
           command: pnpm test -- checkout
-          from: ${{ github.event.before }}
-          to: ${{ github.sha }}
       - uses: actions/upload-artifact@v4
         with:
           name: faultline-intake
@@ -32,7 +34,9 @@ Pin the action to a reviewed immutable tag or commit for a production workflow. 
 
 `command` is required and treated as opaque text. The action passes it as one CLI argument; neither Bash nor FaultLine executes it during intake.
 
-Provide `from` and `to` together when the CI event exposes a reliable green-to-red bracket. If both are omitted, FaultLine permits only its conservative locally observed `HEAD~1 -> HEAD` fallback; merge heads and root commits are refused instead of selecting a remote base. `runtime` is optional and accepts only `node`, `python`, or `go`; it resolves an already-local image digest and never pulls an image.
+Provide `from` and `to` together when you already know the reviewed bracket; they take priority over all suggestions. When both are omitted, the action reads only the runner's local GitHub event payload and proposes one event bracket: `before -> after` for `push`, `pull_request.base.sha -> pull_request.head.sha` for `pull_request`/`pull_request_target`, or `merge_group.base_sha -> merge_group.head_sha` for `merge_group`. It accepts only full non-zero commit IDs, verifies that both are already present in the checkout, and records the choice in the `range-source` output.
+
+This is a convenience for getting to human witness review, not a diagnosis or proof. The action does not make a GitHub API request, fetch commits, parse a CI log, execute the command, approve a witness, or freeze it. If the event commits are absent, it fails with an explicit `fetch-depth: 0` / reviewed `from` + `to` remedy rather than silently narrowing the incident. For event types without a complete bracket it retains the conservative local `HEAD~1 -> HEAD` fallback; merge heads and root commits are still refused instead of guessing a base. `runtime` is optional and accepts only `node`, `python`, or `go`; it resolves an already-local image digest and never pulls an image.
 
 ## Human gate and artifacts
 

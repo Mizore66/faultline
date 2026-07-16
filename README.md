@@ -42,7 +42,7 @@ For the project’s own reproducible historical CI case, use the clearly scoped 
 
 ## CI and distribution boundary
 
-Use the reusable [CI incident-intake action](docs/github-action.md) to preserve a failed command as a review-required FaultLine proposal without executing it. The package has a checked `bin` entry (`fl --version`) and a lean `pnpm pack --dry-run` contract, but it remains deliberately `private` until the repository owner selects a license and an available public npm namespace. That owner decision is required before claiming an `npx` install path; the GitHub Action is the supported reusable entry point today.
+Use the reusable [CI incident-intake action](docs/github-action.md) to preserve a failed command as a review-required FaultLine proposal without executing it. With a full Git checkout, it safely proposes the current GitHub event's `before -> after` or PR `base -> head` bracket from the locally supplied event payload; explicit reviewed inputs still win, and no network request or fetch is hidden in that convenience. The package has a checked `bin` entry (`fl --version`) and a lean `pnpm pack --dry-run` contract, but it remains deliberately `private` until the repository owner selects a license and an available public npm namespace. That owner decision is required before claiming an `npx` install path; the GitHub Action is the supported reusable entry point today.
 
 ## Fast judge check (no Docker or API key)
 
