@@ -22,6 +22,7 @@ import {
   type RepairBrief,
   type RepairEvidencePacket
 } from "./repair-brief.js";
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
 
 /** A private, write-once package containing inferred repair guidance. */
 export const REPAIR_BRIEF_ARTIFACT_VERSION = "faultline.repair-brief-artifact.v1" as const;
@@ -108,16 +109,18 @@ function ensureRealDirectoryTree(directory: string): void {
   const parts = suffix ? suffix.split(/[\\/]+/).filter(Boolean) : [];
   let current = root;
   if (existsSync(current)) {
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Repair brief root is not a real directory: ${current}`);
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) throw new Error(`Repair brief root is not a real directory: ${current}`);
+    current = safeCurrent;
   }
   for (const part of parts) {
     current = join(current, part);
     if (!existsSync(current)) mkdirSync(current, { mode: 0o700 });
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
       throw new Error(`Repair brief output cannot traverse a symbolic link or non-directory: ${current}`);
     }
+    current = safeCurrent;
   }
 }
 

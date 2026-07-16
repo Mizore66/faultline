@@ -14,6 +14,7 @@ import {
   proposeWitness,
   type FrozenWitness
 } from "./witness-lock.js";
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
 
 const DIGEST_PINNED_IMAGE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$/;
 const DEFAULT_DEMO_IMAGE = "node:22-alpine";
@@ -49,16 +50,18 @@ function ensureRealDirectoryTree(directory: string): void {
   const parts = suffix ? suffix.split(/[\\/]+/).filter(Boolean) : [];
   let current = root;
   if (existsSync(current)) {
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Live demo root is not a real directory: ${current}`);
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) throw new Error(`Live demo root is not a real directory: ${current}`);
+    current = safeCurrent;
   }
   for (const part of parts) {
     current = join(current, part);
     if (!existsSync(current)) mkdirSync(current, { mode: 0o700 });
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
       throw new Error(`Live demo cannot traverse a symbolic link or non-directory: ${current}`);
     }
+    current = safeCurrent;
   }
 }
 

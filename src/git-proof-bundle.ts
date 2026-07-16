@@ -40,6 +40,7 @@ import {
   type CodexTransport
 } from "./ledger.js";
 import { validateSandboxPlanAudit } from "./sandbox.js";
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
 
 /** A portable, Git-native proof package for one completed FaultLine investigation. */
 export const GIT_PROOF_BUNDLE_SCHEMA_VERSION = "faultline.git-proof-bundle.v1" as const;
@@ -229,16 +230,18 @@ function ensureRealDirectoryTree(directory: string): void {
   const parts = suffix ? suffix.split(/[\\/]+/).filter(Boolean) : [];
   let current = parsed.root;
   if (existsSync(current)) {
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Git proof root is not a real directory: ${current}`);
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) throw new Error(`Git proof root is not a real directory: ${current}`);
+    current = safeCurrent;
   }
   for (const part of parts) {
     current = join(current, part);
     if (!existsSync(current)) mkdirSync(current, { mode: 0o700 });
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
       throw new Error(`Git proof root cannot traverse a symbolic link or non-directory: ${current}`);
     }
+    current = safeCurrent;
   }
 }
 

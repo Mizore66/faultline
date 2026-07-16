@@ -5,6 +5,7 @@ import { z } from "zod";
 import { canonicalJson, digestJson, sha256 } from "./canonical.js";
 import { DemoAnalysisSchema, MinimizationAttemptSchema, RunRecordSchema, WitnessSchema, type DemoAnalysis, type RunRecord, type Verdict } from "./domain.js";
 import { analysisDigest } from "./engine.js";
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
 
 const ManifestSchema = z.object({
   schemaVersion: z.literal("faultline.proof-bundle.v2"),
@@ -76,18 +77,20 @@ function ensureRealDirectoryTree(directory: string): void {
   const parts = suffix ? suffix.split(/[\\/]+/).filter(Boolean) : [];
   let current = root;
   if (existsSync(current)) {
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
       throw new Error(`Proof bundle root cannot traverse a symbolic link or non-directory: ${current}`);
     }
+    current = safeCurrent;
   }
   for (const part of parts) {
     current = join(current, part);
     if (!existsSync(current)) mkdirSync(current, { mode: 0o700 });
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
       throw new Error(`Proof bundle root cannot traverse a symbolic link or non-directory: ${current}`);
     }
+    current = safeCurrent;
   }
 }
 
@@ -109,7 +112,7 @@ export function assertSafeProofOutput(outputDirectory: string, proofRoot = defau
   ensureRealDirectoryTree(dirname(output));
   const pathParts = nestedPath.split(/[\\/]+/).filter(Boolean);
   let current = root;
-  if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
+  if (existsSync(current) && resolveSafeDirectorySegment(current) === null) {
     throw new Error(`Proof bundle root cannot be a symbolic link: ${root}`);
   }
   for (const part of pathParts) {

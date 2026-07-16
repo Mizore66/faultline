@@ -20,7 +20,7 @@ It deliberately does **not** claim model intent, a unique semantic root cause, o
 
 ## Quick start
 
-Requirements: Node.js 22+ and pnpm 10+. The CLI is tested on Windows, macOS, and Ubuntu; Docker is required only for a live proof-grade Git investigation. Native Docker replay is exercised on Ubuntu CI.
+Requirements: Node.js 22+ and pnpm 10.32.1 (pinned in `package.json`). If Corepack is available, run `corepack enable` once and it will select the pinned pnpm version. The CLI is tested on Windows, macOS, and Ubuntu; Docker is required only for a live proof-grade Git investigation. Native Docker replay is exercised on Ubuntu CI.
 
 ```powershell
 pnpm install --frozen-lockfile

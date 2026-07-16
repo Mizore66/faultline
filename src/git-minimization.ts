@@ -24,6 +24,7 @@ import {
   type FrozenWitness,
   type WitnessLockVerification
 } from "./witness-lock.js";
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
 
 /**
  * A Git-only counterfactual recorder.  It intentionally says nothing about
@@ -1871,23 +1872,28 @@ async function ensureRealOutputDirectory(directory: string): Promise<void> {
   const parts = suffix ? suffix.split(/[\\/]+/).filter(Boolean) : [];
   let current = root;
   const rootEntry = await lstatIfPresent(current);
-  if (rootEntry === null || rootEntry.isSymbolicLink() || !rootEntry.isDirectory()) {
+  const safeRoot = rootEntry === null ? null : resolveSafeDirectorySegment(current);
+  if (safeRoot === null) {
     throw new Error(`Minimization output root is not a real directory: ${root}`);
   }
+  current = safeRoot;
   for (const part of parts) {
     current = join(current, part);
     const entry = await lstatIfPresent(current);
     if (entry === null) {
       await mkdir(current, { mode: 0o700 });
-      const created = await lstat(current);
-      if (created.isSymbolicLink() || !created.isDirectory()) {
+      const safeCurrent = resolveSafeDirectorySegment(current);
+      if (safeCurrent === null) {
         throw new Error(`Minimization output parent is not a real directory: ${current}`);
       }
+      current = safeCurrent;
       continue;
     }
-    if (entry.isSymbolicLink() || !entry.isDirectory()) {
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
       throw new Error(`Minimization output cannot traverse a symbolic link or non-directory: ${current}`);
     }
+    current = safeCurrent;
   }
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { defaultWitnessProposal, proposeWitnessWithGpt } from "./ai.js";
 import {
@@ -40,6 +40,7 @@ import {
 import { readModelOverlayInput } from "./overlay-input.js";
 import { describeBundlePath, verifyProofBundle, writeProofBundle } from "./proof-bundle.js";
 import { redactValue } from "./redaction.js";
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
 import {
   createRepairEvidencePacket,
   proposeRepairBriefWithGpt,
@@ -135,14 +136,12 @@ function safeManagedFileOutput(outputFile: string, managedRoot: string, label: s
   if (parts.length < 1) throw new Error(`${label} output must have a file name.`);
   let current = root;
   if (existsSync(current)) {
-    const stat = lstatSync(current);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${label} root must be a real directory: ${root}`);
+    if (resolveSafeDirectorySegment(current) === null) throw new Error(`${label} root must be a real directory: ${root}`);
   }
   for (const part of parts.slice(0, -1)) {
     current = join(current, part);
     if (!existsSync(current)) continue;
-    const stat = lstatSync(current);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${label} output cannot traverse a symbolic link or non-directory: ${current}`);
+    if (resolveSafeDirectorySegment(current) === null) throw new Error(`${label} output cannot traverse a symbolic link or non-directory: ${current}`);
   }
   if (existsSync(output)) throw new Error(`${label} output already exists and will not be replaced: ${output}`);
   return output;
