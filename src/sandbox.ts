@@ -10,7 +10,15 @@ import type { Witness } from "./domain.js";
  * when it uses the Docker-isolated form below; an explicitly opted-in local
  * execution is marked INAPPLICABLE so it cannot silently become proof.
  */
-export const SANDBOX_POLICY_VERSION = "faultline.sandbox.v1" as const;
+export const SANDBOX_POLICY_VERSION = "faultline.sandbox.v2" as const;
+const LEGACY_SANDBOX_POLICY_VERSION = "faultline.sandbox.v1" as const;
+/**
+ * The source is mounted one level below the image workspace. This preserves
+ * dependencies deliberately baked into `/workspace/node_modules` by the
+ * explicit project-runtime setup flow while keeping the Git source read-only.
+ */
+export const SANDBOX_SOURCE_TARGET = "/workspace/src" as const;
+const LEGACY_SANDBOX_SOURCE_TARGET = "/workspace" as const;
 export const ENVIRONMENT_POLICY_VERSION = "faultline.sandbox-environment.v1" as const;
 
 export const DEFAULT_SANDBOX_LIMITS = Object.freeze({
@@ -359,18 +367,20 @@ function createAudit(
   });
 }
 
-function dockerPolicyDigest(
+function dockerPolicyPayload(
   image: string,
   witness: FrozenSandboxWitness,
   limits: SandboxLimits,
-  environmentPolicyDigest: string
-): string {
-  return digestJson({
-    schemaVersion: SANDBOX_POLICY_VERSION,
+  environmentPolicyDigest: string,
+  schemaVersion: typeof SANDBOX_POLICY_VERSION | typeof LEGACY_SANDBOX_POLICY_VERSION,
+  sourceTarget: typeof SANDBOX_SOURCE_TARGET | typeof LEGACY_SANDBOX_SOURCE_TARGET
+): Record<string, unknown> {
+  return {
+    schemaVersion,
     kind: "DOCKER_ISOLATED",
     image,
     witnessDigest: witness.digest,
-    source: { target: "/workspace", readOnly: true },
+    source: { target: sourceTarget, readOnly: true },
     network: "none",
     rootFilesystem: "read-only",
     user: "65534:65534",
@@ -380,7 +390,32 @@ function dockerPolicyDigest(
     entrypoint: "/bin/sh",
     limits,
     environmentPolicyDigest
-  });
+  };
+}
+
+function dockerPolicyDigest(
+  image: string,
+  witness: FrozenSandboxWitness,
+  limits: SandboxLimits,
+  environmentPolicyDigest: string
+): string {
+  return digestJson(dockerPolicyPayload(image, witness, limits, environmentPolicyDigest, SANDBOX_POLICY_VERSION, SANDBOX_SOURCE_TARGET));
+}
+
+function unsafeLocalPolicyPayload(
+  witness: FrozenSandboxWitness,
+  limits: SandboxLimits,
+  environmentPolicyDigest: string,
+  schemaVersion: typeof SANDBOX_POLICY_VERSION | typeof LEGACY_SANDBOX_POLICY_VERSION
+): Record<string, unknown> {
+  return {
+    schemaVersion,
+    kind: "UNSAFE_LOCAL",
+    witnessDigest: witness.digest,
+    warning: "No container isolation. Never use as proof.",
+    limits,
+    environmentPolicyDigest
+  };
 }
 
 function unsafeLocalPolicyDigest(
@@ -388,14 +423,7 @@ function unsafeLocalPolicyDigest(
   limits: SandboxLimits,
   environmentPolicyDigest: string
 ): string {
-  return digestJson({
-    schemaVersion: SANDBOX_POLICY_VERSION,
-    kind: "UNSAFE_LOCAL",
-    witnessDigest: witness.digest,
-    warning: "No container isolation. Never use as proof.",
-    limits,
-    environmentPolicyDigest
-  });
+  return digestJson(unsafeLocalPolicyPayload(witness, limits, environmentPolicyDigest, SANDBOX_POLICY_VERSION));
 }
 
 /**
@@ -440,9 +468,9 @@ export function createDockerSandboxPlan(request: SandboxPlanRequest): DockerSand
     "--tmpfs",
     `/tmp:rw,noexec,nosuid,nodev,size=${limits.tmpfsBytes}`,
     "--mount",
-    `type=bind,src=${sourceDirectory},dst=/workspace,readonly`,
+    `type=bind,src=${sourceDirectory},dst=${SANDBOX_SOURCE_TARGET},readonly`,
     "--workdir",
-    "/workspace",
+    SANDBOX_SOURCE_TARGET,
     ...environmentArguments(environment.values),
     "--entrypoint",
     "/bin/sh",
@@ -593,37 +621,45 @@ export function validateSandboxPlanAudit(audit: SandboxPlanAudit): string[] {
       || runtime.user !== "65534:65534" || !runtime.capDropAll || !runtime.noNewPrivileges || runtime.pull !== "never") {
       errors.push("Docker runtime policy is not locked down");
     }
-    const reconstructedPolicy = {
-      schemaVersion: SANDBOX_POLICY_VERSION,
-      kind: "DOCKER_ISOLATED" as const,
-      image: runtime.image,
-      witnessDigest: audit.witnessDigest,
-      source: { target: "/workspace", readOnly: true },
-      network: "none" as const,
-      rootFilesystem: "read-only",
-      user: "65534:65534",
-      capDrop: "ALL",
-      noNewPrivileges: true,
-      pull: "never" as const,
-      entrypoint: "/bin/sh",
+    const reconstructedPolicy = dockerPolicyPayload(
+      runtime.image ?? "",
+      { digest: audit.witnessDigest, command: "" },
       limits,
-      environmentPolicyDigest: audit.environmentPolicyDigest
-    };
-    if (audit.policyDigest !== digestJson(reconstructedPolicy)) errors.push("Docker policy digest does not match the serializable audit facts");
+      audit.environmentPolicyDigest,
+      SANDBOX_POLICY_VERSION,
+      SANDBOX_SOURCE_TARGET
+    );
+    const legacyPolicy = dockerPolicyPayload(
+      runtime.image ?? "",
+      { digest: audit.witnessDigest, command: "" },
+      limits,
+      audit.environmentPolicyDigest,
+      LEGACY_SANDBOX_POLICY_VERSION,
+      LEGACY_SANDBOX_SOURCE_TARGET
+    );
+    if (audit.policyDigest !== digestJson(reconstructedPolicy) && audit.policyDigest !== digestJson(legacyPolicy)) {
+      errors.push("Docker policy digest does not match the serializable audit facts");
+    }
   } else if (audit.runtime.image !== null || audit.runtime.entrypoint !== null || audit.runtime.network !== null
     || audit.runtime.rootFilesystemReadOnly || audit.runtime.user !== null || audit.runtime.capDropAll
     || audit.runtime.noNewPrivileges || audit.runtime.pull !== null) {
     errors.push("unsafe-local runtime audit contradicts its declared mode");
   } else {
-    const reconstructedPolicy = {
-      schemaVersion: SANDBOX_POLICY_VERSION,
-      kind: "UNSAFE_LOCAL" as const,
-      witnessDigest: audit.witnessDigest,
-      warning: "No container isolation. Never use as proof.",
+    const reconstructedPolicy = unsafeLocalPolicyPayload(
+      { digest: audit.witnessDigest, command: "" },
       limits,
-      environmentPolicyDigest: audit.environmentPolicyDigest
-    };
-    if (audit.policyDigest !== digestJson(reconstructedPolicy)) errors.push("unsafe-local policy digest does not match the serializable audit facts");
+      audit.environmentPolicyDigest,
+      SANDBOX_POLICY_VERSION
+    );
+    const legacyPolicy = unsafeLocalPolicyPayload(
+      { digest: audit.witnessDigest, command: "" },
+      limits,
+      audit.environmentPolicyDigest,
+      LEGACY_SANDBOX_POLICY_VERSION
+    );
+    if (audit.policyDigest !== digestJson(reconstructedPolicy) && audit.policyDigest !== digestJson(legacyPolicy)) {
+      errors.push("unsafe-local policy digest does not match the serializable audit facts");
+    }
   }
   return errors;
 }

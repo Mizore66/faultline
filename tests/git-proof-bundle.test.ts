@@ -170,6 +170,34 @@ function lifecycleBoundToDescendant(repository: string): CodexLifecycleLedger {
   });
 }
 
+function lifecycleBoundToEveryInvestigatedState(repository: string, commits: readonly string[]): CodexLifecycleLedger {
+  let ledger = createCodexLifecycleLedger({ sessionId: "portable-proof-full-session" });
+  ledger = appendLifecycleEvent(ledger, {
+    type: "SESSION_STARTED",
+    payload: { transport: "SIDE_CAR", workingDirectory: repository, model: "gpt-5.6" }
+  });
+  for (const [offset, commit] of commits.entries()) {
+    git(repository, ["checkout", "--detach", commit]);
+    const turnOrdinal = offset + 1;
+    ledger = appendLifecycleEvent(ledger, {
+      type: "TURN_STARTED",
+      payload: { turnId: `full-turn-${turnOrdinal}`, turnOrdinal, promptDigest: `sha256:${"e".repeat(64)}` }
+    });
+    ledger = appendLifecycleEvent(ledger, {
+      type: "TURN_COMPLETED",
+      payload: { turnId: `full-turn-${turnOrdinal}`, turnOrdinal, outcome: "COMPLETED" }
+    });
+    ledger = appendLifecycleEvent(ledger, {
+      type: "WORKTREE_CHECKPOINT",
+      payload: { checkpoint: captureGitCleanCheckpoint(repository), afterTurnOrdinal: turnOrdinal }
+    });
+  }
+  return appendLifecycleEvent(ledger, {
+    type: "SESSION_ENDED",
+    payload: { reason: "COMPLETED", completedTurns: commits.length }
+  });
+}
+
 function collectArtifacts(root: string, current = root): string[] {
   const artifacts: string[] = [];
   for (const entry of readdirSync(current, { withFileTypes: true })) {
@@ -229,12 +257,37 @@ describe("portable Git investigation proof bundles", () => {
 
       expect(verified).toMatchObject({ valid: true, externalRootStatus: "MATCH", rootDigest: written.rootDigest });
       expect(verified.checkedFiles).toBeGreaterThan(12);
-      expect(verified.manifest?.lifecycle).toMatchObject({ status: "BOUND", transport: "SIDE_CAR" });
+      expect(verified.manifest?.lifecycle).toMatchObject({ status: "PARTIALLY_BOUND", transport: "SIDE_CAR" });
       expect(readFileSync(join(output, "lifecycle", "ledger.json"), "utf8")).toContain("SIDE_CAR");
       expect(readFileSync(join(output, "source", "descendant.bundle")).subarray(0, 16).toString("utf8")).toMatch(/# v[23] git bundle/);
       expect(readFileSync(join(output, "source", "range.patch"), "utf8")).toContain("state.txt");
       expect(() => writeGitInvestigationProofBundle(output, result, frozen, { proofRoot: join(root, "proofs") }))
         .toThrow(/already exists and will not be replaced/);
+
+      // `BOUND` was the old spelling for an otherwise identical factual
+      // descendant checkpoint binding. A verifier must accept it without
+      // weakening its reconstruction of every ledger-derived field.
+      const legacyManifestPath = join(output, "manifest.json");
+      const legacyManifest = JSON.parse(readFileSync(legacyManifestPath, "utf8")) as {
+        lifecycle: { status: string };
+      };
+      legacyManifest.lifecycle.status = "BOUND";
+      writeFileSync(legacyManifestPath, `${JSON.stringify(legacyManifest)}\n`, "utf8");
+      rehashWholeBundle(output);
+      expect(verifyGitInvestigationProofBundle(output)).toMatchObject({
+        valid: true,
+        externalRootStatus: "NOT_PROVIDED",
+        manifest: { lifecycle: { status: "BOUND", transport: "SIDE_CAR" } }
+      });
+
+      const fullyBoundOutput = join(root, "proofs", "fully-bound-range");
+      const fullyBound = writeGitInvestigationProofBundle(fullyBoundOutput, result, frozen, {
+        proofRoot: join(root, "proofs"),
+        generatedAt: "2026-07-16T11:04:00.000Z",
+        lifecycleLedger: lifecycleBoundToEveryInvestigatedState(repository.root, result.states.map((state) => state.commit))
+      });
+      expect(verifyGitInvestigationProofBundle(fullyBound.directory, fullyBound.rootDigest).manifest?.lifecycle)
+        .toMatchObject({ status: "FULLY_BOUND", checkpointBindings: [{ stateIndex: 0 }, { stateIndex: 1 }, { stateIndex: 2 }] });
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(repository.root, { recursive: true, force: true });

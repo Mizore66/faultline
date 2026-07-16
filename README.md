@@ -11,10 +11,11 @@ It deliberately does **not** claim model intent, a unique semantic root cause, o
 - `fl judge-demo` is a deterministic, runnable five-beat product demo: **BREAK -> FIND -> PROVE -> FIX -> PREVENT**.
 - `fl serve --bundle <proof>` renders that same five-beat incident experience from a verified, real Git proof package. Optionally supplied minimization and repair records require separately retained digests, are independently re-verified, and appear in the same page only when their applicable evidence binding matches; they are never mislabeled as part of the original proof root.
 - `fl doctor` makes Git, clean-worktree, Node, Docker CLI/daemon, and likely-runtime prerequisites explicit before a user starts an incident. `fl incident start` records a review-only command/range draft and human-origin witness proposal without executing, approving, or freezing it.
-- `fl runtime resolve node|python|go` and guided incident intake resolve only an already-local curated image to Docker's immutable `RepoDigest`; they never pull an image implicitly or treat a mutable tag as proof input.
+- `fl runtime prepare node|python|go --yes` performs one deliberately confirmed pull of a catalog-owned image, then resolves Docker's immutable `RepoDigest`; `fl runtime resolve` remains read-only. Guided incident intake records only that resolved digest, never a mutable tag.
 - `fl witness review <id>` starts a local, token-protected human review workbench and prints its URL for the exact command, canonical overlay bytes, and policy. Approval and freeze are separate explicit actions; malformed or unblinded proposals are refused before a freeze record can be written.
 - Witness proposals, human approval, and freeze records are immutable, content-addressed, and verified before an investigation can run.
-- `fl record` stores a hash-chained, versioned Codex-compatible lifecycle ledger and captures real clean-Git checkpoints. It labels the transport (`CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR`) rather than pretending to intercept private Codex internals.
+- `fl codex sidecar install --repo <app> --cli <built-cli.js> --yes` creates one new, reviewable project hook document without overwriting an existing one. Its opt-in sidecar stores only allowlisted public lifecycle fields, a prompt digest, and clean Git checkpoints. `fl codex sidecar status` exposes health and exact ledger paths without exposing prompts, assistant text, or transcript paths.
+- `fl record` remains available for a manually supplied hash-chained Codex-compatible lifecycle ledger. All lifecycle transports are labeled (`CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR`) rather than presented as private-Codex interception.
 - `fl investigate git` materializes a real Git commit range into detached temporary worktrees and runs the frozen witness three times per state.
 - Proof-grade runs require a digest-pinned Docker image with no network, read-only source/root, dropped capabilities, an unprivileged user, bounded resources, and a scrubbed environment. An explicit local escape hatch is always `INAPPLICABLE`, never proof.
 - A Git proof package contains the frozen witness, raw run facts, stable transitions, a portable descendant Git bundle, a binary range patch, hashes, and an offline semantic verifier. It rejects rehashed contradictions rather than trusting a checksum alone.
@@ -84,7 +85,13 @@ Before making a real claim, let FaultLine surface local prerequisites:
 pnpm fl -- doctor --repo .
 ```
 
-Then record a review-only draft from the command that is failing. It never runs the command, guesses a remote base, approves a witness, or freezes it. With no explicit range, it uses only an unambiguous locally observed one-parent `HEAD~1 -> HEAD` bracket:
+If you do not know the Git bracket, ask FaultLine for **local-only suggestions** first. It may show a locally cached upstream merge-base and/or the immediate parent, but it never fetches, contacts a remote, parses CI, or chooses one for you:
+
+```powershell
+pnpm fl -- incident suggest --repo .
+```
+
+Then record a review-only draft from the command that is failing. It never runs the command, auto-selects a suggested or remote base, approves a witness, or freezes it. Pass a reviewed suggestion as `--from` / `--to`; with no explicit range, FaultLine uses only an unambiguous locally observed one-parent `HEAD~1 -> HEAD` bracket:
 
 ```powershell
 pnpm fl -- incident start `
@@ -92,12 +99,39 @@ pnpm fl -- incident start `
   --command "pnpm test -- checkout"
 ```
 
-For a common Node/Python/Go base image, manually pull a reviewed catalog tag, resolve its local immutable Docker digest, and add `--runtime node` (or `python` / `go`) to the intake command. FaultLine will not pull an image for you:
+For a common Node/Python/Go base image, use the guided setup command to review the exact Docker mutation first. Its first invocation does not touch Docker; only the explicit `--yes` invocation pulls the reviewed catalog tag, resolves the local immutable digest, and leaves a concrete next command. Add `--runtime node` (or `python` / `go`) to intake to bind that digest:
 
 ```powershell
-docker pull node:22-alpine
-pnpm fl -- runtime resolve node
+pnpm fl -- runtime prepare node
+# Review the displayed Docker pull effect, then explicitly confirm it:
+pnpm fl -- runtime prepare node --yes
 pnpm fl -- incident start --repo . --command "pnpm test -- checkout" --runtime node
+```
+
+For an ordinary project whose dependencies do not exist in a base image, prepare an explicit **setup-only** dependency image. FaultLine fingerprints the Dockerfile and every regular context file, previews the output tag/network policy/Docker mutation, and requires the printed `plan.review.planDigest` again at build time. The default build network is `none`, which disables Dockerfile `RUN` networking but does not certify daemon or base-image networking; choose `default` explicitly only when the reviewed Dockerfile needs networked `RUN` steps. The proof runner mounts Git source at `/workspace/src`, leaving an image-baked parent `/workspace/node_modules` available to common Node package resolution.
+
+```powershell
+pnpm fl -- runtime project plan `
+  --context . `
+  --dockerfile Dockerfile.faultline `
+  --tag registry.example/acme/my-app:faultline-deps-20260717 `
+  --network default
+
+# After reviewing the complete plan, copy its plan.review.planDigest:
+pnpm fl -- runtime project build `
+  --context . `
+  --dockerfile Dockerfile.faultline `
+  --tag registry.example/acme/my-app:faultline-deps-20260717 `
+  --network default `
+  --expect-plan <plan-review-digest> `
+  --yes
+```
+
+This build is never a proof and FaultLine never pushes credentials or images. If Docker reports only a local image ID, push and pull the reviewed tag through your own registry, then resolve its immutable digest without rebuilding. If you only need to validate the workflow locally after human witness freeze, `fl incident continue <id> --unsafe-local` is the explicitly non-proof route; it neither uses that local image ID nor exports a portable bundle.
+
+```powershell
+pnpm fl -- runtime project resolve --tag registry.example/acme/my-app:faultline-deps-20260717
+pnpm fl -- incident start --repo . --command "pnpm test -- checkout" --image <resolved-image@sha256:...>
 ```
 
 The draft and human-origin proposal are write-once local records. Run `pnpm fl -- witness review <id>` to review the exact command, overlay bytes, and policy in a local browser workbench; it requires separate human approval and freeze clicks. Retain the freeze digest outside the witness store, then use `pnpm fl -- incident status <id>` and `pnpm fl -- incident continue <id> --expect-digest <retained-frozen-digest>` to carry that same immutable incident into proof-grade replay without retyping its range or witness identifier. The full happy path, support boundary, CI handoff, and failure modes are in [docs/first-incident.md](docs/first-incident.md) and [docs/github-action.md](docs/github-action.md).
@@ -192,7 +226,40 @@ Verification rechecks schema, nonce-bound run and execution IDs, attempt links, 
 
 ### Optional observed lifecycle ledger
 
-Record observed lifecycle events and clean checkpoints first:
+For an opt-in Codex App/CLI hook path, build FaultLine once and point the installer at that exact built CLI. It generates safe Unix and Windows command variants even when the path contains spaces, shows the complete root `hooks` document for review, and changes nothing until `--yes`. It only creates a new target project's `.codex/hooks.json`; it never overwrites or guesses how to merge an existing hook document.
+
+```powershell
+# Run from this FaultLine checkout.
+pnpm build
+$FaultLineCli = (Resolve-Path .\dist\cli.js).Path
+$TargetRepo = (Resolve-Path C:\path\to\the\application).Path
+
+# Preview the exact hook document and its one-file effect first.
+node $FaultLineCli codex sidecar install --repo $TargetRepo --cli $FaultLineCli
+
+# After reviewing that output, explicitly create $TargetRepo\.codex\hooks.json.
+node $FaultLineCli codex sidecar install --repo $TargetRepo --cli $FaultLineCli --yes
+```
+
+Open or restart Codex in `$TargetRepo`, then use `/hooks` to inspect, trust, enable, or disable the FaultLine commands before they run. Project hook configuration is only appropriate for a project you trust. If `.codex/hooks.json` already exists, FaultLine refuses to replace it: emit the same root document with `node $FaultLineCli codex sidecar config --cli $FaultLineCli`, review it, and merge the `hooks` object yourself. Advanced installations may instead pass their own explicit `--command` and (when needed) `--command-windows` values to `sidecar config`.
+
+The generated hooks observe `SessionStart`, `UserPromptSubmit`, and `Stop`; they never read or store `last_assistant_message`, a transcript path, or the raw prompt. Operational records live beneath the repository's local Git metadata directory rather than the worktree, so the recorder cannot hide arbitrary `.faultline` worktree files from a clean-checkpoint check.
+
+After a session, inspect the recorder and copy its returned `ledgerPath` only when it applies to the incident's selected Git states:
+
+```powershell
+# Run the rest of the incident workflow from the application repository so
+# its managed .faultline stores remain with the incident source.
+Push-Location $TargetRepo
+node $FaultLineCli codex sidecar status --repo .
+node $FaultLineCli incident continue <id> `
+  --expect-digest <retained-frozen-digest> `
+  --ledger <ledgerPath-from-status>
+```
+
+The sidecar captures a checkpoint only when `Stop` sees a clean Git worktree. It reports a durable `CHECKPOINT_SKIPPED_DIRTY` result when agent edits remain uncommitted; it does not fake a clean turn or infer an ephemeral diff checkpoint. Commit/stash/model the state before a later observed checkpoint, or use the manual recording route below for another observed transport.
+
+For manually supplied observed events, record lifecycle facts and clean checkpoints directly:
 
 ```powershell
 pnpm fl -- record init --session <session-id> --repo . --transport SIDE_CAR
@@ -200,7 +267,7 @@ Get-Content .\events.ndjson | pnpm fl -- record stdin --ledger .faultline\record
 pnpm fl -- record checkpoint --ledger .faultline\recordings\<session-id>.json --repo . --after-turn 1
 ```
 
-Pass `--ledger .faultline/recordings/<session-id>.json` to `fl investigate git` to embed and validate matching lifecycle checkpoints in the Git package. If every state should be bound to an ordered checkpoint, create a strict sidecar record:
+Pass the chosen `--ledger` path to `fl investigate git` or `fl incident continue` to embed and validate matching lifecycle checkpoints in the Git package. A rendered package labels its real coverage as `FULLY_BOUND`, `PARTIALLY_BOUND`, or conservative **LEGACY BOUND** for old packages; it never treats a descendant-only checkpoint as coverage of every replayed state. If every state should be bound to an ordered checkpoint, create a strict sidecar record:
 
 ```powershell
 pnpm fl -- ledger bind `
@@ -315,7 +382,7 @@ The page re-verifies each attachment against its retained digest. A minimization
 
 ## How Codex and GPT-5.6 are used
 
-Codex accelerated FaultLine's implementation, adversarial testing, and product hardening. At runtime, `fl record` accepts a strictly ordered, hash-chained Codex-compatible NDJSON lifecycle stream and records clean Git checkpoints; it labels the supplied transport as `CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR` rather than claiming private event interception. Start a recording with `pnpm fl -- codex record init --session <id> --repo . --transport CODEX_CLI`, pipe observed events through `fl codex record stdin`, and capture checkpoints with `fl codex record checkpoint`.
+Codex accelerated FaultLine's implementation, adversarial testing, and product hardening. At runtime, the opt-in `fl codex sidecar` consumes documented public hook envelopes, hashes prompts in memory, and records clean Git checkpoints under local Git metadata; it does not claim access to private model state, reasoning, assistant text, or transcripts. `fl record` remains the manual route for a strictly ordered, hash-chained Codex-compatible NDJSON stream, labeled `CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR` rather than claimed as native interception. Start a manual recording with `pnpm fl -- codex record init --session <id> --repo . --transport CODEX_CLI`, pipe observed events through `fl codex record stdin`, and capture checkpoints with `fl codex record checkpoint`.
 
 GPT-5.6 is used only through the Responses API for a blinded witness proposal or an evidence-cited repair brief. It never decides a pass/fail verdict, identifies a culprit, replaces the frozen witness, or creates proof evidence.
 

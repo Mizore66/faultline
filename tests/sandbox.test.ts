@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  SANDBOX_SOURCE_TARGET,
   auditSandboxPlan,
   classifySandboxResult,
   createSandboxPlan,
@@ -9,6 +10,7 @@ import {
   type SandboxCommandRunner,
   type SandboxPlanRequest
 } from "../src/sandbox.js";
+import { digestJson } from "../src/canonical.js";
 
 const pinnedImage = `registry.example/faultline-node@sha256:${"a".repeat(64)}`;
 const witness = {
@@ -51,6 +53,9 @@ describe("FaultLine frozen-witness sandbox plans", () => {
     expect(first.arguments).toContain("--cpus");
     expect(first.arguments).toContain("--tmpfs");
     expect(first.arguments).toContain("--mount");
+    expect(first.arguments).toContain(`type=bind,src=${first.sourceDirectory},dst=${SANDBOX_SOURCE_TARGET},readonly`);
+    expect(first.arguments).toContain("--workdir");
+    expect(first.arguments).toContain(SANDBOX_SOURCE_TARGET);
     expect(first.arguments).toContain("--pull=never");
     expect(first.arguments).toContain("FOO=green");
     expect(first.arguments.join(" ")).not.toContain("OPENAI_API_KEY");
@@ -62,6 +67,23 @@ describe("FaultLine frozen-witness sandbox plans", () => {
     expect(audit.environment.passed).toHaveLength(1);
     expect(audit.environment.passed[0]?.key).toBe("FOO");
     expect(validateSandboxPlanAudit(audit)).toEqual([]);
+    const legacyPolicyDigest = digestJson({
+      schemaVersion: "faultline.sandbox.v1",
+      kind: "DOCKER_ISOLATED",
+      image: audit.runtime.image,
+      witnessDigest: audit.witnessDigest,
+      source: { target: "/workspace", readOnly: true },
+      network: "none",
+      rootFilesystem: "read-only",
+      user: "65534:65534",
+      capDrop: "ALL",
+      noNewPrivileges: true,
+      pull: "never",
+      entrypoint: "/bin/sh",
+      limits: audit.runtime.limits,
+      environmentPolicyDigest: audit.environmentPolicyDigest
+    });
+    expect(validateSandboxPlanAudit({ ...audit, policyDigest: legacyPolicyDigest })).toEqual([]);
     expect(validateSandboxPlanAudit({
       ...audit,
       runtime: { ...audit.runtime, limits: { ...audit.runtime.limits, memoryBytes: 9_999_999_999 } }

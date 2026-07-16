@@ -249,6 +249,7 @@ describe("read-only Git proof view", () => {
       expect(page).toContain("Recovery evidence");
       expect(page).not.toContain("Recovery and prevention");
       expect(page).toContain("Lifecycle binding");
+      expect(page).toContain("LEGACY BOUND");
       expect(page).toContain("NATIVE DOCKER");
       expect(page).toContain("registry.example/faultline");
       expect(page).toContain("No minimization record was supplied to this read-only view.");

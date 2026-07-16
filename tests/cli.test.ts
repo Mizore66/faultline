@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createRepairEvidencePacket } from "../src/repair-brief.js";
 import { digestJson } from "../src/canonical.js";
@@ -177,6 +177,179 @@ describe("FaultLine CLI workflows", () => {
     expect(version.stdout.trim()).toBe("FaultLine 0.1.0");
   });
 
+  it("requires an explicit confirmation before guided runtime setup can pull Docker images", () => {
+    const result = runFl(["runtime", "prepare", "node"]);
+    expect(result.status).toBe(1);
+    const output = JSON.parse(result.stdout) as {
+      status: string;
+      runtime: { tag: string };
+      effect: string;
+      next: string;
+    };
+    expect(output).toMatchObject({
+      status: "CONFIRMATION_REQUIRED",
+      runtime: { tag: "node:22-alpine" },
+      next: "fl runtime prepare node --yes"
+    });
+    expect(output.effect).toContain("docker pull node:22-alpine");
+  });
+
+  it("shows a reviewable dependency-image build plan and requires confirmation before Dockerfile execution", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-runtime-project-"));
+    const context = join(directory, "application context");
+    try {
+      mkdirSync(context, { recursive: true });
+      writeFileSync(join(context, "Dockerfile"), "FROM node:22-alpine\nRUN echo prepared\n", "utf8");
+      const args = [
+        "runtime", "project", "plan", "--context", context, "--dockerfile", "Dockerfile",
+        "--tag", "registry.example/faultline/demo:deps-20260717", "--network", "default"
+      ];
+      const plan = runFl(args, { cwd: directory });
+      expect(plan.status).toBe(0);
+      expect(JSON.parse(plan.stdout)).toMatchObject({
+        status: "PROJECT_IMAGE_BUILD_REVIEW_REQUIRED",
+        plan: {
+          setupOnly: true,
+          contextDirectory: context,
+          dockerfile: join(context, "Dockerfile"),
+          imageTag: "registry.example/faultline/demo:deps-20260717",
+          network: "default",
+          effects: {
+            dockerfileInstructionsExecute: true,
+            mayAccessNetwork: true,
+            doesNotExecuteProof: true
+          },
+          review: { planDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) }
+        }
+      });
+
+      const confirmation = runFl([...args.slice(0, 2), "build", ...args.slice(3)], { cwd: directory });
+      expect(confirmation.status).toBe(1);
+      expect(JSON.parse(confirmation.stdout)).toMatchObject({
+        status: "CONFIRMATION_REQUIRED",
+        plan: { setupOnly: true, network: "default" },
+        requiredPlanDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("emits a directly installable Codex hook document with an explicit platform command", () => {
+    const command = "node /opt/faultline/dist/cli.js codex sidecar hook --quiet";
+    const commandWindows = "node C:\\tools\\faultline\\dist\\cli.js codex sidecar hook --quiet";
+    const result = runFl([
+      "codex", "sidecar", "config", "--command", command, "--command-windows", commandWindows
+    ]);
+    expect(result.status).toBe(0);
+    const config = JSON.parse(result.stdout) as {
+      hooks: {
+        SessionStart: Array<{ hooks: Array<{ command: string; commandWindows?: string; timeout: number }> }>;
+        UserPromptSubmit: Array<{ hooks: Array<{ command: string; commandWindows?: string; timeout: number }> }>;
+        Stop: Array<{ hooks: Array<{ command: string; commandWindows?: string; timeout: number }> }>;
+      };
+    };
+    expect(Object.keys(config)).toEqual(["hooks"]);
+    for (const event of [config.hooks.SessionStart, config.hooks.UserPromptSubmit, config.hooks.Stop]) {
+      expect(event[0]?.hooks[0]).toMatchObject({ command, commandWindows, timeout: 30 });
+    }
+  });
+
+  it("generates quoted Unix and Windows hook commands from a real CLI path with spaces", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline cli path "));
+    const builtCli = join(directory, "built cli", "faultline cli.js");
+    try {
+      mkdirSync(dirname(builtCli), { recursive: true });
+      writeFileSync(builtCli, "#!/usr/bin/env node\n", "utf8");
+      const result = runFl(["codex", "sidecar", "config", "--cli", builtCli]);
+      expect(result.status).toBe(0);
+      const config = JSON.parse(result.stdout) as {
+        hooks: {
+          SessionStart: Array<{ hooks: Array<{ command: string; commandWindows?: string }> }>;
+        };
+      };
+      expect(config.hooks.SessionStart[0]?.hooks[0]).toMatchObject({
+        command: `node '${builtCli}' codex sidecar hook --quiet`,
+        commandWindows: `node "${builtCli}" codex sidecar hook --quiet`
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("requires confirmation, writes a new project hook document once, and preserves an existing one", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-sidecar-install-"));
+    const repository = join(directory, "application repository");
+    const builtCli = join(directory, "FaultLine build", "cli.js");
+    try {
+      git(directory, ["init", "application repository"]);
+      mkdirSync(dirname(builtCli), { recursive: true });
+      writeFileSync(builtCli, "#!/usr/bin/env node\n", "utf8");
+      const nonGitDirectory = join(directory, "not a repository");
+      mkdirSync(nonGitDirectory, { recursive: true });
+      const rejected = runFl(["codex", "sidecar", "install", "--repo", nonGitDirectory, "--cli", builtCli, "--yes"], { cwd: directory });
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toContain("usable local Git worktree");
+      const baseArgs = ["codex", "sidecar", "install", "--repo", repository, "--cli", builtCli];
+      const preview = runFl(baseArgs, { cwd: directory });
+      expect(preview.status).toBe(1);
+      const pending = JSON.parse(preview.stdout) as { status: string; target: string; hooks: { hooks: unknown } };
+      expect(pending).toMatchObject({ status: "CONFIRMATION_REQUIRED", target: join(repository, ".codex", "hooks.json") });
+      expect(pending.hooks.hooks).toBeDefined();
+      expect(existsSync(join(repository, ".codex", "hooks.json"))).toBe(false);
+
+      const installed = runFl([...baseArgs, "--yes"], { cwd: directory });
+      expect(installed.status).toBe(0);
+      expect(JSON.parse(installed.stdout)).toMatchObject({ status: "PROJECT_HOOKS_INSTALLED", hookFile: join(repository, ".codex", "hooks.json") });
+      const config = JSON.parse(readFileSync(join(repository, ".codex", "hooks.json"), "utf8")) as {
+        hooks: { Stop: Array<{ hooks: Array<{ commandWindows?: string }> }> };
+      };
+      expect(config.hooks.Stop[0]?.hooks[0]?.commandWindows).toBe(`node "${builtCli}" codex sidecar hook --quiet`);
+
+      const second = runFl([...baseArgs, "--yes"], { cwd: directory });
+      expect(second.status).toBe(1);
+      expect(second.stderr).toContain("will not replace an existing project hook document");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reports observed Codex sidecar health and its ledger handoff path without prompt text", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-codex-sidecar-"));
+    const repository = join(directory, "source");
+    const sessionId = "cli-sidecar-session";
+    const turnId = "cli-sidecar-turn";
+    const prompt = "Do not print this sidecar prompt marker.";
+    try {
+      git(directory, ["init", "source"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine CLI test"]);
+      commit(repository, "clean", "clean sidecar fixture");
+      const event = (value: unknown) => runFl(["codex", "sidecar", "hook"], {
+        cwd: directory,
+        input: JSON.stringify(value)
+      });
+      expect(event({ hook_event_name: "SessionStart", session_id: sessionId, cwd: repository, model: "gpt-5.6" }).status).toBe(0);
+      expect(event({ hook_event_name: "UserPromptSubmit", session_id: sessionId, cwd: repository, model: "gpt-5.6", turn_id: turnId, prompt }).status).toBe(0);
+      expect(event({ hook_event_name: "Stop", session_id: sessionId, cwd: repository, model: "gpt-5.6", turn_id: turnId }).status).toBe(0);
+
+      const status = runFl(["codex", "sidecar", "status", "--repo", repository, "--session", sessionId], { cwd: directory });
+      expect(status.status).toBe(0);
+      const output = JSON.parse(status.stdout) as {
+        status: string;
+        recordings: Array<{ ledgerPath: string; latestStop?: { status: string } }>;
+      };
+      expect(output).toMatchObject({
+        status: "SIDECAR_RECORDINGS_READY",
+        recordings: [{ latestStop: { status: "CHECKPOINT_RECORDED" } }]
+      });
+      expect(output.recordings[0]?.ledgerPath).toContain("faultline");
+      expect(status.stdout).not.toContain(prompt);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("creates an externally retained integrity receipt for a verified bundle", () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-cli-attestation-"));
     try {
@@ -285,6 +458,56 @@ describe("FaultLine CLI workflows", () => {
       });
       expect(existsSync(join(store, "proposals", "onboarding-incident.json"))).toBe(true);
       expect(existsSync(join(store, "frozen", "onboarding-incident.json"))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("suggests a locally tracked upstream range without contacting it and can bind an explicit project-image digest", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-incident-suggest-"));
+    try {
+      const repository = join(directory, "source");
+      const store = join(directory, "witnesses");
+      git(directory, ["init", "source"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine CLI test"]);
+      const ancestor = commit(repository, "good", "locally tracked base");
+      const descendant = commit(repository, "bad", "reported failure");
+      const branch = git(repository, ["branch", "--show-current"]);
+      git(repository, ["remote", "add", "origin", "https://127.0.0.1:1/faultline-never-contacted.git"]);
+      git(repository, ["update-ref", `refs/remotes/origin/${branch}`, ancestor]);
+      git(repository, ["config", `branch.${branch}.remote`, "origin"]);
+      git(repository, ["config", `branch.${branch}.merge`, `refs/heads/${branch}`]);
+
+      const suggestions = runFl(["incident", "suggest", "--repo", repository], { cwd: directory });
+      expect(suggestions.status).toBe(0);
+      const suggestionOutput = JSON.parse(suggestions.stdout) as {
+        status: string;
+        automaticSelection: string;
+        candidates: Array<Record<string, unknown>>;
+      };
+      expect(suggestionOutput.status).toBe("RANGE_SUGGESTIONS_READY");
+      expect(suggestionOutput.automaticSelection).toBe("NONE");
+      expect(suggestionOutput.candidates.find((candidate) => candidate.id === "LOCAL_UPSTREAM_MERGE_BASE"))
+        .toMatchObject({
+          from: ancestor,
+          to: descendant,
+          requiresHumanApproval: true,
+          evidence: { remoteContacted: false }
+        });
+
+      const started = runFl([
+        "incident", "start", "--repo", repository, "--command", "node -e \"process.exit(0)\"",
+        "--id", "suggested-project-image", "--from", ancestor, "--to", descendant,
+        "--image", pinnedImage, "--store", store
+      ], { cwd: directory });
+      expect(started.status).toBe(0);
+      expect(JSON.parse(started.stdout)).toMatchObject({
+        draft: {
+          range: { ancestor, descendant, source: "EXPLICIT" },
+          runtime: { requested: "explicit", image: pinnedImage }
+        }
+      });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

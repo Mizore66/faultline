@@ -16,11 +16,11 @@ FaultLine’s witness does **not** claim that `5546831` was the first overall CI
 
 ## Prepare the reviewed witness
 
-Use a clone that contains the historical commits. Pull the reviewed runtime yourself; FaultLine will only resolve its local immutable digest.
+Use a clone that contains the historical commits. FaultLine's guided runtime setup shows the exact Docker mutation before it makes it; only the explicit confirmation pulls the reviewed catalog image and resolves its local immutable digest.
 
 ```powershell
-docker pull node:22-alpine
-pnpm fl -- runtime resolve node
+pnpm fl -- runtime prepare node
+pnpm fl -- runtime prepare node --yes
 ```
 
 Create a review-only draft. The witness returns nonzero only when the `tee` command exists and is missing a preceding `mkdir -p .faultline` command:

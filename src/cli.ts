@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { defaultWitnessProposal, proposeWitnessWithGpt } from "./ai.js";
 import {
   defaultAttestationStore,
@@ -20,9 +20,11 @@ import {
 import { createDemoAnalysis } from "./engine.js";
 import { runFaultLineDoctor, type FaultLineDoctorReport } from "./doctor.js";
 import { createIncidentDraft, type IncidentDraft } from "./incident.js";
+import { suggestIncidentRanges } from "./incident-intake.js";
 import { defaultIncidentDraftStore, readIncidentDraft, writeIncidentDraft } from "./incident-store.js";
 import { defaultJudgePreviewPath, writeJudgePreview } from "./judge-preview.js";
 import { captureCleanGitSnapshot, writeGitSidecarSnapshot } from "./git-snapshot.js";
+import { codexSidecarLedgerPath, inspectObservedCodexSidecar, recordObservedCodexHook } from "./codex-sidecar.js";
 import { GitInvestigationResultSchema, investigateGitRange } from "./git-investigation.js";
 import {
   defaultGitProofRoot,
@@ -55,7 +57,16 @@ import { readModelOverlayInput } from "./overlay-input.js";
 import { describeBundlePath, verifyProofBundle, writeProofBundle } from "./proof-bundle.js";
 import { redactValue } from "./redaction.js";
 import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
-import { resolveCuratedRuntime } from "./runtime.js";
+import {
+  PROJECT_RUNTIME_IMAGE_BUILD_CONFIRMATION,
+  ProjectRuntimeImagePreparationError,
+  describeProjectRuntimeImageBuild,
+  prepareCuratedRuntime,
+  prepareProjectRuntimeImage,
+  resolveCuratedRuntime,
+  resolveProjectRuntimeImage,
+  selectCuratedRuntime
+} from "./runtime.js";
 import {
   createRepairEvidencePacket,
   proposeRepairBriefWithGpt,
@@ -87,16 +98,23 @@ Usage:
   fl --version
   fl judge-preview [--output <static-preview.html>]
   fl doctor [--repo <directory>] [--json]
-  fl incident start --repo <directory> --command <failing-command> [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go>] [--store <directory>]
+  fl incident suggest --repo <directory>
+  fl incident start --repo <directory> --command <failing-command> [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--store <directory>]
   fl incident status <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--expect-digest <sha256:...>]
   fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>] [--unsafe-local]
   fl runtime resolve <node|python|go>
+  fl runtime prepare <node|python|go> --yes
+  fl runtime project <plan|build|resolve> [--context <directory>] [--dockerfile <file>] --tag <repository:tag> [--network <none|default>] [--yes]
   fl demo live-git [--image <digest-pinned-image>] [--export-only] [--port <number>]
   fl verify <proof-bundle-directory> [--expect-root <sha256:...>]
   fl serve [--port <number>]
   fl serve --bundle <git-proof-bundle-directory> [--expect-root <sha256:...>] [--minimization <result.json> --expect-minimization <sha256:...>] [--repair <repair-brief-directory> --expect-repair <sha256:...>] [--port <number>]
   fl codex --dry-run | --snapshot [--repo <directory>]
   fl codex record <init|stdin|checkpoint|verify> [...]
+  fl codex sidecar config (--cli <built-cli.js> | --command <hook-command> [--command-windows <hook-command>])
+  fl codex sidecar install --repo <directory> --cli <built-cli.js> --yes
+  fl codex sidecar hook [--input <hook.json>] [--quiet]
+  fl codex sidecar status [--repo <directory>] [--session <session-id>]
   fl record <init|stdin|checkpoint|verify> [...]
   fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]
   fl minimize git --repo <directory> --before <commit> --after <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--max-executions <count>] [--output <managed-result.json>]
@@ -217,7 +235,7 @@ function doctorSummary(report: FaultLineDoctorReport): string {
     "FaultLine doctor",
     `Repository: ${report.repositoryRoot ?? report.repository}`,
     `Machine preflight: ${report.dockerInvestigationPreflight}`,
-    `Image selection: ${report.imageSelection} (run fl runtime resolve after you choose a reviewed image)`,
+    `Image selection: ${report.imageSelection} (run fl runtime prepare <runtime> --yes for a reviewed base, fl runtime project plan for an explicit dependency image, or fl runtime resolve after you choose one yourself)`,
     `Likely runtime: ${runtime}`,
     "",
     ...diagnostics,
@@ -502,10 +520,21 @@ async function continueIncidentCommand(args: string[]): Promise<void> {
 }
 
 async function incidentCommand(args: string[]): Promise<void> {
+  if (args[0] === "suggest") {
+    const suggestions = await suggestIncidentRanges({ repository: requiredOption(args, "--repo") });
+    process.stdout.write(`${JSON.stringify({
+      status: suggestions.candidates.length === 0 ? "NO_REVIEWABLE_RANGE_SUGGESTIONS" : "RANGE_SUGGESTIONS_READY",
+      ...suggestions,
+      next: suggestions.candidates.length === 0
+        ? ["Supply an explicit reviewed --from <commit> and --to <commit> when you start the incident. FaultLine intentionally did not guess a range."]
+        : ["Review the local candidates. When one applies, pass its exact from/to commits to fl incident start; FaultLine will still require human witness approval and freeze before execution."]
+    }, null, 2)}\n`);
+    return;
+  }
   if (args[0] === "status") return incidentStatusCommand(args);
   if (args[0] === "continue") return continueIncidentCommand(args);
   if (args[0] !== "start") {
-    throw new Error("Usage: fl incident start|status|continue ...");
+    throw new Error("Usage: fl incident suggest|start|status|continue ...");
   }
   const repository = resolve(requiredOption(args, "--repo"));
   const command = requiredOption(args, "--command");
@@ -516,11 +545,17 @@ async function incidentCommand(args: string[]): Promise<void> {
   }
   const draftId = option(args, "--id") ?? generatedIncidentId();
   const requestedRuntime = option(args, "--runtime");
+  const requestedImage = option(args, "--image");
+  if (requestedRuntime !== undefined && requestedImage !== undefined) {
+    throw new Error("Incident intake accepts either --runtime <node|python|go> or --image <digest-pinned-image>, not both.");
+  }
   const timeoutSeconds = Number(option(args, "--timeout-seconds") ?? "300");
   if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 3_600) {
     throw new Error("--timeout-seconds must be an integer from 1 through 3600.");
   }
-  const runtime = requestedRuntime === undefined ? undefined : await resolveCuratedRuntime(requestedRuntime);
+  const runtime = requestedRuntime === undefined
+    ? requestedImage === undefined ? undefined : { requested: "explicit", image: requestedImage }
+    : await resolveCuratedRuntime(requestedRuntime);
   // Even an explicit bracket must belong to a local Git worktree.  The
   // observed facts are used only for the no-range fallback; they never make
   // FaultLine select a remote base.
@@ -602,20 +637,151 @@ async function incidentCommand(args: string[]): Promise<void> {
   }, null, 2)}\n`);
 }
 
+function projectRuntimeBuildInput(args: string[]): {
+  readonly contextDirectory: string;
+  readonly dockerfile: string;
+  readonly imageTag: string;
+  readonly network: "none" | "default";
+} {
+  const requestedNetwork = option(args, "--network") ?? "none";
+  if (requestedNetwork !== "none" && requestedNetwork !== "default") {
+    throw new Error("--network must be either none or default for a project runtime image build.");
+  }
+  return {
+    contextDirectory: resolve(option(args, "--context") ?? process.cwd()),
+    dockerfile: option(args, "--dockerfile") ?? "Dockerfile",
+    imageTag: requiredOption(args, "--tag"),
+    network: requestedNetwork
+  };
+}
+
+async function projectRuntimeCommand(args: string[]): Promise<void> {
+  const action = args[0];
+  if (action === "resolve") {
+    const imageTag = requiredOption(args, "--tag");
+    try {
+      const resolved = await resolveProjectRuntimeImage(imageTag);
+      process.stdout.write(`${JSON.stringify({
+        status: "PROJECT_IMAGE_RESOLVED_LOCAL_DIGEST",
+        setupOnly: true,
+        requestedTag: resolved.requestedTag,
+        image: resolved.image,
+        next: "Use this digest-pinned image with fl incident start --image <digest-pinned-image> so human review can bind it before proof replay."
+      }, null, 2)}\n`);
+    } catch (error) {
+      if (error instanceof ProjectRuntimeImagePreparationError && error.code === "UNRESOLVED_REPO_DIGEST") {
+        process.stdout.write(`${JSON.stringify({
+          status: "PROJECT_IMAGE_DIGEST_UNAVAILABLE",
+          requestedTag: imageTag,
+          limitation: error.message,
+          next: "FaultLine will not push an image or use registry credentials. Push and pull this reviewed tag with your own registry workflow, then rerun this same resolve command."
+        }, null, 2)}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+  if (action !== "plan" && action !== "build") {
+    throw new Error("Usage: fl runtime project plan [--context <directory>] [--dockerfile <file>] --tag <repository:tag> [--network <none|default>] | fl runtime project build [same options] --expect-plan <sha256:digest> --yes | fl runtime project resolve --tag <repository:tag>");
+  }
+  const input = projectRuntimeBuildInput(args);
+  const plan = describeProjectRuntimeImageBuild(input);
+  if (action === "plan") {
+    process.stdout.write(`${JSON.stringify({
+      status: "PROJECT_IMAGE_BUILD_REVIEW_REQUIRED",
+      plan,
+      next: "Review the Dockerfile, context boundary, plan.review.planDigest, network policy, and Docker mutation shown above. If they are acceptable, rerun the same request as fl runtime project build ... --expect-plan <plan.review.planDigest> --yes."
+    }, null, 2)}\n`);
+    return;
+  }
+  const expectedPlanDigest = option(args, "--expect-plan");
+  if (!hasFlag(args, "--yes") || expectedPlanDigest === undefined) {
+    process.stdout.write(`${JSON.stringify({
+      status: "CONFIRMATION_REQUIRED",
+      plan,
+      effect: "FaultLine will execute the reviewed Dockerfile as setup only. This may change the local Docker image store and, with --network default, allow Dockerfile build steps to use the network. It does not run a witness or create proof.",
+      requiredPlanDigest: plan.review.planDigest,
+      next: "Review the complete plan, then rerun the same command with --expect-plan <requiredPlanDigest> --yes."
+    }, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const prepared = await prepareProjectRuntimeImage({
+      ...input,
+      confirmation: PROJECT_RUNTIME_IMAGE_BUILD_CONFIRMATION,
+      expectedPlanDigest
+    });
+    process.stdout.write(`${JSON.stringify({
+      status: "PROJECT_IMAGE_PREPARED_LOCAL_DIGEST",
+      prepared,
+      next: `Start a review-only incident with --image ${prepared.image}; FaultLine will bind that digest to the human-reviewed draft before any proof-grade replay.`
+    }, null, 2)}\n`);
+  } catch (error) {
+    if (error instanceof ProjectRuntimeImagePreparationError && error.code === "UNRESOLVED_REPO_DIGEST") {
+      process.stdout.write(`${JSON.stringify({
+          status: "PROJECT_IMAGE_BUILT_NEEDS_REGISTRY_DIGEST",
+          plan,
+          limitation: error.message,
+          proofNext: "FaultLine did not push an image or use registry credentials. For a portable proof, push and pull the reviewed tag with your own registry workflow, then run fl runtime project resolve --tag <repository:tag>.",
+          localDiagnosticNext: "For local wiring only after a human witness freeze, run fl incident continue <id> --unsafe-local. That route does not use this local image ID, is explicitly non-proof, and never exports a portable proof bundle."
+        }, null, 2)}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
+}
+
 async function runtimeCommand(args: string[]): Promise<void> {
-  if (args[0] !== "resolve" || !args[1]) {
-    throw new Error("Usage: fl runtime resolve <node|python|go>");
+  const action = args[0];
+  if (action === "project") {
+    await projectRuntimeCommand(args.slice(1));
+    return;
+  }
+  const requested = args[1];
+  if ((action !== "resolve" && action !== "prepare") || !requested) {
+    throw new Error("Usage: fl runtime resolve <node|python|go> | fl runtime prepare <node|python|go> --yes | fl runtime project plan|build|resolve ...");
+  }
+  if (action === "resolve") {
+    if (hasFlag(args, "--pull")) {
+      throw new Error("FaultLine never pulls a runtime image implicitly. Use fl runtime prepare <node|python|go> --yes to explicitly pull one reviewed catalog image, or pull it yourself and then run fl runtime resolve again.");
+    }
+    const resolution = await resolveCuratedRuntime(requested);
+    process.stdout.write(`${JSON.stringify({
+      status: "RESOLVED_LOCAL_DIGEST",
+      runtime: resolution.runtime,
+      requested: resolution.requested,
+      image: resolution.image,
+      next: `Run fl incident start ... --runtime ${resolution.runtime.alias} to persist this resolved image, or after a human freeze pass the image value and retained --expect-digest to fl incident continue <id> --image.`
+    }, null, 2)}\n`);
+    return;
+  }
+
+  const runtime = selectCuratedRuntime(requested);
+  if (!hasFlag(args, "--yes")) {
+    process.stdout.write(`${JSON.stringify({
+      status: "CONFIRMATION_REQUIRED",
+      runtime,
+      effect: `FaultLine will run docker pull ${runtime.tag}, which may access the network and changes the local Docker image store. It will then inspect and print Docker's immutable RepoDigest. This setup action is not a proof execution.`,
+      next: `fl runtime prepare ${runtime.alias} --yes`
+    }, null, 2)}\n`);
+    process.exitCode = 1;
+    return;
   }
   if (hasFlag(args, "--pull")) {
-    throw new Error("FaultLine never pulls a runtime image implicitly. Pull a reviewed catalog tag yourself, then run fl runtime resolve again to record its local digest.");
+    throw new Error("fl runtime prepare already performs one explicit catalog pull after --yes; do not add --pull.");
   }
-  const resolution = await resolveCuratedRuntime(args[1]);
+  const prepared = await prepareCuratedRuntime(requested);
   process.stdout.write(`${JSON.stringify({
-    status: "RESOLVED_LOCAL_DIGEST",
-    runtime: resolution.runtime,
-    requested: resolution.requested,
-    image: resolution.image,
-    next: `Run fl incident start ... --runtime ${resolution.runtime.alias} to persist this resolved image, or after a human freeze pass the image value and retained --expect-digest to fl incident continue <id> --image.`
+    status: "PREPARED_LOCAL_DIGEST",
+    runtime: prepared.runtime,
+    requested: prepared.requested,
+    pulledTag: prepared.pull.tag,
+    image: prepared.image,
+    next: `Run fl incident start ... --runtime ${prepared.runtime.alias} to bind this immutable image digest into the human-reviewed incident draft. The pull itself is setup only, not proof.`
   }, null, 2)}\n`);
 }
 
@@ -934,6 +1100,237 @@ async function recordCommand(args: string[]): Promise<void> {
     }
     default:
       throw new Error("Usage: fl record init|stdin|checkpoint|verify ...");
+  }
+}
+
+/**
+ * Build an opt-in Codex hook configuration. Hook definitions execute code in
+ * a user's agent loop, so FaultLine makes the command visible for review and
+ * only writes a new project file after an explicit `--yes`; Codex retains the
+ * separate review/trust decision through `/hooks`.
+ */
+type SidecarHookCommand = {
+  readonly command: string;
+  readonly commandWindows?: string;
+};
+
+function assertSidecarCommandText(value: string, label: string): string {
+  const command = value.trim();
+  if (!command) throw new Error(`${label} must not be empty.`);
+  if (/[\0\r\n]/.test(command)) throw new Error(`${label} cannot contain a NUL byte or a line break.`);
+  return command;
+}
+
+function quotePosixShellArgument(value: string): string {
+  if (/[\0\r\n]/.test(value)) throw new Error("The sidecar CLI path cannot contain a NUL byte or a line break.");
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+/** Quote one Windows argv value without relying on the caller's shell syntax. */
+function quoteWindowsCommandArgument(value: string): string {
+  if (/[\0\r\n]/.test(value)) throw new Error("The sidecar CLI path cannot contain a NUL byte or a line break.");
+  let result = '"';
+  let backslashes = 0;
+  for (const character of value) {
+    if (character === "\\") {
+      backslashes += 1;
+      continue;
+    }
+    if (character === '"') {
+      result += "\\".repeat((backslashes * 2) + 1);
+      result += '"';
+      backslashes = 0;
+      continue;
+    }
+    result += "\\".repeat(backslashes);
+    result += character;
+    backslashes = 0;
+  }
+  result += "\\".repeat(backslashes * 2);
+  return `${result}"`;
+}
+
+function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(`FaultLine could not inspect ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function sidecarCliCommand(args: string[]): SidecarHookCommand {
+  const explicitCommand = option(args, "--command");
+  const cliInput = option(args, "--cli");
+  if ((explicitCommand === undefined) === (cliInput === undefined)) {
+    throw new Error("Provide exactly one of --cli <built-cli.js> or --command <stable-hook-command>.");
+  }
+  if (cliInput === undefined) {
+    const commandWindows = option(args, "--command-windows");
+    return {
+      command: assertSidecarCommandText(requiredOption(args, "--command"), "--command"),
+      ...(commandWindows === undefined ? {} : { commandWindows: assertSidecarCommandText(commandWindows, "--command-windows") })
+    };
+  }
+  if (option(args, "--command-windows") !== undefined) {
+    throw new Error("--command-windows is only valid with an explicit --command; --cli generates both platform commands safely.");
+  }
+  const cliPath = resolve(requiredOption(args, "--cli"));
+  if (extname(cliPath).toLowerCase() !== ".js") {
+    throw new Error(`--cli must point to the built JavaScript entry point (normally dist/cli.js), not ${cliPath}.`);
+  }
+  try {
+    const stat = lstatSync(cliPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("not a real regular file");
+  } catch (error) {
+    throw new Error(`--cli must point to an existing built, non-symlink CLI file: ${cliPath} (${error instanceof Error ? error.message : String(error)})`);
+  }
+  return {
+    command: `node ${quotePosixShellArgument(cliPath)} codex sidecar hook --quiet`,
+    commandWindows: `node ${quoteWindowsCommandArgument(cliPath)} codex sidecar hook --quiet`
+  };
+}
+
+function codexSidecarHookConfig(command: SidecarHookCommand): Record<string, unknown> {
+  const hook = (statusMessage: string) => ({
+    type: "command",
+    command: command.command,
+    ...(command.commandWindows === undefined ? {} : { commandWindows: command.commandWindows }),
+    timeout: 30,
+    statusMessage
+  });
+  return {
+    hooks: {
+      SessionStart: [{
+        matcher: "startup|resume|clear|compact",
+        hooks: [hook("FaultLine observes this Codex session")]
+      }],
+      UserPromptSubmit: [{
+        hooks: [hook("FaultLine records an observed Codex turn")]
+      }],
+      Stop: [{
+        hooks: [hook("FaultLine captures a clean observed checkpoint when available")]
+      }]
+    }
+  };
+}
+
+function sidecarProjectHookTarget(repository: string): { readonly repository: string; readonly directory: string; readonly file: string } {
+  const resolvedRepository = resolve(repository);
+  if (lstatIfPresent(resolvedRepository) === undefined || resolveSafeDirectorySegment(resolvedRepository) === null) {
+    throw new Error(`--repo must be a real directory, not a symbolic link or file: ${resolvedRepository}`);
+  }
+  try {
+    // Sidecar records are deliberately under Git common metadata; reject a
+    // non-Git folder before placing an executable project hook into it.
+    codexSidecarLedgerPath(resolvedRepository, "faultline-install-check");
+  } catch (error) {
+    throw new Error(`--repo must be a usable local Git worktree for FaultLine sidecar capture: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const directory = join(resolvedRepository, ".codex");
+  if (lstatIfPresent(directory) !== undefined && resolveSafeDirectorySegment(directory) === null) {
+    throw new Error(`Project .codex directory must be a real directory, not a symbolic link or file: ${directory}`);
+  }
+  const file = join(directory, "hooks.json");
+  // lstat catches a dangling symlink too; preserving a user's hook document
+  // is more important than guessing how its JSON should be merged.
+  if (lstatIfPresent(file) !== undefined) {
+    throw new Error(`FaultLine will not replace an existing project hook document: ${file}. Run sidecar config and merge the reviewed hooks yourself.`);
+  }
+  return { repository: resolvedRepository, directory, file };
+}
+
+function writeSidecarProjectHookConfig(target: { readonly directory: string; readonly file: string }, config: Record<string, unknown>): void {
+  if (lstatIfPresent(target.directory) === undefined) {
+    mkdirSync(target.directory, { mode: 0o700 });
+  }
+  if (resolveSafeDirectorySegment(target.directory) === null) {
+    throw new Error(`Project .codex directory must be a real directory, not a symbolic link or file: ${target.directory}`);
+  }
+  try {
+    writeFileSync(target.file, `${JSON.stringify(config, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  } catch (error) {
+    throw new Error(`FaultLine could not create the project hook document without replacing anything: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function codexSidecarCommand(args: string[]): Promise<void> {
+  const action = args[0];
+  if (action === "config") {
+    const command = sidecarCliCommand(args);
+    // Stdout is the directly installable root hooks document. It is safe to
+    // redirect it to a reviewed config file without stripping metadata.
+    process.stdout.write(`${JSON.stringify(codexSidecarHookConfig(command), null, 2)}\n`);
+    return;
+  }
+  if (action === "install") {
+    const command = sidecarCliCommand(args);
+    const config = codexSidecarHookConfig(command);
+    const target = sidecarProjectHookTarget(requiredOption(args, "--repo"));
+    if (!hasFlag(args, "--yes")) {
+      process.stdout.write(`${JSON.stringify({
+        status: "CONFIRMATION_REQUIRED",
+        target: target.file,
+        effect: "Creates a new project .codex/hooks.json containing the displayed reviewed hook configuration. It does not overwrite or merge an existing hook document.",
+        hooks: config,
+        next: "After reviewing the displayed configuration, rerun the same install command with --yes."
+      }, null, 2)}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    writeSidecarProjectHookConfig(target, config);
+    process.stdout.write(`${JSON.stringify({
+      status: "PROJECT_HOOKS_INSTALLED",
+      hookFile: target.file,
+      next: "Restart or begin Codex in this trusted project, then use /hooks to review and trust the displayed FaultLine hooks before they run."
+    }, null, 2)}\n`);
+    return;
+  }
+  if (action === "status") {
+    const repository = resolve(option(args, "--repo") ?? process.cwd());
+    const inspection = inspectObservedCodexSidecar(repository, option(args, "--session"));
+    const invalid = inspection.recordings.some((recording) => !recording.valid);
+    process.stdout.write(`${JSON.stringify({
+      status: inspection.recordings.length === 0
+        ? "NO_SIDECAR_RECORDINGS"
+        : invalid ? "SIDECAR_RECORDING_INVALID" : "SIDECAR_RECORDINGS_READY",
+      ...inspection,
+      next: inspection.recordings.length === 0
+        ? ["Install a reviewed project hook document with fl codex sidecar install --repo <directory> --cli <built-cli.js> --yes, review/trust it through /hooks, then begin a Codex session in this Git worktree."]
+        : invalid
+          ? ["Do not bind an invalid sidecar ledger. Resolve the reported local integrity/storage issue, then start a new observed session."]
+          : inspection.recordings.map((recording) => `After human witness freeze, pass --ledger ${recording.ledgerPath} to fl incident continue <id> only when its observed checkpoints apply to the selected Git states.`),
+      privacy: "Status reads only sidecar integrity and checkpoint metadata. It never prints prompts, assistant messages, or transcript paths."
+    }, null, 2)}\n`);
+    process.exitCode = invalid ? 1 : 0;
+    return;
+  }
+  if (action !== "hook") {
+    throw new Error("Usage: fl codex sidecar config (--cli <built-cli.js> | --command <hook-command> [--command-windows <hook-command>]) | fl codex sidecar install --repo <directory> --cli <built-cli.js> --yes | fl codex sidecar hook [--input <hook.json>] [--quiet] | fl codex sidecar status [--repo <directory>] [--session <session-id>]");
+  }
+  const quiet = hasFlag(args, "--quiet");
+  try {
+    const input = option(args, "--input") === undefined
+      ? JSON.parse(await readStandardInput())
+      : readJsonInput(requiredOption(args, "--input"));
+    const result = recordObservedCodexHook(input);
+    if (quiet) {
+      // A JSON continuation response is valid for the three configured Codex
+      // hook events and prevents an observation failure from blocking a turn.
+      process.stdout.write('{"continue":true}\n');
+      return;
+    }
+    process.stdout.write(`${JSON.stringify({
+      ...result,
+      limitation: "Observed public Codex lifecycle metadata only; this is not private model-state or intent capture."
+    }, null, 2)}\n`);
+  } catch (error) {
+    if (!quiet) throw error;
+    // Telemetry must not become a control plane. The direct (non-quiet)
+    // command and `sidecar status` remain available for a detailed,
+    // actionable health check without surfacing hook input bytes.
+    process.stderr.write("FaultLine sidecar did not record this hook; run fl codex sidecar status in the repository after the turn.\n");
+    process.stdout.write('{"continue":true}\n');
   }
 }
 
@@ -1352,8 +1749,12 @@ async function main(): Promise<void> {
         await recordCommand(args.slice(1));
         return;
       }
+      if (args[0] === "sidecar") {
+        await codexSidecarCommand(args.slice(1));
+        return;
+      }
       if (hasFlag(args, "--dry-run")) {
-        process.stdout.write(`${JSON.stringify({ adapter: "git-sidecar", status: "DRY_RUN", records: ["clean Git HEAD tree", "content-addressed snapshot manifest"], limitation: "No live Codex transport or turn lifecycle capture is claimed by this build." }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify({ adapter: "observed-codex-hook-sidecar", status: "DRY_RUN", records: ["public session and turn identifiers", "prompt digest only", "clean Git checkpoint when available"], limitation: "Install and trust the emitted hook configuration to observe public lifecycle metadata. FaultLine does not intercept private model state, transcripts, or reasoning." }, null, 2)}\n`);
         return;
       }
       if (hasFlag(args, "--snapshot")) {
@@ -1363,7 +1764,7 @@ async function main(): Promise<void> {
         process.stdout.write(`${JSON.stringify({ snapshot, file, limitation: "This is a clean Git sidecar snapshot, not a live Codex transport event." }, null, 2)}\n`);
         return;
       }
-      throw new Error("The current build exposes an honest Git sidecar. Run: fl codex --dry-run or fl codex --snapshot --repo <directory>");
+      throw new Error("The current build exposes an observed Codex hook sidecar and a clean Git snapshot. Run: fl codex sidecar install --repo <directory> --cli <built-cli.js> --yes, fl codex --dry-run, or fl codex --snapshot --repo <directory>");
     case "witness":
       await witnessCommand(args);
       return;

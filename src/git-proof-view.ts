@@ -215,13 +215,25 @@ function lifecyclePanel(view: VerifiedGitProofView): string {
   if (lifecycle.status === "UNBOUND") {
     return `<article class="card panel"><h3>Lifecycle binding</h3><p class="empty-state"><strong>UNBOUND</strong><br>${escapeHtml(lifecycle.limitation)}</p><small>FaultLine does not infer private model reasoning or native Codex interception from an unbound package.</small></article>`;
   }
+  const coveredStates = new Set(lifecycle.checkpointBindings.map((binding) => binding.stateIndex)).size;
+  const coverage = `${coveredStates} of ${view.investigation.states.length} investigated Git states`;
+  const bindingStatus = lifecycle.status === "FULLY_BOUND"
+    ? "FULLY BOUND"
+    : lifecycle.status === "PARTIALLY_BOUND"
+      ? "PARTIALLY BOUND"
+      : "LEGACY BOUND";
+  const bindingScope = lifecycle.status === "FULLY_BOUND"
+    ? `Every investigated state has an observed checkpoint (${coverage}).`
+    : lifecycle.status === "PARTIALLY_BOUND"
+      ? `Only ${coverage} have observed checkpoints; the remaining replayed states are not lifecycle-bound.`
+      : `This package predates explicit lifecycle coverage labels. It lists ${coverage}, but its old BOUND label does not assert complete coverage.`;
   const rows = lifecycle.checkpointBindings.map((binding) => `<tr>
     <td>${binding.stateIndex}</td>
     <td>${binding.sequence}</td>
     <td><code title="${escapeHtml(binding.checkpointDigest)}">${escapeHtml(shortDigest(binding.checkpointDigest))}</code></td>
   </tr>`).join("");
   return `<article class="card panel"><h3>Lifecycle binding</h3>
-    <p><strong>BOUND</strong> via observed ${escapeHtml(lifecycle.transport.replaceAll("_", " "))} events. This records checkpoints, not private model reasoning or native interception.</p>
+    <p><strong>${bindingStatus}</strong> via observed ${escapeHtml(lifecycle.transport.replaceAll("_", " "))} events. ${escapeHtml(bindingScope)} This records checkpoints, not private model reasoning or native interception.</p>
     <div class="proof"><span>Ledger digest</span><code title="${escapeHtml(lifecycle.ledgerDigest)}">${escapeHtml(shortDigest(lifecycle.ledgerDigest))}</code></div>
     <div class="proof"><span>Ledger head</span><code title="${escapeHtml(lifecycle.headHash)}">${escapeHtml(shortDigest(lifecycle.headHash))}</code></div>
     <div class="table-wrap"><table class="data-table"><thead><tr><th>Git state</th><th>Ledger sequence</th><th>Checkpoint digest</th></tr></thead><tbody>${rows}</tbody></table></div>

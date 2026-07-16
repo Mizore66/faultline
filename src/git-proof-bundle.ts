@@ -82,8 +82,7 @@ const LifecycleUnboundSchema = z.object({
   limitation: z.literal("No caller-supplied Codex lifecycle ledger is bound to this Git investigation package.")
 }).strict();
 
-const LifecycleBoundSchema = z.object({
-  status: z.literal("BOUND"),
+const LifecycleBindingFields = z.object({
   path: z.literal("lifecycle/ledger.json"),
   ledgerDigest: DigestSchema,
   headHash: DigestSchema,
@@ -96,7 +95,21 @@ const LifecycleBoundSchema = z.object({
   }).strict()).min(1)
 }).strict();
 
-const LifecycleBindingSchema = z.discriminatedUnion("status", [LifecycleUnboundSchema, LifecycleBoundSchema]);
+/**
+ * `BOUND` is accepted only to verify packages written before FaultLine
+ * distinguished a descendant-only attachment from coverage of every replayed
+ * state. New packages always declare their actual coverage explicitly.
+ */
+const LifecycleLegacyBoundSchema = LifecycleBindingFields.extend({ status: z.literal("BOUND") }).strict();
+const LifecyclePartiallyBoundSchema = LifecycleBindingFields.extend({ status: z.literal("PARTIALLY_BOUND") }).strict();
+const LifecycleFullyBoundSchema = LifecycleBindingFields.extend({ status: z.literal("FULLY_BOUND") }).strict();
+
+const LifecycleBindingSchema = z.discriminatedUnion("status", [
+  LifecycleUnboundSchema,
+  LifecycleLegacyBoundSchema,
+  LifecyclePartiallyBoundSchema,
+  LifecycleFullyBoundSchema
+]);
 
 export const GitProofSourceMetadataSchema = z.object({
   schemaVersion: z.literal(GIT_PROOF_SOURCE_SCHEMA_VERSION),
@@ -520,6 +533,10 @@ function reconstructTransitions(states: readonly StableGitState[]): StableGitTra
 
 type LifecycleBinding = z.infer<typeof LifecycleBindingSchema>;
 
+function hasLifecycleLedger(binding: LifecycleBinding): binding is Exclude<LifecycleBinding, z.infer<typeof LifecycleUnboundSchema>> {
+  return binding.status !== "UNBOUND";
+}
+
 function unboundLifecycle(): z.infer<typeof LifecycleUnboundSchema> {
   return {
     status: "UNBOUND",
@@ -565,9 +582,11 @@ function bindLifecycleLedger(
   if (!descendantBinding) {
     throw new Error("Lifecycle ledger must include a clean checkpoint for the investigated descendant state.");
   }
+  const coveredStateIndices = new Set(checkpointBindings.map((binding) => binding.stateIndex));
+  const status = coveredStateIndices.size === result.states.length ? "FULLY_BOUND" : "PARTIALLY_BOUND";
   return {
-    binding: LifecycleBoundSchema.parse({
-      status: "BOUND",
+    binding: (status === "FULLY_BOUND" ? LifecycleFullyBoundSchema : LifecyclePartiallyBoundSchema).parse({
+      status,
       path: "lifecycle/ledger.json",
       ledgerDigest: digestJson(ledger),
       headHash: verification.headHash,
@@ -729,7 +748,7 @@ function makeManifest(
       gitBundle: "source/descendant.bundle",
       rangePatch: "source/range.patch",
       verification: "VERIFY.md",
-      ...(lifecycle.status === "BOUND" ? { lifecycleLedger: lifecycle.path } : {})
+      ...(hasLifecycleLedger(lifecycle) ? { lifecycleLedger: lifecycle.path } : {})
     }
   });
 }
@@ -877,7 +896,7 @@ function expectedManifestArtifacts(result: GitInvestigationResult, lifecycle: Li
     gitBundle: "source/descendant.bundle",
     rangePatch: "source/range.patch",
     verification: "VERIFY.md",
-    ...(lifecycle.status === "BOUND" ? { lifecycleLedger: lifecycle.path } : {})
+    ...(hasLifecycleLedger(lifecycle) ? { lifecycleLedger: lifecycle.path } : {})
   };
 }
 
@@ -908,7 +927,14 @@ function verifyLifecycleBinding(
   }
   try {
     const rebound = bindLifecycleLedger(parsedLedger.data, result).binding;
-    if (!sameCanonical(rebound, manifest.lifecycle)) errors.push("lifecycle ledger binding does not match its valid checkpoint-to-state reconstruction");
+    // Packages written before coverage labels existed used `BOUND` for the
+    // same factual checkpoint binding. Reconstruct every factual field from
+    // the ledger, but compare it with that legacy label when verifying one of
+    // those historical packages. New writers never emit the ambiguous label.
+    const expected = manifest.lifecycle.status === "BOUND"
+      ? LifecycleLegacyBoundSchema.parse({ ...rebound, status: "BOUND" })
+      : rebound;
+    if (!sameCanonical(expected, manifest.lifecycle)) errors.push("lifecycle ledger binding does not match its valid checkpoint-to-state reconstruction");
   } catch (error) {
     errors.push(`lifecycle ledger cannot bind to the investigation: ${errorMessage(error)}`);
   }
@@ -981,7 +1007,7 @@ export function writeGitInvestigationProofBundle(
     if (lifecycle.ledger) put("lifecycle/ledger.json", jsonBytes(lifecycle.ledger));
     for (const run of result.runs) put(runArtifactPath(run), jsonBytes(run));
     for (const [index, transition] of result.transitions.entries()) put(transitionArtifactPath(index), jsonBytes(transition));
-    const expected = requiredArtifactPaths(result, lifecycle.binding.status === "BOUND");
+    const expected = requiredArtifactPaths(result, hasLifecycleLedger(lifecycle.binding));
     const actual = [...artifacts.keys()].sort((left, right) => left.localeCompare(right));
     if (!sameCanonical(expected, actual)) throw new Error("Git proof writer did not produce the complete expected artifact set.");
     for (const [artifact, bytes] of artifacts) {
@@ -1094,7 +1120,7 @@ export function verifyGitInvestigationProofBundle(
       if (!sameCanonical(manifest.artifacts, expectedManifestArtifacts(result, manifest.lifecycle))) {
         errors.push("manifest artifact index does not exactly match the investigation run and transition catalog");
       }
-      const expectedArtifacts = new Set(requiredArtifactPaths(result, manifest.lifecycle.status === "BOUND"));
+      const expectedArtifacts = new Set(requiredArtifactPaths(result, hasLifecycleLedger(manifest.lifecycle)));
       for (const artifact of expectedArtifacts) if (!catalog.has(artifact)) errors.push(`required artifact is missing from hashes.txt: ${artifact}`);
       for (const artifact of catalog.keys()) if (!expectedArtifacts.has(artifact)) errors.push(`hashes.txt contains an unexpected artifact: ${artifact}`);
       const physical = new Set(collectFiles(root));
