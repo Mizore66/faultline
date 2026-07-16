@@ -301,7 +301,6 @@ describe("FaultLine CLI workflows", () => {
       const hook = join(repository, "forbidden-fsmonitor.cjs");
       const marker = join(repository, "fsmonitor-ran");
       writeFileSync(hook, 'require("node:fs").writeFileSync(process.argv[2], "invoked", "utf8");\n', "utf8");
-      git(repository, ["update-index", "--fsmonitor"]);
       const hostileHook = [
         quoteFsmonitorCommandPart(process.execPath),
         quoteFsmonitorCommandPart(hook),
@@ -315,9 +314,6 @@ describe("FaultLine CLI workflows", () => {
       runFl(["doctor", "--repo", repository], { cwd: directory });
       expect(existsSync(marker)).toBe(false);
     } finally {
-      // Git for Windows can briefly retain an index/monitor handle after the
-      // spawned diagnostic exits. Retrying cleanup makes this security test
-      // deterministic without weakening the assertion above.
       rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
