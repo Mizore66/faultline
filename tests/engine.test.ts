@@ -127,11 +127,11 @@ describe("FaultLine deterministic sample", () => {
 
   it("renders the five-beat incident page from executable analysis data", () => {
     const page = renderIncidentPage(createDemoAnalysis("REPLAY"));
-    expect(page).toContain("BREAK");
-    expect(page).toContain("FIND");
-    expect(page).toContain("PROVE");
-    expect(page).toContain("FIX");
-    expect(page).toContain("PREVENT");
-    expect(page).toContain("Re-run all evidence");
+    expect(page).toContain("Choose one test");
+    expect(page).toContain("Find the first broken version");
+    expect(page).toContain("Double-check the suspected changes");
+    expect(page).toContain("Prepare a clear fix");
+    expect(page).toContain("Make sure the bug stays fixed");
+    expect(page).toContain("Run the demo again");
   });
 });

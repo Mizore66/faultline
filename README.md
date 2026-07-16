@@ -25,6 +25,7 @@ Requirements: Node.js 22+ and pnpm 10+. Docker is required only for a live proof
 ```powershell
 pnpm install --frozen-lockfile
 pnpm test
+pnpm fl -- --version
 pnpm fl -- judge-demo --rerun-all
 ```
 
@@ -128,6 +129,67 @@ pnpm fl -- attest verify <receipt-id> --expect-digest sha256:<recorded-receipt-d
 
 An external digest detects an editor who rewrites both local content and local checksums. It is not a cryptographic signature, an identity check, proof of authorship, or a provenance guarantee.
 
+## Package and clean-install use
+
+FaultLine is licensed under the MIT License. It is not published to npm yet; the owner still controls the first registry release, so do not treat `npm install faultline` as a supported installation command.
+
+A pinned source checkout can still produce and test the exact package that would be released:
+
+```powershell
+git checkout <release-tag-or-full-commit-sha>
+pnpm install --frozen-lockfile
+pnpm test:package
+pnpm pack
+npm install --global .\faultline-0.1.0.tgz
+fl --version
+```
+
+`prepack` builds `dist/`, and the package allowlist contains only `dist/`, `LICENSE`, `README.md`, and npm's required package metadata. CI installs the tarball into an empty project and executes the installed `fl` binary before a release can be considered.
+
+## Reusable GitHub Action
+
+Commit a reviewed `faultline.frozen-witness.v1` record to the consumer repository, then pin the action to an owner-created release tag or, for the strongest immutability, a full commit SHA:
+
+```yaml
+name: FaultLine proof
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: faultline
+        uses: Mizore66/faultline@<release-tag-or-full-commit-sha>
+        with:
+          witness: .github/faultline/witnesses/refund-regression.json
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          runtime: ghcr.io/your-org/your-project-test@sha256:<64-lowercase-hex>
+          proof-mode: required
+      - name: Record externally retained root
+        run: echo '${{ steps.faultline.outputs.root-digest }}' >> "$GITHUB_STEP_SUMMARY"
+```
+
+The action uploads `faultline-proof` and exposes `proof-package` and `root-digest` outputs. The runtime image must contain the consumer project's witness dependencies and must be digest-pinned. `proof-mode: required` fails closed unless Docker-isolated replay creates a verified package. `proof-mode: diagnostic` is an explicitly non-proof local replay; it uploads no package and leaves both outputs empty.
+
+The manually runnable `Verify reusable Action` workflow creates a two-commit consumer repository, freezes a deterministic witness, resolves a Docker image digest, invokes this repository through `uses: ./`, checks both outputs, verifies the package, and exercises artifact upload.
+
+Support matrix:
+
+- Packaged CLI: Node.js 22 and 24 on current GitHub-hosted Ubuntu, Windows, and macOS runners.
+- Proof action: current GitHub-hosted Ubuntu runner with Docker and a Linux digest-pinned runtime image.
+- Diagnostic action: current GitHub-hosted Ubuntu runner; it is not evidence suitable for publication.
+- Package manager for source builds: pnpm 10. Installed consumers only need a supported Node.js runtime.
+- GitHub.com Actions is supported. GitHub Enterprise Server is not currently claimed because `actions/upload-artifact@v4` availability differs by GHES version.
+- npm registry installation remains unsupported until the owner performs the first publish. No release or publish automation is enabled.
+
 ## GPT-5.6 boundaries
 
 `fl witness propose --live` uses the Responses API with strict structured output after `OPENAI_API_KEY` is set. The model sees a blinded, redacted incident packet: candidate commits, turns, diffs, timeline data, and localization results are excluded by schema.
@@ -177,6 +239,7 @@ The remaining submission actions require a human account or recorded material an
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:package
 ```
 
 The suite includes canonical hashing, adversarial bundle tampering, witness-freeze integrity, lifecycle hash chains, real temporary-Git replay, Docker-plan safety, ledger binding, redaction behavior, external receipts, and CLI workflows.

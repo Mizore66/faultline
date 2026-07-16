@@ -23,6 +23,12 @@ function git(repository: string, args: string[]): void {
 }
 
 describe("FaultLine CLI workflows", () => {
+  it("reports the package version", () => {
+    const result = runFl(["--version"]);
+    const metadata = JSON.parse(readFileSync(join(workspace, "package.json"), "utf8")) as { version: string };
+    expect(result).toMatchObject({ status: 0, stdout: `${metadata.version}\n`, stderr: "" });
+  });
+
   it("creates an externally retained integrity receipt for a verified bundle", () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-cli-attestation-"));
     try {

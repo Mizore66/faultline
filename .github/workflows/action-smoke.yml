@@ -1,0 +1,68 @@
+name: Verify reusable Action
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - action.yml
+      - package.json
+      - pnpm-lock.yaml
+      - scripts/prepare-action-smoke.mjs
+      - scripts/run-action.mjs
+      - src/**
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Build fixture tooling
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Prepare deterministic consumer repository
+        id: fixture
+        run: node scripts/prepare-action-smoke.mjs
+      - name: Resolve the container runtime digest
+        id: runtime
+        shell: bash
+        run: |
+          docker pull node:22-bookworm-slim
+          image="$(docker image inspect node:22-bookworm-slim --format '{{ index .RepoDigests 0 }}')"
+          if [[ ! "$image" =~ @sha256:[a-f0-9]{64}$ ]]; then
+            echo "Docker did not return a digest-pinned image: $image" >&2
+            exit 1
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+      - name: Run the repository as a consumer Action
+        id: faultline
+        uses: ./
+        with:
+          witness: ${{ steps.fixture.outputs.witness }}
+          repository: ${{ steps.fixture.outputs.repository }}
+          base: ${{ steps.fixture.outputs.base }}
+          head: ${{ steps.fixture.outputs.head }}
+          runtime: ${{ steps.runtime.outputs.image }}
+          proof-mode: required
+          artifact-name: faultline-action-smoke
+      - name: Verify Action outputs
+        shell: bash
+        env:
+          PROOF_PACKAGE: ${{ steps.faultline.outputs.proof-package }}
+          ROOT_DIGEST: ${{ steps.faultline.outputs.root-digest }}
+        run: |
+          test -d "$PROOF_PACKAGE"
+          test "$(tr -d '\r\n' < "$PROOF_PACKAGE/ROOT.sha256")" = "$ROOT_DIGEST"
+          node dist/cli.js verify "$PROOF_PACKAGE" --expect-root "$ROOT_DIGEST"

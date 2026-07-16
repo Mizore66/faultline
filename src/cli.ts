@@ -47,6 +47,7 @@ import type { RunMode } from "./domain.js";
 const usage = `FaultLine — executable evidence for agent-assisted code
 
 Usage:
+  fl --version
   fl judge-demo [--replay | --rerun-all] [--output <directory>] [--export-only]
   fl verify <proof-bundle-directory> [--expect-root <sha256:...>]
   fl serve [--port <number>]
@@ -68,6 +69,14 @@ Usage:
 The judge demo is a reviewed, deterministic Node fixture. It does not require an OpenAI API key.
 The lifecycle adapter accepts observed Codex-compatible events; it does not claim to intercept private Codex internals.
 Use --live for a GPT-5.6 witness proposal after setting OPENAI_API_KEY.`;
+
+function packageVersion(): string {
+  const metadata = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: unknown };
+  if (typeof metadata.version !== "string" || metadata.version.length === 0) {
+    throw new Error("Package metadata does not contain a valid version.");
+  }
+  return metadata.version;
+}
 
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
@@ -572,6 +581,10 @@ async function attestationCommand(args: string[]): Promise<void> {
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
+    case "--version":
+    case "-V":
+      process.stdout.write(`${packageVersion()}\n`);
+      return;
     case undefined:
     case "help":
     case "--help":
