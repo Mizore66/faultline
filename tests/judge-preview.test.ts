@@ -13,6 +13,10 @@ describe("deterministic static judge preview", () => {
     expect(first).toMatch(/deterministic judge preview/i);
     expect(first).toMatch(/not a live Docker proof/i);
     expect(first).toContain("It did not run Docker, execute repository code, call an API, or verify a live repository.");
+    expect(first).toContain("FaultLine product guarantees");
+    expect(first).toContain("approval + freeze");
+    expect(first).toContain("runs per Git state");
+    expect(first).not.toMatch(/sample sessions|sample turns|changed files|implicated hunks/i);
     expect(first).toContain("No code executes when this file is opened.");
     expect(first).not.toMatch(/<script\b/i);
     expect(first).not.toMatch(/\bfetch\s*\(/i);
