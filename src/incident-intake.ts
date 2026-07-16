@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { lstatSync, realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { lstatSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { DOCTOR_SAFE_GIT_CONFIG } from "./doctor.js";
 
 /**
@@ -253,7 +253,28 @@ function isInsideDirectory(child: string, parent: string): boolean {
       .toLocaleLowerCase("en-US");
   };
   const pathFromParent = relative(comparable(parent), comparable(child));
-  return pathFromParent === "" || (!pathFromParent.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && pathFromParent !== ".." && !isAbsolute(pathFromParent));
+  if (pathFromParent === "" || (!pathFromParent.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && pathFromParent !== ".." && !isAbsolute(pathFromParent))) {
+    return true;
+  }
+
+  // Some Windows APIs preserve a short-name or volume-device spelling through
+  // realpath. Compare directory identity while walking the actual requested
+  // path as a final safe fallback; this is stricter than accepting Git's
+  // string alone and still rejects an unrelated reported root.
+  try {
+    const parentStat = statSync(parent);
+    let current = child;
+    for (let depth = 0; depth < 256; depth += 1) {
+      const currentStat = statSync(current);
+      if (currentStat.dev === parentStat.dev && currentStat.ino === parentStat.ino) return true;
+      const next = dirname(current);
+      if (next === current) return false;
+      current = next;
+    }
+  } catch {
+    // A path that cannot be inspected cannot establish the containment claim.
+  }
+  return false;
 }
 
 function normalizeRunnerResult(value: IncidentIntakeGitCommandResult): CommandOutcome {
