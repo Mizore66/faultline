@@ -1,5 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -211,6 +212,75 @@ describe("FaultLine CLI workflows", () => {
       expect(verification.status).toBe(0);
       expect(JSON.parse(verification.stdout)).toMatchObject({ valid: true, externalDigestStatus: "MATCH" });
       expect(existsSync(join(store, "frozen", "cli-witness.json"))).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("records and verifies an optional reviewer-held Ed25519 approval through the CLI", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-authenticated-witness-"));
+    try {
+      const store = join(directory, "witnesses");
+      const inputFile = join(directory, "proposal.json");
+      const privateKeyFile = join(directory, "reviewer-private.pem");
+      const keyringFile = join(directory, "reviewers.json");
+      writeFileSync(inputFile, JSON.stringify({
+        proposalId: "cli-authenticated-witness",
+        incidentPacket: {
+          symptom: "CI failure",
+          ciLog: "expected true, received false",
+          repositoryLanguage: "TypeScript",
+          repositorySummary: "temporary authenticated CLI test"
+        },
+        witness: {
+          behavior: "A true value remains true.",
+          command: "node witness.mjs",
+          overlays: [{ path: "witness.mjs", bytesBase64: Buffer.from("process.exit(0)\n", "utf8").toString("base64") }],
+          policy: { network: "disabled", credentials: "redacted", timeoutSeconds: 10 }
+        }
+      }), "utf8");
+      const pair = generateKeyPairSync("ed25519");
+      const publicDer = pair.publicKey.export({ type: "spki", format: "der" });
+      const keyId = `sha256:${createHash("sha256").update(publicDer).digest("hex")}`;
+      writeFileSync(privateKeyFile, pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString(), "utf8");
+      writeFileSync(keyringFile, JSON.stringify({
+        schemaVersion: "faultline.reviewer-keyring.v1",
+        reviewers: [{
+          approvedBy: "reviewer@example.test",
+          keyId,
+          algorithm: "ED25519",
+          publicKeyPem: pair.publicKey.export({ type: "spki", format: "pem" }).toString()
+        }]
+      }), "utf8");
+
+      expect(runFl(["witness", "propose", "--input", inputFile, "--store", store]).status).toBe(0);
+      expect(runFl(["witness", "approve", "cli-authenticated-witness", "--approved-by", "reviewer@example.test", "--store", store]).status).toBe(0);
+      expect(runFl(["witness", "freeze", "cli-authenticated-witness", "--store", store]).status).toBe(0);
+      const signed = runFl([
+        "witness", "sign", "cli-authenticated-witness", "--private-key", privateKeyFile,
+        "--keyring", keyringFile, "--store", store
+      ]);
+      expect(signed.status).toBe(0);
+      expect(JSON.parse(signed.stdout)).toMatchObject({ status: "AUTHENTICATED_APPROVAL_RECORDED", keyId });
+      const verified = runFl([
+        "witness", "verify", "cli-authenticated-witness", "--keyring", keyringFile,
+        "--require-signature", "--store", store
+      ]);
+      expect(verified.status).toBe(0);
+      expect(JSON.parse(verified.stdout)).toMatchObject({ valid: true, signatureStatus: "VERIFIED" });
+      expect(readFileSync(join(store, "authenticated-approvals", "cli-authenticated-witness.json"), "utf8"))
+        .not.toContain(pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString());
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to label a locally created provenance subject as signed CI evidence", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-provenance-local-"));
+    try {
+      const result = runFl(["provenance", "create", "--bundle", join(directory, "not-a-proof")], { cwd: directory });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/only be created inside GitHub Actions/);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

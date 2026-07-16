@@ -16,7 +16,7 @@ It deliberately does **not** claim model intent, a unique semantic root cause, o
 - A Git proof package contains the frozen witness, raw run facts, stable transitions, a portable descendant Git bundle, a binary range patch, hashes, and an offline semantic verifier. It rejects rehashed contradictions rather than trusting a checksum alone.
 - Optional lifecycle evidence is bound to matching Git checkpoints. The stricter ledger-binding artifact can require every replayed state to map to an ordered checkpoint.
 - Incident packets and captured fields are redacted with explicit limited-coverage warnings. FaultLine does not claim perfect secret discovery.
-- An external, write-once receipt can retain a proof root. That is integrity attestation, not a signature, identity, authorship, or provenance claim.
+- An external, write-once receipt can retain a proof root. That is integrity attestation, not a signature, identity, authorship, or provenance claim. Optional GitHub Artifact Attestations can instead sign a CI-created provenance subject, and optional reviewer signatures can bind a frozen witness to a trusted reviewer key.
 
 ## Quick start
 
@@ -60,6 +60,38 @@ pnpm fl -- witness approve <proposal-id> --approved-by you@example.com
 pnpm fl -- witness freeze <proposal-id>
 pnpm fl -- witness verify <proposal-id> --expect-digest <frozen-digest>
 ```
+
+### Optional authenticated reviewer approval
+
+`fl witness approve` records a reviewed approval but is intentionally not an identity assertion. When a reviewer needs to authenticate the approval, sign the already-frozen witness with an Ed25519 private key and verify it against a separately retained reviewer keyring:
+
+```powershell
+pnpm fl -- witness sign <proposal-id> `
+  --private-key .\reviewer-ed25519.pem `
+  --keyring .\reviewers.json
+pnpm fl -- witness verify <proposal-id> `
+  --expect-digest sha256:<frozen-digest> `
+  --keyring .\reviewers.json `
+  --require-signature
+```
+
+The keyring, not the approval record, decides which reviewer keys are trusted. It contains the reviewer's stable identity, the SHA-256 fingerprint of its SPKI public key, and that public key:
+
+```json
+{
+  "schemaVersion": "faultline.reviewer-keyring.v1",
+  "reviewers": [
+    {
+      "approvedBy": "reviewer@example.com",
+      "keyId": "sha256:<SPKI-public-key-fingerprint>",
+      "algorithm": "ED25519",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\\n...\\n-----END PUBLIC KEY-----\\n"
+    }
+  ]
+}
+```
+
+The signed record binds the proposal, ordinary approval, exact frozen-witness digest, and witness digest. A normal verification may accept a frozen witness without a signature for the local/offline MVP; `--require-signature` fails closed when the authenticated record is missing, untrusted, or altered. Keep private keys outside the repository, rotate keys by changing the retained keyring, and do not treat a displayed `approvedBy` string as authenticated unless this signature check passes.
 
 Then replay it across a Git range in a digest-pinned Docker image:
 
@@ -147,7 +179,48 @@ pnpm fl -- attest create `
 pnpm fl -- attest verify <receipt-id> --expect-digest sha256:<recorded-receipt-digest>
 ```
 
-An external digest detects an editor who rewrites both local content and local checksums. It is not a cryptographic signature, an identity check, proof of authorship, or a provenance guarantee.
+`fl attest` is an **integrity-only** receipt. An external digest detects an editor who rewrites both local content and local checksums. It is not a cryptographic signature, an identity check, proof of authorship, or a provenance guarantee.
+
+### Signed GitHub CI provenance
+
+For a CI identity assertion, create a provenance subject from a fully verified Git proof bundle inside GitHub Actions:
+
+```powershell
+pnpm fl -- provenance create `
+  --bundle <git-proof-bundle-directory> `
+  --output .faultline\provenance\ci-receipt.json
+```
+
+This command refuses to run outside GitHub Actions. Its output is deliberately **unsigned**: it binds the verified proof root, source identity, resolved commit/tree range, frozen witness, and recorded execution policy facts, but it has no provenance value until the workflow passes those exact bytes to `actions/attest@v4` and retains the resulting Sigstore attestation bundle. Configure the action with the least privileges required by its current documentation (including its OIDC permission when required), and record the signer workflow, ref, event, and runner policy that the verifier should accept.
+
+Verify the retained receipt, signature bundle, and proof package together without executing repository code:
+
+```powershell
+pnpm fl -- provenance verify `
+  --bundle <git-proof-bundle-directory> `
+  --receipt .faultline\provenance\ci-receipt.json `
+  --attestation-bundle .\sigstore-bundle.json `
+  --trust .\faultline-attestation-trust.json
+```
+
+The verifier runs `gh attestation verify` against the supplied Sigstore material and then independently reconstructs the FaultLine binding from the Git proof bundle. Its trust file is an explicit allowlist, not metadata copied from the receipt:
+
+Start from [`docs/faultline-github-attestation-trust.example.json`](docs/faultline-github-attestation-trust.example.json), then retain a reviewed copy alongside the downloaded root and artifact bundle.
+
+```json
+{
+  "schemaVersion": "faultline.github-artifact-attestation-trust.v1",
+  "repository": "owner/repository",
+  "signerWorkflow": "owner/repository/.github/workflows/verify.yml",
+  "sourceRef": "refs/heads/main",
+  "eventName": "push",
+  "denySelfHostedRunners": true,
+  "trustedRootFile": ".\\trusted\\github-attestation-root.jsonl",
+  "sourceDigest": "<optional-40-or-64-hex-source-commit>"
+}
+```
+
+`sourceDigest` is optional; when set it must be the recorded 40- or 64-hex Git source commit. Retain the trust file and its referenced root file with the evidence, review every allowlisted value before using it, and rotate or replace them deliberately when CI policy changes. This signed provenance says that the configured GitHub Actions identity signed the receipt bytes. It does **not** cryptographically prove that a host, Docker client, or Docker daemon enforced FaultLine's recorded sandbox policy, nor does it expand the predicate-specific proof into a general build or authorship claim.
 
 ## GPT-5.6 boundaries
 
@@ -203,7 +276,7 @@ Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. A `PA
 - FaultLine's included demo is deterministic; it is not a claim of a general arbitrary-code runner.
 - The live implementation is Git commit-range replay. A lifecycle ledger strengthens it only to the degree of its recorded checkpoints; no native Codex interception is implied.
 - The sandbox plans are fail-closed. The CLI labels injected runners `INJECTED_RUNNER` and refuses to certify or publish them as Docker proof. The Ubuntu CI gate exercises the native Docker boundary; a local development environment still needs a Docker daemon to create real proof evidence.
-- `NATIVE_DOCKER` means FaultLine's direct Docker runner on the host that produced the record. Offline verification reconstructs the recorded policy and data, but it is not cryptographic attestation that a host, Docker client, or daemon enforced that policy. Retain an external root or CI receipt when host provenance matters.
+- `NATIVE_DOCKER` means FaultLine's direct Docker runner on the host that produced the record. Offline verification reconstructs the recorded policy and data, but it is not cryptographic attestation that a host, Docker client, or daemon enforced that policy. A signed GitHub CI receipt binds bytes and the configured GitHub Actions identity; it does not change this host/Docker-enforcement limitation.
 - A proof is predicate-specific. It does not prove intent, semantic causality, or that one edit is the unique cause.
 - Portable Git packages deliberately retain the frozen witness, Git object references, and bounded evidence fields so another engineer can verify them. Treat a package as sensitive incident material before sharing it outside the authorized audience.
 - No software project can honestly guarantee a 100% probability of winning a judged competition.
@@ -214,6 +287,7 @@ The [Build Week submission kit](docs/build-week-submission-kit.md) provides a th
 
 - Capture the qualifying `/feedback` session ID.
 - Record a narrated under-three-minute demo of the actual product path.
+- If showing CI provenance, retain the GitHub-signed attestation bundle and the exact trust configuration used to verify it.
 - Publish a licensed repository and the demo video, then complete the Devpost submission.
 - Recheck the official rules, deadline, and category requirements on submission day.
 
@@ -225,4 +299,4 @@ pnpm test
 pnpm build
 ```
 
-The suite includes canonical hashing, adversarial bundle tampering, witness-freeze integrity, lifecycle hash chains, real temporary-Git replay, Docker-plan safety, ledger binding, redaction behavior, external receipts, and CLI workflows.
+The suite includes canonical hashing, adversarial bundle tampering, witness-freeze integrity, authenticated reviewer approvals, lifecycle hash chains, real temporary-Git replay, Docker-plan safety, ledger binding, redaction behavior, integrity and signed-provenance receipts, and CLI workflows.

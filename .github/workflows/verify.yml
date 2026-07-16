@@ -45,3 +45,43 @@ jobs:
       - run: pnpm test -- tests/docker-integration.test.ts
         env:
           FAULTLINE_DOCKER_INTEGRATION: "1"
+
+  provenance:
+    name: signed GitHub CI provenance
+    needs: [test, docker-integration]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      # The exact pnpm version is pinned in package.json.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Create a verified live proof and attestation subject
+        shell: bash
+        run: |
+          node dist/cli.js demo live-git --export-only | tee .faultline/live-git-demo.json
+          bundle="$(node -e "const result = JSON.parse(require('node:fs').readFileSync('.faultline/live-git-demo.json', 'utf8')); if (result.status !== 'DEMO_PROOF_READY') process.exit(1); process.stdout.write(result.proofBundle.directory);")"
+          node dist/cli.js provenance create --bundle "$bundle" --output .faultline/provenance/ci-receipt.json
+      - id: attest
+        name: Sign the provenance receipt with GitHub artifact attestation
+        uses: actions/attest@v4
+        with:
+          subject-path: .faultline/provenance/ci-receipt.json
+      - name: Publish proof, receipt, and offline verification collateral
+        uses: actions/upload-artifact@v4
+        with:
+          name: faultline-ci-provenance-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          path: |
+            .faultline/provenance/ci-receipt.json
+            .faultline/git-proof-bundles/
+            ${{ steps.attest.outputs.bundle-path }}

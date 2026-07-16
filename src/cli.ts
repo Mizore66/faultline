@@ -7,6 +7,14 @@ import {
   verifyStoredBundleAttestation,
   writeBundleAttestation
 } from "./attestation.js";
+import {
+  createGithubProvenanceReceipt,
+  defaultGithubProvenanceRoot,
+  githubActionsIdentityFromEnvironment,
+  readGithubArtifactAttestationTrust,
+  verifySignedGithubProvenance,
+  writeGithubProvenanceReceipt
+} from "./github-provenance.js";
 import { createDemoAnalysis } from "./engine.js";
 import { captureCleanGitSnapshot, writeGitSidecarSnapshot } from "./git-snapshot.js";
 import { GitInvestigationResultSchema, investigateGitRange } from "./git-investigation.js";
@@ -56,6 +64,10 @@ import {
   readFrozenWitness,
   verifyFrozenWitness
 } from "./witness-lock.js";
+import {
+  signAuthenticatedWitnessApproval,
+  verifyAuthenticatedWitnessApproval
+} from "./authenticated-witness-approval.js";
 import type { RunMode } from "./domain.js";
 
 const usage = `FaultLine — executable evidence for agent-assisted code
@@ -76,13 +88,16 @@ Usage:
   fl ledger verify <binding.json> [--expect-digest <sha256:...>]
   fl attest create --bundle <proof-bundle-directory> --receipt <id> --subject <label> --issuer <label> [--store <directory>]
   fl attest verify <receipt-id> [--expect-digest <sha256:...>] [--store <directory>]
+  fl provenance create --bundle <git-proof-bundle-directory> [--output <managed-receipt.json>]
+  fl provenance verify --bundle <git-proof-bundle-directory> --receipt <ci-receipt.json> --attestation-bundle <sigstore-bundle.json> --trust <trust.json>
   fl repair brief (--bundle <git-proof-bundle-directory> | --investigation <verified-bundle>/investigation.json) (--live | --input <repair-brief.json>) [--expect-root <sha256:...>] [--model <model>] [--output <managed-directory>]
   fl repair verify <repair-brief-directory>
   fl witness propose --input <proposal.json> [--store <directory>]
   fl witness propose --live --incident <incident.json> --proposal-id <id> --overlay-root <directory> [--model <model>] [--store <directory>]
   fl witness approve <proposal-id> --approved-by <actor> [--store <directory>]
   fl witness freeze <proposal-id> [--store <directory>]
-  fl witness verify <proposal-id> [--expect-digest <sha256:...>] [--store <directory>]
+  fl witness sign <proposal-id> --private-key <ed25519-private.pem> --keyring <trusted-reviewers.json> [--store <directory>]
+  fl witness verify <proposal-id> [--expect-digest <sha256:...>] [--keyring <trusted-reviewers.json> --require-signature] [--store <directory>]
 
 The judge demo is a reviewed, deterministic Node fixture. It does not require an OpenAI API key.
 The lifecycle adapter accepts observed Codex-compatible events; it does not claim to intercept private Codex internals.
@@ -309,15 +324,51 @@ async function witnessCommand(args: string[]): Promise<void> {
       process.stdout.write(`${JSON.stringify({ status: "FROZEN", proposalId, witnessDigest: frozen.witnessDigest, frozenDigest: frozen.frozenDigest, frozenAt: frozen.frozenAt }, null, 2)}\n`);
       return;
     }
+    case "sign": {
+      if (!proposalId) throw new Error("Usage: fl witness sign <proposal-id> --private-key <ed25519-private.pem> --keyring <trusted-reviewers.json>");
+      const privateKeyFile = resolve(requiredOption(args, "--private-key"));
+      let privateKeyPem: string;
+      try {
+        privateKeyPem = readFileSync(privateKeyFile, "utf8");
+      } catch (error) {
+        throw new Error(`Unable to read reviewer private key ${privateKeyFile}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const receipt = signAuthenticatedWitnessApproval(store, proposalId, {
+        privateKeyPem,
+        keyring: readJsonInput(requiredOption(args, "--keyring"))
+      });
+      process.stdout.write(`${JSON.stringify({
+        status: "AUTHENTICATED_APPROVAL_RECORDED",
+        proposalId,
+        frozenDigest: receipt.frozenDigest,
+        keyId: receipt.keyId,
+        signedAt: receipt.signedAt,
+        receiptDigest: receipt.receiptDigest,
+        limitation: "The private key is never stored or printed. Trust comes only from the supplied reviewer keyring."
+      }, null, 2)}\n`);
+      return;
+    }
     case "verify": {
       if (!proposalId) throw new Error("Usage: fl witness verify <proposal-id> [--expect-digest <sha256:...>]");
-      const result = verifyFrozenWitness(store, proposalId, option(args, "--expect-digest"));
+      const keyringFile = option(args, "--keyring");
+      const requireSignature = hasFlag(args, "--require-signature");
+      if (requireSignature && !keyringFile) {
+        throw new Error("--require-signature needs --keyring <trusted-reviewers.json>.");
+      }
+      const expectedFrozenDigest = option(args, "--expect-digest");
+      const result = keyringFile
+        ? verifyAuthenticatedWitnessApproval(store, proposalId, {
+          ...(expectedFrozenDigest === undefined ? {} : { expectedFrozenDigest }),
+          keyring: readJsonInput(keyringFile),
+          requireSignature
+        })
+        : verifyFrozenWitness(store, proposalId, expectedFrozenDigest);
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       process.exitCode = result.valid ? 0 : 1;
       return;
     }
     default:
-      throw new Error("Usage: fl witness propose|approve|freeze|verify ...");
+      throw new Error("Usage: fl witness propose|approve|freeze|sign|verify ...");
   }
 }
 
@@ -601,6 +652,52 @@ async function attestationCommand(args: string[]): Promise<void> {
 }
 
 /**
+ * GitHub artifact provenance deliberately has a separate command from `attest`.
+ * The older command is an integrity checksum only; this command creates the
+ * exact subject file that GitHub Actions signs with actions/attest.
+ */
+async function provenanceCommand(args: string[]): Promise<void> {
+  const [action] = args;
+  switch (action) {
+    case "create": {
+      const bundleDirectory = resolve(requiredOption(args, "--bundle"));
+      const provenanceRoot = defaultGithubProvenanceRoot();
+      const output = resolve(option(args, "--output") ?? join(provenanceRoot, "ci-receipt.json"));
+      const ci = githubActionsIdentityFromEnvironment(process.cwd());
+      const receipt = createGithubProvenanceReceipt(bundleDirectory, ci);
+      const path = writeGithubProvenanceReceipt(output, receipt, provenanceRoot);
+      process.stdout.write(`${JSON.stringify({
+        status: "AWAITING_GITHUB_ARTIFACT_ATTESTATION",
+        path,
+        receiptDigest: receipt.receiptDigest,
+        proofRootDigest: receipt.proof.rootDigest,
+        signing: "Run actions/attest@v4 with this exact path as subject-path before calling it signed provenance.",
+        limitation: receipt.limitation
+      }, null, 2)}\n`);
+      return;
+    }
+    case "verify": {
+      const trustFile = resolve(requiredOption(args, "--trust"));
+      const trust = readGithubArtifactAttestationTrust(trustFile);
+      // A relative root in the policy is relative to the policy, not the
+      // caller's current directory or an attacker-supplied attestation bundle.
+      const resolvedTrust = { ...trust, trustedRootFile: resolve(dirname(trustFile), trust.trustedRootFile) };
+      const verification = verifySignedGithubProvenance({
+        bundleDirectory: resolve(requiredOption(args, "--bundle")),
+        receiptFile: resolve(requiredOption(args, "--receipt")),
+        attestationBundleFile: resolve(requiredOption(args, "--attestation-bundle")),
+        trust: resolvedTrust
+      });
+      process.stdout.write(`${JSON.stringify(verification, null, 2)}\n`);
+      process.exitCode = verification.valid ? 0 : 1;
+      return;
+    }
+    default:
+      throw new Error("Usage: fl provenance create|verify ...");
+  }
+}
+
+/**
  * A repair brief is deliberately downstream of a verified, proof-grade Git
  * package. It can only express cited, INFERRED guidance; it cannot turn an
  * arbitrary JSON file or model response into an execution fact.
@@ -774,6 +871,9 @@ async function main(): Promise<void> {
       return;
     case "attest":
       await attestationCommand(args);
+      return;
+    case "provenance":
+      await provenanceCommand(args);
       return;
     case "repair":
       await repairCommand(args);
