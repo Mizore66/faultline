@@ -24,10 +24,16 @@ const workspace = process.cwd();
 const tsxCli = join(workspace, "node_modules", "tsx", "dist", "cli.mjs");
 const faultLineCli = join(workspace, "src", "cli.ts");
 
-function runFl(args: string[], options: { cwd?: string; input?: string } = {}): { status: number | null; stdout: string; stderr: string } {
+function runFl(
+  args: string[],
+  options: { cwd?: string; input?: string; env?: NodeJS.ProcessEnv } = {}
+): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync(process.execPath, [tsxCli, faultLineCli, ...args], {
     cwd: options.cwd ?? workspace,
     input: options.input,
+    // The test process can itself be running in GitHub Actions. Let callers
+    // explicitly control the CI identity seen by the CLI under test.
+    env: { ...process.env, ...options.env },
     encoding: "utf8"
   });
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
@@ -278,7 +284,12 @@ describe("FaultLine CLI workflows", () => {
   it("refuses to label a locally created provenance subject as signed CI evidence", () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-cli-provenance-local-"));
     try {
-      const result = runFl(["provenance", "create", "--bundle", join(directory, "not-a-proof")], { cwd: directory });
+      const result = runFl(["provenance", "create", "--bundle", join(directory, "not-a-proof")], {
+        cwd: directory,
+        // This test asserts the local boundary even when Vitest runs on a
+        // public GitHub Actions runner, whose parent environment sets this.
+        env: { GITHUB_ACTIONS: "false" }
+      });
       expect(result.status).toBe(1);
       expect(result.stderr).toMatch(/only be created inside GitHub Actions/);
     } finally {

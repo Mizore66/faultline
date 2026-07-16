@@ -2,6 +2,18 @@
 
 This is a recording and submission checklist, not evidence that a submission has already been made. Recheck the official Build Week page before submitting.
 
+## Fastest judge check
+
+Show this deterministic, no-Docker, no-API-key path before asking a reviewer to evaluate a live environment:
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm fl -- judge-demo --rerun-all --export-only
+pnpm fl -- verify .faultline/bundles/judge-demo
+```
+
+It demonstrates the frozen witness, evidence labels, stable-boundary rules, counterfactual result, and offline verification of the included sample. It does **not** demonstrate a real incident, a production deployment, or native Docker proof. Label it accurately in the recording, then use the separate live-Git path when Docker evidence is available.
+
 ## Three-minute demo run of show
 
 | Time | Screen | Narration point |
@@ -31,6 +43,7 @@ Never imply that a locally generated `fl provenance create` file is signed: the 
 
 - [ ] Select the **Developer Tools** track.
 - [ ] Add a concise project description and a public under-three-minute narrated video.
+- [ ] Start from the human-reviewed [Devpost description draft](devpost-description-draft.md); replace every bracketed placeholder and remove unsupported claims.
 - [ ] Provide the repository URL. Before publishing, choose an appropriate license; this repository deliberately does not choose one on the submitter's behalf.
 - [ ] If keeping the repository private, grant the organizers the required testing access specified in the current rules.
 - [ ] Include the qualifying Codex `/feedback` session ID.
@@ -38,8 +51,11 @@ Never imply that a locally generated `fl provenance create` file is signed: the 
 - [ ] Run the native Docker investigation in a real Docker environment and retain the printed external proof root for the video.
 - [ ] If demonstrating reviewer authentication, retain the public-key keyring separately and use `fl witness verify --keyring ... --require-signature` on camera; never record or publish the private key.
 - [ ] In GitHub Actions, create the CI-only provenance subject, pass its exact bytes through `actions/attest@v4`, and retain the produced Sigstore attestation bundle.
+- [ ] Confirm the public CI test matrix is green, including the hermetic local-provenance refusal check: `fl provenance create` must reject a process with `GITHUB_ACTIONS=false` even when the parent test run is in GitHub Actions.
 - [ ] Preserve the exact `faultline.github-artifact-attestation-trust.v1` file and its trusted root file used for `fl provenance verify`; review its repository, workflow, ref, event, and runner constraints before recording.
 - [ ] Verify the live proof bundle, unsigned receipt binding, supplied Sigstore bundle, and trust configuration together before publishing the video. Do not claim this attests to the Docker host or daemon.
+- [ ] If making impact, adoption, or time-saved claims, retain a consented record using the [impact-validation template](impact-validation-template.md), including its method and limitations.
+- [ ] Use the [differentiation comparison](differentiation.md) to avoid claiming that FaultLine replaces Git bisect, CI artifacts, repro cases, or provenance tooling.
 - [ ] Recheck current rules, deadline, track requirements, and all required fields immediately before submission.
 
 ## Judge-ready commands
@@ -58,6 +74,21 @@ pnpm fl -- provenance verify `
 ```
 
 For a live incident, use a digest-pinned image and the Git investigation flow documented in the README. A Docker daemon is required for proof-grade output; injected and unsafe-local runs are intentionally non-proof. The provenance verification command does not run repository code; it validates the saved proof bundle, the supplied GitHub Artifact Attestation material (through `gh attestation verify`), and FaultLine's own byte bindings.
+
+## Required factual evidence ledger
+
+These are separate facts to gather; none is created merely by copying this kit into a repository.
+
+| Submission or presentation statement | Evidence to retain or fill in | Status |
+| --- | --- | --- |
+| FaultLine runs as shown | Commit/release, platform/runtime, exact commands, and recorded output | [NOT YET RECORDED] |
+| The live Git/Docker path produced evidence | Verified bundle plus externally retained proof root | [NOT YET RECORDED] |
+| Codex and GPT-5.6 were used as described | Human-reviewed description that matches the implemented bounded workflow | [REVIEW REQUIRED] |
+| The project addressed a real audience problem | Consented incident or interview record, including counterevidence and limitations | [NOT YET COLLECTED] |
+| The Devpost entry is complete | Selected track, public narrated-video URL, qualifying feedback session ID, repository URL/license, and required fields | [NOT YET COMPLETED] |
+| Signed CI provenance is shown | CI receipt, matching Sigstore bundle, trust file, trusted root, and exact verification result | [OPTIONAL / NOT YET RECORDED] |
+
+Do not transform a blank status into a claim. The [Devpost description draft](devpost-description-draft.md), [impact-validation template](impact-validation-template.md), and [differentiation comparison](differentiation.md) are deliberately structured so a human can replace placeholders with auditable facts.
 
 ## CI evidence packet to retain
 

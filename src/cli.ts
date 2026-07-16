@@ -16,6 +16,7 @@ import {
   writeGithubProvenanceReceipt
 } from "./github-provenance.js";
 import { createDemoAnalysis } from "./engine.js";
+import { defaultJudgePreviewPath, writeJudgePreview } from "./judge-preview.js";
 import { captureCleanGitSnapshot, writeGitSidecarSnapshot } from "./git-snapshot.js";
 import { GitInvestigationResultSchema, investigateGitRange } from "./git-investigation.js";
 import {
@@ -74,6 +75,7 @@ const usage = `FaultLine — executable evidence for agent-assisted code
 
 Usage:
   fl judge-demo [--replay | --rerun-all] [--output <managed-bundle-directory>] [--export-only]
+  fl judge-preview [--output <static-preview.html>]
   fl demo live-git [--image <digest-pinned-image>] [--export-only] [--port <number>]
   fl verify <proof-bundle-directory> [--expect-root <sha256:...>]
   fl serve [--port <number>]
@@ -215,6 +217,17 @@ async function witnessProposal(args: string[]): Promise<void> {
   }
   const result = await proposeWitnessWithGpt(packet, { model: option(args, "--model") ?? "gpt-5.6" });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+function judgePreviewCommand(args: string[]): void {
+  const output = option(args, "--output") === undefined
+    ? defaultJudgePreviewPath()
+    : resolve(requiredOption(args, "--output"));
+  const preview = writeJudgePreview(output);
+  process.stdout.write(`FaultLine deterministic static judge preview written.\n`);
+  process.stdout.write(`Preview: ${preview.path}\n`);
+  process.stdout.write(`Bytes: ${preview.bytes}\n`);
+  process.stdout.write("Limitation: this read-only replay snapshot is not a live Docker proof, a verified proof bundle, or a record of a fresh execution.\n");
 }
 
 /** Run the real Git/Docker product path against a disposable built-in incident. */
@@ -792,6 +805,9 @@ async function main(): Promise<void> {
       return;
     case "judge-demo":
       await judgeDemo(args);
+      return;
+    case "judge-preview":
+      judgePreviewCommand(args);
       return;
     case "demo":
       await demoCommand(args);

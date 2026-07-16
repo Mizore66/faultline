@@ -31,6 +31,20 @@ pnpm fl -- judge-demo --rerun-all
 The demo writes a managed bundle beneath `.faultline/bundles/` and starts a local incident page. Use `Ctrl+C` to stop it.
 When supplied, `--output` must also be a new or previously verified child directory under this managed root; FaultLine intentionally rejects arbitrary output paths.
 
+## Fast judge check (no Docker or API key)
+
+The fastest reproducible product check is the deterministic, export-only path:
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm fl -- judge-demo --rerun-all --export-only
+pnpm fl -- verify .faultline/bundles/judge-demo
+```
+
+This produces a managed judge bundle and verifies its stored evidence without executing repository code during verification. It lets a reviewer inspect the frozen witness, evidence vocabulary, stable-boundary rules, counterfactual result, and scope limits without Docker, a network call, or an API key. It is not a live customer incident and does not establish proof-grade Docker execution; use `fl demo live-git` below for that separate path.
+
+For a zero-install visual walkthrough, download and open the committed [static judge preview](docs/judge-preview.html) in any browser. It is intentionally read-only and visibly labeled as a deterministic sample; regenerate the exact artifact with `pnpm fl -- judge-preview`.
+
 For an export-only judge run:
 
 ```powershell
@@ -264,12 +278,29 @@ Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. A `PA
 
 ## Judge path
 
-1. Run `pnpm fl -- judge-demo --rerun-all`.
+1. Start with the [fast no-Docker check](#fast-judge-check-no-docker-or-api-key).
 2. Inspect the reviewed frozen witness before the sample exposes a suspect state.
 3. Watch the timeline keep non-monotonic history visible rather than assuming once-failing means always-failing.
 4. Inspect the two-direction counterfactual and the explicit unresolved partial-patch result.
 5. Verify the exported bundle with `pnpm fl -- verify .faultline/bundles/judge-demo`.
 6. For a live, publishable incident, use the Git workflow above with a working Docker daemon and a digest-pinned image.
+
+The deterministic path proves only its included sample workflow. A real incident claim needs a recorded live Git/Docker run, the exact retained proof root, and an accurate description of what the replay did and did not establish.
+
+### Judge-facing factual evidence
+
+The repository can supply runnable behavior and evidence boundaries; it cannot supply facts that have not been recorded. Before a submission or public claim, retain or fill in the following separately:
+
+| Claim or requirement | Factual evidence to retain | Do not imply |
+| --- | --- | --- |
+| Runnable product path | Exact commit, platform/runtime, commands, and recorded output | That an unrecorded local run occurred |
+| Live proof-grade investigation | Docker-backed bundle and proof root retained outside the bundle | That the deterministic judge sample is a live incident |
+| Codex/GPT-5.6 use | The implemented bounded workflow plus an accurate human review of how Codex was used to build it | Native private-Codex interception, model verdicts, or model intent |
+| User or business impact | A consented real-incident or interview record with method and limitations | Adoption, time savings, or customer outcomes that have not been measured |
+| Signed CI provenance, if shown | The CI receipt, Sigstore bundle, trust file, and trusted root from the same run | Host, Docker-daemon, or general authorship attestation |
+| Build Week submission | The qualifying feedback session ID, published narrated demo URL, repository/license, and completed submission fields | That these actions have already happened |
+
+Use the [Devpost description draft](docs/devpost-description-draft.md), [impact-validation template](docs/impact-validation-template.md), and [differentiation comparison](docs/differentiation.md) to prepare those human-reviewed facts without inventing metrics or novelty claims.
 
 ## Important boundaries
 
@@ -287,6 +318,9 @@ The [Build Week submission kit](docs/build-week-submission-kit.md) provides a th
 
 - Capture the qualifying `/feedback` session ID.
 - Record a narrated under-three-minute demo of the actual product path.
+- Complete the human-reviewed [Devpost description draft](docs/devpost-description-draft.md), replacing each placeholder with factual evidence.
+- Collect consented real-incident or interview evidence with the [impact-validation template](docs/impact-validation-template.md) before making impact claims.
+- Use the [differentiation comparison](docs/differentiation.md) to keep positioning precise against Git bisect, CI artifacts, repro cases, and provenance tools.
 - If showing CI provenance, retain the GitHub-signed attestation bundle and the exact trust configuration used to verify it.
 - Publish a licensed repository and the demo video, then complete the Devpost submission.
 - Recheck the official rules, deadline, and category requirements on submission day.
