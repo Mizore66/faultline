@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
+  TURN_SNAPSHOT_MAX_QUIESCENCE_ATTEMPTS,
+  TURN_SNAPSHOT_QUIESCENCE_DELAY_MS,
   TURN_TREE_SNAPSHOT_VERSION,
   captureTurnTreeSnapshot,
   defaultTurnSnapshotGitRunner,
@@ -118,7 +120,7 @@ describe("Turn tree snapshot capture", () => {
     }
   });
 
-  it("refuses a torn snapshot when the porcelain status changes mid-capture", () => {
+  it("refuses a torn snapshot when the porcelain status changes around a tree capture", () => {
     const repository = repositoryFixture();
     try {
       const torn = (): { runGit: TurnSnapshotGitRunner; calls: () => number } => {
@@ -126,7 +128,8 @@ describe("Turn tree snapshot capture", () => {
         const runGit: TurnSnapshotGitRunner = (root, args, env) => {
           if (args[0] === "status") {
             statusCalls += 1;
-            return statusCalls === 1 ? "" : "?? changed-mid-write.txt\0";
+            // Alternate so every capture bracket sees a status change.
+            return statusCalls % 2 === 1 ? "" : "?? changed-mid-write.txt\0";
           }
           return defaultTurnSnapshotGitRunner(root, args, env);
         };
@@ -134,28 +137,78 @@ describe("Turn tree snapshot capture", () => {
       };
 
       const first = torn();
-      expect(() => captureTurnTreeSnapshot(repository, { runGit: first.runGit, sleep: () => {} })).toThrow(TurnSnapshotError);
-      expect(first.calls()).toBe(2);
+      expect(() => captureTurnTreeSnapshot(repository, {
+        runGit: first.runGit,
+        sleep: () => {},
+        maxQuiescenceAttempts: 2
+      })).toThrow(TurnSnapshotError);
+      // Two attempts × (status before + status after) around the first tree.
+      expect(first.calls()).toBe(4);
 
       const second = torn();
-      expect(() => captureTurnTreeSnapshot(repository, { runGit: second.runGit, sleep: () => {} })).toThrow(/mid-capture/);
+      expect(() => captureTurnTreeSnapshot(repository, {
+        runGit: second.runGit,
+        sleep: () => {},
+        maxQuiescenceAttempts: 2
+      })).toThrow(/quiescence|torn/i);
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
   });
 
-  it("accepts a stable filesystem across the mid-write check without rejecting a legitimate capture", () => {
+  it("refuses a torn snapshot when consecutive tree digests disagree even if status is unchanged", () => {
+    const repository = repositoryFixture();
+    try {
+      let writeTreeCalls = 0;
+      const runGit: TurnSnapshotGitRunner = (root, args, env) => {
+        if (args[0] === "write-tree") {
+          writeTreeCalls += 1;
+          // Distinct valid-looking tree ids so quiescence never converges.
+          return writeTreeCalls % 2 === 1 ? "a".repeat(40) : "b".repeat(40);
+        }
+        if (args[0] === "add") return "";
+        return defaultTurnSnapshotGitRunner(root, args, env);
+      };
+
+      expect(() => captureTurnTreeSnapshot(repository, {
+        runGit,
+        sleep: () => {},
+        maxQuiescenceAttempts: 3
+      })).toThrow(/quiescence|torn/i);
+      expect(writeTreeCalls).toBe(6);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a snapshot when the worktree mutates during the quiescence delay", () => {
+    const repository = repositoryFixture();
+    try {
+      expect(() => captureTurnTreeSnapshot(repository, {
+        maxQuiescenceAttempts: 2,
+        sleep: () => {
+          writeFileSync(join(repository, "tracked.txt"), `mutated-${Date.now()}\n`, "utf8");
+        }
+      })).toThrow(/quiescence|torn/i);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts only after two consecutive tree digests match", () => {
     const repository = repositoryFixture();
     try {
       let sleepCalls = 0;
       const snapshot = captureTurnTreeSnapshot(repository, {
         sleep: (milliseconds) => {
           sleepCalls += 1;
-          expect(milliseconds).toBe(50);
+          expect(milliseconds).toBe(TURN_SNAPSHOT_QUIESCENCE_DELAY_MS);
         }
       });
       expect(sleepCalls).toBe(1);
       expect(snapshot.dirty).toBe(false);
+      expect(snapshot.treeDigest).toBe(git(repository, ["rev-parse", "HEAD^{tree}"]));
+      expect(TURN_SNAPSHOT_MAX_QUIESCENCE_ATTEMPTS).toBeGreaterThanOrEqual(2);
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
