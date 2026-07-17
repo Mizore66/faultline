@@ -727,7 +727,7 @@ export async function investigateTurnTrees(options: {
           tempRoot,
           name: `run-${String(state.turnOrdinal).padStart(4, "0")}-${state.treeDigest.slice(0, 12)}`
         });
-        const overlays = await materializeFrozenOverlays(materialized.worktree, options.frozenWitness);
+        const overlays = await materializeFrozenOverlays(materialized.worktree, options.frozenWitness, materialized);
         const plan = createSandboxPlan({
           witness: { digest: options.frozenWitness.frozenDigest, command: options.frozenWitness.proposal.witness.command },
           sourceDirectory: materialized.worktree,

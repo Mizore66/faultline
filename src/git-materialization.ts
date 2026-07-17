@@ -1,11 +1,20 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 export const GIT_MATERIALIZATION_TIMEOUT_MS = 30_000;
 export const GIT_MATERIALIZATION_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+const GIT_SYMLINK_MODE = "120000";
+
+/**
+ * Normalize a filesystem path for Git argv and environment values.
+ * Windows Git accepts backslashes inconsistently across subcommands
+ * (`index-pack`, `worktree`, `--git-dir=`); forward slashes are portable.
+ */
+export function toGitPath(path: string): string {
+  return resolve(path).replaceAll("\\", "/");
+}
 
 export const MATERIALIZATION_SAFE_GIT_CONFIG = Object.freeze([
   "-c", "core.hooksPath=/nonexistent/faultline-hooks",
@@ -14,6 +23,9 @@ export const MATERIALIZATION_SAFE_GIT_CONFIG = Object.freeze([
   "-c", "core.untrackedCache=false",
   "-c", "core.preloadIndex=false",
   "-c", "core.autocrlf=false",
+  // Keep checkout deterministic: Windows may otherwise materialize mode 120000
+  // as a regular file when core.symlinks is unset/false in the user config.
+  "-c", "core.symlinks=false",
   "-c", "core.sparseCheckout=false",
   "-c", "core.sparseCheckoutCone=false",
   "-c", "filter.lfs.process=",
@@ -61,15 +73,18 @@ function hardenedGitEnvironment(options: HardenedGitOptions): NodeJS.ProcessEnv 
   const environment: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "",
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: join(tmpdir(), `faultline-empty-git-config-${randomUUID()}`),
+    // Align with turn-snapshot / sidecar: a real null device avoids Windows
+    // treating a missing random path as a create-on-write global config.
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
     GIT_OPTIONAL_LOCKS: "0",
     GIT_NO_REPLACE_OBJECTS: "1",
     GIT_LFS_SKIP_SMUDGE: "1",
     GIT_ALLOW_PROTOCOL: "none",
-    ...(options.gitDir === undefined ? {} : { GIT_DIR: options.gitDir }),
-    ...(options.worktree === undefined ? {} : { GIT_WORK_TREE: options.worktree }),
-    ...(options.indexFile === undefined ? {} : { GIT_INDEX_FILE: options.indexFile })
+    ...(options.gitDir === undefined ? {} : { GIT_DIR: toGitPath(options.gitDir) }),
+    ...(options.worktree === undefined ? {} : { GIT_WORK_TREE: toGitPath(options.worktree) }),
+    ...(options.indexFile === undefined ? {} : { GIT_INDEX_FILE: toGitPath(options.indexFile) })
   };
   if (process.platform === "win32") {
     if (process.env.SystemRoot) environment.SystemRoot = process.env.SystemRoot;
@@ -94,12 +109,15 @@ export async function runHardenedGit(
   args: readonly string[],
   options: HardenedGitOptions = {}
 ): Promise<HardenedGitResult> {
+  const repositoryPath = toGitPath(repository);
+  const gitDir = options.gitDir === undefined ? undefined : toGitPath(options.gitDir);
+  const worktree = options.worktree === undefined ? undefined : toGitPath(options.worktree);
   const argumentsList = [
     ...MATERIALIZATION_SAFE_GIT_CONFIG,
-    ...(options.gitDir === undefined ? [] : [`--git-dir=${options.gitDir}`]),
-    ...(options.worktree === undefined ? [] : [`--work-tree=${options.worktree}`]),
+    ...(gitDir === undefined ? [] : [`--git-dir=${gitDir}`]),
+    ...(worktree === undefined ? [] : [`--work-tree=${worktree}`]),
     "-C",
-    repository,
+    repositoryPath,
     ...args
   ];
   return new Promise((resolveResult) => {
@@ -185,6 +203,34 @@ export async function hardenedGitText(repository: string, args: readonly string[
     throw new Error(`Git ${args.join(" ")} failed: ${detail || `exit ${result.exitCode ?? "unknown"}`}`);
   }
   return result.stdout.toString("utf8").trim();
+}
+
+/**
+ * Refuse frozen overlay targets that are Git symlinks (mode 120000).
+ * Required on Windows where checkout may materialize those entries as plain
+ * files containing the link text when `core.symlinks=false`.
+ */
+export async function assertOverlayTargetsNotGitSymlinks(
+  tree: Pick<MaterializedGitTree, "runGit">,
+  overlayPaths: readonly string[]
+): Promise<void> {
+  for (const overlayPath of overlayPaths) {
+    if (!overlayPath || overlayPath.includes("\\") || overlayPath.includes("\0") || overlayPath.startsWith("/")) {
+      throw new Error(`Frozen overlay path is unsafe: ${overlayPath}`);
+    }
+    const listed = await tree.runGit(["ls-files", "--stage", "--", overlayPath]);
+    if (listed.exitCode !== 0 || listed.error !== undefined) {
+      throw new Error(
+        `Could not inspect overlay target mode for ${overlayPath}: ${listed.stderr.toString("utf8").trim() || listed.error || "Git failed."}`
+      );
+    }
+    const line = listed.stdout.toString("utf8").split(/\r?\n/).find((entry) => entry.trim().length > 0);
+    if (!line) continue;
+    const mode = line.split(/\s+/, 1)[0];
+    if (mode === GIT_SYMLINK_MODE) {
+      throw new Error(`Frozen overlay target is a symbolic link: ${overlayPath}`);
+    }
+  }
 }
 
 /**

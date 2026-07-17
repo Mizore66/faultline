@@ -107,10 +107,12 @@ Usage:
   fl attest verify <receipt-id> [--expect-digest <sha256:...>] [--store <directory>]
   fl provenance create --bundle <git-proof-bundle-directory> [--output <managed-receipt.json>]
   fl provenance verify --bundle <git-proof-bundle-directory> --receipt <ci-receipt.json> --attestation-bundle <sigstore-bundle.json> --trust <trust.json>
+  fl repair --bundle <git-proof-bundle-directory> --expect-root <sha256:...> [--repo <directory>] [--output <directory>] [--with-codex] [--instructions-only] [--keep-worktree]
   fl repair brief (--bundle <git-proof-bundle-directory> | --investigation <verified-bundle>/investigation.json) (--live | --input <repair-brief.json>) [--expect-root <sha256:...>] [--model <model>] [--output <managed-directory>]
   fl repair verify <repair-brief-directory> [--expect-digest <sha256:...>]
   fl witness propose --input <proposal.json> [--store <directory>]
   fl witness propose --live --incident <incident.json> --proposal-id <id> --overlay-root <directory> [--model <model>] [--store <directory>]
+  fl witness implement --incident <incident.json> --proposal-id <id> --overlay-out <directory> [--repo <directory>] [--with-codex] [--behavior <text>]
   fl witness review <proposal-id> [--json | --port <number>] [--store <directory>] [--draft-store <directory>]
   fl witness approve <proposal-id> --approved-by <actor> [--store <directory>]
   fl witness freeze <proposal-id> [--store <directory>]
@@ -723,6 +725,43 @@ async function witnessCommand(args: string[]): Promise<void> {
   const [action, proposalId] = args;
   const store = witnessStore(args);
   switch (action) {
+    case "implement": {
+      const { implementWitnessWithCodex } = await import("./codex-loop.js");
+      const incident = JSON.parse(readFileSync(resolve(requiredOption(args, "--incident")), "utf8")) as unknown;
+      const result = await implementWitnessWithCodex({
+        proposalId: requiredOption(args, "--proposal-id"),
+        incident,
+        behavior: option(args, "--behavior") ?? "The human-reviewed predicate must hold.",
+        overlayOut: resolve(requiredOption(args, "--overlay-out")),
+        repository: resolve(option(args, "--repo") ?? process.cwd()),
+        ...(hasFlag(args, "--with-codex")
+          ? {
+              runner: {
+                async run(codexArgs: readonly string[], options: { cwd: string; input?: string }) {
+                  if (!hasFlag(args, "--allow-codex-full-auto")) {
+                    throw new Error("Codex drafting requires explicit --allow-codex-full-auto in addition to --with-codex.");
+                  }
+                  const executed = spawnSync("codex", [...codexArgs], {
+                    cwd: options.cwd,
+                    encoding: "utf8",
+                    input: options.input,
+                    timeout: 120_000,
+                    env: { PATH: process.env.PATH ?? "", COMSPEC: process.env.COMSPEC }
+                  });
+                  return {
+                    exitCode: executed.status,
+                    stdout: executed.stdout ?? "",
+                    stderr: executed.stderr ?? ""
+                  };
+                }
+              }
+            }
+          : {})
+      });
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      process.exitCode = result.status === "CODEX_UNAVAILABLE" ? 1 : 0;
+      return;
+    }
     case "review": {
       if (!proposalId) throw new Error("Usage: fl witness review <proposal-id> [--json | --port <number>] [--draft-store <directory>]");
       if (hasFlag(args, "--json")) {
@@ -1189,8 +1228,57 @@ async function repairCommand(args: string[]): Promise<void> {
     process.exitCode = verification.valid ? 0 : 1;
     return;
   }
+  if (hasFlag(args, "--bundle") && args[0] !== "brief") {
+    const { repairWithCodex } = await import("./codex-loop.js");
+    const result = await repairWithCodex({
+      bundleDirectory: resolve(requiredOption(args, "--bundle")),
+      expectRoot: requiredOption(args, "--expect-root"),
+      repository: resolve(option(args, "--repo") ?? process.cwd()),
+      outputDirectory: resolve(option(args, "--output") ?? join(".faultline", "repairs", `repair-${Date.now()}`)),
+      withCodex: hasFlag(args, "--with-codex"),
+      instructionsOnly: hasFlag(args, "--instructions-only"),
+      keepWorktree: hasFlag(args, "--keep-worktree"),
+      verifyBundle: (directory, expectRoot) => {
+        const verification = verifyGitInvestigationProofBundle(directory, expectRoot);
+        return {
+          valid: verification.valid,
+          errors: [...verification.errors],
+          rootDigest: verification.rootDigest
+        };
+      },
+      ...(hasFlag(args, "--with-codex")
+        ? {
+            runner: {
+              async run(codexArgs: readonly string[], options: { cwd: string; input?: string }) {
+                if (!hasFlag(args, "--allow-codex-full-auto")) {
+                  throw new Error("Codex repair drafting requires explicit --allow-codex-full-auto in addition to --with-codex.");
+                }
+                const executed = spawnSync("codex", [...codexArgs], {
+                  cwd: options.cwd,
+                  encoding: "utf8",
+                  input: options.input,
+                  timeout: 180_000,
+                  env: { PATH: process.env.PATH ?? "", COMSPEC: process.env.COMSPEC }
+                });
+                return {
+                  exitCode: executed.status,
+                  stdout: executed.stdout ?? "",
+                  stderr: executed.stderr ?? ""
+                };
+              }
+            }
+          }
+        : {})
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = result.status === "BUNDLE_INVALID" || result.status === "REPAIR_SETUP_FAILED"
+      || result.status === "REPAIR_VERIFICATION_FAILED" || result.status === "WORKTREE_CLEANUP_FAILED"
+      ? 1
+      : 0;
+    return;
+  }
   if (args[0] !== "brief") {
-    throw new Error("Usage: fl repair brief|verify ...");
+    throw new Error("Usage: fl repair --bundle <dir> --expect-root <digest> [--with-codex] | fl repair brief|verify ...");
   }
   const live = hasFlag(args, "--live");
   const input = option(args, "--input");

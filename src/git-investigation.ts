@@ -639,7 +639,7 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
           tempRoot,
           name: `state-${String(state.index).padStart(4, "0")}-${state.commit.slice(0, 16)}`
         });
-        const overlays = await materializeFrozenOverlays(materialized.worktree, input.frozenWitness);
+        const overlays = await materializeFrozenOverlays(materialized.worktree, input.frozenWitness, materialized);
         let plan;
         try {
           plan = createSandboxPlan(planRequestForState(input.sandbox, materialized.worktree, input.frozenWitness));
