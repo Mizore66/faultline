@@ -13,7 +13,13 @@ import {
 } from "../src/git-investigation.js";
 import { writeGitInvestigationProofBundle } from "../src/git-proof-bundle.js";
 import { readIncidentDraft } from "../src/incident-store.js";
+import {
+  appendLifecycleEvent,
+  createCodexLifecycleLedger,
+  writeCodexLifecycleLedgerAtomic
+} from "../src/ledger.js";
 import type { SandboxCommandRunner } from "../src/sandbox.js";
+import { captureTurnTreeSnapshot } from "../src/turn-snapshot.js";
 import { formatWitnessResult } from "../src/witness-result.js";
 import {
   approveWitnessProposal,
@@ -145,7 +151,7 @@ function nativeDockerFixture(observed: GitInvestigationResult): GitInvestigation
   });
 }
 
-async function createVerifiedRepairBundle(root: string): Promise<{ directory: string; investigation: GitInvestigationResult }> {
+async function createVerifiedRepairBundle(root: string): Promise<{ directory: string; rootDigest: string; investigation: GitInvestigationResult }> {
   const repository = join(root, "repair-proof-source");
   git(root, ["init", "repair-proof-source"]);
   git(repository, ["config", "user.email", "faultline@example.test"]);
@@ -164,11 +170,11 @@ async function createVerifiedRepairBundle(root: string): Promise<{ directory: st
   });
   const investigation = nativeDockerFixture(observed);
   const directory = join(root, "verified-proof", "repair-range");
-  writeGitInvestigationProofBundle(directory, investigation, frozen, {
+  const written = writeGitInvestigationProofBundle(directory, investigation, frozen, {
     proofRoot: join(root, "verified-proof"),
     generatedAt: "2026-07-16T11:03:00.000Z"
   });
-  return { directory, investigation };
+  return { directory: written.directory, rootDigest: written.rootDigest, investigation };
 }
 
 describe("FaultLine CLI workflows", () => {
@@ -857,6 +863,147 @@ describe("FaultLine CLI workflows", () => {
       expect(runFl(["repair", "brief", "--investigation", join(directory, "not-a-bundle", "investigation.json"), "--input", inputFile], { cwd: directory }).status).toBe(1);
       writeFileSync(join(output, "repair-brief.json"), "{}\n", "utf8");
       expect(runFl(["repair", "verify", output], { cwd: directory }).status).toBe(1);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("drafts a template witness overlay via fl witness implement without Codex", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-witness-implement-"));
+    try {
+      const incident = {
+        symptom: "CI became red after an agent turn.",
+        ciLog: "FAIL tests/refund.test.ts",
+        repositoryLanguage: "TypeScript",
+        repositorySummary: "CLI witness implement fixture."
+      };
+      const incidentPath = join(directory, "incident.json");
+      const overlayOut = join(directory, "overlays");
+      writeFileSync(incidentPath, JSON.stringify(incident), "utf8");
+      const result = runFl([
+        "witness", "implement",
+        "--incident", incidentPath,
+        "--proposal-id", "cli-implement-1",
+        "--overlay-out", overlayOut,
+        "--repo", directory,
+        "--behavior", "refunds must stay idempotent"
+      ], { cwd: directory });
+      expect(result.status).toBe(0);
+      const payload = JSON.parse(result.stdout) as { status: string; overlayPath: string };
+      expect(payload.status).toBe("TEMPLATE_ONLY");
+      expect(payload.overlayPath.length).toBeGreaterThan(0);
+      expect(existsSync(payload.overlayPath)).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when fl repair --bundle receives an invalid proof root", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-repair-codex-"));
+    try {
+      mkdirSync(join(directory, "fake-bundle"), { recursive: true });
+      writeFileSync(join(directory, "fake-bundle", "manifest.json"), "{}\n", "utf8");
+      const result = runFl([
+        "repair",
+        "--bundle", join(directory, "fake-bundle"),
+        "--expect-root", `sha256:${"d".repeat(64)}`,
+        "--repo", directory,
+        "--output", join(directory, "repair-out")
+      ], { cwd: directory });
+      expect(result.status).toBe(1);
+      const payload = JSON.parse(result.stdout) as { status: string };
+      expect(payload.status).toBe("BUNDLE_INVALID");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("prepares repair instructions with an honest REPAIR_INSTRUCTIONS_PREPARED status for a verified bundle", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-repair-instructions-"));
+    try {
+      const proof = await createVerifiedRepairBundle(directory);
+      const result = runFl([
+        "repair",
+        "--bundle", proof.directory,
+        "--expect-root", proof.rootDigest,
+        "--repo", directory,
+        "--output", join(directory, "repair-out")
+      ], { cwd: directory });
+      expect(result.status).toBe(0);
+      const payload = JSON.parse(result.stdout) as { status: string; note: string };
+      expect(payload.status).toBe("REPAIR_INSTRUCTIONS_PREPARED");
+      expect(payload.note).toMatch(/not yet an isolated Git repair worktree/i);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("runs fl investigate turns against a ledger and reports experimental turn evidence", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-investigate-turns-"));
+    const repository = join(directory, "repo");
+    try {
+      git(directory, ["init", "repo"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine"]);
+      writeFileSync(join(repository, "state.txt"), "good\n", "utf8");
+      git(repository, ["add", "state.txt"]);
+      git(repository, ["commit", "-m", "good"]);
+
+      let ledger = createCodexLifecycleLedger({ sessionId: "cli-turns" });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "SESSION_STARTED",
+        payload: { transport: "SIDE_CAR", workingDirectory: repository }
+      });
+      const snap1 = captureTurnTreeSnapshot(repository);
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_STARTED",
+        payload: { turnId: "t1", turnOrdinal: 1, promptDigest: `sha256:${"a".repeat(64)}` }
+      });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_COMPLETED",
+        payload: { turnId: "t1", turnOrdinal: 1, outcome: "COMPLETED" }
+      });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_TREE_SNAPSHOT",
+        payload: { turnId: "t1", turnOrdinal: 1, snapshot: snap1 }
+      });
+      writeFileSync(join(repository, "state.txt"), "bad\n", "utf8");
+      const snap2 = captureTurnTreeSnapshot(repository);
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_STARTED",
+        payload: { turnId: "t2", turnOrdinal: 2, promptDigest: `sha256:${"b".repeat(64)}` }
+      });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_COMPLETED",
+        payload: { turnId: "t2", turnOrdinal: 2, outcome: "COMPLETED" }
+      });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_TREE_SNAPSHOT",
+        payload: { turnId: "t2", turnOrdinal: 2, snapshot: snap2 }
+      });
+      const ledgerPath = join(directory, "ledger.json");
+      writeCodexLifecycleLedgerAtomic(ledgerPath, ledger);
+
+      const store = join(directory, "witnesses");
+      const frozen = createRepairWitness(store);
+      // Without Docker the CLI cannot certify; it should still return structured JSON.
+      const result = runFl([
+        "investigate", "turns",
+        "--repo", repository,
+        "--ledger", ledgerPath,
+        "--proposal", frozen.proposal.proposalId,
+        "--expect-digest", frozen.frozenDigest,
+        "--image", pinnedImage,
+        "--store", store
+      ], { cwd: directory });
+      const payload = JSON.parse(result.stdout) as {
+        status: string;
+        proof: { isProof: boolean; evidenceGrade: string };
+        states: unknown[];
+      };
+      expect(payload.states).toHaveLength(2);
+      expect(payload.proof.evidenceGrade === "EXPERIMENTAL_TURN" || payload.proof.evidenceGrade === "NONE").toBe(true);
+      expect(payload.proof.isProof).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

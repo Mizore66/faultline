@@ -1,9 +1,13 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { z } from "zod";
 import { digestJson } from "./canonical.js";
+import {
+  computeEnvironmentFingerprint,
+  environmentHomogeneity
+} from "./environment-fingerprint.js";
 import {
   readVerifiedCodexLifecycleLedger,
   type CodexLifecycleLedger
@@ -14,6 +18,7 @@ import {
   executeSandboxPlan,
   type SandboxCommandRunner
 } from "./sandbox.js";
+import { materializeFrozenOverlays } from "./safe-overlay.js";
 import { TurnTreeSnapshotSchema } from "./turn-snapshot.js";
 import {
   verifyFrozenWitnessRecord,
@@ -24,6 +29,7 @@ export const TURN_INVESTIGATION_SCHEMA_VERSION = "faultline.turn-investigation.v
 
 const DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const GitObjectIdSchema = z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/);
+const DANGEROUS_GIT_ATTRIBUTE = /(?:^|\s)filter=[^\s]+/m;
 
 export const TurnStateSchema = z.object({
   index: z.number().int().nonnegative(),
@@ -71,6 +77,14 @@ export function turnStatesFromLedger(ledger: CodexLifecycleLedger): TurnState[] 
   return states.sort((left, right) => left.turnOrdinal - right.turnOrdinal || left.index - right.index);
 }
 
+/** Returns an error when more than one snapshot claims the same turnOrdinal. */
+export function duplicateTurnOrdinalError(states: readonly TurnState[]): string | null {
+  const ordinals = states.map((state) => state.turnOrdinal);
+  return new Set(ordinals).size === ordinals.length
+    ? null
+    : "Duplicate turnOrdinal in TURN_TREE_SNAPSHOT sequence.";
+}
+
 async function materializeTree(repository: string, treeDigest: string, worktree: string): Promise<void> {
   await mkdir(worktree, { recursive: true });
   const indexFile = join(worktree, ".faultline-turn-index");
@@ -81,20 +95,34 @@ async function materializeTree(repository: string, treeDigest: string, worktree:
   if (checkout.exitCode !== 0) throw new Error(`checkout-index failed for ${treeDigest}: ${checkout.stderr}`);
 }
 
+async function assertNoDangerousAttributes(worktree: string): Promise<void> {
+  try {
+    const attributes = await readFile(join(worktree, ".gitattributes"), "utf8");
+    if (DANGEROUS_GIT_ATTRIBUTE.test(attributes)) {
+      throw new Error("Refusing turn materialization: tree declares a Git filter attribute.");
+    }
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+    if (code === "ENOENT") return;
+    throw error;
+  }
+}
+
 export type TurnInvestigationResult = {
   schemaVersion: typeof TURN_INVESTIGATION_SCHEMA_VERSION;
   recorder: "codex-turn-tree-replay";
   nativeCodexInterception: false;
-  status: "COMPLETED" | "INVALID_WITNESS" | "NO_TURN_SNAPSHOTS" | "EXECUTION_ERROR";
+  status: "COMPLETED" | "INVALID_WITNESS" | "NO_TURN_SNAPSHOTS" | "EXECUTION_ERROR" | "ENVIRONMENT_CHANGED" | "DUPLICATE_TURN_SNAPSHOTS";
   states: TurnState[];
   transitions: Array<{ kind: "PASS_TO_FAIL" | "FAIL_TO_PASS"; before: TurnState; after: TurnState; beforeVerdict: "PASS" | "FAIL"; afterVerdict: "PASS" | "FAIL" }>;
-  proof: { isProof: boolean; reason: string };
+  proof: { isProof: boolean; reason: string; evidenceGrade: "EXPERIMENTAL_TURN" | "NONE" };
   errors: string[];
 };
 
 /**
  * Replay a frozen witness across Codex turn-tree snapshots (including dirty Stops).
- * This is the Codex-native localization path; Git commit-range replay remains the fallback.
+ * This is the Codex-native localization path; Git commit-range replay remains the mature proof fallback.
+ * Evidence grade is EXPERIMENTAL_TURN until the turn path exports a full portable proof bundle (#21).
  */
 export async function investigateTurnTrees(options: {
   repository: string;
@@ -104,6 +132,12 @@ export async function investigateTurnTrees(options: {
   image: string;
   runner?: SandboxCommandRunner;
 }): Promise<TurnInvestigationResult> {
+  const emptyProof = (reason: string): TurnInvestigationResult["proof"] => ({
+    isProof: false,
+    reason,
+    evidenceGrade: "NONE"
+  });
+
   const repository = resolve(options.repository);
   const verification = verifyFrozenWitnessRecord(options.frozenWitness, options.expectedFrozenDigest);
   if (!verification.valid || verification.externalDigestStatus !== "MATCH") {
@@ -114,7 +148,7 @@ export async function investigateTurnTrees(options: {
       status: "INVALID_WITNESS",
       states: [],
       transitions: [],
-      proof: { isProof: false, reason: "Frozen witness digest mismatch." },
+      proof: emptyProof("Frozen witness digest mismatch."),
       errors: verification.errors
     };
   }
@@ -129,23 +163,37 @@ export async function investigateTurnTrees(options: {
       status: "NO_TURN_SNAPSHOTS",
       states,
       transitions: [],
-      proof: { isProof: false, reason: "Need at least two TURN_TREE_SNAPSHOT events for turn localization." },
+      proof: emptyProof("Need at least two TURN_TREE_SNAPSHOT events for turn localization."),
       errors: []
+    };
+  }
+
+  const duplicateError = duplicateTurnOrdinalError(states);
+  if (duplicateError) {
+    return {
+      schemaVersion: TURN_INVESTIGATION_SCHEMA_VERSION,
+      recorder: "codex-turn-tree-replay",
+      nativeCodexInterception: false,
+      status: "DUPLICATE_TURN_SNAPSHOTS",
+      states,
+      transitions: [],
+      proof: emptyProof("Multiple TURN_TREE_SNAPSHOT events share a turnOrdinal; refuse ambiguous localization."),
+      errors: [duplicateError]
     };
   }
 
   const tempRoot = await mkdtemp(join(tmpdir(), "faultline-turn-investigation-"));
   const verdicts: Array<"PASS" | "FAIL" | "OTHER"> = [];
   const errors: string[] = [];
+  const fingerprints = [];
   try {
     for (const state of states) {
       const worktree = join(tempRoot, `turn-${state.turnOrdinal}-${state.treeDigest.slice(0, 12)}`);
       try {
         await materializeTree(repository, state.treeDigest, worktree);
-        for (const overlay of options.frozenWitness.proposal.witness.overlays) {
-          const bytes = Buffer.from(overlay.bytesBase64, "base64");
-          await writeFile(join(worktree, overlay.path), bytes);
-        }
+        await assertNoDangerousAttributes(worktree);
+        fingerprints.push(computeEnvironmentFingerprint(worktree));
+        await materializeFrozenOverlays(worktree, options.frozenWitness);
         const plan = createSandboxPlan({
           witness: { digest: options.frozenWitness.witnessDigest, command: options.frozenWitness.proposal.witness.command },
           sourceDirectory: worktree,
@@ -179,6 +227,22 @@ export async function investigateTurnTrees(options: {
     await rm(tempRoot, { recursive: true, force: true });
   }
 
+  if (environmentHomogeneity(fingerprints) === "HETEROGENEOUS") {
+    return {
+      schemaVersion: TURN_INVESTIGATION_SCHEMA_VERSION,
+      recorder: "codex-turn-tree-replay",
+      nativeCodexInterception: false,
+      status: "ENVIRONMENT_CHANGED",
+      states,
+      transitions: [],
+      proof: emptyProof("Environment changed between turn states. Supply a runtime mapping for each fingerprint before proof can continue."),
+      errors: [
+        ...errors,
+        "Environment fingerprint changed across turn snapshots; refuse cross-environment proof."
+      ]
+    };
+  }
+
   const transitions: TurnInvestigationResult["transitions"] = [];
   for (let index = 1; index < states.length; index += 1) {
     const beforeVerdict = verdicts[index - 1];
@@ -196,7 +260,7 @@ export async function investigateTurnTrees(options: {
     });
   }
 
-  const isProof = options.runner === undefined && transitions.length > 0 && errors.length === 0;
+  const certified = options.runner === undefined && transitions.length > 0 && errors.length === 0;
   return {
     schemaVersion: TURN_INVESTIGATION_SCHEMA_VERSION,
     recorder: "codex-turn-tree-replay",
@@ -205,12 +269,16 @@ export async function investigateTurnTrees(options: {
     states,
     transitions,
     proof: {
-      isProof,
-      reason: isProof
-        ? "Stable structured PREDICATE_* transitions were observed across Codex turn-tree snapshots."
+      // Native Docker turn localization can set isProof when transitions are
+      // stable, but evidenceGrade remains EXPERIMENTAL_TURN until a portable
+      // turn proof bundle exists (#21). Do not equate with Git-path A-grade.
+      isProof: certified,
+      reason: certified
+        ? "Stable structured PREDICATE_* transitions were observed across Codex turn-tree snapshots (experimental turn evidence; not a portable Git-grade proof bundle)."
         : transitions.length === 0
           ? "No stable structured turn-to-turn PASS/FAIL transitions were established."
-          : "Turn replay completed without native Docker proof certification."
+          : "Turn replay completed without native Docker proof certification.",
+      evidenceGrade: certified || transitions.length > 0 ? "EXPERIMENTAL_TURN" : "NONE"
     },
     errors
   };

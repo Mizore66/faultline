@@ -33,7 +33,7 @@ export type ImplementWitnessResult = {
 
 export type RepairWithCodexResult = {
   schemaVersion: typeof CODEX_LOOP_SCHEMA_VERSION;
-  status: "REPAIR_WORKTREE_PREPARED" | "CODEX_UNAVAILABLE" | "BUNDLE_INVALID";
+  status: "REPAIR_INSTRUCTIONS_PREPARED" | "CODEX_UNAVAILABLE" | "BUNDLE_INVALID";
   transport: "CODEX_CLI" | "NONE";
   worktreePath: string | null;
   instructionPath: string | null;
@@ -200,7 +200,7 @@ export async function repairWithCodex(options: {
   if (!options.withCodex || !options.runner) {
     return {
       schemaVersion: CODEX_LOOP_SCHEMA_VERSION,
-      status: "REPAIR_WORKTREE_PREPARED",
+      status: "REPAIR_INSTRUCTIONS_PREPARED",
       transport: "NONE",
       worktreePath: outputDirectory,
       instructionPath,
@@ -209,8 +209,8 @@ export async function repairWithCodex(options: {
         "Implement the repair in an isolated worktree",
         "Re-verify with the same frozen witness digest"
       ],
-      note: "Repair instruction pack written. Codex was not invoked.",
-      limitation: "Automated Codex repair is opt-in via --with-codex and never auto-merges."
+      note: "Repair instruction pack written. Codex was not invoked. This is not yet an isolated Git repair worktree.",
+      limitation: "Automated Codex repair is opt-in via --with-codex and never auto-merges. A real repository worktree is tracked separately."
     };
   }
 
@@ -222,7 +222,7 @@ export async function repairWithCodex(options: {
     ], { cwd: outputDirectory });
     return {
       schemaVersion: CODEX_LOOP_SCHEMA_VERSION,
-      status: result.exitCode === 0 ? "REPAIR_WORKTREE_PREPARED" : "CODEX_UNAVAILABLE",
+      status: result.exitCode === 0 ? "REPAIR_INSTRUCTIONS_PREPARED" : "CODEX_UNAVAILABLE",
       transport: "CODEX_CLI",
       worktreePath: outputDirectory,
       instructionPath,

@@ -1,26 +1,30 @@
 # FaultLine
 
-> **First Bad Turn** evidence for agent-assisted regressions: freeze one reviewed predicate, replay historical states, prove only what executions support.
+> **First Bad Turn**, powered by FaultLine: observe public Codex lifecycle hooks, capture immutable turn-boundary Git trees, and execute a frozen witness across those states. FaultLine does **not** inspect private Codex reasoning.
 
-FaultLine executes historical states to prove where a frozen witness changed from pass to fail — without claiming agent intent or a unique semantic root cause.
+FaultLine proves where a frozen witness changed from pass to fail — without claiming agent intent or a unique semantic root cause.
 
 **Break → Find → Prove → Fix → Prevent**
 
 | Proves | Never claims |
 | --- | --- |
-| Earliest stable PASS→FAIL under a frozen witness | Model intent / “the agent meant to…” |
-| Bidirectional edit necessity/sufficiency when certified | Unique semantic root cause |
-| Turn tree snapshots from dirty Codex Stops (when sidecar installed) | Private Codex interception |
+| Earliest stable PASS→FAIL under a frozen witness (turn trees or Git range) | Model intent / “the agent meant to…” |
+| Turn-boundary localization from Codex Stop snapshots (including dirty worktrees) | Private Codex interception or hidden model state |
+| Bidirectional edit necessity/sufficiency when certified (Git path) | Unique semantic root cause |
 | Structured `PREDICATE_*` outcomes (compile ≠ FAIL) | That one Docker image fits every lockfile era |
 
-**Hero demo for judges (real self-incident — prefer this in the video):**
+### Evidence grades (honest)
 
-1. Open [docs/faultline-self-incident.md](docs/faultline-self-incident.md)
-2. Show historical CI failure → frozen witness → `PASS→FAIL` at `97c3290` → recorded root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`
-3. Optional live re-verify path in that doc
-4. Optional: `fl investigate turns` when a Codex sidecar ledger with dirty-turn snapshots is available
+| Path | Grade today | Notes |
+| --- | --- | --- |
+| `fl investigate turns` | **Experimental turn evidence** | Localizes across captured turn trees; portable turn proof bundle parity with Git is still tracked (#21) |
+| `fl investigate git` / live self-incident | **Mature Git proof** | Portable, independently verifiable proof packages |
 
-The deterministic `judge-demo` fixture is only the **protocol sample** (no Docker/API key). Do not center the submission video on its synthetic session metrics.
+**Hero demo for judges (prefer this in the video):**
+
+1. Open [docs/faultline-self-incident.md](docs/faultline-self-incident.md) — real Git `PASS→FAIL` at `97c3290`, retained proof root
+2. Show `fl investigate turns` when a Codex sidecar ledger with turn-tree snapshots is available (experimental grade)
+3. Keep the deterministic `judge-demo` fixture as the **protocol sample** only (no Docker/API key) — do not center the submission video on its synthetic session metrics
 
 ## Protocol sample (no Docker, no API key)
 
@@ -35,40 +39,53 @@ pnpm fl -- verify .faultline/bundles/judge-demo
 
 Zero-install visual: open [`docs/judge-preview.html`](docs/judge-preview.html).
 
-With Docker (product path smoke): `pnpm fl -- demo live-git --export-only`
+With Docker (mature Git product-path smoke): `pnpm fl -- demo live-git --export-only`
 
 ## Install
 
-**Canonical path today:** clone `main` (MIT) and use `pnpm fl -- …` as above.
-
-Public package name is `@mizore66/faultline` (the unscoped `faultline` name is taken). Registry install is supported **after** the first `pnpm publish`:
+**Canonical judge path (only supported install today):** clone `main` (MIT) and run via pnpm.
 
 ```powershell
-npm install -g @mizore66/faultline
-fl --version
-fl doctor --repo .
-fl doctor --proof-ready   # nonzero unless Docker proof-grade is READY
+git clone https://github.com/Mizore66/faultline.git
+cd faultline
+git checkout main
+pnpm install --frozen-lockfile
+pnpm fl -- doctor --repo .
+pnpm fl -- doctor --proof-ready   # nonzero unless Docker proof-grade is READY
 ```
 
-Until publish completes, do not treat `npm install -g` as the judge path.
+The public package name `@mizore66/faultline` is reserved for a future registry publish. **npm/global install is not supported yet** — there is no published release. Do not run `npm install -g @mizore66/faultline` or `npm install faultline` until an owner-published version exists. To exercise the packaged binary before publish, use `pnpm pack` and install the local tarball (see [Package and clean-install use](#package-and-clean-install-use)).
 
-## One guided command
+## Primary investigation paths
+
+**Turn localization (Codex-native, experimental evidence grade):**
+
+```powershell
+pnpm fl -- investigate turns --repo . --ledger .faultline\ledgers\session.json --proposal <id> --expect-digest sha256:... --image <digest-pinned-image>
+```
+
+**Guided intake from a CI log (draft + next steps; does not auto-approve):**
 
 ```powershell
 pnpm fl -- investigate --ci-log .\ci.log --repo . --command "pnpm test"
 ```
 
-Creates a review-only draft, prints next steps (`witness review` → freeze → `incident continue`). Never auto-approves.
+**Mature Git commit-range proof (fallback / portable packages):**
+
+```powershell
+pnpm fl -- investigate git --repo . --from <good> --to <bad> --proposal <id> --expect-digest sha256:... --image <digest-pinned-image>
+```
 
 ## One product path (expert)
 
 1. `fl doctor --repo .` / `fl doctor --proof-ready`
-2. `fl incident start` or `fl investigate --ci-log`
-3. `fl witness review` → Approve → Freeze (retain digest)
-4. Optional: `fl witness implement` (Codex drafts overlay; human still freezes)
-5. `fl incident continue` / `fl investigate git`
-6. `fl serve --bundle` / `fl verify --expect-root`
-7. Optional: `fl repair --bundle … --with-codex` then re-verify three-state prevention
+2. Install Codex sidecar hooks; capture turn trees (including dirty Stops)
+3. `fl incident start` or `fl investigate --ci-log`
+4. `fl witness review` → Approve → Freeze (retain digest)
+5. Optional: `fl witness implement` (Codex drafts overlay; human still freezes)
+6. Prefer `fl investigate turns` when a turn ledger exists; otherwise `fl investigate git` / `fl incident continue`
+7. `fl serve --bundle` / `fl verify --expect-root` (Git packages)
+8. Optional: `fl repair --bundle …` prepares instructions (`REPAIR_INSTRUCTIONS_PREPARED`); `--with-codex` is opt-in and never auto-merges
 
 Full guide: [docs/first-incident.md](docs/first-incident.md).
 
@@ -90,7 +107,7 @@ Dogfood only: FaultLine’s first completed proof is **this repository’s prove
 
 ## What is implemented (advanced)
 
-See prior surface: Docker-isolated Git replay, env-fingerprint refusal on lockfile skew, structured witness results, minimization, proof packages, attestations, GitHub Actions. Parallel multi-session *fleet blame* is **not** claimed — contribution attribution in the sample is fixture theater; production proves Git/turn-tree boundaries under one frozen witness.
+Docker-isolated Git replay (mature proof packages), env-fingerprint refusal on lockfile skew (Git and turn paths), structured witness results, turn-tree localization (experimental), minimization, attestations, GitHub Actions. Parallel multi-session *fleet blame* is **not** claimed — contribution attribution in the sample is fixture theater; production proves Git/turn-tree boundaries under one frozen witness.
 
 ## Fast judge check (no Docker or API key)
 
@@ -391,7 +408,7 @@ Start from [`docs/faultline-github-attestation-trust.example.json`](docs/faultli
 
 ## Package and clean-install use
 
-FaultLine is licensed under the MIT License. It is not published to npm yet; the owner still controls the first registry release, so do not treat `npm install faultline` as a supported installation command.
+FaultLine is licensed under the MIT License. **It is not published to npm yet.** The owner still controls the first registry release. Do not treat `npm install -g @mizore66/faultline` or `npm install faultline` as supported installation commands.
 
 A pinned source checkout can still produce and test the exact package that would be released:
 
@@ -450,7 +467,7 @@ Support matrix:
 - Diagnostic action: current GitHub-hosted Ubuntu runner; it is not evidence suitable for publication.
 - Package manager for source builds: pnpm 10. Installed consumers only need a supported Node.js runtime.
 - GitHub.com Actions is supported. GitHub Enterprise Server is not currently claimed because `actions/upload-artifact@v4` availability differs by GHES version.
-- npm registry installation remains unsupported until the owner performs the first publish. No release or publish automation is enabled.
+- npm registry installation remains **unsupported**. There are no GitHub Releases for a published CLI package yet. Source checkout + `pnpm fl` is the only judge install path.
 
 ## GPT-5.6 boundaries
 
@@ -521,7 +538,7 @@ The deterministic path proves only its included sample workflow. A real incident
 | Live proof-grade investigation | Self-incident root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` | Recorded |
 | Codex/GPT-5.6 use | Qualifying `/feedback` `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` plus the bounded runtime boundaries above | Recorded session id |
 | User or business impact | Self-incident dogfood only; no third-party adoption metrics | Scoped / honest |
-| npm install | `@mizore66/faultline` public package name (publish when ready) | Package contract ready |
+| npm install | Not published; clone + `pnpm fl` only | Source-only until first publish |
 | Build Week video + Devpost fields | Narrated &lt;3 min YouTube URL and remaining form fields | Still human-owned |
 
 Use the [Devpost description draft](docs/devpost-description-draft.md), [impact-validation template](docs/impact-validation-template.md), and [differentiation comparison](docs/differentiation.md) for the remaining human-reviewed copy.
@@ -529,7 +546,8 @@ Use the [Devpost description draft](docs/devpost-description-draft.md), [impact-
 ## Important boundaries
 
 - FaultLine's included demo is deterministic; it is not a claim of a general arbitrary-code runner.
-- The live implementation is Git commit-range replay. A lifecycle ledger strengthens it only to the degree of its recorded checkpoints; no native Codex interception is implied.
+- **Turn path:** observes public Codex lifecycle hooks, captures immutable turn-boundary Git trees (including dirty Stops), and executes a frozen witness across those states. It does not inspect private Codex reasoning. Evidence grade is experimental until portable turn proof bundles match the Git path (#21).
+- **Git path:** mature commit-range replay with portable, independently verifiable proof packages. Prefer this for publishable A-grade claims today.
 - The sandbox plans are fail-closed. The CLI labels injected runners `INJECTED_RUNNER` and refuses to certify or publish them as Docker proof. The Ubuntu CI gate exercises the native Docker boundary; a local development environment still needs a Docker daemon to create real proof evidence.
 - `NATIVE_DOCKER` means FaultLine's direct Docker runner on the host that produced the record. Offline verification reconstructs the recorded policy and data, but it is not cryptographic attestation that a host, Docker client, or daemon enforced that policy. A signed GitHub CI receipt binds bytes and the configured GitHub Actions identity; it does not change this host/Docker-enforcement limitation.
 - A proof is predicate-specific. It does not prove intent, semantic causality, or that one edit is the unique cause.
@@ -540,11 +558,11 @@ Use the [Devpost description draft](docs/devpost-description-draft.md), [impact-
 The [Build Week submission kit](docs/build-week-submission-kit.md) has the three-minute run of show and checklist.
 
 - [x] Qualifying Codex `/feedback` session ID: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
-- [x] MIT license on canonical `main`
-- [x] Public npm package name `@mizore66/faultline` (run `pnpm publish` when releasing)
+- [x] MIT license on canonical `main` (GitHub default branch: `main`)
+- [x] Active Sol audit backlog: issues [#18–#32](https://github.com/Mizore66/faultline/issues/32) (historical #1–#16 closed)
+- [ ] Publish `@mizore66/faultline` only when intentionally releasing (not required for judging today)
 - [ ] Record a narrated under-three-minute demo (YouTube, public)
 - [ ] Complete Devpost fields from [docs/devpost-description-draft.md](docs/devpost-description-draft.md)
-- [ ] Set GitHub default branch to `main` if it is still `master`
 - [ ] Recheck official rules and deadline on submission day
 
 ## Development
