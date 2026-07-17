@@ -8,12 +8,12 @@ import { canonicalJson, digestJson, sha256 } from "./canonical.js";
 import {
   assertSafeGitMaterialization,
   hardenedGitText,
-  materializeFrozenOverlays,
   materializeGitTree,
   runHardenedGit,
   type HardenedGitResult,
   type MaterializedGitTree
 } from "./git-materialization.js";
+import { materializeFrozenOverlays } from "./safe-overlay.js";
 import { redactText } from "./redaction.js";
 import {
   auditSandboxPlan,

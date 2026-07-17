@@ -6,10 +6,10 @@ import { z } from "zod";
 import { digestJson, sha256 } from "./canonical.js";
 import {
   assertSafeGitMaterialization,
-  materializeFrozenOverlays,
   materializeGitTree,
   runHardenedGit
 } from "./git-materialization.js";
+import { materializeFrozenOverlays } from "./safe-overlay.js";
 import { redactText } from "./redaction.js";
 import {
   auditSandboxPlan,
