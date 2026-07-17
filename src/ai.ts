@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { digestJson } from "./canonical.js";
+import { extractOpenAiResponseText } from "./openai-response.js";
 import { redactValue, type RedactionReport } from "./redaction.js";
 
 const BlindIncidentPacketSchema = z.object({
@@ -34,13 +35,6 @@ const witnessProposalJsonSchema = {
     safetyNotes: { type: "array", items: { type: "string" }, maxItems: 8 }
   }
 };
-
-function responseText(response: unknown): string {
-  if (typeof response === "object" && response !== null && "output_text" in response && typeof response.output_text === "string") {
-    return response.output_text;
-  }
-  throw new Error("OpenAI response did not contain output_text");
-}
 
 export function makeBlindIncidentPacket(input: unknown): { packet: BlindIncidentPacket; digest: string } {
   const packet = BlindIncidentPacketSchema.parse(input);
@@ -94,6 +88,6 @@ export async function proposeWitnessWithGpt(input: unknown, options: { apiKey?: 
   if (!response.ok) {
     throw new Error(`OpenAI Responses request failed: ${response.status} ${await response.text()}`);
   }
-  const proposal = WitnessProposalSchema.parse(JSON.parse(responseText(await response.json())));
+  const proposal = WitnessProposalSchema.parse(JSON.parse(extractOpenAiResponseText(await response.json())));
   return { proposal, incidentPacketDigest: digestJson(redactedPacket), redaction: redacted.report };
 }

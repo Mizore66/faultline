@@ -1,0 +1,74 @@
+name: FaultLine proof
+description: Replay a frozen witness over a Git range and upload the resulting proof package.
+inputs:
+  witness:
+    description: Path, relative to the checked-out repository, to a reviewed faultline.frozen-witness.v1 JSON file.
+    required: true
+  base:
+    description: Known-good base commit or ref.
+    required: true
+  head:
+    description: Known-bad head commit or ref.
+    required: true
+  runtime:
+    description: Digest-pinned Docker image used to execute the witness.
+    required: true
+  repository:
+    description: Repository to investigate, relative to the checked-out workspace.
+    required: false
+    default: .
+  proof-mode:
+    description: Use required for proof-grade Docker replay or diagnostic for explicitly non-proof local replay.
+    required: false
+    default: required
+  artifact-name:
+    description: Name of the uploaded proof-package artifact.
+    required: false
+    default: faultline-proof
+outputs:
+  proof-package:
+    description: Absolute path to the generated proof package, empty for diagnostic runs.
+    value: ${{ steps.run.outputs.proof-package }}
+  root-digest:
+    description: Root SHA-256 digest of the proof package, empty for diagnostic runs.
+    value: ${{ steps.run.outputs.root-digest }}
+runs:
+  using: composite
+  steps:
+    - name: Set up pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10.32.1
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+        cache-dependency-path: ${{ github.action_path }}/../../pnpm-lock.yaml
+    - name: Build FaultLine
+      shell: bash
+      working-directory: ${{ github.action_path }}/../..
+      run: |
+        pnpm install --frozen-lockfile
+        pnpm build
+    - name: Run FaultLine
+      id: run
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        FAULTLINE_ACTION_PATH: ${{ github.action_path }}/../..
+        FAULTLINE_WITNESS: ${{ inputs.witness }}
+        FAULTLINE_BASE: ${{ inputs.base }}
+        FAULTLINE_HEAD: ${{ inputs.head }}
+        FAULTLINE_RUNTIME: ${{ inputs.runtime }}
+        FAULTLINE_REPOSITORY: ${{ inputs.repository }}
+        FAULTLINE_PROOF_MODE: ${{ inputs.proof-mode }}
+      run: node "$FAULTLINE_ACTION_PATH/scripts/run-action.mjs"
+    - name: Upload proof package
+      if: ${{ steps.run.outputs.proof-package != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.run.outputs.proof-package }}
+        if-no-files-found: error
+        include-hidden-files: true

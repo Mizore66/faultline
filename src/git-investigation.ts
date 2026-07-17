@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import { digestJson, sha256 } from "./canonical.js";
+import { redactText } from "./redaction.js";
 import {
   auditSandboxPlan,
   createSandboxPlan,
@@ -36,6 +37,8 @@ const GIT_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const SAFE_GIT_REVISION = /^(?!-)[^\0\r\n]{1,512}$/;
 const SAFE_OVERLAY_PATH = /^[^\\/\0]+(?:\/[^\\/\0]+)*$/;
 const MAX_GIT_OUTPUT_BYTES = 1_048_576;
+const EVIDENCE_LOG_PREVIEW_BYTES = 16 * 1024;
+const DANGEROUS_GIT_ATTRIBUTE = /(?:^|\s)filter=[^\s]+/m;
 
 const DigestSchema = z.string().regex(SHA256_DIGEST, "expected sha256:<64 lowercase hex characters>");
 const GitObjectIdSchema = z.string().regex(GIT_OBJECT_ID, "expected a 40- or 64-character lowercase Git object id");
@@ -112,6 +115,24 @@ const SandboxAuditSchema = z.object({
     allowedKeys: z.array(z.string()),
     passed: z.array(z.object({ key: z.string(), valueDigest: DigestSchema }).strict()),
     redactedKeys: z.array(z.string())
+  }).strict(),
+  runtime: z.object({
+    image: z.string().nullable(),
+    entrypoint: z.string().nullable(),
+    network: z.literal("none").nullable(),
+    rootFilesystemReadOnly: z.boolean(),
+    user: z.string().nullable(),
+    capDropAll: z.boolean(),
+    noNewPrivileges: z.boolean(),
+    pull: z.literal("never").nullable(),
+    limits: z.object({
+      timeoutMs: z.number().int().positive(),
+      maxOutputBytes: z.number().int().positive(),
+      cpuCount: z.number().int().positive(),
+      memoryBytes: z.number().int().positive(),
+      pidsLimit: z.number().int().positive(),
+      tmpfsBytes: z.number().int().positive()
+    }).strict()
   }).strict()
 }).strict();
 
@@ -119,6 +140,8 @@ export const GitInvestigationRunFactSchema = z.object({
   schemaVersion: z.literal(GIT_INVESTIGATION_SCHEMA_VERSION),
   runId: DigestSchema,
   executionId: DigestSchema,
+  /** Random recorder nonce distinguishes separate invocations of the same state/attempt. */
+  executionNonce: z.string().uuid(),
   stateIndex: z.number().int().nonnegative(),
   executionAttempt: z.number().int().min(1).max(STABLE_EXECUTION_COUNT),
   commit: GitObjectIdSchema,
@@ -132,6 +155,7 @@ export const GitInvestigationRunFactSchema = z.object({
   sandbox: SandboxAuditSchema,
   result: z.object({
     kind: z.enum(["DOCKER_ISOLATED", "UNSAFE_LOCAL"]),
+    executor: z.enum(["NATIVE_DOCKER", "INJECTED_RUNNER", "UNSAFE_LOCAL"]),
     verdict: z.enum(["PASS", "FAIL", "ERROR", "INAPPLICABLE"]),
     reason: z.enum([
       "EXIT_ZERO",
@@ -139,6 +163,7 @@ export const GitInvestigationRunFactSchema = z.object({
       "TIMEOUT",
       "OUTPUT_LIMIT_EXCEEDED",
       "SANDBOX_UNAVAILABLE",
+      "WITNESS_SETUP_ERROR",
       "RUNNER_FAILURE",
       "UNSAFE_LOCAL_NOT_PROOF"
     ]),
@@ -147,8 +172,14 @@ export const GitInvestigationRunFactSchema = z.object({
     outputTruncated: z.boolean(),
     stdoutDigest: DigestSchema,
     stdoutBytes: z.number().int().nonnegative(),
+    stdoutPreview: z.string().max(EVIDENCE_LOG_PREVIEW_BYTES * 2),
+    stdoutPreviewTruncated: z.boolean(),
+    stdoutRedacted: z.boolean(),
     stderrDigest: DigestSchema,
-    stderrBytes: z.number().int().nonnegative()
+    stderrBytes: z.number().int().nonnegative(),
+    stderrPreview: z.string().max(EVIDENCE_LOG_PREVIEW_BYTES * 2),
+    stderrPreviewTruncated: z.boolean(),
+    stderrRedacted: z.boolean()
   }).strict()
 }).strict();
 
@@ -205,6 +236,7 @@ export const GitInvestigationResultSchema = z.object({
   proof: z.object({
     requiresDockerIsolation: z.literal(true),
     dockerIsolated: z.boolean(),
+    executionTrust: z.enum(["NATIVE_DOCKER", "INJECTED_RUNNER", "UNSAFE_LOCAL"]),
     proofTransitions: z.number().int().nonnegative(),
     isProof: z.boolean(),
     reason: z.string()
@@ -226,8 +258,84 @@ type ProcessResult = {
   error?: string;
 };
 
+/**
+ * Git materialization is a pre-Docker boundary. Disable system/global config,
+ * hooks, prompts, replace refs, and LFS smudging rather than treating a
+ * checkout as harmless input preparation.
+ */
+function hardenedGitEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH ?? "",
+    GIT_CONFIG_NOSYSTEM: "1",
+    // A random nonexistent config path prevents accidental use of a user's
+    // global Git configuration without relying on an OS-specific null device.
+    GIT_CONFIG_GLOBAL: join(tmpdir(), `faultline-empty-git-config-${randomUUID()}`),
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_LFS_SKIP_SMUDGE: "1",
+    // The recorder never fetches, clones, or initializes submodules. Keep
+    // every transport unavailable at this pre-Docker boundary so a local
+    // repository configuration cannot turn an otherwise read-only Git query
+    // into a network or helper invocation. "none" is deliberately not a
+    // Git transport name, which makes all real transport protocols fail the
+    // GIT_ALLOW_PROTOCOL allow-list.
+    GIT_ALLOW_PROTOCOL: "none"
+  };
+  if (process.platform === "win32") {
+    if (process.env.SystemRoot) environment.SystemRoot = process.env.SystemRoot;
+    if (process.env.ComSpec) environment.ComSpec = process.env.ComSpec;
+    if (process.env.PATHEXT) environment.PATHEXT = process.env.PATHEXT;
+  }
+  return environment;
+}
+
+function hardenedGitArguments(repository: string, args: readonly string[]): string[] {
+  return [
+    "-c", "core.hooksPath=/nonexistent/faultline-hooks",
+    // core.fsmonitor accepts a command from repository-local configuration.
+    // Explicitly override it before every host-side Git invocation: a
+    // detached worktree checkout is still pre-Docker code execution surface.
+    "-c", "core.fsmonitor=false",
+    "-c", "core.useBuiltinFSMonitor=false",
+    "-c", "core.autocrlf=false",
+    "-c", "filter.lfs.process=",
+    "-c", "filter.lfs.smudge=",
+    "-c", "filter.lfs.required=false",
+    "-c", "diff.external=",
+    // No FaultLine Git operation needs a recursive submodule update. Make
+    // that invariant explicit instead of inheriting a repository preference.
+    "-c", "submodule.recurse=false",
+    "-c", "fetch.recurseSubmodules=false",
+    // Git transport is outside this recorder's contract. The environment
+    // allow-list above is the primary lock; these command-line settings also
+    // defeat repository-local protocol.* overrides on Git versions that use
+    // the config policy directly.
+    "-c", "protocol.allow=never",
+    "-c", "protocol.file.allow=never",
+    "-c", "protocol.ext.allow=never",
+    "-c", "protocol.git.allow=never",
+    "-c", "protocol.ssh.allow=never",
+    "-c", "protocol.http.allow=never",
+    "-c", "protocol.https.allow=never",
+    "-C", repository,
+    ...args
+  ];
+}
+
 function sha256Digest(value: string | Buffer): string {
   return `sha256:${sha256(value)}`;
+}
+
+function redactedEvidencePreview(value: string, stream: "stdout" | "stderr"): {
+  value: string;
+  truncated: boolean;
+  redacted: boolean;
+} {
+  const bytes = Buffer.from(value, "utf8");
+  const preview = bytes.subarray(0, EVIDENCE_LOG_PREVIEW_BYTES).toString("utf8");
+  const safe = redactText(preview, `$.run.${stream}`);
+  return { value: safe.value, truncated: bytes.length > EVIDENCE_LOG_PREVIEW_BYTES, redacted: safe.report.redacted };
 }
 
 function errorMessage(error: unknown): string {
@@ -257,7 +365,8 @@ async function runProcess(executable: string, argumentsList: readonly string[]):
       child = spawn(executable, [...argumentsList], {
         shell: false,
         windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"]
+        stdio: ["ignore", "pipe", "pipe"],
+        env: hardenedGitEnvironment()
       });
     } catch (error) {
       settle({ exitCode: null, stdout: "", stderr: "", error: errorMessage(error) });
@@ -299,7 +408,7 @@ async function runProcess(executable: string, argumentsList: readonly string[]):
 }
 
 async function runGit(repository: string, args: readonly string[]): Promise<ProcessResult> {
-  return runProcess("git", ["-C", repository, ...args]);
+  return runProcess("git", hardenedGitArguments(repository, args));
 }
 
 async function gitText(repository: string, args: readonly string[]): Promise<string> {
@@ -378,6 +487,20 @@ async function resolveCommitRange(repository: string, range: z.output<typeof Git
     states.push({ index, commit, tree: await resolveTree(repository, commit) });
   }
   return states;
+}
+
+/** Refuse checkout-time filters before any untrusted tree is materialized on the host. */
+async function assertSafeGitMaterialization(repository: string, states: readonly GitCommitState[]): Promise<void> {
+  const localFilters = await runGit(repository, ["config", "--local", "--get-regexp", "^filter\\."]);
+  if (localFilters.exitCode === 0 && localFilters.stdout.trim()) {
+    throw new Error("Refusing host worktree materialization: repository local Git filter configuration is present.");
+  }
+  for (const state of states) {
+    const attributes = await runGit(repository, ["show", "--no-textconv", "--end-of-options", `${state.commit}:.gitattributes`]);
+    if (attributes.exitCode === 0 && DANGEROUS_GIT_ATTRIBUTE.test(attributes.stdout)) {
+      throw new Error(`Refusing host worktree materialization: ${state.commit} declares a Git filter attribute.`);
+    }
+  }
 }
 
 function safeOverlayParts(value: string): string[] {
@@ -500,7 +623,8 @@ function stableStates(
     const executionIds = new Set(stateRuns.map((run) => run.executionId));
     if (attempts.size !== STABLE_EXECUTION_COUNT || executionIds.size !== STABLE_EXECUTION_COUNT) continue;
     const verdict = stateRuns[0]?.result.verdict;
-    if ((verdict !== "PASS" && verdict !== "FAIL") || !stateRuns.every((run) => run.result.kind === "DOCKER_ISOLATED" && run.result.verdict === verdict)) {
+    if ((verdict !== "PASS" && verdict !== "FAIL") || !stateRuns.every((run) => run.result.kind === "DOCKER_ISOLATED"
+      && run.result.verdict === verdict)) {
       continue;
     }
     stable.push({
@@ -546,10 +670,20 @@ function witnessSummary(frozenWitness: FrozenWitness, verification: WitnessLockV
   };
 }
 
-function emptyProof(sandboxMode: "DOCKER_ISOLATED" | "UNSAFE_LOCAL", reason: string) {
+function executionTrustFor(sandboxMode: "DOCKER_ISOLATED" | "UNSAFE_LOCAL", hasInjectedRunner: boolean): "NATIVE_DOCKER" | "INJECTED_RUNNER" | "UNSAFE_LOCAL" {
+  if (sandboxMode === "UNSAFE_LOCAL") return "UNSAFE_LOCAL";
+  return hasInjectedRunner ? "INJECTED_RUNNER" : "NATIVE_DOCKER";
+}
+
+function emptyProof(
+  sandboxMode: "DOCKER_ISOLATED" | "UNSAFE_LOCAL",
+  reason: string,
+  executionTrust = executionTrustFor(sandboxMode, false)
+) {
   return {
     requiresDockerIsolation: true as const,
-    dockerIsolated: sandboxMode === "DOCKER_ISOLATED",
+    dockerIsolated: executionTrust === "NATIVE_DOCKER",
+    executionTrust,
     proofTransitions: 0,
     isProof: false,
     reason
@@ -560,7 +694,8 @@ function baseResult(
   status: z.infer<typeof GitInvestigationResultSchema>["status"],
   sandboxMode: "DOCKER_ISOLATED" | "UNSAFE_LOCAL",
   errors: readonly string[],
-  fields: Pick<GitInvestigationResult, "repository" | "requestedRange" | "resolvedRange" | "witness">
+  fields: Pick<GitInvestigationResult, "repository" | "requestedRange" | "resolvedRange" | "witness">,
+  executionTrust = executionTrustFor(sandboxMode, false)
 ): GitInvestigationResult {
   return GitInvestigationResultSchema.parse({
     schemaVersion: GIT_INVESTIGATION_SCHEMA_VERSION,
@@ -574,7 +709,7 @@ function baseResult(
     stableStates: [],
     transitions: [],
     nonMonotonic: false,
-    proof: emptyProof(sandboxMode, errors[0] ?? "Investigation did not produce proof."),
+    proof: emptyProof(sandboxMode, errors[0] ?? "Investigation did not produce proof.", executionTrust),
     errors: [...errors]
   });
 }
@@ -590,17 +725,22 @@ function runFact(
   finishedAt: string,
   durationMs: number
 ): GitInvestigationRunFact {
+  const executionNonce = randomUUID();
   const executionId = digestJson({
     schemaVersion: GIT_INVESTIGATION_SCHEMA_VERSION,
+    executionNonce,
     stateIndex: state.index,
     commit: state.commit,
     tree: state.tree,
     frozenDigest: frozenWitness.frozenDigest,
     executionAttempt
   });
+  const stdoutPreview = redactedEvidencePreview(result.stdout, "stdout");
+  const stderrPreview = redactedEvidencePreview(result.stderr, "stderr");
   const unsigned = {
     schemaVersion: GIT_INVESTIGATION_SCHEMA_VERSION,
     executionId,
+    executionNonce,
     stateIndex: state.index,
     executionAttempt,
     commit: state.commit,
@@ -614,6 +754,7 @@ function runFact(
     sandbox: sandboxAudit,
     result: {
       kind: result.kind,
+      executor: result.executor,
       verdict: result.verdict,
       reason: result.reason,
       exitCode: result.exitCode,
@@ -621,8 +762,14 @@ function runFact(
       outputTruncated: result.outputTruncated,
       stdoutDigest: sha256Digest(result.stdout),
       stdoutBytes: Buffer.byteLength(result.stdout, "utf8"),
+      stdoutPreview: stdoutPreview.value,
+      stdoutPreviewTruncated: stdoutPreview.truncated,
+      stdoutRedacted: stdoutPreview.redacted,
       stderrDigest: sha256Digest(result.stderr),
-      stderrBytes: Buffer.byteLength(result.stderr, "utf8")
+      stderrBytes: Buffer.byteLength(result.stderr, "utf8"),
+      stderrPreview: stderrPreview.value,
+      stderrPreviewTruncated: stderrPreview.truncated,
+      stderrRedacted: stderrPreview.redacted
     }
   };
   return GitInvestigationRunFactSchema.parse({ ...unsigned, runId: digestJson(unsigned) });
@@ -662,13 +809,14 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
     ...(request.maxStates === undefined ? {} : { maxStates: request.maxStates })
   });
   const requestedSandboxMode = request.sandbox.mode === "UNSAFE_LOCAL" ? "UNSAFE_LOCAL" : "DOCKER_ISOLATED";
+  const requestedExecutionTrust = executionTrustFor(requestedSandboxMode, request.runner !== undefined);
   if (!parsedRequest.success) {
     return baseResult("INVALID_REQUEST", requestedSandboxMode, [`Invalid Git investigation request: ${parsedRequest.error.message}`], {
       repository: null,
       requestedRange: null,
       resolvedRange: null,
       witness: null
-    });
+    }, requestedExecutionTrust);
   }
 
   const input = parsedRequest.data;
@@ -682,7 +830,7 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
       requestedRange: input.range,
       resolvedRange: null,
       witness: summary
-    });
+    }, executionTrustFor(input.sandbox.mode, request.runner !== undefined));
   }
 
   let repository: string;
@@ -690,13 +838,14 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
   try {
     repository = await resolveRepositoryRoot(input.repository);
     states = await resolveCommitRange(repository, input.range, input.maxStates);
+    await assertSafeGitMaterialization(repository, states);
   } catch (error) {
     return baseResult("RANGE_ERROR", input.sandbox.mode, [errorMessage(error)], {
       repository: null,
       requestedRange: input.range,
       resolvedRange: null,
       witness: summary
-    });
+    }, executionTrustFor(input.sandbox.mode, request.runner !== undefined));
   }
 
   const first = states[0];
@@ -707,7 +856,7 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
       requestedRange: input.range,
       resolvedRange: null,
       witness: summary
-    });
+    }, executionTrustFor(input.sandbox.mode, request.runner !== undefined));
   }
 
   const tempRoot = await mkdtemp(join(tmpdir(), "faultline-git-investigation-"));
@@ -783,17 +932,20 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
       stableStates: [],
       transitions: [],
       nonMonotonic: false,
-      proof: emptyProof(input.sandbox.mode, errors[0] ?? "Sandbox configuration failed."),
+      proof: emptyProof(input.sandbox.mode, errors[0] ?? "Sandbox configuration failed.", executionTrustFor(input.sandbox.mode, request.runner !== undefined)),
       errors
     };
     return GitInvestigationResultSchema.parse(result);
   }
 
+  const executionTrust = executionTrustFor(input.sandbox.mode, request.runner !== undefined);
   const stable = stableStates(states, runs, input.sandbox.mode);
   const transitions = findTransitions(stable);
   const status = classifyStatus(runs, errors);
-  const dockerIsolated = input.sandbox.mode === "DOCKER_ISOLATED";
-  const proofReason = !dockerIsolated
+  const dockerIsolated = executionTrust === "NATIVE_DOCKER";
+  const proofReason = executionTrust === "INJECTED_RUNNER"
+    ? "An injected runner produced these observations; FaultLine refuses to certify it as native Docker proof."
+    : !dockerIsolated
     ? "Unsafe local execution is explicitly inapplicable and cannot be proof."
     : status === "SANDBOX_UNAVAILABLE"
       ? "Docker was unavailable; no execution result is proof."
@@ -820,6 +972,7 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
     proof: {
       requiresDockerIsolation: true as const,
       dockerIsolated,
+      executionTrust,
       proofTransitions: transitions.length,
       isProof: dockerIsolated && status === "COMPLETED" && transitions.length > 0,
       reason: proofReason

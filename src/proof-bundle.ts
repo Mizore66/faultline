@@ -1,10 +1,11 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { z } from "zod";
 import { canonicalJson, digestJson, sha256 } from "./canonical.js";
 import { DemoAnalysisSchema, MinimizationAttemptSchema, RunRecordSchema, WitnessSchema, type DemoAnalysis, type RunRecord, type Verdict } from "./domain.js";
 import { analysisDigest } from "./engine.js";
+import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
 
 const ManifestSchema = z.object({
   schemaVersion: z.literal("faultline.proof-bundle.v2"),
@@ -68,6 +69,31 @@ function assertNoLinksOrSpecialFiles(directory: string): void {
   }
 }
 
+/** Create each managed-root segment without ever following a preexisting link. */
+function ensureRealDirectoryTree(directory: string): void {
+  const absolute = resolve(directory);
+  const root = parse(absolute).root;
+  const suffix = relative(root, absolute);
+  const parts = suffix ? suffix.split(/[\\/]+/).filter(Boolean) : [];
+  let current = root;
+  if (existsSync(current)) {
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
+      throw new Error(`Proof bundle root cannot traverse a symbolic link or non-directory: ${current}`);
+    }
+    current = safeCurrent;
+  }
+  for (const part of parts) {
+    current = join(current, part);
+    if (!existsSync(current)) mkdirSync(current, { mode: 0o700 });
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
+      throw new Error(`Proof bundle root cannot traverse a symbolic link or non-directory: ${current}`);
+    }
+    current = safeCurrent;
+  }
+}
+
 /**
  * Proof bundles are replace-on-write, so their destination must stay inside
  * FaultLine's managed evidence directory. This prevents a typo such as
@@ -76,13 +102,17 @@ function assertNoLinksOrSpecialFiles(directory: string): void {
 export function assertSafeProofOutput(outputDirectory: string, proofRoot = defaultProofRoot()): string {
   const output = resolve(outputDirectory);
   const root = resolve(proofRoot);
-  const nestedPath = relative(root, output);
+  const nestedPath = relativeTrustedSystemPath(root, output);
   if (!nestedPath || nestedPath.startsWith("..") || isAbsolute(nestedPath)) {
     throw new Error(`Proof bundle output must be a child directory of ${root}`);
   }
+  // The root may not exist yet. Create every segment deliberately before a
+  // later recursive stage write can follow a hostile .faultline link.
+  ensureRealDirectoryTree(root);
+  ensureRealDirectoryTree(dirname(output));
   const pathParts = nestedPath.split(/[\\/]+/).filter(Boolean);
   let current = root;
-  if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
+  if (existsSync(current) && resolveSafeDirectorySegment(current) === null) {
     throw new Error(`Proof bundle root cannot be a symbolic link: ${root}`);
   }
   for (const part of pathParts) {

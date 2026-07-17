@@ -14,6 +14,7 @@ import { isAbsolute, join, parse, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson, digestJson } from "./canonical.js";
+import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
 
 /**
  * A bundle attestation is deliberately not a signature. It gives a reviewer a
@@ -114,7 +115,7 @@ function canonicalTimestamp(value: string | Date | undefined): string {
 }
 
 function isDescendantOrSame(root: string, candidate: string): boolean {
-  const pathFromRoot = relative(root, candidate);
+  const pathFromRoot = relativeTrustedSystemPath(root, candidate);
   return pathFromRoot === "" || (!pathFromRoot.startsWith("..") && !isAbsolute(pathFromRoot));
 }
 
@@ -131,10 +132,11 @@ function ensureRealDirectory(directory: string, create: boolean): void {
   let current = parsed.root;
 
   if (existsSync(current)) {
-    const rootStat = lstatSync(current);
-    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
       throw new Error(`Attestation path root must be a real directory: ${current}`);
     }
+    current = safeCurrent;
   }
 
   for (const part of parts) {
@@ -143,10 +145,11 @@ function ensureRealDirectory(directory: string, create: boolean): void {
       if (!create) throw new Error(`Attestation store does not exist: ${absolute}`);
       mkdirSync(current);
     }
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
       throw new Error(`Attestation store cannot traverse a symbolic link or non-directory: ${current}`);
     }
+    current = safeCurrent;
   }
 }
 

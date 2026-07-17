@@ -1,13 +1,20 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   MINIMIZATION_CERTIFICATION_EXECUTIONS,
   minimizeGitDiff,
+  verifyGitMinimizationResult,
+  verifyGitMinimizationResultFile,
+  writeGitMinimizationResult,
+  type GitMinimizationResult,
+  type GitMinimizationRunFact,
   type GitMinimizationRequest
 } from "../src/git-minimization.js";
+import { digestJson } from "../src/canonical.js";
 import type { SandboxCommandRunner } from "../src/sandbox.js";
 import {
   approveWitnessProposal,
@@ -20,6 +27,11 @@ const pinnedImage = `registry.example/faultline-node@sha256:${"a".repeat(64)}`;
 
 function git(repository: string, args: string[]): string {
   return execFileSync("git", ["-C", repository, ...args], { encoding: "utf8" }).trim();
+}
+
+/** Quote a Git fsmonitor command for both Git-for-Windows and POSIX shells. */
+function quoteFsmonitorCommandPart(value: string): string {
+  return `"${value.replaceAll("\\", "/").replaceAll('"', '\\"')}"`;
 }
 
 function commit(repository: string, message: string): string {
@@ -97,27 +109,162 @@ function requestFor(repository: string, before: string, after: string, witness: 
   };
 }
 
+function rehashMinimizationRun(run: GitMinimizationRunFact): void {
+  run.executionId = digestJson({
+    schemaVersion: run.schemaVersion,
+    nonce: run.executionNonce,
+    role: run.role,
+    roleAttempt: run.roleAttempt,
+    direction: run.application.direction,
+    base: run.application.base,
+    candidateUnitIds: run.candidateUnitIds,
+    frozenDigest: run.frozenDigest
+  });
+  const { runId: _runId, ...unsigned } = run;
+  run.runId = digestJson(unsigned);
+}
+
+/** Build a self-consistent-looking native-Docker proof that omits search evidence. */
+function forgedCertificateOnlyProof(result: GitMinimizationResult): GitMinimizationResult {
+  const forged = JSON.parse(JSON.stringify(result)) as GitMinimizationResult;
+  const sufficiencyTemplate = forged.runs.find((run) => run.role === "SUFFICIENCY_CERTIFICATION");
+  const necessityTemplate = forged.runs.find((run) => run.role === "NECESSITY_CERTIFICATION");
+  if (!sufficiencyTemplate || !necessityTemplate || !sufficiencyTemplate.result || !necessityTemplate.result) {
+    throw new Error("test fixture did not retain both certification run templates");
+  }
+
+  const cloneCertificationRun = (
+    template: GitMinimizationRunFact,
+    roleAttempt: number
+  ): GitMinimizationRunFact => {
+    const cloned = JSON.parse(JSON.stringify(template)) as GitMinimizationRunFact;
+    cloned.roleAttempt = roleAttempt;
+    cloned.executionNonce = randomUUID();
+    cloned.result = { ...cloned.result!, executor: "NATIVE_DOCKER" };
+    rehashMinimizationRun(cloned);
+    return cloned;
+  };
+
+  const sufficiencyRuns = [1, 2, 3].map((roleAttempt) => cloneCertificationRun(sufficiencyTemplate, roleAttempt));
+  const necessityRuns = [1, 2, 3].map((roleAttempt) => cloneCertificationRun(necessityTemplate, roleAttempt));
+  forged.runs = [...sufficiencyRuns, ...necessityRuns];
+  forged.attempts = forged.runs.map((run, index) => ({
+    ordinal: index + 1,
+    phase: run.role === "SUFFICIENCY_CERTIFICATION" ? "SUFFICIENCY_CERTIFICATION" : "NECESSITY_CERTIFICATION",
+    candidateUnitIds: [...run.candidateUnitIds],
+    outcome: run.outcome,
+    runId: run.runId,
+    note: run.note
+  }));
+  forged.budget.usedExecutions = forged.runs.length;
+  forged.certification.sufficiency = {
+    ...forged.certification.sufficiency,
+    status: "CERTIFIED",
+    runIds: sufficiencyRuns.map((run) => run.runId),
+    executionIds: sufficiencyRuns.map((run) => run.executionId)
+  };
+  forged.certification.necessity = {
+    ...forged.certification.necessity,
+    status: "CERTIFIED",
+    runIds: necessityRuns.map((run) => run.runId),
+    executionIds: necessityRuns.map((run) => run.executionId)
+  };
+  forged.status = "COMPLETED";
+  forged.minimality = { oneMinimal: true, reason: "Forged assertion without retained ordinary search evidence." };
+  forged.proof = {
+    ...forged.proof,
+    dockerIsolated: true,
+    executionTrust: "NATIVE_DOCKER",
+    sufficiencyCertified: true,
+    necessityCertified: true,
+    isProof: true
+  };
+  forged.errors = [];
+  return forged;
+}
+
 describe("Git diff counterfactual minimization", () => {
-  it("discovers a two-file interaction in a real Git diff and certifies it with distinct Docker executions", async () => {
+  it("discovers a two-file interaction but refuses to certify an injected runner as Docker proof", async () => {
     const store = mkdtempSync(join(tmpdir(), "faultline-git-minimization-store-"));
     const repository = interactionRepository();
     try {
       const witness = frozenWitness(store, "two-file-interaction");
       const result = await minimizeGitDiff(requestFor(repository.root, repository.before, repository.after, witness, interactionRunner()));
 
-      expect(result.status).toBe("COMPLETED");
+      expect(result.status).toBe("CERTIFICATION_FAILED");
       expect(result.nativeCodexInterception).toBe(false);
       expect(result.patchUnits).toHaveLength(2);
       expect(new Set(result.patchUnits.map((unit) => unit.id))).toEqual(new Set(result.candidateUnitIds));
       expect(result.candidateUnitIds).toHaveLength(2);
       expect(result.minimality.oneMinimal).toBe(true);
       expect(result.attempts.some((attempt) => attempt.phase === "ONE_MINIMAL" && attempt.outcome === "PASS")).toBe(true);
-      expect(result.certification.sufficiency).toMatchObject({ status: "CERTIFIED", requiredExecutions: MINIMIZATION_CERTIFICATION_EXECUTIONS });
-      expect(result.certification.necessity).toMatchObject({ status: "CERTIFIED", requiredExecutions: MINIMIZATION_CERTIFICATION_EXECUTIONS });
-      expect(new Set(result.certification.sufficiency.executionIds)).toHaveLength(MINIMIZATION_CERTIFICATION_EXECUTIONS);
-      expect(new Set(result.certification.necessity.executionIds)).toHaveLength(MINIMIZATION_CERTIFICATION_EXECUTIONS);
-      expect(result.proof).toMatchObject({ dockerIsolated: true, isProof: true });
+      expect(result.certification.sufficiency).toMatchObject({ status: "NOT_CERTIFIED", requiredExecutions: MINIMIZATION_CERTIFICATION_EXECUTIONS });
+      expect(result.proof).toMatchObject({ dockerIsolated: false, executionTrust: "INJECTED_RUNNER", isProof: false });
+      expect(result.runs.every((run) => run.result?.executor === "INJECTED_RUNNER")).toBe(true);
       expect(git(repository.root, ["worktree", "list", "--porcelain"]).split("\n").filter((line) => line.startsWith("worktree "))).toHaveLength(1);
+
+      const written = await writeGitMinimizationResult(join(store, "result.json"), result);
+      expect(written.resultDigest).toBe(digestJson(result));
+      await expect(writeGitMinimizationResult(written.path, result)).rejects.toThrow(/already exists and will not be replaced/);
+      expect(verifyGitMinimizationResult(result, written.resultDigest)).toMatchObject({
+        valid: true,
+        resultDigest: written.resultDigest,
+        externalDigestStatus: "MATCH"
+      });
+      expect(verifyGitMinimizationResultFile(written.path, written.resultDigest)).toMatchObject({
+        valid: true,
+        resultDigest: written.resultDigest,
+        externalDigestStatus: "MATCH"
+      });
+      expect(verifyGitMinimizationResult(result, `sha256:${"f".repeat(64)}`)).toMatchObject({
+        valid: false,
+        externalDigestStatus: "MISMATCH"
+      });
+
+      // Rehashing a changed run cannot revive it: execution ids are bound to
+      // a retained nonce and the attempt graph must still reference the exact
+      // run record.
+      const rehashed = JSON.parse(JSON.stringify(result)) as typeof result;
+      const firstRun = rehashed.runs[0];
+      const secondRun = rehashed.runs[1];
+      if (!firstRun || !secondRun) throw new Error("test fixture did not record two minimization runs");
+      const previousRunId = firstRun.runId;
+      firstRun.executionId = secondRun.executionId;
+      const { runId: _runId, ...unsigned } = firstRun;
+      firstRun.runId = digestJson(unsigned);
+      const linkedAttempt = rehashed.attempts.find((attempt) => attempt.runId === previousRunId);
+      if (!linkedAttempt) throw new Error("test fixture did not link the first minimization run");
+      linkedAttempt.runId = firstRun.runId;
+      const rehashedVerification = verifyGitMinimizationResult(rehashed);
+      expect(rehashedVerification.valid).toBe(false);
+      expect(rehashedVerification.errors.join("\n")).toMatch(/execution id does not match|duplicate execution id/);
+
+      const inflated = JSON.parse(JSON.stringify(result)) as typeof result;
+      inflated.status = "COMPLETED";
+      inflated.proof = {
+        ...inflated.proof,
+        dockerIsolated: true,
+        executionTrust: "NATIVE_DOCKER",
+        sufficiencyCertified: true,
+        necessityCertified: true,
+        isProof: true
+      };
+      inflated.certification.sufficiency.status = "CERTIFIED";
+      inflated.certification.necessity.status = "CERTIFIED";
+      const inflatedVerification = verifyGitMinimizationResult(inflated);
+      expect(inflatedVerification.valid).toBe(false);
+      expect(inflatedVerification.errors.join("\n")).toMatch(/certificate|proof|provenance|COMPLETED/);
+
+      // Six native-looking repeat certifications alone are not a proof. A
+      // forged record must also retain linked baseline, full-range, and final
+      // one-minimal ordinary attempts. This fixture deliberately removes all
+      // three kinds while preserving the record's internal certificate graph.
+      const certificateOnlyForgery = forgedCertificateOnlyProof(result);
+      const certificateOnlyVerification = verifyGitMinimizationResult(certificateOnlyForgery);
+      expect(certificateOnlyVerification.valid).toBe(false);
+      expect(certificateOnlyVerification.errors.join("\n")).toMatch(
+        /baseline-before \[\] evidence|full-patch \[all patch unit ids\] evidence|one-minimal evidence/
+      );
     } finally {
       rmSync(store, { recursive: true, force: true });
       rmSync(repository.root, { recursive: true, force: true });
@@ -185,6 +332,44 @@ describe("Git diff counterfactual minimization", () => {
       expect(dockerUnavailable.status).toBe("SANDBOX_UNAVAILABLE");
       expect(dockerUnavailable.runs[0]?.result).toMatchObject({ verdict: "ERROR", reason: "SANDBOX_UNAVAILABLE" });
       expect(dockerUnavailable.proof.isProof).toBe(false);
+    } finally {
+      rmSync(store, { recursive: true, force: true });
+      rmSync(repository.root, { recursive: true, force: true });
+    }
+  });
+
+  it("neutralizes a repository-local fsmonitor hook before minimization worktrees", async () => {
+    const store = mkdtempSync(join(tmpdir(), "faultline-git-minimization-store-"));
+    const repository = interactionRepository();
+    try {
+      const hook = join(repository.root, "faultline-forbidden-fsmonitor-hook.cjs");
+      const marker = join(repository.root, "faultline-fsmonitor-hook-invoked");
+      writeFileSync(
+        hook,
+        'require("node:fs").writeFileSync(process.argv[2], "invoked", "utf8");\n',
+        "utf8"
+      );
+      git(repository.root, ["update-index", "--fsmonitor"]);
+      const hostileHook = [
+        quoteFsmonitorCommandPart(process.execPath),
+        quoteFsmonitorCommandPart(hook),
+        quoteFsmonitorCommandPart(marker)
+      ].join(" ");
+      git(repository.root, ["config", "core.fsmonitor", hostileHook]);
+      expect(existsSync(marker)).toBe(false);
+
+      const witness = frozenWitness(store, "hostile-fsmonitor-minimization");
+      const result = await minimizeGitDiff(requestFor(
+        repository.root,
+        repository.before,
+        repository.after,
+        witness,
+        interactionRunner()
+      ));
+
+      expect(result.status).toBe("CERTIFICATION_FAILED");
+      expect(result.errors).toEqual([]);
+      expect(existsSync(marker)).toBe(false);
     } finally {
       rmSync(store, { recursive: true, force: true });
       rmSync(repository.root, { recursive: true, force: true });

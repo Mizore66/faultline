@@ -34,7 +34,15 @@ try {
   run(npm, ["pack", "--pack-destination", packDirectory], repository);
   const dryRun = JSON.parse(run(npm, ["pack", "--dry-run", "--json", "--ignore-scripts"], repository));
   const packedFiles = dryRun[0]?.files?.map(({ path }) => path) ?? [];
-  const unexpected = packedFiles.filter((path) => path !== "package.json" && path !== "LICENSE" && path !== "README.md" && !path.startsWith("dist/"));
+  const allowedExact = new Set([
+    "package.json",
+    "LICENSE",
+    "README.md",
+    "docs/faultline-self-incident.md",
+    "docs/first-incident.md",
+    "docs/github-action.md"
+  ]);
+  const unexpected = packedFiles.filter((path) => !allowedExact.has(path) && !path.startsWith("dist/"));
   if (unexpected.length > 0) throw new Error(`Package contains files outside the allowlist: ${unexpected.join(", ")}`);
   if (!packedFiles.includes("dist/cli.js")) throw new Error("Package does not contain dist/cli.js");
 
@@ -45,12 +53,13 @@ try {
   run(npm, ["install", "--ignore-scripts", "--no-audit", "--no-fund", archive], consumer);
   const metadata = JSON.parse(readFileSync(join(repository, "package.json"), "utf8"));
   const version = runInstalledFl(["--version"]).trim();
-  if (version !== metadata.version) throw new Error(`Installed fl reported ${version}, expected ${metadata.version}`);
+  const expectedVersion = `FaultLine ${metadata.version}`;
+  if (version !== expectedVersion) throw new Error(`Installed fl reported ${version}, expected ${expectedVersion}`);
 
   const bundle = join(consumer, ".faultline", "bundles", "package-smoke");
   runInstalledFl(["judge-demo", "--rerun-all", "--export-only", "--output", bundle]);
   runInstalledFl(["verify", bundle]);
-  process.stdout.write(`Packed and executed faultline@${version} from a clean install.\n`);
+  process.stdout.write(`Packed and executed faultline@${metadata.version} from a clean install.\n`);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }

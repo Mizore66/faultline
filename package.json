@@ -1,8 +1,9 @@
 {
   "name": "faultline",
   "version": "0.1.0",
-  "description": "Evidence-first replay and proof for agent-assisted regressions.",
+  "description": "Executable evidence for regressions introduced during Codex-assisted development.",
   "license": "MIT",
+  "private": true,
   "type": "module",
   "keywords": [
     "regression",
@@ -20,10 +21,14 @@
     "url": "git+https://github.com/Mizore66/faultline.git"
   },
   "files": [
-    "dist/",
+    "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "docs/faultline-self-incident.md",
+    "docs/first-incident.md",
+    "docs/github-action.md"
   ],
+  "packageManager": "pnpm@10.32.1",
   "bin": {
     "fl": "./dist/cli.js"
   },
@@ -32,12 +37,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prepack": "pnpm build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:package": "node scripts/package-smoke.mjs",
     "dev": "tsx src/server.ts",
-    "fl": "tsx src/cli.ts"
+    "fl": "tsx src/cli.ts",
+    "prepack": "pnpm build",
+    "pack:check": "pnpm pack --dry-run"
   },
   "dependencies": {
     "zod": "^3.25.76"

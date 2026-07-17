@@ -26,7 +26,7 @@ function completedInvestigation() {
     stableStates: [stablePass, stableFail],
     transitions: [{ kind: "PASS_TO_FAIL", before: stablePass, after: stableFail }],
     nonMonotonic: false,
-    proof: { requiresDockerIsolation: true, dockerIsolated: true, proofTransitions: 1, isProof: true, reason: "three Docker runs" },
+    proof: { requiresDockerIsolation: true, dockerIsolated: true, executionTrust: "NATIVE_DOCKER", proofTransitions: 1, isProof: true, reason: "three Docker runs" },
     errors: []
   };
 }
@@ -35,6 +35,7 @@ describe("post-localization GPT repair boundary", () => {
   it("minimizes a verified Git result into a citation-addressable private packet", () => {
     const packet = createRepairEvidencePacket(completedInvestigation());
     expect(packet.facts).toHaveLength(3);
+    expect(packet.frozenWitnessDigest).toBe(digest("f"));
     const { packetDigest, ...unsigned } = packet;
     expect(packetDigest).toBe(digestJson(unsigned));
   });
@@ -58,5 +59,10 @@ describe("post-localization GPT repair boundary", () => {
     const incomplete = completedInvestigation();
     incomplete.proof.isProof = false;
     expect(() => createRepairEvidencePacket(incomplete)).toThrow(/requires a completed Docker-isolated investigation/);
+
+    const injected = completedInvestigation();
+    injected.proof.executionTrust = "INJECTED_RUNNER";
+    injected.proof.dockerIsolated = false;
+    expect(() => createRepairEvidencePacket(injected)).toThrow(/requires a completed Docker-isolated investigation/);
   });
 });

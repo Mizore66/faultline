@@ -1,10 +1,11 @@
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeBlindIncidentPacket } from "../src/ai.js";
 import { sha256 } from "../src/canonical.js";
 import { createDemoAnalysis } from "../src/engine.js";
+import { createFrozenWitness, executeFixtureState, fixtureStates } from "../src/fixture.js";
 import { verifyProofBundle, writeProofBundle } from "../src/proof-bundle.js";
 import { renderIncidentPage } from "../src/ui.js";
 
@@ -21,6 +22,18 @@ function refreshBundleHash(directory: string, file: string): string {
 }
 
 describe("FaultLine deterministic sample", () => {
+  it("records a nonnegative execution duration when the wall clock moves backwards", () => {
+    const now = vi.spyOn(Date, "now")
+      .mockReturnValueOnce(2_000)
+      .mockReturnValueOnce(1_000);
+    try {
+      const run = executeFixtureState(fixtureStates.turn6, createFrozenWitness());
+      expect(run.durationMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("finds the stable boundary and proves the two-hunk interaction", () => {
     const analysis = createDemoAnalysis("RERUN");
     const firstRegression = analysis.transitions.find((transition) => transition.kind === "PASS_TO_FAIL" && transition.stable);
@@ -93,6 +106,22 @@ describe("FaultLine deterministic sample", () => {
     }
   });
 
+  it("refuses a managed proof root reached through a newly created symlinked parent", () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-output-link-"));
+    const outside = join(root, "outside");
+    const linkedFaultline = join(root, ".faultline");
+    const proofRoot = join(linkedFaultline, "bundles");
+    try {
+      mkdirSync(outside);
+      symlinkSync(outside, linkedFaultline, process.platform === "win32" ? "junction" : "dir");
+      expect(() => writeProofBundle(join(proofRoot, "bundle"), createDemoAnalysis("REPLAY"), { proofRoot }))
+        .toThrow(/symbolic link/);
+      expect(existsSync(join(outside, "bundles", "bundle"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a rehashed bundle whose persisted evidence contradicts the analysis", () => {
     const root = mkdtempSync(join(tmpdir(), "faultline-semantic-"));
     const proofRoot = join(root, ".faultline", "bundles");
@@ -127,11 +156,16 @@ describe("FaultLine deterministic sample", () => {
 
   it("renders the five-beat incident page from executable analysis data", () => {
     const page = renderIncidentPage(createDemoAnalysis("REPLAY"));
-    expect(page).toContain("Choose one test");
-    expect(page).toContain("Find the first broken version");
-    expect(page).toContain("Double-check the suspected changes");
-    expect(page).toContain("Prepare a clear fix");
-    expect(page).toContain("Make sure the bug stays fixed");
-    expect(page).toContain("Run the demo again");
+    expect(page).toContain("BREAK");
+    expect(page).toContain("FIND");
+    expect(page).toContain("PROVE");
+    expect(page).toContain("FIX");
+    expect(page).toContain("PREVENT");
+    expect(page).toContain("DETERMINISTIC SAMPLE");
+    expect(page).toContain("Re-run fixture evidence");
+    expect(page).toContain("Not executed - cached replay only");
+    expect(page).toContain("SAMPLE ONLY - cached replay is not evidence");
+    expect(page).not.toContain("Bidirectionally validated");
+    expect(page).not.toContain("VERIFIED PREVENTION");
   });
 });

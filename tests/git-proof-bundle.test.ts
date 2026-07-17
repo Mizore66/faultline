@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { digestJson, sha256 } from "../src/canonical.js";
-import { investigateGitRange, type GitInvestigationRequest } from "../src/git-investigation.js";
+import {
+  GitInvestigationResultSchema,
+  investigateGitRange,
+  type GitInvestigationRequest,
+  type GitInvestigationResult
+} from "../src/git-investigation.js";
 import {
   verifyGitInvestigationProofBundle,
   writeGitInvestigationProofBundle
@@ -90,6 +95,57 @@ function deterministicDockerRunner(): SandboxCommandRunner {
   };
 }
 
+/**
+ * The bundle verifier needs a native-Docker-shaped serialized fixture, while
+ * `investigateGitRange` intentionally marks injected runners non-proof. This
+ * promotes only a local test fixture after the test has asserted that the
+ * real API rejected the injected observation as proof.
+ */
+function nativeDockerFixture(observed: GitInvestigationResult): GitInvestigationResult {
+  const runs = observed.runs.map((run) => {
+    const { runId: _runId, ...unsigned } = {
+      ...run,
+      result: { ...run.result, executor: "NATIVE_DOCKER" as const }
+    };
+    return { ...unsigned, runId: digestJson(unsigned) };
+  });
+  const stableStates = observed.states.map((state) => {
+    const stateRuns = runs.filter((run) => run.stateIndex === state.index)
+      .sort((left, right) => left.executionAttempt - right.executionAttempt);
+    const verdict = stateRuns[0]?.result.verdict;
+    if (verdict !== "PASS" && verdict !== "FAIL") throw new Error("fixture did not create a decisive state");
+    return {
+      stateIndex: state.index,
+      commit: state.commit,
+      tree: state.tree,
+      verdict,
+      executionIds: stateRuns.map((run) => run.executionId),
+      runIds: stateRuns.map((run) => run.runId)
+    };
+  });
+  const transitions = stableStates.slice(1).flatMap((after, index) => {
+    const before = stableStates[index];
+    if (!before || before.verdict === after.verdict) return [];
+    return [{ kind: before.verdict === "PASS" ? "PASS_TO_FAIL" as const : "FAIL_TO_PASS" as const, before, after }];
+  });
+  return GitInvestigationResultSchema.parse({
+    ...observed,
+    runs,
+    stableStates,
+    transitions,
+    nonMonotonic: transitions.some((transition) => transition.kind === "PASS_TO_FAIL")
+      && transitions.some((transition) => transition.kind === "FAIL_TO_PASS"),
+    proof: {
+      requiresDockerIsolation: true,
+      dockerIsolated: true,
+      executionTrust: "NATIVE_DOCKER",
+      proofTransitions: transitions.length,
+      isProof: transitions.length > 0,
+      reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states."
+    }
+  });
+}
+
 function lifecycleBoundToDescendant(repository: string): CodexLifecycleLedger {
   let ledger = createCodexLifecycleLedger({ sessionId: "portable-proof-session" });
   ledger = appendLifecycleEvent(ledger, {
@@ -111,6 +167,34 @@ function lifecycleBoundToDescendant(repository: string): CodexLifecycleLedger {
   return appendLifecycleEvent(ledger, {
     type: "SESSION_ENDED",
     payload: { reason: "COMPLETED", completedTurns: 1 }
+  });
+}
+
+function lifecycleBoundToEveryInvestigatedState(repository: string, commits: readonly string[]): CodexLifecycleLedger {
+  let ledger = createCodexLifecycleLedger({ sessionId: "portable-proof-full-session" });
+  ledger = appendLifecycleEvent(ledger, {
+    type: "SESSION_STARTED",
+    payload: { transport: "SIDE_CAR", workingDirectory: repository, model: "gpt-5.6" }
+  });
+  for (const [offset, commit] of commits.entries()) {
+    git(repository, ["checkout", "--detach", commit]);
+    const turnOrdinal = offset + 1;
+    ledger = appendLifecycleEvent(ledger, {
+      type: "TURN_STARTED",
+      payload: { turnId: `full-turn-${turnOrdinal}`, turnOrdinal, promptDigest: `sha256:${"e".repeat(64)}` }
+    });
+    ledger = appendLifecycleEvent(ledger, {
+      type: "TURN_COMPLETED",
+      payload: { turnId: `full-turn-${turnOrdinal}`, turnOrdinal, outcome: "COMPLETED" }
+    });
+    ledger = appendLifecycleEvent(ledger, {
+      type: "WORKTREE_CHECKPOINT",
+      payload: { checkpoint: captureGitCleanCheckpoint(repository), afterTurnOrdinal: turnOrdinal }
+    });
+  }
+  return appendLifecycleEvent(ledger, {
+    type: "SESSION_ENDED",
+    payload: { reason: "COMPLETED", completedTurns: commits.length }
   });
 }
 
@@ -151,7 +235,12 @@ describe("portable Git investigation proof bundles", () => {
         sandbox: { mode: "DOCKER_ISOLATED", image: pinnedImage },
         runner: deterministicDockerRunner()
       };
-      const result = await investigateGitRange(request);
+      const observed = await investigateGitRange(request);
+      expect(observed.proof).toMatchObject({ executionTrust: "INJECTED_RUNNER", isProof: false });
+      expect(() => writeGitInvestigationProofBundle(join(root, "proofs", "rejected-injected"), observed, frozen, {
+        proofRoot: join(root, "proofs")
+      })).toThrow(/native Docker executor provenance/);
+      const result = nativeDockerFixture(observed);
       expect(result).toMatchObject({
         status: "COMPLETED",
         proof: { isProof: true, dockerIsolated: true, proofTransitions: 2 }
@@ -168,12 +257,37 @@ describe("portable Git investigation proof bundles", () => {
 
       expect(verified).toMatchObject({ valid: true, externalRootStatus: "MATCH", rootDigest: written.rootDigest });
       expect(verified.checkedFiles).toBeGreaterThan(12);
-      expect(verified.manifest?.lifecycle).toMatchObject({ status: "BOUND", transport: "SIDE_CAR" });
+      expect(verified.manifest?.lifecycle).toMatchObject({ status: "PARTIALLY_BOUND", transport: "SIDE_CAR" });
       expect(readFileSync(join(output, "lifecycle", "ledger.json"), "utf8")).toContain("SIDE_CAR");
       expect(readFileSync(join(output, "source", "descendant.bundle")).subarray(0, 16).toString("utf8")).toMatch(/# v[23] git bundle/);
       expect(readFileSync(join(output, "source", "range.patch"), "utf8")).toContain("state.txt");
       expect(() => writeGitInvestigationProofBundle(output, result, frozen, { proofRoot: join(root, "proofs") }))
         .toThrow(/already exists and will not be replaced/);
+
+      // `BOUND` was the old spelling for an otherwise identical factual
+      // descendant checkpoint binding. A verifier must accept it without
+      // weakening its reconstruction of every ledger-derived field.
+      const legacyManifestPath = join(output, "manifest.json");
+      const legacyManifest = JSON.parse(readFileSync(legacyManifestPath, "utf8")) as {
+        lifecycle: { status: string };
+      };
+      legacyManifest.lifecycle.status = "BOUND";
+      writeFileSync(legacyManifestPath, `${JSON.stringify(legacyManifest)}\n`, "utf8");
+      rehashWholeBundle(output);
+      expect(verifyGitInvestigationProofBundle(output)).toMatchObject({
+        valid: true,
+        externalRootStatus: "NOT_PROVIDED",
+        manifest: { lifecycle: { status: "BOUND", transport: "SIDE_CAR" } }
+      });
+
+      const fullyBoundOutput = join(root, "proofs", "fully-bound-range");
+      const fullyBound = writeGitInvestigationProofBundle(fullyBoundOutput, result, frozen, {
+        proofRoot: join(root, "proofs"),
+        generatedAt: "2026-07-16T11:04:00.000Z",
+        lifecycleLedger: lifecycleBoundToEveryInvestigatedState(repository.root, result.states.map((state) => state.commit))
+      });
+      expect(verifyGitInvestigationProofBundle(fullyBound.directory, fullyBound.rootDigest).manifest?.lifecycle)
+        .toMatchObject({ status: "FULLY_BOUND", checkpointBindings: [{ stateIndex: 0 }, { stateIndex: 1 }, { stateIndex: 2 }] });
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(repository.root, { recursive: true, force: true });
@@ -186,7 +300,7 @@ describe("portable Git investigation proof bundles", () => {
     const repository = createRepository();
     try {
       const frozen = createFrozenWitness(store);
-      const result = await investigateGitRange({
+      const observed = await investigateGitRange({
         repository: repository.root,
         range: { ancestor: "HEAD~2", descendant: "HEAD" },
         frozenWitness: frozen,
@@ -194,6 +308,7 @@ describe("portable Git investigation proof bundles", () => {
         sandbox: { mode: "DOCKER_ISOLATED", image: pinnedImage },
         runner: deterministicDockerRunner()
       });
+      const result = nativeDockerFixture(observed);
       const output = join(root, "proofs", "tamper-range");
       writeGitInvestigationProofBundle(output, result, frozen, {
         proofRoot: join(root, "proofs"),
@@ -237,6 +352,50 @@ describe("portable Git investigation proof bundles", () => {
       expect(verified.valid).toBe(false);
       expect(verified.externalRootStatus).toBe("NOT_PROVIDED");
       expect(verified.errors.join("\n")).toMatch(/stable states contradict the reconstructed run facts/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(repository.root, { recursive: true, force: true });
+    }
+  });
+
+  it("reconstructs every recorded state from the bundled Git ancestry path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-git-proof-state-path-root-"));
+    const store = join(root, "witness-lock");
+    const repository = createRepository();
+    try {
+      const frozen = createFrozenWitness(store);
+      const observed = await investigateGitRange({
+        repository: repository.root,
+        range: { ancestor: "HEAD~2", descendant: "HEAD" },
+        frozenWitness: frozen,
+        expectedFrozenDigest: frozen.frozenDigest,
+        sandbox: { mode: "DOCKER_ISOLATED", image: pinnedImage },
+        runner: deterministicDockerRunner()
+      });
+      const result = nativeDockerFixture(observed);
+      const output = join(root, "proofs", "state-path-range");
+      writeGitInvestigationProofBundle(output, result, frozen, {
+        proofRoot: join(root, "proofs"),
+        generatedAt: "2026-07-16T11:03:00.000Z"
+      });
+
+      const investigationPath = join(output, "investigation.json");
+      const investigation = JSON.parse(readFileSync(investigationPath, "utf8")) as {
+        states: Array<{ index: number; commit: string; tree: string }>;
+      };
+      const middle = investigation.states[1];
+      if (!middle) throw new Error("test fixture did not produce a middle state");
+      middle.commit = "f".repeat(40);
+      writeFileSync(investigationPath, `${JSON.stringify(investigation)}\n`, "utf8");
+      const manifestPath = join(output, "manifest.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { investigationDigest: string };
+      manifest.investigationDigest = digestJson(investigation);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
+      rehashWholeBundle(output);
+
+      const verified = verifyGitInvestigationProofBundle(output);
+      expect(verified.valid).toBe(false);
+      expect(verified.errors.join("\n")).toMatch(/state sequence does not exactly match the bundled ancestor-to-descendant Git path/);
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(repository.root, { recursive: true, force: true });

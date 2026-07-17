@@ -1,14 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstatSync, readFileSync } from "node:fs";
+import { link, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { z } from "zod";
-import { digestJson, sha256 } from "./canonical.js";
+import { canonicalJson, digestJson, sha256 } from "./canonical.js";
+import { redactText } from "./redaction.js";
 import {
   auditSandboxPlan,
   createSandboxPlan,
   executeSandboxPlan,
+  validateSandboxPlanAudit,
   type SandboxCommandRunner,
   type SandboxExecutionResult,
   type SandboxLimits,
@@ -21,6 +24,7 @@ import {
   type FrozenWitness,
   type WitnessLockVerification
 } from "./witness-lock.js";
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
 
 /**
  * A Git-only counterfactual recorder.  It intentionally says nothing about
@@ -35,6 +39,9 @@ const GIT_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const SAFE_GIT_REVISION = /^(?!-)[^\0\r\n]{1,512}$/;
 const SAFE_OVERLAY_PATH = /^[^\\/\0]+(?:\/[^\\/\0]+)*$/;
 const MAX_GIT_OUTPUT_BYTES = 64 * 1024 * 1024;
+const EVIDENCE_LOG_PREVIEW_BYTES = 16 * 1024;
+const MAX_MINIMIZATION_RESULT_BYTES = 128 * 1024 * 1024;
+const DANGEROUS_GIT_ATTRIBUTE = /(?:^|\s)filter=[^\s]+/m;
 
 const DigestSchema = z.string().regex(SHA256_DIGEST, "expected sha256:<64 lowercase hex characters>");
 const GitObjectIdSchema = z.string().regex(GIT_OBJECT_ID, "expected a 40- or 64-character lowercase Git object id");
@@ -127,6 +134,24 @@ const SandboxAuditSchema = z.object({
     allowedKeys: z.array(z.string()),
     passed: z.array(z.object({ key: z.string(), valueDigest: DigestSchema }).strict()),
     redactedKeys: z.array(z.string())
+  }).strict(),
+  runtime: z.object({
+    image: z.string().nullable(),
+    entrypoint: z.string().nullable(),
+    network: z.literal("none").nullable(),
+    rootFilesystemReadOnly: z.boolean(),
+    user: z.string().nullable(),
+    capDropAll: z.boolean(),
+    noNewPrivileges: z.boolean(),
+    pull: z.literal("never").nullable(),
+    limits: z.object({
+      timeoutMs: z.number().int().positive(),
+      maxOutputBytes: z.number().int().positive(),
+      cpuCount: z.number().int().positive(),
+      memoryBytes: z.number().int().positive(),
+      pidsLimit: z.number().int().positive(),
+      tmpfsBytes: z.number().int().positive()
+    }).strict()
   }).strict()
 }).strict();
 
@@ -149,6 +174,8 @@ export const GitMinimizationRunFactSchema = z.object({
   runId: DigestSchema,
   /** Unique nonce-bound identifier proving the certification attempts are distinct. */
   executionId: DigestSchema,
+  /** Random recorder nonce retained so offline verification can reconstruct executionId. */
+  executionNonce: z.string().uuid(),
   role: z.enum([
     "BASELINE_BEFORE",
     "FULL_PATCH",
@@ -171,6 +198,7 @@ export const GitMinimizationRunFactSchema = z.object({
   sandbox: SandboxAuditSchema.nullable(),
   result: z.object({
     kind: z.enum(["DOCKER_ISOLATED", "UNSAFE_LOCAL"]),
+    executor: z.enum(["NATIVE_DOCKER", "INJECTED_RUNNER", "UNSAFE_LOCAL"]),
     verdict: z.enum(["PASS", "FAIL", "ERROR", "INAPPLICABLE"]),
     reason: z.enum([
       "EXIT_ZERO",
@@ -178,6 +206,7 @@ export const GitMinimizationRunFactSchema = z.object({
       "TIMEOUT",
       "OUTPUT_LIMIT_EXCEEDED",
       "SANDBOX_UNAVAILABLE",
+      "WITNESS_SETUP_ERROR",
       "RUNNER_FAILURE",
       "UNSAFE_LOCAL_NOT_PROOF"
     ]),
@@ -186,8 +215,14 @@ export const GitMinimizationRunFactSchema = z.object({
     outputTruncated: z.boolean(),
     stdoutDigest: DigestSchema,
     stdoutBytes: z.number().int().nonnegative(),
+    stdoutPreview: z.string().max(EVIDENCE_LOG_PREVIEW_BYTES * 2),
+    stdoutPreviewTruncated: z.boolean(),
+    stdoutRedacted: z.boolean(),
     stderrDigest: DigestSchema,
-    stderrBytes: z.number().int().nonnegative()
+    stderrBytes: z.number().int().nonnegative(),
+    stderrPreview: z.string().max(EVIDENCE_LOG_PREVIEW_BYTES * 2),
+    stderrPreviewTruncated: z.boolean(),
+    stderrRedacted: z.boolean()
   }).strict().nullable(),
   outcome: z.enum(["PASS", "FAIL", "UNRESOLVED"]),
   note: z.string()
@@ -268,6 +303,7 @@ export const GitMinimizationResultSchema = z.object({
   proof: z.object({
     requiresDockerIsolation: z.literal(true),
     dockerIsolated: z.boolean(),
+    executionTrust: z.enum(["NATIVE_DOCKER", "INJECTED_RUNNER", "UNSAFE_LOCAL"]),
     sufficiencyCertified: z.boolean(),
     necessityCertified: z.boolean(),
     isProof: z.boolean(),
@@ -284,6 +320,23 @@ export type GitMinimizationRunFact = z.infer<typeof GitMinimizationRunFactSchema
 export type GitMinimizationAttempt = z.infer<typeof GitMinimizationAttemptSchema>;
 export type GitMinimizationCertificate = z.infer<typeof GitMinimizationCertificateSchema>;
 export type GitMinimizationResult = z.infer<typeof GitMinimizationResultSchema>;
+
+export type GitMinimizationExternalDigestStatus = "NOT_PROVIDED" | "MATCH" | "MISMATCH";
+
+/** Offline, self-consistency verification for one standalone minimization record. */
+export interface GitMinimizationVerification {
+  readonly valid: boolean;
+  readonly errors: readonly string[];
+  /** Canonical digest of the parsed record; retain it outside the record for tamper detection. */
+  readonly resultDigest: string | null;
+  readonly externalDigestStatus: GitMinimizationExternalDigestStatus;
+  readonly result?: GitMinimizationResult;
+}
+
+export interface WrittenGitMinimizationResult {
+  readonly path: string;
+  readonly resultDigest: string;
+}
 
 type ProcessResult = {
   exitCode: number | null;
@@ -304,8 +357,93 @@ type Probe = {
   readonly note: string;
 };
 
+/** Keep host-side Git inspection and worktree materialization non-interactive and configuration-isolated. */
+function hardenedGitEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH ?? "",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: join(tmpdir(), `faultline-empty-git-config-${randomUUID()}`),
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_LFS_SKIP_SMUDGE: "1",
+    // FaultLine never fetches/clones while preparing a counterfactual. Leave
+    // no usable transport protocol for repository-local configuration.
+    GIT_ALLOW_PROTOCOL: "none"
+  };
+  if (process.platform === "win32") {
+    if (process.env.SystemRoot) environment.SystemRoot = process.env.SystemRoot;
+    if (process.env.ComSpec) environment.ComSpec = process.env.ComSpec;
+    if (process.env.PATHEXT) environment.PATHEXT = process.env.PATHEXT;
+  }
+  return environment;
+}
+
+function hardenedGitArguments(repository: string, args: readonly string[]): string[] {
+  return [
+    "-c", "core.hooksPath=/nonexistent/faultline-hooks",
+    "-c", "core.autocrlf=false",
+    // Do not let a repository's cached file-system watcher/index state affect
+    // a counterfactual materialization or the Git facts we persist.
+    "-c", "core.fsmonitor=false",
+    "-c", "core.useBuiltinFSMonitor=false",
+    "-c", "core.untrackedCache=false",
+    "-c", "core.preloadIndex=false",
+    "-c", "filter.lfs.process=",
+    "-c", "filter.lfs.smudge=",
+    "-c", "filter.lfs.required=false",
+    "-c", "diff.external=",
+    // Git submodules and transports are outside this offline replay contract;
+    // do not inherit repository-local recursion or protocol preferences.
+    "-c", "submodule.recurse=false",
+    "-c", "fetch.recurseSubmodules=false",
+    "-c", "protocol.allow=never",
+    "-c", "protocol.file.allow=never",
+    "-c", "protocol.ext.allow=never",
+    "-c", "protocol.git.allow=never",
+    "-c", "protocol.ssh.allow=never",
+    "-c", "protocol.http.allow=never",
+    "-c", "protocol.https.allow=never",
+    "-C", repository,
+    ...args
+  ];
+}
+
 function sha256Digest(value: string | Buffer): string {
   return `sha256:${sha256(value)}`;
+}
+
+function sameCanonical(left: unknown, right: unknown): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+function expectedMinimizationExecutionId(run: GitMinimizationRunFact): string {
+  return digestJson({
+    schemaVersion: GIT_MINIMIZATION_SCHEMA_VERSION,
+    nonce: run.executionNonce,
+    role: run.role,
+    roleAttempt: run.roleAttempt,
+    direction: run.application.direction,
+    base: run.application.base,
+    candidateUnitIds: run.candidateUnitIds,
+    frozenDigest: run.frozenDigest
+  });
+}
+
+function expectedMinimizationRunId(run: GitMinimizationRunFact): string {
+  const { runId: _runId, ...unsigned } = run;
+  return digestJson(unsigned);
+}
+
+function redactedEvidencePreview(value: string, stream: "stdout" | "stderr"): {
+  value: string;
+  truncated: boolean;
+  redacted: boolean;
+} {
+  const bytes = Buffer.from(value, "utf8");
+  const preview = bytes.subarray(0, EVIDENCE_LOG_PREVIEW_BYTES).toString("utf8");
+  const safe = redactText(preview, `$.minimization.${stream}`);
+  return { value: safe.value, truncated: bytes.length > EVIDENCE_LOG_PREVIEW_BYTES, redacted: safe.report.redacted };
 }
 
 function errorMessage(error: unknown): string {
@@ -337,7 +475,8 @@ async function runProcess(executable: string, argumentsList: readonly string[], 
       child = spawn(executable, [...argumentsList], {
         shell: false,
         windowsHide: true,
-        stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"]
+        stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        env: hardenedGitEnvironment()
       });
     } catch (error) {
       settle({ exitCode: null, stdout, stderr, error: errorMessage(error) });
@@ -376,7 +515,7 @@ async function runProcess(executable: string, argumentsList: readonly string[], 
 }
 
 async function runGit(repository: string, args: readonly string[], stdin?: Buffer): Promise<ProcessResult> {
-  return runProcess("git", ["-C", repository, ...args], stdin);
+  return runProcess("git", hardenedGitArguments(repository, args), stdin);
 }
 
 async function gitText(repository: string, args: readonly string[]): Promise<string> {
@@ -406,6 +545,20 @@ async function resolveState(repository: string, revision: string): Promise<GitCo
   const tree = await gitText(repository, ["rev-parse", "--verify", "--end-of-options", `${commit}^{tree}`]);
   if (!GIT_OBJECT_ID.test(tree)) throw new Error(`Git returned an invalid tree object id for revision ${revision}.`);
   return { commit, tree };
+}
+
+/** Reject checkout filters before a revision is materialized on the host. */
+async function assertSafeGitMaterialization(repository: string, states: readonly GitCounterfactualState[]): Promise<void> {
+  const localFilters = await runGit(repository, ["config", "--local", "--get-regexp", "^filter\\."]);
+  if (localFilters.exitCode === 0 && localFilters.stdout.toString("utf8").trim()) {
+    throw new Error("Refusing host worktree materialization: repository local Git filter configuration is present.");
+  }
+  for (const state of states) {
+    const attributes = await runGit(repository, ["show", "--no-textconv", "--end-of-options", `${state.commit}:.gitattributes`]);
+    if (attributes.exitCode === 0 && DANGEROUS_GIT_ATTRIBUTE.test(attributes.stdout.toString("utf8"))) {
+      throw new Error(`Refusing host worktree materialization: ${state.commit} declares a Git filter attribute.`);
+    }
+  }
 }
 
 function nulParts(value: Buffer): Buffer[] {
@@ -615,8 +768,11 @@ function applicationFact(
 }
 
 function persistedResult(result: SandboxExecutionResult) {
+  const stdoutPreview = redactedEvidencePreview(result.stdout, "stdout");
+  const stderrPreview = redactedEvidencePreview(result.stderr, "stderr");
   return {
     kind: result.kind,
+    executor: result.executor,
     verdict: result.verdict,
     reason: result.reason,
     exitCode: result.exitCode,
@@ -624,12 +780,20 @@ function persistedResult(result: SandboxExecutionResult) {
     outputTruncated: result.outputTruncated,
     stdoutDigest: sha256Digest(result.stdout),
     stdoutBytes: Buffer.byteLength(result.stdout, "utf8"),
+    stdoutPreview: stdoutPreview.value,
+    stdoutPreviewTruncated: stdoutPreview.truncated,
+    stdoutRedacted: stdoutPreview.redacted,
     stderrDigest: sha256Digest(result.stderr),
-    stderrBytes: Buffer.byteLength(result.stderr, "utf8")
+    stderrBytes: Buffer.byteLength(result.stderr, "utf8"),
+    stderrPreview: stderrPreview.value,
+    stderrPreviewTruncated: stderrPreview.truncated,
+    stderrRedacted: stderrPreview.redacted
   };
 }
 
 function outcomeForSandbox(result: SandboxExecutionResult): Extract<ProbeOutcome, "PASS" | "FAIL" | "UNRESOLVED"> {
+  // Injected runners can support a developer's observed counterfactual search,
+  // but `finalize` and certification still refuse to label them proof.
   if (result.kind !== "DOCKER_ISOLATED") return "UNRESOLVED";
   if (result.verdict === "PASS") return "PASS";
   if (result.verdict === "FAIL") return "FAIL";
@@ -719,10 +883,20 @@ function emptyCertificate(direction: Direction, expectedOutcome: "PASS" | "FAIL"
   };
 }
 
-function emptyProof(sandboxMode: "DOCKER_ISOLATED" | "UNSAFE_LOCAL", reason: string) {
+function executionTrustFor(sandboxMode: "DOCKER_ISOLATED" | "UNSAFE_LOCAL", hasInjectedRunner: boolean): "NATIVE_DOCKER" | "INJECTED_RUNNER" | "UNSAFE_LOCAL" {
+  if (sandboxMode === "UNSAFE_LOCAL") return "UNSAFE_LOCAL";
+  return hasInjectedRunner ? "INJECTED_RUNNER" : "NATIVE_DOCKER";
+}
+
+function emptyProof(
+  sandboxMode: "DOCKER_ISOLATED" | "UNSAFE_LOCAL",
+  reason: string,
+  executionTrust = executionTrustFor(sandboxMode, false)
+) {
   return {
     requiresDockerIsolation: true as const,
-    dockerIsolated: sandboxMode === "DOCKER_ISOLATED",
+    dockerIsolated: executionTrust === "NATIVE_DOCKER",
+    executionTrust,
     sufficiencyCertified: false,
     necessityCertified: false,
     isProof: false,
@@ -735,7 +909,8 @@ function baseResult(
   sandboxMode: "DOCKER_ISOLATED" | "UNSAFE_LOCAL",
   maxExecutions: number,
   errors: readonly string[],
-  fields: Pick<GitMinimizationResult, "repository" | "before" | "after" | "witness">
+  fields: Pick<GitMinimizationResult, "repository" | "before" | "after" | "witness">,
+  executionTrust = executionTrustFor(sandboxMode, false)
 ): GitMinimizationResult {
   return GitMinimizationResultSchema.parse({
     schemaVersion: GIT_MINIMIZATION_SCHEMA_VERSION,
@@ -753,7 +928,7 @@ function baseResult(
       sufficiency: emptyCertificate("FORWARD_FROM_BEFORE", "FAIL", "No sufficiency certification was run."),
       necessity: emptyCertificate("REVERSE_FROM_AFTER", "PASS", "No necessity certification was run.")
     },
-    proof: emptyProof(sandboxMode, errors[0] ?? "Minimization did not produce proof."),
+    proof: emptyProof(sandboxMode, errors[0] ?? "Minimization did not produce proof.", executionTrust),
     errors: [...errors]
   });
 }
@@ -768,6 +943,7 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
   const rawMode = request.sandbox && typeof request.sandbox === "object" && "mode" in request.sandbox && request.sandbox.mode === "UNSAFE_LOCAL"
     ? "UNSAFE_LOCAL" as const
     : "DOCKER_ISOLATED" as const;
+  const requestedExecutionTrust = executionTrustFor(rawMode, request.runner !== undefined);
   const parsedRequest = GitMinimizationRequestSchema.safeParse({
     repository: request.repository,
     before: request.before,
@@ -783,7 +959,7 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
       before: null,
       after: null,
       witness: null
-    });
+    }, requestedExecutionTrust);
   }
   const input = parsedRequest.data;
   const verification = verifyFrozenWitnessRecord(input.frozenWitness, input.expectedFrozenDigest);
@@ -796,7 +972,7 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
       before: null,
       after: null,
       witness: summary
-    });
+    }, executionTrustFor(input.sandbox.mode, request.runner !== undefined));
   }
 
   let repository: string;
@@ -806,13 +982,14 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
     repository = await resolveRepositoryRoot(input.repository);
     before = await resolveState(repository, input.before);
     after = await resolveState(repository, input.after);
+    await assertSafeGitMaterialization(repository, [before, after]);
   } catch (error) {
     return baseResult("RANGE_ERROR", input.sandbox.mode, input.budget.maxExecutions, [errorMessage(error)], {
       repository: null,
       before: null,
       after: null,
       witness: summary
-    });
+    }, executionTrustFor(input.sandbox.mode, request.runner !== undefined));
   }
 
   let units: PatchUnitInternal[];
@@ -824,7 +1001,7 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
       before,
       after,
       witness: summary
-    });
+    }, executionTrustFor(input.sandbox.mode, request.runner !== undefined));
   }
   if (units.length === 0) {
     return baseResult("NO_PATCHES", input.sandbox.mode, input.budget.maxExecutions, ["The supplied Git states have no file-level diff units."], {
@@ -937,9 +1114,10 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
     }
     const finishedEpoch = Date.now();
     const finishedAt = new Date(finishedEpoch).toISOString();
+    const executionNonce = randomUUID();
     const executionId = digestJson({
       schemaVersion: GIT_MINIMIZATION_SCHEMA_VERSION,
-      nonce: randomUUID(),
+      nonce: executionNonce,
       role,
       roleAttempt,
       direction,
@@ -950,6 +1128,7 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
     const unsigned = {
       schemaVersion: GIT_MINIMIZATION_SCHEMA_VERSION,
       executionId,
+      executionNonce,
       role,
       roleAttempt,
       candidateUnitIds: patch.units.map((unit) => unit.id),
@@ -1016,12 +1195,14 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
   ): GitMinimizationResult => {
     const sufficiencyCertified = sufficiency.status === "CERTIFIED";
     const necessityCertified = necessity.status === "CERTIFIED";
+    const executionTrust = executionTrustFor(input.sandbox.mode, request.runner !== undefined);
     const proof = {
       requiresDockerIsolation: true as const,
-      dockerIsolated: input.sandbox.mode === "DOCKER_ISOLATED",
+      dockerIsolated: executionTrust === "NATIVE_DOCKER",
+      executionTrust,
       sufficiencyCertified,
       necessityCertified,
-      isProof: input.sandbox.mode === "DOCKER_ISOLATED" && minimality.oneMinimal && sufficiencyCertified && necessityCertified,
+      isProof: executionTrust === "NATIVE_DOCKER" && minimality.oneMinimal && sufficiencyCertified && necessityCertified && errors.length === 0,
       reason
     };
     return GitMinimizationResultSchema.parse({
@@ -1160,7 +1341,8 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
         runIds.push(probe.run.runId);
         executionIds.push(probe.run.executionId);
       }
-      if (probe.outcome !== expectedOutcome || probe.run?.result?.kind !== "DOCKER_ISOLATED") {
+      if (probe.outcome !== expectedOutcome || probe.run?.result?.kind !== "DOCKER_ISOLATED"
+        || probe.run.result.executor !== "NATIVE_DOCKER") {
         return {
           direction,
           expectedOutcome,
@@ -1204,13 +1386,14 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
   const certificationsComplete = sufficiency.status === "CERTIFIED" && necessity.status === "CERTIFIED";
   const certificationRun = [...runs].reverse().find((run) => run.role === "SUFFICIENCY_CERTIFICATION" || run.role === "NECESSITY_CERTIFICATION");
   const terminal = certificationRun?.result;
+  const completedProof = certificationsComplete && oneMinimal && errors.length === 0;
   const status = usedExecutions >= input.budget.maxExecutions && !certificationsComplete
     ? "BUDGET_EXHAUSTED"
     : terminal?.kind === "UNSAFE_LOCAL"
       ? "UNSAFE_LOCAL_INAPPLICABLE"
       : terminal?.reason === "SANDBOX_UNAVAILABLE"
         ? "SANDBOX_UNAVAILABLE"
-        : certificationsComplete && oneMinimal
+        : completedProof
           ? "COMPLETED"
           : "CERTIFICATION_FAILED";
   const reason = status === "COMPLETED"
@@ -1227,22 +1410,527 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
   return finalize(status, candidate, { oneMinimal, reason: minimalityReason }, sufficiency, necessity, reason);
 }
 
+const ROLE_SEMANTICS = {
+  BASELINE_BEFORE: { phase: "BASELINE", direction: "FORWARD_FROM_BEFORE" },
+  FULL_PATCH: { phase: "FULL_RANGE", direction: "FORWARD_FROM_BEFORE" },
+  DELTA_SUBSET: { phase: "DELTA_SUBSET", direction: "FORWARD_FROM_BEFORE" },
+  DELTA_COMPLEMENT: { phase: "DELTA_COMPLEMENT", direction: "FORWARD_FROM_BEFORE" },
+  ONE_MINIMAL: { phase: "ONE_MINIMAL", direction: "FORWARD_FROM_BEFORE" },
+  SUFFICIENCY_CERTIFICATION: { phase: "SUFFICIENCY_CERTIFICATION", direction: "FORWARD_FROM_BEFORE" },
+  NECESSITY_CERTIFICATION: { phase: "NECESSITY_CERTIFICATION", direction: "REVERSE_FROM_AFTER" }
+} as const satisfies Record<GitMinimizationRunFact["role"], {
+  readonly phase: GitMinimizationAttempt["phase"];
+  readonly direction: GitPatchApplication["direction"];
+}>;
+
+function externalDigestStatus(
+  expectedDigest: string | undefined,
+  resultDigest: string | null,
+  errors: string[]
+): GitMinimizationExternalDigestStatus {
+  if (expectedDigest === undefined) return "NOT_PROVIDED";
+  if (!DigestSchema.safeParse(expectedDigest).success) {
+    errors.push("externally supplied minimization digest is not a sha256 digest");
+    return "MISMATCH";
+  }
+  if (resultDigest === null || expectedDigest !== resultDigest) {
+    errors.push("externally supplied minimization digest does not match");
+    return "MISMATCH";
+  }
+  return "MATCH";
+}
+
+function validateCandidateIds(
+  ids: readonly string[],
+  units: ReadonlyMap<string, GitPatchUnit>,
+  errors: string[],
+  label: string
+): void {
+  const seen = new Set<string>();
+  let previousOrdinal = -1;
+  for (const id of ids) {
+    if (seen.has(id)) errors.push(`${label} contains duplicate patch unit id: ${id}`);
+    seen.add(id);
+    const unit = units.get(id);
+    if (!unit) {
+      errors.push(`${label} references a patch unit that is not in this result: ${id}`);
+      continue;
+    }
+    if (unit.ordinal <= previousOrdinal) errors.push(`${label} patch unit ids are not in canonical ordinal order`);
+    previousOrdinal = unit.ordinal;
+  }
+}
+
+function expectedOutcomeForRun(run: GitMinimizationRunFact): GitMinimizationRunFact["outcome"] {
+  if (run.result === null || run.result.kind !== "DOCKER_ISOLATED") return "UNRESOLVED";
+  if (run.result.verdict === "PASS") return "PASS";
+  if (run.result.verdict === "FAIL") return "FAIL";
+  return "UNRESOLVED";
+}
+
+function validateCertificate(
+  label: "sufficiency" | "necessity",
+  certificate: GitMinimizationCertificate,
+  result: GitMinimizationResult,
+  runs: ReadonlyMap<string, GitMinimizationRunFact>,
+  errors: string[]
+): void {
+  const expected = label === "sufficiency"
+    ? { direction: "FORWARD_FROM_BEFORE" as const, outcome: "FAIL" as const, role: "SUFFICIENCY_CERTIFICATION" as const }
+    : { direction: "REVERSE_FROM_AFTER" as const, outcome: "PASS" as const, role: "NECESSITY_CERTIFICATION" as const };
+  if (certificate.direction !== expected.direction) errors.push(`${label} certificate has the wrong direction`);
+  if (certificate.expectedOutcome !== expected.outcome) errors.push(`${label} certificate has the wrong expected outcome`);
+  if (certificate.runIds.length !== certificate.executionIds.length) errors.push(`${label} certificate run and execution id counts differ`);
+  if (certificate.status === "NOT_RUN" && (certificate.runIds.length !== 0 || certificate.executionIds.length !== 0)) {
+    errors.push(`${label} NOT_RUN certificate must not contain execution references`);
+  }
+
+  let completeEvidence = certificate.runIds.length === MINIMIZATION_CERTIFICATION_EXECUTIONS
+    && certificate.executionIds.length === MINIMIZATION_CERTIFICATION_EXECUTIONS;
+  const seenRuns = new Set<string>();
+  const seenExecutions = new Set<string>();
+  for (const [index, runId] of certificate.runIds.entries()) {
+    if (seenRuns.has(runId)) {
+      errors.push(`${label} certificate repeats run id: ${runId}`);
+      completeEvidence = false;
+    }
+    seenRuns.add(runId);
+    const run = runs.get(runId);
+    if (!run) {
+      errors.push(`${label} certificate references an absent run: ${runId}`);
+      completeEvidence = false;
+      continue;
+    }
+    const executionId = certificate.executionIds[index];
+    if (executionId !== run.executionId) {
+      errors.push(`${label} certificate execution id does not match run ${runId}`);
+      completeEvidence = false;
+    }
+    if (seenExecutions.has(run.executionId)) {
+      errors.push(`${label} certificate executions are not distinct`);
+      completeEvidence = false;
+    }
+    seenExecutions.add(run.executionId);
+    if (run.role !== expected.role || run.application.direction !== expected.direction) {
+      errors.push(`${label} certificate references a run with the wrong role or direction: ${runId}`);
+      completeEvidence = false;
+    }
+    if (!sameCanonical(run.candidateUnitIds, result.candidateUnitIds)) {
+      errors.push(`${label} certificate run does not use the final candidate: ${runId}`);
+      completeEvidence = false;
+    }
+    if (run.outcome !== expected.outcome || run.result?.kind !== "DOCKER_ISOLATED"
+      || run.result.executor !== "NATIVE_DOCKER" || run.result.verdict !== expected.outcome) {
+      // A NOT_CERTIFIED record intentionally retains the failed or injected
+      // attempt that prevented certification. It is structurally valid but
+      // cannot contribute to the three-run native-Docker proof predicate.
+      completeEvidence = false;
+    }
+  }
+
+  if (certificate.status === "CERTIFIED" && !completeEvidence) {
+    errors.push(`${label} certificate claims CERTIFIED without three distinct matching native Docker runs`);
+  }
+  if (certificate.status !== "CERTIFIED" && completeEvidence) {
+    errors.push(`${label} certificate with three distinct matching native Docker runs must be CERTIFIED`);
+  }
+}
+
+type ProofGradeEvidence = {
+  readonly valid: boolean;
+  readonly errors: readonly string[];
+};
+
 /**
- * Writes a canonical, schema-validated result atomically enough for local
- * evidence bundles. The caller can record its returned digest externally.
+ * A proof cannot be reconstructed from repeat certification alone. Retain the
+ * ordinary search evidence that established its precondition (clean baseline),
+ * trigger (the full range), and one-minimality of the final candidate.
+ *
+ * This intentionally does not make an incomplete/non-proof search invalid:
+ * callers may retain those records for diagnosis. The evidence only becomes a
+ * mandatory predicate when a record claims proof or COMPLETED status.
  */
-export async function writeGitMinimizationResult(filePath: string, result: GitMinimizationResult): Promise<string> {
-  const parsed = GitMinimizationResultSchema.parse(result);
+function proofGradeEvidence(
+  result: GitMinimizationResult,
+  attemptsByRunId: ReadonlyMap<string, GitMinimizationAttempt>
+): ProofGradeEvidence {
+  const evidenceErrors: string[] = [];
+  const allUnitIds = result.patchUnits.map((unit) => unit.id);
+
+  const hasLinkedNativeDockerRun = (
+    run: GitMinimizationRunFact,
+    phase: GitMinimizationAttempt["phase"],
+    expectedCandidate: readonly string[],
+    expectedOutcome: "PASS" | "FAIL"
+  ): boolean => {
+    const attempt = attemptsByRunId.get(run.runId);
+    const expectedApplicationStatus = expectedCandidate.length === 0 ? "NO_PATCHES" : "APPLIED";
+    return attempt !== undefined
+      && attempt.phase === phase
+      && attempt.runId === run.runId
+      && attempt.outcome === expectedOutcome
+      && sameCanonical(attempt.candidateUnitIds, expectedCandidate)
+      && sameCanonical(run.candidateUnitIds, expectedCandidate)
+      && sameCanonical(run.application.selectedUnitIds, expectedCandidate)
+      && run.application.direction === ROLE_SEMANTICS[run.role].direction
+      && run.application.status === expectedApplicationStatus
+      && run.outcome === expectedOutcome
+      && run.result?.kind === "DOCKER_ISOLATED"
+      && run.result.executor === "NATIVE_DOCKER"
+      && run.result.verdict === expectedOutcome;
+  };
+
+  const hasEvidence = (
+    label: string,
+    role: GitMinimizationRunFact["role"],
+    phase: GitMinimizationAttempt["phase"],
+    expectedCandidate: readonly string[],
+    expectedOutcome: "PASS" | "FAIL"
+  ): void => {
+    const found = result.runs.some((run) => run.role === role
+      && hasLinkedNativeDockerRun(run, phase, expectedCandidate, expectedOutcome));
+    if (!found) {
+      evidenceErrors.push(`${label} requires a linked native-Docker ${expectedOutcome} run with the exact candidate set`);
+    }
+  };
+
+  if (allUnitIds.length === 0) {
+    evidenceErrors.push("proof-grade evidence requires at least one full-range patch unit");
+  }
+  if (result.candidateUnitIds.length === 0) {
+    evidenceErrors.push("proof-grade evidence requires a non-empty final candidate");
+  }
+
+  hasEvidence("baseline-before [] evidence", "BASELINE_BEFORE", "BASELINE", [], "PASS");
+  hasEvidence("full-patch [all patch unit ids] evidence", "FULL_PATCH", "FULL_RANGE", allUnitIds, "FAIL");
+
+  for (const unitId of result.candidateUnitIds) {
+    const withoutUnit = result.candidateUnitIds.filter((candidateId) => candidateId !== unitId);
+    hasEvidence(
+      `one-minimal evidence after removing ${unitId}`,
+      "ONE_MINIMAL",
+      "ONE_MINIMAL",
+      withoutUnit,
+      "PASS"
+    );
+  }
+
+  return { valid: evidenceErrors.length === 0, errors: evidenceErrors };
+}
+
+/**
+ * Verify one stored minimization result without invoking Git, Docker, a model,
+ * or repository code. This establishes schema and internal consistency only;
+ * an optional digest retained outside the JSON detects a rewritten record but
+ * is not a signature, identity assertion, or host-attestation claim.
+ */
+export function verifyGitMinimizationResult(value: unknown, expectedDigest?: string): GitMinimizationVerification {
+  const errors: string[] = [];
+  let resultDigest: string | null = null;
+  try {
+    const parsed = GitMinimizationResultSchema.safeParse(value);
+    if (!parsed.success) {
+      errors.push(`minimization result schema validation failed: ${parsed.error.message}`);
+      return {
+        valid: false,
+        errors,
+        resultDigest,
+        externalDigestStatus: externalDigestStatus(expectedDigest, resultDigest, errors)
+      };
+    }
+    const result = parsed.data;
+    resultDigest = digestJson(result);
+    const units = new Map<string, GitPatchUnit>();
+    for (const [index, unit] of result.patchUnits.entries()) {
+      if (unit.ordinal !== index) errors.push(`patch unit ordinal is not contiguous at offset ${index}`);
+      if (units.has(unit.id)) errors.push(`duplicate patch unit id: ${unit.id}`);
+      units.set(unit.id, unit);
+      const bytes = Buffer.from(unit.pathBytesBase64, "base64");
+      if (bytes.toString("base64") !== unit.pathBytesBase64) errors.push(`patch unit path bytes are not canonical base64: ${unit.id}`);
+      const path = bytes.toString("utf8");
+      if (!Buffer.from(path, "utf8").equals(bytes) || path !== unit.path) {
+        errors.push(`patch unit path does not match its exact UTF-8 bytes: ${unit.id}`);
+      }
+      if (unit.pathDigest !== sha256Digest(bytes)) errors.push(`patch unit path digest does not match bytes: ${unit.id}`);
+      const expectedId = digestJson({
+        schemaVersion: GIT_MINIMIZATION_SCHEMA_VERSION,
+        ordinal: unit.ordinal,
+        pathDigest: unit.pathDigest,
+        patchDigest: unit.patchDigest
+      });
+      if (unit.id !== expectedId) errors.push(`patch unit id does not match ordinal and digests: ${unit.id}`);
+    }
+    validateCandidateIds(result.candidateUnitIds, units, errors, "result candidate");
+
+    const runs = new Map<string, GitMinimizationRunFact>();
+    const executionIds = new Set<string>();
+    const executionNonces = new Set<string>();
+    const attemptsByRole = new Map<GitMinimizationRunFact["role"], number[]>();
+    for (const run of result.runs) {
+      if (runs.has(run.runId)) errors.push(`duplicate run id: ${run.runId}`);
+      else runs.set(run.runId, run);
+      if (run.runId !== expectedMinimizationRunId(run)) errors.push(`run id does not match canonical run fact: ${run.runId}`);
+      if (run.executionId !== expectedMinimizationExecutionId(run)) errors.push(`execution id does not match nonce-bound run identity: ${run.runId}`);
+      if (executionIds.has(run.executionId)) errors.push(`duplicate execution id: ${run.executionId}`);
+      executionIds.add(run.executionId);
+      if (executionNonces.has(run.executionNonce)) errors.push(`duplicate execution nonce: ${run.executionNonce}`);
+      executionNonces.add(run.executionNonce);
+      const roleAttempts = attemptsByRole.get(run.role) ?? [];
+      roleAttempts.push(run.roleAttempt);
+      attemptsByRole.set(run.role, roleAttempts);
+      const roleSemantics = ROLE_SEMANTICS[run.role];
+      if (run.application.direction !== roleSemantics.direction) {
+        errors.push(`run direction does not match role ${run.role}: ${run.runId}`);
+      }
+      validateCandidateIds(run.candidateUnitIds, units, errors, `run candidate ${run.runId}`);
+      if (!sameCanonical(run.application.selectedUnitIds, run.candidateUnitIds)) {
+        errors.push(`run application selected units do not match candidate units: ${run.runId}`);
+      }
+      const selectedBytes = run.candidateUnitIds.reduce((total, id) => total + (units.get(id)?.patchBytes ?? 0), 0);
+      if (run.application.candidatePatchBytes !== selectedBytes) {
+        errors.push(`run application patch byte count does not match selected patch units: ${run.runId}`);
+      }
+      if (run.candidateUnitIds.length === 0
+        && (run.application.candidatePatchBytes !== 0 || run.application.candidatePatchDigest !== sha256Digest(Buffer.alloc(0)))) {
+        errors.push(`empty candidate application does not use the empty patch digest: ${run.runId}`);
+      }
+      if (run.application.status === "NO_PATCHES" && run.candidateUnitIds.length !== 0) {
+        errors.push(`NO_PATCHES application has selected patch units: ${run.runId}`);
+      }
+      const expectedBase = run.application.direction === "FORWARD_FROM_BEFORE" ? result.before : result.after;
+      if (expectedBase === null || !sameCanonical(run.application.base, expectedBase)) {
+        errors.push(`run application base does not match the recorded direction endpoint: ${run.runId}`);
+      }
+      if ((run.sandbox === null) !== (run.result === null)) {
+        errors.push(`run sandbox and execution result must be both present or both absent: ${run.runId}`);
+      }
+      if (run.sandbox !== null) {
+        for (const auditError of validateSandboxPlanAudit(run.sandbox)) {
+          errors.push(`run sandbox audit is invalid: ${run.runId}: ${auditError}`);
+        }
+      }
+      if (run.result === null) {
+        if (run.outcome !== "UNRESOLVED") errors.push(`run without execution result must be UNRESOLVED: ${run.runId}`);
+      } else {
+        if (run.sandbox?.kind !== run.result.kind) errors.push(`run sandbox kind does not match execution result: ${run.runId}`);
+        if (run.sandbox?.witnessDigest !== run.frozenDigest) errors.push(`run sandbox witness digest does not match run frozen digest: ${run.runId}`);
+        if (run.result.executor === "UNSAFE_LOCAL" && run.result.kind !== "UNSAFE_LOCAL") {
+          errors.push(`unsafe-local executor has a non-local result kind: ${run.runId}`);
+        }
+        if (run.result.executor !== "UNSAFE_LOCAL" && run.result.kind !== "DOCKER_ISOLATED") {
+          errors.push(`Docker executor has a non-Docker result kind: ${run.runId}`);
+        }
+        if (run.result.verdict === "PASS" && (run.result.reason !== "EXIT_ZERO" || run.result.exitCode !== 0)) {
+          errors.push(`PASS execution result is inconsistent: ${run.runId}`);
+        }
+        if (run.result.verdict === "FAIL" && (run.result.reason !== "EXIT_NONZERO" || run.result.exitCode === null || run.result.exitCode === 0)) {
+          errors.push(`FAIL execution result is inconsistent: ${run.runId}`);
+        }
+        if (run.result.kind === "UNSAFE_LOCAL" && (run.result.verdict !== "INAPPLICABLE" || run.result.reason !== "UNSAFE_LOCAL_NOT_PROOF")) {
+          errors.push(`unsafe-local execution result is not explicitly inapplicable: ${run.runId}`);
+        }
+        if (run.outcome !== expectedOutcomeForRun(run)) errors.push(`run outcome contradicts its execution result: ${run.runId}`);
+      }
+      if (result.witness) {
+        if (run.frozenDigest !== result.witness.frozenDigest || run.witnessDigest !== result.witness.witnessDigest) {
+          errors.push(`run witness digests do not match the result witness summary: ${run.runId}`);
+        }
+      }
+    }
+    for (const [role, values] of attemptsByRole) {
+      const ordered = [...values].sort((left, right) => left - right);
+      if (!ordered.every((value, index) => value === index + 1)) {
+        errors.push(`role attempts are not contiguous for ${role}`);
+      }
+    }
+    const usedExecutions = result.runs.filter((run) => run.result !== null).length;
+    if (result.budget.usedExecutions !== usedExecutions) {
+      errors.push("used execution budget does not match recorded sandbox executions");
+    }
+    if (result.budget.usedExecutions > result.budget.maxExecutions) errors.push("used execution budget exceeds its maximum");
+
+    const referencedRuns = new Set<string>();
+    const attemptsByRunId = new Map<string, GitMinimizationAttempt>();
+    for (const [index, attempt] of result.attempts.entries()) {
+      if (attempt.ordinal !== index + 1) errors.push(`attempt ordinal is not contiguous at offset ${index}`);
+      validateCandidateIds(attempt.candidateUnitIds, units, errors, `attempt ${attempt.ordinal} candidate`);
+      if (attempt.runId === null) {
+        if (attempt.outcome !== "NOT_RUN") errors.push(`attempt without a run must be NOT_RUN: ${attempt.ordinal}`);
+        continue;
+      }
+      if (referencedRuns.has(attempt.runId)) errors.push(`multiple attempts reference run id: ${attempt.runId}`);
+      referencedRuns.add(attempt.runId);
+      if (!attemptsByRunId.has(attempt.runId)) attemptsByRunId.set(attempt.runId, attempt);
+      const run = runs.get(attempt.runId);
+      if (!run) {
+        errors.push(`attempt references an absent run: ${attempt.runId}`);
+        continue;
+      }
+      const semantics = ROLE_SEMANTICS[run.role];
+      if (attempt.phase !== semantics.phase) errors.push(`attempt phase does not match run role: ${attempt.runId}`);
+      if (!sameCanonical(attempt.candidateUnitIds, run.candidateUnitIds)) errors.push(`attempt candidate does not match run candidate: ${attempt.runId}`);
+      if (attempt.outcome !== run.outcome) errors.push(`attempt outcome does not match run outcome: ${attempt.runId}`);
+      if (attempt.note !== run.note) errors.push(`attempt note does not match run note: ${attempt.runId}`);
+    }
+    for (const run of result.runs) {
+      if (!referencedRuns.has(run.runId)) errors.push(`recorded run is not referenced by an attempt: ${run.runId}`);
+    }
+
+    validateCertificate("sufficiency", result.certification.sufficiency, result, runs, errors);
+    validateCertificate("necessity", result.certification.necessity, result, runs, errors);
+    for (const run of result.runs) {
+      if (run.role === "SUFFICIENCY_CERTIFICATION" && !result.certification.sufficiency.runIds.includes(run.runId)) {
+        errors.push(`sufficiency certification run is absent from its certificate: ${run.runId}`);
+      }
+      if (run.role === "NECESSITY_CERTIFICATION" && !result.certification.necessity.runIds.includes(run.runId)) {
+        errors.push(`necessity certification run is absent from its certificate: ${run.runId}`);
+      }
+    }
+
+    const proofEvidence = proofGradeEvidence(result, attemptsByRunId);
+
+    const sufficiencyCertified = result.certification.sufficiency.status === "CERTIFIED";
+    const necessityCertified = result.certification.necessity.status === "CERTIFIED";
+    if (result.proof.sufficiencyCertified !== sufficiencyCertified) errors.push("proof sufficiency flag does not match certificate status");
+    if (result.proof.necessityCertified !== necessityCertified) errors.push("proof necessity flag does not match certificate status");
+    if (result.proof.dockerIsolated !== (result.proof.executionTrust === "NATIVE_DOCKER")) {
+      errors.push("proof Docker-isolated flag does not match execution provenance");
+    }
+    for (const run of result.runs) {
+      if (run.result !== null && run.result.executor !== result.proof.executionTrust) {
+        errors.push(`run executor does not match result execution provenance: ${run.runId}`);
+      }
+    }
+    const expectedProof = result.proof.executionTrust === "NATIVE_DOCKER"
+      && result.minimality.oneMinimal
+      && sufficiencyCertified
+      && necessityCertified
+      && proofEvidence.valid
+      && errors.length === 0
+      && result.errors.length === 0;
+    if ((result.proof.isProof || result.status === "COMPLETED") && !proofEvidence.valid) {
+      errors.push(...proofEvidence.errors);
+    }
+    if (result.proof.isProof !== expectedProof) errors.push("proof bit contradicts provenance, minimality, certificates, or recorder errors");
+    if (expectedProof && result.status !== "COMPLETED") errors.push("completed proof evidence has a non-COMPLETED status");
+    if (result.status === "COMPLETED" && !expectedProof) errors.push("COMPLETED status lacks complete proof evidence");
+
+    const status = externalDigestStatus(expectedDigest, resultDigest, errors);
+    return { valid: errors.length === 0, errors, resultDigest, externalDigestStatus: status, result };
+  } catch (error) {
+    errors.push(`minimization result verification failed safely: ${errorMessage(error)}`);
+    return {
+      valid: false,
+      errors,
+      resultDigest,
+      externalDigestStatus: externalDigestStatus(expectedDigest, resultDigest, errors)
+    };
+  }
+}
+
+/** Safely read and verify a standalone minimization result without running its repository code. */
+export function verifyGitMinimizationResultFile(filePath: string, expectedDigest?: string): GitMinimizationVerification {
+  const errors: string[] = [];
+  try {
+    const absolute = resolve(filePath);
+    const stat = lstatSync(absolute);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      errors.push("minimization result must be a regular, non-symlink file");
+    } else if (stat.size > MAX_MINIMIZATION_RESULT_BYTES) {
+      errors.push("minimization result exceeds FaultLine's verification read limit");
+    } else {
+      const bytes = readFileSync(absolute);
+      if (bytes.length > MAX_MINIMIZATION_RESULT_BYTES) {
+        errors.push("minimization result changed beyond FaultLine's verification read limit while reading");
+      } else {
+        let value: unknown;
+        try {
+          value = JSON.parse(bytes.toString("utf8"));
+        } catch (error) {
+          errors.push(`minimization result contains invalid JSON: ${errorMessage(error)}`);
+          value = undefined;
+        }
+        if (errors.length === 0) return verifyGitMinimizationResult(value, expectedDigest);
+      }
+    }
+  } catch (error) {
+    errors.push(`minimization result cannot be read safely: ${errorMessage(error)}`);
+  }
+  return {
+    valid: false,
+    errors,
+    resultDigest: null,
+    externalDigestStatus: externalDigestStatus(expectedDigest, null, errors)
+  };
+}
+
+/** Create each output parent without traversing a symlink or special file. */
+async function ensureRealOutputDirectory(directory: string): Promise<void> {
+  const absolute = resolve(directory);
+  const root = parse(absolute).root;
+  const suffix = relative(root, absolute);
+  const parts = suffix ? suffix.split(/[\\/]+/).filter(Boolean) : [];
+  let current = root;
+  const rootEntry = await lstatIfPresent(current);
+  const safeRoot = rootEntry === null ? null : resolveSafeDirectorySegment(current);
+  if (safeRoot === null) {
+    throw new Error(`Minimization output root is not a real directory: ${root}`);
+  }
+  current = safeRoot;
+  for (const part of parts) {
+    current = join(current, part);
+    const entry = await lstatIfPresent(current);
+    if (entry === null) {
+      await mkdir(current, { mode: 0o700 });
+      const safeCurrent = resolveSafeDirectorySegment(current);
+      if (safeCurrent === null) {
+        throw new Error(`Minimization output parent is not a real directory: ${current}`);
+      }
+      current = safeCurrent;
+      continue;
+    }
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
+      throw new Error(`Minimization output cannot traverse a symbolic link or non-directory: ${current}`);
+    }
+    current = safeCurrent;
+  }
+}
+
+/**
+ * Writes a canonical, self-consistent result atomically enough for local
+ * evidence bundles. The caller must retain its returned digest externally to
+ * detect a record that is rewritten together with its internal fields.
+ */
+export async function writeGitMinimizationResult(filePath: string, result: GitMinimizationResult): Promise<WrittenGitMinimizationResult> {
+  const verification = verifyGitMinimizationResult(result);
+  if (!verification.valid || !verification.result || !verification.resultDigest) {
+    throw new Error(`Refusing to write an invalid Git minimization result: ${verification.errors.join("; ")}`);
+  }
   const absolute = resolve(filePath);
   const directory = dirname(absolute);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await ensureRealOutputDirectory(directory);
+  if (await lstatIfPresent(absolute)) {
+    throw new Error(`Git minimization result already exists and will not be replaced: ${absolute}`);
+  }
   const temporary = join(directory, `.${randomUUID()}.faultline-git-minimization.tmp`);
-  const content = `${JSON.stringify(parsed, null, 2)}\n`;
+  const content = `${canonicalJson(verification.result)}\n`;
   try {
     await writeFile(temporary, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
-    await rename(temporary, absolute);
+    try {
+      // link(2) creates the final pathname only if it is absent, unlike a
+      // replace-capable rename on POSIX. The temporary lives in the same
+      // verified directory, so this is an atomic write-once publish step.
+      await link(temporary, absolute);
+    } catch (error) {
+      const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+      if (code === "EEXIST") {
+        throw new Error(`Git minimization result already exists and will not be replaced: ${absolute}`);
+      }
+      throw error;
+    }
   } finally {
     await rm(temporary, { force: true });
   }
-  return absolute;
+  return { path: absolute, resultDigest: verification.resultDigest };
 }

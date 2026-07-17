@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "faultline.github-artifact-attestation-trust.v1",
+  "repository": "Mizore66/faultline",
+  "signerWorkflow": "Mizore66/faultline/.github/workflows/verify.yml",
+  "sourceRef": "refs/heads/main",
+  "eventName": "push",
+  "denySelfHostedRunners": true,
+  "trustedRootFile": "trusted-root.jsonl"
+}

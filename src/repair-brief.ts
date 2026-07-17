@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { digestJson } from "./canonical.js";
 import { GitInvestigationResultSchema, type GitInvestigationResult } from "./git-investigation.js";
+import { extractOpenAiResponseText } from "./openai-response.js";
 import { redactValue } from "./redaction.js";
 
 /**
@@ -9,7 +10,11 @@ import { redactValue } from "./redaction.js";
  * verdicts, causal proof, or a replacement witness. This module turns only a
  * verified Git investigation into a compact, citation-checked prompt.
  */
-export const REPAIR_EVIDENCE_PACKET_VERSION = "faultline.repair-evidence.v1" as const;
+// v2 binds guidance to the exact *frozen review record*, rather than only to
+// the command-and-overlay witness digest used by the older v1 packet.  The
+// version bump makes older packets fail closed instead of silently changing
+// the meaning of the frozenWitnessDigest field.
+export const REPAIR_EVIDENCE_PACKET_VERSION = "faultline.repair-evidence.v2" as const;
 export const REPAIR_BRIEF_VERSION = "faultline.repair-brief.v1" as const;
 
 const DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -58,13 +63,6 @@ export type RepairBriefValidation = {
   brief: RepairBrief | null;
 };
 
-function responseText(response: unknown): string {
-  if (typeof response === "object" && response !== null && "output_text" in response && typeof response.output_text === "string") {
-    return response.output_text;
-  }
-  throw new Error("OpenAI response did not contain output_text");
-}
-
 function withoutDigest(packet: RepairEvidencePacket): Omit<RepairEvidencePacket, "packetDigest"> {
   const { packetDigest: _packetDigest, ...unsigned } = packet;
   return unsigned;
@@ -81,7 +79,8 @@ function resultDigest(result: GitInvestigationResult): string {
  */
 export function createRepairEvidencePacket(input: unknown): RepairEvidencePacket {
   const result = GitInvestigationResultSchema.parse(input);
-  if (!result.proof.isProof || result.status !== "COMPLETED" || result.transitions.length === 0 || !result.witness?.witnessDigest) {
+  if (result.proof.executionTrust !== "NATIVE_DOCKER" || !result.proof.dockerIsolated || !result.proof.isProof
+    || result.status !== "COMPLETED" || result.transitions.length === 0 || !result.witness?.witnessDigest) {
     throw new Error("A post-localization repair brief requires a completed Docker-isolated investigation with at least one stable transition.");
   }
 
@@ -110,7 +109,10 @@ export function createRepairEvidencePacket(input: unknown): RepairEvidencePacket
   const unsigned = {
     schemaVersion: REPAIR_EVIDENCE_PACKET_VERSION,
     investigationDigest: resultDigest(result),
-    frozenWitnessDigest: result.witness.witnessDigest,
+    // Bind repair guidance to the reviewed approval/freeze record, not merely
+    // to the command-and-overlay digest. A later review chain must never be
+    // interchangeable with the exact frozen witness that produced the proof.
+    frozenWitnessDigest: result.witness.frozenDigest,
     recorder: result.recorder,
     nativeCodexInterception: false as const,
     facts,
@@ -221,7 +223,7 @@ export async function proposeRepairBriefWithGpt(
     })
   });
   if (!response.ok) throw new Error(`OpenAI Responses request failed: ${response.status} ${await response.text()}`);
-  const output = JSON.parse(responseText(await response.json())) as unknown;
+  const output = JSON.parse(extractOpenAiResponseText(await response.json())) as unknown;
   const validation = validateRepairBrief(packet, output);
   if (!validation.valid || !validation.brief) {
     throw new Error(`GPT-5.6 repair brief was rejected: ${validation.errors.join("; ")}`);

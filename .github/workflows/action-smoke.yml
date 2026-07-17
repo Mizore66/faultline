@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - action.yml
+      - actions/proof/**
       - package.json
       - pnpm-lock.yaml
       - scripts/prepare-action-smoke.mjs
@@ -22,8 +23,6 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -48,7 +47,7 @@ jobs:
           echo "image=$image" >> "$GITHUB_OUTPUT"
       - name: Run the repository as a consumer Action
         id: faultline
-        uses: ./
+        uses: ./actions/proof
         with:
           witness: ${{ steps.fixture.outputs.witness }}
           repository: ${{ steps.fixture.outputs.repository }}
