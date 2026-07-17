@@ -2,16 +2,33 @@
   "name": "faultline",
   "version": "0.1.0",
   "description": "Executable evidence for regressions introduced during Codex-assisted development.",
+  "license": "MIT",
   "private": true,
+  "type": "module",
+  "keywords": [
+    "regression",
+    "reproducibility",
+    "proof",
+    "git",
+    "cli"
+  ],
+  "homepage": "https://github.com/Mizore66/faultline#readme",
+  "bugs": {
+    "url": "https://github.com/Mizore66/faultline/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mizore66/faultline.git"
+  },
   "files": [
     "dist",
+    "LICENSE",
     "README.md",
     "docs/faultline-self-incident.md",
     "docs/first-incident.md",
     "docs/github-action.md"
   ],
   "packageManager": "pnpm@10.32.1",
-  "type": "module",
   "bin": {
     "fl": "./dist/cli.js"
   },
@@ -22,6 +39,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:package": "node scripts/package-smoke.mjs",
     "dev": "tsx src/server.ts",
     "fl": "tsx src/cli.ts",
     "prepack": "pnpm build",

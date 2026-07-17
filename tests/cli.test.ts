@@ -787,17 +787,21 @@ describe("FaultLine CLI workflows", () => {
       git(repository, ["add", "sample.txt"]);
       git(repository, ["commit", "-m", "clean checkpoint"]);
 
-      expect(runFl(["record", "init", "--session", "cli-session", "--ledger", ledger, "--repo", repository, "--transport", "CODEX_CLI"]).status).toBe(0);
-      const events = [
-        { eventId: "turn-start", event: { type: "TURN_STARTED", payload: { turnId: "turn-1", turnOrdinal: 1, promptDigest: `sha256:${"a".repeat(64)}` } } },
-        { eventId: "turn-complete", event: { type: "TURN_COMPLETED", payload: { turnId: "turn-1", turnOrdinal: 1, outcome: "COMPLETED", outputDigest: `sha256:${"b".repeat(64)}` } } }
-      ].map((event) => JSON.stringify(event)).join("\n");
-      expect(runFl(["record", "stdin", "--ledger", ledger], { input: events }).status).toBe(0);
-      expect(runFl(["record", "checkpoint", "--ledger", ledger, "--repo", repository, "--after-turn", "1"]).status).toBe(0);
+      expect(runFl(["record", "init", "--session", "cli-session", "--ledger", ledger, "--repo", repository, "--transport", "CODEX_CLI", "--actor", "reviewer@example.test"]).status).toBe(0);
+      const attached = runFl([
+        "record", "attach", "--ledger", ledger, "--repo", repository, "--turn", "turn-1", "--ordinal", "1",
+        "--prompt-digest", `sha256:${"a".repeat(64)}`, "--output-digest", `sha256:${"b".repeat(64)}`,
+        "--contribution", "refund settlement change", "--checkpoint"
+      ]);
+      expect(attached.status).toBe(0);
+      expect(JSON.parse(attached.stdout)).toMatchObject({ status: "ATTACHED", valid: true, eventCount: 4, checkpoint: "RECORDED" });
       const verification = runFl(["record", "verify", "--ledger", ledger]);
       expect(verification.status).toBe(0);
       expect(JSON.parse(verification.stdout)).toMatchObject({ valid: true, eventCount: 4 });
-      expect(readFileSync(ledger, "utf8")).toContain("WORKTREE_CHECKPOINT");
+      const ledgerContents = readFileSync(ledger, "utf8");
+      expect(ledgerContents).toContain("WORKTREE_CHECKPOINT");
+      expect(ledgerContents).toContain("refund settlement change");
+      expect(ledgerContents).toContain("reviewer@example.test");
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

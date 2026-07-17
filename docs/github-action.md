@@ -2,6 +2,8 @@
 
 FaultLine's root action gives a failed CI job a safe handoff into the same human-reviewed incident path as the local CLI. It records a prerequisite report, an immutable incident draft, and a witness proposal. It does **not** execute the supplied command, pull an image, approve a witness, freeze a witness, upload evidence, or assert that CI has produced a proof.
 
+After a human freezes a witness, Docker-isolated proof replay is a separate composite action at `actions/proof` (`uses: Mizore66/faultline/actions/proof@<pin>`). Keep intake at the repository root and proof replay nested so the two surfaces cannot overwrite each other.
+
 Use it after checking out the repository that contains the failure. The action itself is built from the pinned FaultLine revision, while its `--repo` target is the checked-out application repository.
 
 ```yaml

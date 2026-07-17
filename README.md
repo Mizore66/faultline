@@ -30,6 +30,7 @@ Requirements: Node.js 22+ and pnpm 10.32.1 (pinned in `package.json`). If Corepa
 ```powershell
 pnpm install --frozen-lockfile
 pnpm test
+pnpm fl -- --version
 pnpm fl -- judge-demo --rerun-all
 ```
 
@@ -42,7 +43,7 @@ For the project’s own reproducible historical CI case, see the clearly scoped 
 
 ## CI and distribution boundary
 
-Use the reusable [CI incident-intake action](docs/github-action.md) to preserve a failed command as a review-required FaultLine proposal without executing it. With a full Git checkout, it safely proposes the current GitHub event's `before -> after` or PR `base -> head` bracket from the locally supplied event payload; explicit reviewed inputs still win, and no network request or fetch is hidden in that convenience. The package has a checked `bin` entry (`fl --version`) and a lean `pnpm pack --dry-run` contract, but it remains deliberately `private` until the repository owner selects a license and an available public npm namespace. That owner decision is required before claiming an `npx` install path; the GitHub Action is the supported reusable entry point today.
+Use the reusable [CI incident-intake action](docs/github-action.md) to preserve a failed command as a review-required FaultLine proposal without executing it. With a full Git checkout, it safely proposes the current GitHub event's `before -> after` or PR `base -> head` bracket from the locally supplied event payload; explicit reviewed inputs still win, and no network request or fetch is hidden in that convenience. The package has a checked `bin` entry (`fl --version`), MIT `LICENSE`, and lean pack/smoke contracts (`pnpm pack --dry-run` plus `pnpm test:package`), but it remains deliberately `private` until the repository owner selects an available public npm namespace. That owner decision is required before claiming an `npx` install path. Today the supported reusable entry points are the root [CI incident-intake action](docs/github-action.md) and the nested proof action at `actions/proof`.
 
 ## Fast judge check (no Docker or API key)
 
@@ -262,9 +263,16 @@ The sidecar captures a checkpoint only when `Stop` sees a clean Git worktree. It
 For manually supplied observed events, record lifecycle facts and clean checkpoints directly:
 
 ```powershell
-pnpm fl -- record init --session <session-id> --repo . --transport SIDE_CAR
-Get-Content .\events.ndjson | pnpm fl -- record stdin --ledger .faultline\recordings\<session-id>.json
-pnpm fl -- record checkpoint --ledger .faultline\recordings\<session-id>.json --repo . --after-turn 1
+pnpm fl -- record init --session <session-id> --repo . --transport SIDE_CAR --actor you@example.com
+pnpm fl -- record attach `
+  --ledger .faultline\recordings\<session-id>.json `
+  --repo . `
+  --turn turn-1 `
+  --ordinal 1 `
+  --prompt-digest sha256:<64-lowercase-hex> `
+  --output-digest sha256:<64-lowercase-hex> `
+  --contribution "short observed change label" `
+  --checkpoint
 ```
 
 Pass the chosen `--ledger` path to `fl investigate git` or `fl incident continue` to embed and validate matching lifecycle checkpoints in the Git package. A rendered package labels its real coverage as `FULLY_BOUND`, `PARTIALLY_BOUND`, or conservative **LEGACY BOUND** for old packages; it never treats a descendant-only checkpoint as coverage of every replayed state. If every state should be bound to an ordered checkpoint, create a strict sidecar record:
@@ -277,7 +285,7 @@ pnpm fl -- ledger bind `
 pnpm fl -- ledger verify .faultline\bindings\<investigation>.json
 ```
 
-The ledger is observed evidence, not a claim that FaultLine reads private model reasoning.
+`record attach` is a convenience path for sidecar session attribution: it appends a started/completed turn pair and, when requested, a clean Git checkpoint for the completed turn. The attribution fields are reviewer-supplied context, not identity proof, private Codex interception, model intent, or turn-level blame. The ledger is observed evidence, not a claim that FaultLine reads private model reasoning.
 
 ## Verify and retain integrity evidence
 
@@ -340,6 +348,69 @@ Start from [`docs/faultline-github-attestation-trust.example.json`](docs/faultli
 ```
 
 `sourceDigest` is optional; when set it must be the recorded 40- or 64-hex Git source commit. Retain the trust file and its referenced root file with the evidence, review every allowlisted value before using it, and rotate or replace them deliberately when CI policy changes. This signed provenance says that the configured GitHub Actions identity signed the receipt bytes. It does **not** cryptographically prove that a host, Docker client, or Docker daemon enforced FaultLine's recorded sandbox policy, nor does it expand the predicate-specific proof into a general build or authorship claim.
+
+## Package and clean-install use
+
+FaultLine is licensed under the MIT License. It is not published to npm yet; the owner still controls the first registry release, so do not treat `npm install faultline` as a supported installation command.
+
+A pinned source checkout can still produce and test the exact package that would be released:
+
+```powershell
+git checkout <release-tag-or-full-commit-sha>
+pnpm install --frozen-lockfile
+pnpm test:package
+pnpm pack
+npm install --global .\faultline-0.1.0.tgz
+fl --version
+```
+
+`prepack` builds `dist/`, and the package allowlist contains `dist/`, `LICENSE`, `README.md`, the selected `docs/` guides, and npm's required package metadata. CI installs the tarball into an empty project and executes the installed `fl` binary before a release can be considered.
+
+## Reusable GitHub Action (proof replay)
+
+The root `action.yml` is the review-only [incident-intake action](docs/github-action.md). Proof replay lives at `actions/proof` so the two surfaces do not collide.
+
+Commit a reviewed `faultline.frozen-witness.v1` record to the consumer repository, then pin the proof action to an owner-created release tag or, for the strongest immutability, a full commit SHA:
+
+```yaml
+name: FaultLine proof
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: faultline
+        uses: Mizore66/faultline/actions/proof@<release-tag-or-full-commit-sha>
+        with:
+          witness: .github/faultline/witnesses/refund-regression.json
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          runtime: ghcr.io/your-org/your-project-test@sha256:<64-lowercase-hex>
+          proof-mode: required
+      - name: Record externally retained root
+        run: echo '${{ steps.faultline.outputs.root-digest }}' >> "$GITHUB_STEP_SUMMARY"
+```
+
+The proof action uploads `faultline-proof` and exposes `proof-package` and `root-digest` outputs. The runtime image must contain the consumer project's witness dependencies and must be digest-pinned. `proof-mode: required` fails closed unless Docker-isolated replay creates a verified package. `proof-mode: diagnostic` is an explicitly non-proof local replay; it uploads no package and leaves both outputs empty.
+
+The manually runnable `Verify reusable Action` workflow creates a two-commit consumer repository, freezes a deterministic witness, resolves a Docker image digest, invokes this repository through `uses: ./actions/proof`, checks both outputs, verifies the package, and exercises artifact upload.
+
+Support matrix:
+
+- Packaged CLI: Node.js 22 and 24 on current GitHub-hosted Ubuntu, Windows, and macOS runners.
+- Proof action: current GitHub-hosted Ubuntu runner with Docker and a Linux digest-pinned runtime image.
+- Diagnostic action: current GitHub-hosted Ubuntu runner; it is not evidence suitable for publication.
+- Package manager for source builds: pnpm 10. Installed consumers only need a supported Node.js runtime.
+- GitHub.com Actions is supported. GitHub Enterprise Server is not currently claimed because `actions/upload-artifact@v4` availability differs by GHES version.
+- npm registry installation remains unsupported until the owner performs the first publish. No release or publish automation is enabled.
 
 ## GPT-5.6 boundaries
 
@@ -452,6 +523,7 @@ The [Build Week submission kit](docs/build-week-submission-kit.md) provides a th
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:package
 ```
 
 The suite includes canonical hashing, adversarial bundle tampering, witness-freeze integrity, authenticated reviewer approvals, lifecycle hash chains, real temporary-Git replay, Docker-plan safety, ledger binding, redaction behavior, integrity and signed-provenance receipts, and CLI workflows.

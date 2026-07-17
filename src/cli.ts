@@ -50,6 +50,7 @@ import {
   createCodexLifecycleLedger,
   LifecycleEventInputSchema,
   readVerifiedCodexLifecycleLedger,
+  verifyCodexLifecycleLedger,
   verifyCodexLifecycleLedgerFile,
   writeCodexLifecycleLedgerAtomic
 } from "./ledger.js";
@@ -115,7 +116,7 @@ Usage:
   fl codex sidecar install --repo <directory> --cli <built-cli.js> --yes
   fl codex sidecar hook [--input <hook.json>] [--quiet]
   fl codex sidecar status [--repo <directory>] [--session <session-id>]
-  fl record <init|stdin|checkpoint|verify> [...]
+  fl record <init|stdin|checkpoint|attach|verify> [...]
   fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]
   fl minimize git --repo <directory> --before <commit> --after <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--max-executions <count>] [--output <managed-result.json>]
   fl minimize verify <result.json> [--expect-digest <sha256:...>]
@@ -1087,7 +1088,8 @@ async function recordCommand(args: string[]): Promise<void> {
           transport: (option(args, "--transport") ?? "SIDE_CAR") as "CODEX_CLI" | "CODEX_APP" | "SIDE_CAR",
           workingDirectory: repository,
           ...(option(args, "--thread") ? { codexThreadId: option(args, "--thread") } : {}),
-          ...(option(args, "--model") ? { model: option(args, "--model") } : {})
+          ...(option(args, "--model") ? { model: option(args, "--model") } : {}),
+          ...(option(args, "--actor") ? { actor: option(args, "--actor") } : {})
         }
       });
       writeCodexLifecycleLedgerAtomic(file, ledger);
@@ -1104,6 +1106,47 @@ async function recordCommand(args: string[]): Promise<void> {
         payload: { checkpoint: captureGitCleanCheckpoint(repository), afterTurnOrdinal }
       });
       process.stdout.write(`${JSON.stringify({ status: "CHECKPOINT_RECORDED", ledger: file, headHash: ledger.events.at(-1)?.hash }, null, 2)}\n`);
+      return;
+    }
+
+    case "attach": {
+      const file = ledgerPath(args);
+      const repository = option(args, "--repo") ? resolve(requiredOption(args, "--repo")) : undefined;
+      const turnId = requiredOption(args, "--turn");
+      const turnOrdinal = Number(requiredOption(args, "--ordinal"));
+      if (!Number.isInteger(turnOrdinal) || turnOrdinal <= 0) throw new Error("--ordinal must be a positive integer.");
+      let ledger = appendLifecycleEventAtomic(file, {
+        type: "TURN_STARTED",
+        payload: { turnId, turnOrdinal, promptDigest: requiredOption(args, "--prompt-digest") }
+      });
+      ledger = appendLifecycleEventAtomic(file, {
+        type: "TURN_COMPLETED",
+        payload: {
+          turnId,
+          turnOrdinal,
+          outcome: (option(args, "--outcome") ?? "COMPLETED") as "COMPLETED" | "FAILED" | "INTERRUPTED",
+          ...(option(args, "--output-digest") ? { outputDigest: option(args, "--output-digest") } : {}),
+          ...(option(args, "--contribution") ? { contribution: option(args, "--contribution") } : {})
+        }
+      });
+      if (hasFlag(args, "--checkpoint")) {
+        if (!repository) throw new Error("--repo is required when --checkpoint is used.");
+        ledger = appendLifecycleEventAtomic(file, {
+          type: "WORKTREE_CHECKPOINT",
+          payload: { checkpoint: captureGitCleanCheckpoint(repository), afterTurnOrdinal: turnOrdinal }
+        });
+      }
+      const verification = verifyCodexLifecycleLedger(ledger);
+      process.stdout.write(`${JSON.stringify({
+        status: verification.valid ? "ATTACHED" : "INVALID",
+        ledger: file,
+        turnId,
+        turnOrdinal,
+        checkpoint: hasFlag(args, "--checkpoint") ? "RECORDED" : "NOT_REQUESTED",
+        limitation: "Observed sidecar attribution only; FaultLine does not claim private Codex interception or turn-level blame.",
+        ...verification
+      }, null, 2)}\n`);
+      process.exitCode = verification.valid ? 0 : 1;
       return;
     }
     case "stdin": {
@@ -1138,7 +1181,7 @@ async function recordCommand(args: string[]): Promise<void> {
       return;
     }
     default:
-      throw new Error("Usage: fl record init|stdin|checkpoint|verify ...");
+      throw new Error("Usage: fl record init|stdin|checkpoint|attach|verify ...");
   }
 }
 
