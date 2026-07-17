@@ -35,6 +35,14 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Resolve FaultLine package root
+      id: package
+      shell: bash
+      run: |
+        # Nested under actions/proof; normalize to an absolute path without '..'
+        # so setup-node cache-dependency-path accepts it.
+        root="$(cd "${{ github.action_path }}/../.." && pwd)"
+        echo "root=$root" >> "$GITHUB_OUTPUT"
     - name: Set up pnpm
       uses: pnpm/action-setup@v4
       with:
@@ -44,10 +52,10 @@ runs:
       with:
         node-version: 22
         cache: pnpm
-        cache-dependency-path: ${{ github.action_path }}/../../pnpm-lock.yaml
+        cache-dependency-path: ${{ steps.package.outputs.root }}/pnpm-lock.yaml
     - name: Build FaultLine
       shell: bash
-      working-directory: ${{ github.action_path }}/../..
+      working-directory: ${{ steps.package.outputs.root }}
       run: |
         pnpm install --frozen-lockfile
         pnpm build
@@ -56,7 +64,7 @@ runs:
       shell: bash
       working-directory: ${{ github.workspace }}
       env:
-        FAULTLINE_ACTION_PATH: ${{ github.action_path }}/../..
+        FAULTLINE_ACTION_PATH: ${{ steps.package.outputs.root }}
         FAULTLINE_WITNESS: ${{ inputs.witness }}
         FAULTLINE_BASE: ${{ inputs.base }}
         FAULTLINE_HEAD: ${{ inputs.head }}
