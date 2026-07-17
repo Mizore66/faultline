@@ -85,7 +85,7 @@ function appendBaselineSnapshot(
   ledger: ReturnType<typeof createCodexLifecycleLedger>,
   repository: string
 ) {
-  const snapshot = captureTurnTreeSnapshot(repository);
+  const snapshot = captureTurnTreeSnapshot(repository).snapshot;
   return appendLifecycleEvent(ledger, {
     type: "SESSION_BASELINE_SNAPSHOT",
     payload: { snapshot }
@@ -98,7 +98,7 @@ function appendTurnSnapshot(
   turnOrdinal: number,
   turnId: string
 ) {
-  const snapshot = captureTurnTreeSnapshot(repository);
+  const snapshot = captureTurnTreeSnapshot(repository).snapshot;
   let next = appendLifecycleEvent(ledger, {
     type: "TURN_STARTED",
     payload: { turnId, turnOrdinal, promptDigest: `sha256:${"a".repeat(64)}` }

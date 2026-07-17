@@ -508,6 +508,26 @@ pnpm fl -- serve `
 
 The page re-verifies each attachment against its retained digest. A minimization must match the proof's frozen witness and stable pass-to-fail transition; a repair artifact must match the exact investigation and frozen witness. The shareable page renders only certification status, counts, and evidence IDs—free-form repair text stays in the private repair artifact. Attachments remain outside the original Git proof root.
 
+## How Codex and GPT-5.6 are used
+
+Codex accelerated FaultLine's implementation, adversarial testing, and product hardening. At runtime, `fl record` accepts a strictly ordered, hash-chained Codex-compatible NDJSON lifecycle stream and records clean Git checkpoints; it labels the supplied transport as `CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR` rather than claiming private event interception. Start a recording with `pnpm fl -- codex record init --session <id> --repo . --transport CODEX_CLI`, pipe observed events through `fl codex record stdin`, and capture checkpoints with `fl codex record checkpoint`.
+
+### Turn-tree snapshot storage warning
+
+Codex sidecar SessionStart/Stop turn-tree snapshots use a **temporary Git index**, but they are **not storage-neutral**: staging still writes blob objects into this repository's object database. Eligible **untracked** files may be included unless you opt out.
+
+Mitigations:
+
+- Add a repository-root `.faultlineignore` (gitignore syntax) for project-specific exclusions.
+- Built-in defaults already skip common build/cache trees (`dist/`, `build/`, `.next/`, `coverage/`, …), dependency dirs, and secret-shaped paths.
+- Hard caps reject oversized snapshots (per-file, total bytes, and file count) before any blob write.
+- Secret scanning (regex + entropy) rejects high-confidence credential material before acceptance.
+- Set `FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY=1` to stage tracked files only.
+
+The sidecar prints this warning when it primes the SessionStart baseline snapshot.
+
+GPT-5.6 is used only through the Responses API for a blinded witness proposal or an evidence-cited repair brief. It never decides a pass/fail verdict, identifies a culprit, replaces the frozen witness, or creates proof evidence.
+
 ## Evidence vocabulary
 
 | Label | Meaning |

@@ -104,7 +104,7 @@ function appendBaselineSnapshot(
   ledger: ReturnType<typeof createCodexLifecycleLedger>,
   repository: string
 ) {
-  const snapshot = captureTurnTreeSnapshot(repository);
+  const snapshot = captureTurnTreeSnapshot(repository).snapshot;
   return appendLifecycleEvent(ledger, {
     type: "SESSION_BASELINE_SNAPSHOT",
     payload: { snapshot }
@@ -117,7 +117,7 @@ function appendTurnSnapshot(
   turnOrdinal: number,
   turnId: string
 ) {
-  const snapshot = captureTurnTreeSnapshot(repository);
+  const snapshot = captureTurnTreeSnapshot(repository).snapshot;
   let next = appendLifecycleEvent(ledger, {
     type: "TURN_STARTED",
     payload: { turnId, turnOrdinal, promptDigest: `sha256:${"a".repeat(64)}` }
@@ -178,7 +178,7 @@ describe("turn-tree localization", () => {
       git(repository, ["add", "a.txt"]);
       git(repository, ["commit", "-m", "base"]);
       writeFileSync(join(repository, "a.txt"), "two\n", "utf8");
-      const snapshot = captureTurnTreeSnapshot(repository);
+      const snapshot = captureTurnTreeSnapshot(repository).snapshot;
       let ledger = createCodexLifecycleLedger({ sessionId: "turn-local-session" });
       ledger = appendLifecycleEvent(ledger, {
         type: "SESSION_STARTED",
@@ -197,7 +197,7 @@ describe("turn-tree localization", () => {
         payload: { turnId: "turn-1", turnOrdinal: 1, snapshot }
       });
       writeFileSync(join(repository, "a.txt"), "three\n", "utf8");
-      const snapshot2 = captureTurnTreeSnapshot(repository);
+      const snapshot2 = captureTurnTreeSnapshot(repository).snapshot;
       ledger = appendLifecycleEvent(ledger, {
         type: "TURN_STARTED",
         payload: { turnId: "turn-2", turnOrdinal: 2, promptDigest: `sha256:${"b".repeat(64)}` }
