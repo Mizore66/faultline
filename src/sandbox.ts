@@ -4,6 +4,7 @@ import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, parse, resolve } from "node:path";
 import { digestJson, sha256 } from "./canonical.js";
 import type { Witness } from "./domain.js";
+import { classifyFromWitnessResult, parseWitnessResult } from "./witness-result.js";
 
 /**
  * The sandbox boundary is intentionally conservative. A plan is evidence only
@@ -52,6 +53,10 @@ export type SandboxVerdict = "PASS" | "FAIL" | "ERROR" | "INAPPLICABLE";
 export type SandboxReason =
   | "EXIT_ZERO"
   | "EXIT_NONZERO"
+  | "PREDICATE_PASS"
+  | "PREDICATE_FAIL"
+  | "INCOMPATIBLE_STATE"
+  | "HARNESS_ERROR"
   | "TIMEOUT"
   | "OUTPUT_LIMIT_EXCEEDED"
   | "SANDBOX_UNAVAILABLE"
@@ -685,6 +690,13 @@ export function classifySandboxResult(
   // signatures are infrastructure errors, never predicate failures.
   if (result.exitCode === 125 || (plan.kind === "DOCKER_ISOLATED" && DOCKER_INFRASTRUCTURE_ERROR.test(result.stderr))) {
     return { ...base, verdict: "ERROR", reason: "SANDBOX_UNAVAILABLE" };
+  }
+  // Prefer a structured witness outcome when present so turn investigation can
+  // distinguish predicate failure from harness/incompatible states.
+  const witnessResult = parseWitnessResult(result.stdout);
+  if (witnessResult) {
+    const classified = classifyFromWitnessResult(witnessResult.outcome);
+    return { ...base, verdict: classified.verdict, reason: classified.reason as SandboxReason };
   }
   // Command-not-found and permission-denied are infrastructure/setup errors,
   // not evidence that the approved predicate failed.

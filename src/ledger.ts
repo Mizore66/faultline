@@ -15,6 +15,7 @@ import { basename, dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { z } from "zod";
 import { digestJson } from "./canonical.js";
+import { TurnTreeSnapshotSchema, verifyTurnTreeSnapshot } from "./turn-snapshot.js";
 
 /**
  * A small, explicit transport boundary for records obtained from Codex.  The
@@ -53,7 +54,9 @@ export const SessionStartedPayloadSchema = StrictObject({
   transport: CodexTransportSchema,
   workingDirectory: z.string().min(1),
   codexThreadId: IdentifierSchema.optional(),
-  model: z.string().min(1).max(200).optional()
+  model: z.string().min(1).max(200).optional(),
+  /** Human-readable attribution for the observed session, not proof of authorship. */
+  actor: z.string().min(1).max(200).optional()
 });
 
 export const TurnStartedPayloadSchema = StrictObject({
@@ -90,6 +93,25 @@ export const WorktreeCheckpointPayloadSchema = StrictObject({
   afterTurnOrdinal: z.number().int().nonnegative()
 });
 
+/**
+ * Observed worktree tree after a completed turn. Dirty trees are allowed so
+ * FaultLine can localize a regression to its turn even without a human commit.
+ */
+export const TurnTreeSnapshotPayloadSchema = StrictObject({
+  turnId: IdentifierSchema,
+  turnOrdinal: z.number().int().positive(),
+  snapshot: TurnTreeSnapshotSchema
+});
+
+/**
+ * Immutable worktree tree captured at SessionStart (turn zero). Dirty trees are
+ * allowed so localization can prove the pre-turn-1 state even when the session
+ * began with uncommitted changes.
+ */
+export const SessionBaselineSnapshotPayloadSchema = StrictObject({
+  snapshot: TurnTreeSnapshotSchema
+});
+
 export const SessionEndedPayloadSchema = StrictObject({
   reason: SessionEndReasonSchema,
   completedTurns: z.number().int().nonnegative()
@@ -97,9 +119,11 @@ export const SessionEndedPayloadSchema = StrictObject({
 
 export const LifecycleEventInputSchema = z.discriminatedUnion("type", [
   StrictObject({ type: z.literal("SESSION_STARTED"), payload: SessionStartedPayloadSchema }),
+  StrictObject({ type: z.literal("SESSION_BASELINE_SNAPSHOT"), payload: SessionBaselineSnapshotPayloadSchema }),
   StrictObject({ type: z.literal("TURN_STARTED"), payload: TurnStartedPayloadSchema }),
   StrictObject({ type: z.literal("TURN_COMPLETED"), payload: TurnCompletedPayloadSchema }),
   StrictObject({ type: z.literal("WORKTREE_CHECKPOINT"), payload: WorktreeCheckpointPayloadSchema }),
+  StrictObject({ type: z.literal("TURN_TREE_SNAPSHOT"), payload: TurnTreeSnapshotPayloadSchema }),
   StrictObject({ type: z.literal("SESSION_ENDED"), payload: SessionEndedPayloadSchema })
 ]);
 
@@ -131,6 +155,8 @@ export type TurnOutcome = z.infer<typeof TurnOutcomeSchema>;
 export type SessionEndReason = z.infer<typeof SessionEndReasonSchema>;
 export type GitCheckpoint = z.infer<typeof GitCheckpointSchema>;
 export type UnsignedGitCheckpoint = z.infer<typeof UnsignedGitCheckpointSchema>;
+export type TurnTreeSnapshotPayload = z.infer<typeof TurnTreeSnapshotPayloadSchema>;
+export type SessionBaselineSnapshotPayload = z.infer<typeof SessionBaselineSnapshotPayloadSchema>;
 export type LifecycleEventInput = z.infer<typeof LifecycleEventInputSchema>;
 export type UnsignedCodexLifecycleEvent = z.infer<typeof UnsignedCodexLifecycleEventSchema>;
 export type CodexLifecycleEvent = z.infer<typeof CodexLifecycleEventSchema>;
@@ -291,6 +317,7 @@ export function appendLifecycleEvent(
 type LifecycleState = {
   started: boolean;
   ended: boolean;
+  hasBaseline: boolean;
   activeTurn: { id: string; ordinal: number } | null;
   completedTurnOrdinal: number;
   seenTurnIds: Set<string>;
@@ -311,6 +338,31 @@ function validateLifecycleState(event: CodexLifecycleEvent, state: LifecycleStat
       if (index !== 0) errors.push(`${prefix} must be the first event`);
       state.started = true;
       return;
+    case "SESSION_BASELINE_SNAPSHOT": {
+      if (!state.started) {
+        errors.push(`${prefix} occurs before SESSION_STARTED`);
+        return;
+      }
+      if (state.hasBaseline) {
+        errors.push(`${prefix} repeats SESSION_BASELINE_SNAPSHOT`);
+        return;
+      }
+      if (state.activeTurn) {
+        errors.push(`${prefix} is not permitted while turn ${state.activeTurn.id} is active`);
+        return;
+      }
+      if (state.seenTurnIds.size > 0 || state.completedTurnOrdinal !== 0) {
+        errors.push(`${prefix} must occur before any turn events`);
+        return;
+      }
+      const { snapshot } = event.event.payload;
+      if (Date.parse(snapshot.capturedAt) > Date.parse(event.occurredAt)) {
+        errors.push(`${prefix} is timestamped before its baseline tree snapshot was captured`);
+      }
+      for (const snapshotError of verifyTurnTreeSnapshot(snapshot)) errors.push(`${prefix}: ${snapshotError}`);
+      state.hasBaseline = true;
+      return;
+    }
     case "TURN_STARTED": {
       if (!state.started) {
         errors.push(`${prefix} occurs before SESSION_STARTED`);
@@ -365,6 +417,28 @@ function validateLifecycleState(event: CodexLifecycleEvent, state: LifecycleStat
       for (const checkpointError of verifyGitCheckpoint(checkpoint)) errors.push(`${prefix}: ${checkpointError}`);
       return;
     }
+    case "TURN_TREE_SNAPSHOT": {
+      if (!state.started) {
+        errors.push(`${prefix} occurs before SESSION_STARTED`);
+        return;
+      }
+      if (state.activeTurn) {
+        errors.push(`${prefix} is not permitted while turn ${state.activeTurn.id} is active`);
+        return;
+      }
+      const { turnId, turnOrdinal, snapshot } = event.event.payload;
+      if (!state.seenTurnIds.has(turnId)) {
+        errors.push(`${prefix} references a turn id that was never started: ${turnId}`);
+      }
+      if (turnOrdinal !== state.completedTurnOrdinal) {
+        errors.push(`${prefix} claims turn ordinal ${turnOrdinal}; expected ${state.completedTurnOrdinal}`);
+      }
+      if (Date.parse(snapshot.capturedAt) > Date.parse(event.occurredAt)) {
+        errors.push(`${prefix} is timestamped before its turn tree snapshot was captured`);
+      }
+      for (const snapshotError of verifyTurnTreeSnapshot(snapshot)) errors.push(`${prefix}: ${snapshotError}`);
+      return;
+    }
     case "SESSION_ENDED":
       if (!state.started) {
         errors.push(`${prefix} occurs before SESSION_STARTED`);
@@ -406,6 +480,7 @@ export function verifyCodexLifecycleLedger(value: unknown): LedgerVerification {
   const state: LifecycleState = {
     started: false,
     ended: false,
+    hasBaseline: false,
     activeTurn: null,
     completedTurnOrdinal: 0,
     seenTurnIds: new Set<string>(),
