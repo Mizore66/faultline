@@ -39,8 +39,12 @@ import {
   type CodexLifecycleLedger,
   type CodexTransport
 } from "./ledger.js";
+<<<<<<< Updated upstream
 import { validateSandboxPlanAudit } from "./sandbox.js";
 import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
+=======
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
+>>>>>>> Stashed changes
 
 /** A portable, Git-native proof package for one completed FaultLine investigation. */
 export const GIT_PROOF_BUNDLE_SCHEMA_VERSION = "faultline.git-proof-bundle.v1" as const;

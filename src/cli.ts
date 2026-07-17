@@ -57,6 +57,7 @@ import {
 import { readModelOverlayInput } from "./overlay-input.js";
 import { describeBundlePath, verifyProofBundle, writeProofBundle } from "./proof-bundle.js";
 import { redactValue } from "./redaction.js";
+<<<<<<< Updated upstream
 import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
 import {
   PROJECT_RUNTIME_IMAGE_BUILD_CONFIRMATION,
@@ -78,6 +79,10 @@ import { defaultRepairBriefRoot, verifyRepairBriefArtifact, writeRepairBriefArti
 import { startFaultLineServer, startGitProofServer } from "./server.js";
 import { startWitnessReviewServer } from "./witness-review-server.js";
 import { openWitnessReview } from "./witness-review.js";
+=======
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
+import { startFaultLineServer } from "./server.js";
+>>>>>>> Stashed changes
 import {
   approveWitnessProposal,
   freezeApprovedWitness,

@@ -1,4 +1,5 @@
 import { lstatSync, realpathSync } from "node:fs";
+<<<<<<< Updated upstream
 import { join, relative, resolve } from "node:path";
 
 const DARWIN_SYSTEM_DIRECTORY_ALIASES = [
@@ -12,6 +13,13 @@ const DARWIN_SYSTEM_DIRECTORY_ALIASES = [
  * aliases for `/private/var` and `/private/tmp`; accepting only those exact,
  * verified links lets FaultLine use the standard temporary-directory paths
  * while preserving the no-symlink invariant for every other path segment.
+=======
+import { resolve } from "node:path";
+
+/**
+ * Accept normal directories and the two verified macOS system aliases used
+ * for temporary files. All user-controlled symbolic links remain rejected.
+>>>>>>> Stashed changes
  */
 export function resolveSafeDirectorySegment(path: string): string | null {
   const stat = lstatSync(path);
@@ -19,7 +27,15 @@ export function resolveSafeDirectorySegment(path: string): string | null {
   if (!stat.isSymbolicLink() || process.platform !== "darwin") return null;
 
   const lexical = resolve(path);
+<<<<<<< Updated upstream
   const expectedTarget = DARWIN_SYSTEM_DIRECTORY_ALIASES.find(([alias]) => lexical === alias)?.[1] ?? null;
+=======
+  const expectedTarget = lexical === "/var"
+    ? "/private/var"
+    : lexical === "/tmp"
+      ? "/private/tmp"
+      : null;
+>>>>>>> Stashed changes
   if (expectedTarget === null) return null;
 
   try {
@@ -30,6 +46,7 @@ export function resolveSafeDirectorySegment(path: string): string | null {
     return null;
   }
 }
+<<<<<<< Updated upstream
 
 /**
  * Normalize only verified macOS system aliases for path comparisons. This
@@ -53,3 +70,5 @@ export function resolveTrustedSystemPath(path: string): string {
 export function relativeTrustedSystemPath(root: string, candidate: string): string {
   return relative(resolveTrustedSystemPath(root), resolveTrustedSystemPath(candidate));
 }
+=======
+>>>>>>> Stashed changes

@@ -38,7 +38,15 @@ outputs:
 runs:
   using: composite
   steps:
+<<<<<<< Updated upstream
     - name: Set up Node
+=======
+    - name: Set up pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 10.32.1
+    - name: Set up Node.js
+>>>>>>> Stashed changes
       uses: actions/setup-node@v4
       with:
         node-version: 22

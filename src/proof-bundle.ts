@@ -5,7 +5,11 @@ import { z } from "zod";
 import { canonicalJson, digestJson, sha256 } from "./canonical.js";
 import { DemoAnalysisSchema, MinimizationAttemptSchema, RunRecordSchema, WitnessSchema, type DemoAnalysis, type RunRecord, type Verdict } from "./domain.js";
 import { analysisDigest } from "./engine.js";
+<<<<<<< Updated upstream
 import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
+=======
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
+>>>>>>> Stashed changes
 
 const ManifestSchema = z.object({
   schemaVersion: z.literal("faultline.proof-bundle.v2"),
@@ -69,6 +73,7 @@ function assertNoLinksOrSpecialFiles(directory: string): void {
   }
 }
 
+<<<<<<< Updated upstream
 /** Create each managed-root segment without ever following a preexisting link. */
 function ensureRealDirectoryTree(directory: string): void {
   const absolute = resolve(directory);
@@ -89,6 +94,22 @@ function ensureRealDirectoryTree(directory: string): void {
     const safeCurrent = resolveSafeDirectorySegment(current);
     if (safeCurrent === null) {
       throw new Error(`Proof bundle root cannot traverse a symbolic link or non-directory: ${current}`);
+=======
+function assertSafeExistingDirectoryPath(directory: string): void {
+  const absolute = resolve(directory);
+  const parsed = parse(absolute);
+  const parts = relative(parsed.root, absolute).split(/[\\/]+/).filter(Boolean);
+  let current = parsed.root;
+  const safeRoot = resolveSafeDirectorySegment(current);
+  if (safeRoot === null) throw new Error(`Proof bundle root is not a real directory: ${current}`);
+  current = safeRoot;
+  for (const part of parts) {
+    current = join(current, part);
+    if (!existsSync(current)) return;
+    const safeCurrent = resolveSafeDirectorySegment(current);
+    if (safeCurrent === null) {
+      throw new Error(`Proof bundle output cannot traverse a symbolic link or non-directory: ${current}`);
+>>>>>>> Stashed changes
     }
     current = safeCurrent;
   }
@@ -106,6 +127,7 @@ export function assertSafeProofOutput(outputDirectory: string, proofRoot = defau
   if (!nestedPath || nestedPath.startsWith("..") || isAbsolute(nestedPath)) {
     throw new Error(`Proof bundle output must be a child directory of ${root}`);
   }
+<<<<<<< Updated upstream
   // The root may not exist yet. Create every segment deliberately before a
   // later recursive stage write can follow a hostile .faultline link.
   ensureRealDirectoryTree(root);
@@ -115,6 +137,12 @@ export function assertSafeProofOutput(outputDirectory: string, proofRoot = defau
   if (existsSync(current) && resolveSafeDirectorySegment(current) === null) {
     throw new Error(`Proof bundle root cannot be a symbolic link: ${root}`);
   }
+=======
+  assertSafeExistingDirectoryPath(root);
+  assertSafeExistingDirectoryPath(dirname(output));
+  const pathParts = nestedPath.split(/[\\/]+/).filter(Boolean);
+  let current = root;
+>>>>>>> Stashed changes
   for (const part of pathParts) {
     current = join(current, part);
     if (!existsSync(current)) continue;

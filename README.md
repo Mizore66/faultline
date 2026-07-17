@@ -25,7 +25,11 @@ It deliberately does **not** claim model intent, a unique semantic root cause, o
 
 ## Quick start
 
+<<<<<<< Updated upstream
 Requirements: Node.js 22+ and pnpm 10.32.1 (pinned in `package.json`). If Corepack is available, run `corepack enable` once and it will select the pinned pnpm version. The CLI is tested on Windows, macOS, and Ubuntu; Docker is required only for a live proof-grade Git investigation. Native Docker replay is exercised on Ubuntu CI.
+=======
+Requirements: Node.js 22+ and pnpm 10.32.1 (pinned in `package.json`). Docker is required only for a live proof-grade Git investigation.
+>>>>>>> Stashed changes
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -408,7 +412,7 @@ Support matrix:
 - Packaged CLI: Node.js 22 and 24 on current GitHub-hosted Ubuntu, Windows, and macOS runners.
 - Proof action: current GitHub-hosted Ubuntu runner with Docker and a Linux digest-pinned runtime image.
 - Diagnostic action: current GitHub-hosted Ubuntu runner; it is not evidence suitable for publication.
-- Package manager for source builds: pnpm 10. Installed consumers only need a supported Node.js runtime.
+- Package manager for source builds: pnpm 10.32.1. Installed consumers only need a supported Node.js runtime.
 - GitHub.com Actions is supported. GitHub Enterprise Server is not currently claimed because `actions/upload-artifact@v4` availability differs by GHES version.
 - npm registry installation remains unsupported until the owner performs the first publish. No release or publish automation is enabled.
 

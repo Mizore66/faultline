@@ -14,7 +14,11 @@ import { isAbsolute, join, parse, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson, digestJson } from "./canonical.js";
+<<<<<<< Updated upstream
 import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-directory.js";
+=======
+import { resolveSafeDirectorySegment } from "./safe-directory.js";
+>>>>>>> Stashed changes
 
 /**
  * A bundle attestation is deliberately not a signature. It gives a reviewer a

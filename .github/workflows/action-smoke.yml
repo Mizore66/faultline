@@ -2,6 +2,9 @@ name: Verify reusable Action
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - master
   pull_request:
     paths:
       - action.yml
@@ -23,6 +26,11 @@ jobs:
         with:
           fetch-depth: 0
       - uses: pnpm/action-setup@v4
+<<<<<<< Updated upstream
+=======
+        with:
+          version: 10.32.1
+>>>>>>> Stashed changes
       - uses: actions/setup-node@v4
         with:
           node-version: 22
