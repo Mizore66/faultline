@@ -11,6 +11,7 @@ import {
 import type { SandboxCommandRunner } from "../src/sandbox.js";
 import { formatWitnessResult } from "../src/witness-result.js";
 import { captureTurnTreeSnapshot } from "../src/turn-snapshot.js";
+import { ENVIRONMENT_CHANGED_PROOF_MESSAGE } from "../src/environment-fingerprint.js";
 import {
   attributeFailureIntroduction,
   duplicateTurnOrdinalError,
@@ -628,8 +629,132 @@ describe("turn-tree localization", () => {
 
       expect(result.status).toBe("ENVIRONMENT_CHANGED");
       expect(result.proof.isProof).toBe(false);
+      expect(result.proof.evidenceGrade).toBe("NONE");
       expect(result.transitions).toEqual([]);
-      expect(result.errors.some((error) => /fingerprint/i.test(error))).toBe(true);
+      expect(result.runs).toEqual([]);
+      expect(result.errors).toContain(ENVIRONMENT_CHANGED_PROOF_MESSAGE);
+      expect(result.proof.reason).toBe(ENVIRONMENT_CHANGED_PROOF_MESSAGE);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when package.json changes even if the lockfile does not", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-turn-package-json-"));
+    try {
+      const repository = join(root, "repo");
+      git(root, ["init", "repo"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine"]);
+      writeFileSync(join(repository, "state.txt"), "good\n", "utf8");
+      writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nSAME\n", "utf8");
+      writeFileSync(join(repository, "package.json"), JSON.stringify({ name: "fixture", scripts: { test: "node a" } }), "utf8");
+      git(repository, ["add", "state.txt", "pnpm-lock.yaml", "package.json"]);
+      git(repository, ["commit", "-m", "good"]);
+
+      let ledger = createCodexLifecycleLedger({ sessionId: "turn-package-json" });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "SESSION_STARTED",
+        payload: { transport: "SIDE_CAR", workingDirectory: repository }
+      });
+      ledger = appendTurnSnapshot(ledger, repository, 1, "turn-1");
+      writeFileSync(join(repository, "state.txt"), "bad\n", "utf8");
+      writeFileSync(join(repository, "package.json"), JSON.stringify({ name: "fixture", scripts: { test: "node b" } }), "utf8");
+      ledger = appendTurnSnapshot(ledger, repository, 2, "turn-2");
+      const ledgerPath = join(root, "ledger.json");
+      writeCodexLifecycleLedgerAtomic(ledgerPath, ledger);
+
+      const frozen = createFrozenWitness(join(root, "witnesses"), "turn-package-json");
+      const result = await investigateTurnTrees({
+        repository,
+        ledgerPath,
+        frozenWitness: frozen,
+        expectedFrozenDigest: frozen.frozenDigest,
+        image: pinnedImage,
+        runner: stateReadingRunner()
+      });
+
+      expect(result.status).toBe("ENVIRONMENT_CHANGED");
+      expect(result.environmentHomogeneity).toBe("HETEROGENEOUS");
+      expect(result.errors).toContain(ENVIRONMENT_CHANGED_PROOF_MESSAGE);
+      expect(result.proof.isProof).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("selects per-fingerprint images from runtimeMapping when environments diverge", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-turn-runtime-map-"));
+    const imageA = `registry.example/faultline-a@sha256:${"a".repeat(64)}`;
+    const imageB = `registry.example/faultline-b@sha256:${"b".repeat(64)}`;
+    try {
+      const repository = join(root, "repo");
+      git(root, ["init", "repo"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine"]);
+      writeFileSync(join(repository, "state.txt"), "good\n", "utf8");
+      writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nA\n", "utf8");
+      git(repository, ["add", "state.txt", "pnpm-lock.yaml"]);
+      git(repository, ["commit", "-m", "good"]);
+
+      let ledger = createCodexLifecycleLedger({ sessionId: "turn-runtime-map" });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "SESSION_STARTED",
+        payload: { transport: "SIDE_CAR", workingDirectory: repository }
+      });
+      ledger = appendTurnSnapshot(ledger, repository, 1, "turn-1");
+      writeFileSync(join(repository, "state.txt"), "bad\n", "utf8");
+      writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nB\n", "utf8");
+      ledger = appendTurnSnapshot(ledger, repository, 2, "turn-2");
+      const ledgerPath = join(root, "ledger.json");
+      writeCodexLifecycleLedgerAtomic(ledgerPath, ledger);
+
+      const frozen = createFrozenWitness(join(root, "witnesses"), "turn-runtime-map");
+      const blocked = await investigateTurnTrees({
+        repository,
+        ledgerPath,
+        frozenWitness: frozen,
+        expectedFrozenDigest: frozen.frozenDigest,
+        image: pinnedImage,
+        runner: stateReadingRunner()
+      });
+      expect(blocked.status).toBe("ENVIRONMENT_CHANGED");
+      expect(blocked.environmentFingerprints).toHaveLength(2);
+      const digestA = blocked.environmentFingerprints[0]?.digest;
+      const digestB = blocked.environmentFingerprints[1]?.digest;
+      expect(digestA).toMatch(/^sha256:/);
+      expect(digestB).toMatch(/^sha256:/);
+      expect(digestA).not.toBe(digestB);
+
+      const result = await investigateTurnTrees({
+        repository,
+        ledgerPath,
+        frozenWitness: frozen,
+        expectedFrozenDigest: frozen.frozenDigest,
+        image: pinnedImage,
+        runtimeMapping: {
+          [digestA as string]: imageA,
+          [digestB as string]: imageB
+        },
+        runner: stateReadingRunner()
+      });
+
+      expect(result.status).toBe("COMPLETED");
+      expect(result.environmentHomogeneity).toBe("HETEROGENEOUS");
+      expect(result.runtimeMapping).toEqual({
+        [digestA as string]: imageA,
+        [digestB as string]: imageB
+      });
+      expect(result.runs).toHaveLength(6);
+      expect(result.runs.filter((run) => run.stateIndex === 0).every((run) => (
+        run.environmentFingerprintDigest === digestA && run.sandbox.runtime.image === imageA
+      ))).toBe(true);
+      expect(result.runs.filter((run) => run.stateIndex === 1).every((run) => (
+        run.environmentFingerprintDigest === digestB && run.sandbox.runtime.image === imageB
+      ))).toBe(true);
+      expect(result.transitions).toHaveLength(1);
+      expect(result.proof.isProof).toBe(false);
+      expect(result.proof.evidenceGrade).toBe("EXPERIMENTAL_TURN");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
