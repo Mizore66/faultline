@@ -75,7 +75,13 @@ export const TURN_SNAPSHOT_EXCLUDED_PATHSPECS: readonly string[] = Object.freeze
   ":(exclude,glob)**/id_rsa.*"
 ]);
 
-const MID_WRITE_CHECK_DELAY_MS = 50;
+/** Delay between consecutive tree captures while proving filesystem quiescence. */
+export const TURN_SNAPSHOT_QUIESCENCE_DELAY_MS = 50;
+/**
+ * Maximum dual-tree attempts before fail-closed. Each attempt captures two
+ * throwaway trees; keep this small so Stop-hook latency stays bounded.
+ */
+export const TURN_SNAPSHOT_MAX_QUIESCENCE_ATTEMPTS = 4;
 const STATUS_ARGS = ["status", "--porcelain=v1", "--untracked-files=all", "-z"] as const;
 
 export type TurnSnapshotGitRunner = (repositoryRoot: string, args: readonly string[], env?: NodeJS.ProcessEnv) => string;
@@ -122,7 +128,7 @@ export function defaultTurnSnapshotGitRunner(repositoryRoot: string, args: reado
   return String(result.stdout ?? "");
 }
 
-/** Blocks the current thread without a shell or a busy loop; used only for the short mid-write stability check. */
+/** Blocks the current thread without a shell or a busy loop; used only for the quiescence delay. */
 function blockingSleep(milliseconds: number): void {
   if (milliseconds <= 0) return;
   const signal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
@@ -148,8 +154,25 @@ export type CaptureTurnTreeSnapshotOptions = {
   runGit?: TurnSnapshotGitRunner;
   /** Injectable so tests can skip the real wall-clock wait. Production callers should not override this. */
   sleep?: (milliseconds: number) => void;
+  /** @deprecated Use `quiescenceDelayMs`. Kept so older callers still compile. */
   midWriteCheckDelayMs?: number;
+  quiescenceDelayMs?: number;
+  maxQuiescenceAttempts?: number;
 };
+
+function writeThrowawayTreeDigest(runGit: TurnSnapshotGitRunner, repositoryRoot: string): string {
+  const temporaryIndexPath = join(tmpdir(), `faultline-turn-tree-${randomUUID()}.index`);
+  try {
+    runGit(repositoryRoot, ["add", "--all", "--", ".", ...TURN_SNAPSHOT_EXCLUDED_PATHSPECS], { GIT_INDEX_FILE: temporaryIndexPath });
+    const treeDigest = runGit(repositoryRoot, ["write-tree"], { GIT_INDEX_FILE: temporaryIndexPath }).trim();
+    if (!GitObjectIdSchema.safeParse(treeDigest).success) {
+      throw new TurnSnapshotError("Git did not return a valid tree object id for this turn tree snapshot.");
+    }
+    return treeDigest;
+  } finally {
+    rmSync(temporaryIndexPath, { force: true });
+  }
+}
 
 /**
  * Captures `{ headCommit, treeDigest, dirty, statusDigest }` for whatever is
@@ -160,51 +183,92 @@ export type CaptureTurnTreeSnapshotOptions = {
  * own storage, dependency trees, and common secret shapes) and is then
  * discarded after `git write-tree` returns the resulting tree object id.
  *
- * Because a live filesystem could be mutating while this runs, the porcelain
- * status is sampled twice ~50ms apart; a difference means the capture would
- * be torn, and this function refuses rather than returning an ambiguous tree.
+ * Quiescence is proven by dual tree capture (Option A) with status brackets
+ * (Option B): capture tree A, wait, capture tree B, and accept only when
+ * `tree A == tree B` and the porcelain status is unchanged around both
+ * captures. Status equality alone is not enough — an already-dirty file can
+ * change bytes without altering the porcelain string. Retries are bounded;
+ * exhaustion fails closed rather than returning a torn snapshot.
  */
 export function captureTurnTreeSnapshot(repository: string, options: CaptureTurnTreeSnapshotOptions = {}): TurnTreeSnapshot {
   const runGit = options.runGit ?? defaultTurnSnapshotGitRunner;
   const sleep = options.sleep ?? blockingSleep;
-  const midWriteCheckDelayMs = options.midWriteCheckDelayMs ?? MID_WRITE_CHECK_DELAY_MS;
+  const quiescenceDelayMs = options.quiescenceDelayMs
+    ?? options.midWriteCheckDelayMs
+    ?? TURN_SNAPSHOT_QUIESCENCE_DELAY_MS;
+  const maxQuiescenceAttempts = options.maxQuiescenceAttempts ?? TURN_SNAPSHOT_MAX_QUIESCENCE_ATTEMPTS;
   const now = options.now ?? (() => new Date());
+
+  if (!Number.isInteger(maxQuiescenceAttempts) || maxQuiescenceAttempts < 1) {
+    throw new TurnSnapshotError("Turn tree snapshot quiescence attempt budget must be a positive integer.");
+  }
+  if (!Number.isFinite(quiescenceDelayMs) || quiescenceDelayMs < 0) {
+    throw new TurnSnapshotError("Turn tree snapshot quiescence delay must be a non-negative number of milliseconds.");
+  }
 
   const requestedRoot = resolve(repository);
   const repositoryRoot = resolve(runGit(requestedRoot, ["rev-parse", "--show-toplevel"]).trim());
+  const sampleStatus = (): string => runGit(repositoryRoot, [...STATUS_ARGS]);
 
-  const firstStatus = runGit(repositoryRoot, [...STATUS_ARGS]);
-  sleep(midWriteCheckDelayMs);
-  const secondStatus = runGit(repositoryRoot, [...STATUS_ARGS]);
-  if (firstStatus !== secondStatus) {
-    throw new TurnSnapshotError("FaultLine detected the worktree changing mid-capture and refused a torn turn tree snapshot.");
+  let acceptedTree: string | null = null;
+  let acceptedStatus: string | null = null;
+  let acceptedHead: string | null = null;
+
+  for (let attempt = 1; attempt <= maxQuiescenceAttempts; attempt += 1) {
+    const headBefore = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();
+    if (!GitObjectIdSchema.safeParse(headBefore).success) {
+      throw new TurnSnapshotError("Git did not return a resolvable HEAD commit for this turn tree snapshot.");
+    }
+    const statusBeforeA = sampleStatus();
+    const treeA = writeThrowawayTreeDigest(runGit, repositoryRoot);
+    const statusAfterA = sampleStatus();
+    if (statusBeforeA !== statusAfterA) {
+      // Mutation during the first add/write-tree window — do not trust treeA.
+      continue;
+    }
+
+    sleep(quiescenceDelayMs);
+
+    const statusBeforeB = sampleStatus();
+    const treeB = writeThrowawayTreeDigest(runGit, repositoryRoot);
+    const statusAfterB = sampleStatus();
+    const headAfter = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();
+    if (statusBeforeB !== statusAfterB) {
+      continue;
+    }
+    if (statusAfterA !== statusBeforeB || statusAfterA !== statusAfterB) {
+      // Porcelain changed across the delay or between the paired captures.
+      continue;
+    }
+    if (treeA !== treeB) {
+      // Content changed even if porcelain looked identical (dirty-file bytes).
+      continue;
+    }
+    if (headBefore !== headAfter) {
+      // HEAD moved during capture; the snapshot would bind the wrong commit tip.
+      continue;
+    }
+
+    acceptedTree = treeB;
+    acceptedStatus = statusAfterB;
+    acceptedHead = headAfter;
+    break;
   }
 
-  const headCommit = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();
-  if (!GitObjectIdSchema.safeParse(headCommit).success) {
-    throw new TurnSnapshotError("Git did not return a resolvable HEAD commit for this turn tree snapshot.");
-  }
-
-  const temporaryIndexPath = join(tmpdir(), `faultline-turn-tree-${randomUUID()}.index`);
-  let treeDigest: string;
-  try {
-    runGit(repositoryRoot, ["add", "--all", "--", ".", ...TURN_SNAPSHOT_EXCLUDED_PATHSPECS], { GIT_INDEX_FILE: temporaryIndexPath });
-    treeDigest = runGit(repositoryRoot, ["write-tree"], { GIT_INDEX_FILE: temporaryIndexPath }).trim();
-  } finally {
-    rmSync(temporaryIndexPath, { force: true });
-  }
-  if (!GitObjectIdSchema.safeParse(treeDigest).success) {
-    throw new TurnSnapshotError("Git did not return a valid tree object id for this turn tree snapshot.");
+  if (acceptedTree === null || acceptedStatus === null || acceptedHead === null) {
+    throw new TurnSnapshotError(
+      `FaultLine could not prove turn-tree quiescence after ${maxQuiescenceAttempts} dual-tree attempt(s) and refused a torn turn tree snapshot.`
+    );
   }
 
   const unsigned: UnsignedTurnTreeSnapshot = {
     schemaVersion: TURN_TREE_SNAPSHOT_VERSION,
     repositoryRoot,
-    headCommit,
-    treeDigest,
+    headCommit: acceptedHead,
+    treeDigest: acceptedTree,
     capturedAt: now().toISOString(),
-    dirty: secondStatus.length > 0,
-    statusDigest: `sha256:${sha256(secondStatus)}`
+    dirty: acceptedStatus.length > 0,
+    statusDigest: `sha256:${sha256(acceptedStatus)}`
   };
   return signTurnTreeSnapshot(unsigned);
 }
