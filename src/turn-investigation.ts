@@ -31,16 +31,50 @@ const DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const GitObjectIdSchema = z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/);
 const DANGEROUS_GIT_ATTRIBUTE = /(?:^|\s)filter=[^\s]+/m;
 
+/** Synthetic turn id for the SessionStart baseline (turn zero). */
+export const SESSION_BASELINE_TURN_ID = "session-baseline" as const;
+
 export const TurnStateSchema = z.object({
   index: z.number().int().nonnegative(),
   turnId: z.string().min(1),
-  turnOrdinal: z.number().int().positive(),
+  /** 0 is the session baseline; positive values are completed Codex turns. */
+  turnOrdinal: z.number().int().nonnegative(),
+  role: z.enum(["SESSION_BASELINE", "TURN"]),
   treeDigest: GitObjectIdSchema,
   snapshotDigest: DigestSchema,
   dirty: z.boolean()
 }).strict();
 
 export type TurnState = z.infer<typeof TurnStateSchema>;
+
+export const TurnIntroductionSchema = z.object({
+  status: z.enum(["ATTRIBUTED", "UNATTRIBUTED", "NOT_APPLICABLE"]),
+  turnOrdinal: z.number().int().positive().nullable(),
+  turnId: z.string().min(1).nullable(),
+  reason: z.string().min(1)
+}).strict();
+
+export type TurnIntroduction = z.infer<typeof TurnIntroductionSchema>;
+
+export type TurnTransition = {
+  kind: "PASS_TO_FAIL" | "FAIL_TO_PASS";
+  before: TurnState;
+  after: TurnState;
+  beforeVerdict: "PASS" | "FAIL";
+  afterVerdict: "PASS" | "FAIL";
+};
+
+export type TurnInvestigationResult = {
+  schemaVersion: typeof TURN_INVESTIGATION_SCHEMA_VERSION;
+  recorder: "codex-turn-tree-replay";
+  nativeCodexInterception: false;
+  status: "COMPLETED" | "INVALID_WITNESS" | "NO_TURN_SNAPSHOTS" | "EXECUTION_ERROR" | "ENVIRONMENT_CHANGED" | "DUPLICATE_TURN_SNAPSHOTS";
+  states: TurnState[];
+  transitions: TurnTransition[];
+  introduction: TurnIntroduction;
+  proof: { isProof: boolean; reason: string; evidenceGrade: "EXPERIMENTAL_TURN" | "NONE" };
+  errors: string[];
+};
 
 function runGit(repository: string, args: readonly string[], env: NodeJS.ProcessEnv = {}): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
   return new Promise((resolveResult) => {
@@ -58,17 +92,32 @@ function runGit(repository: string, args: readonly string[], env: NodeJS.Process
 }
 
 /**
- * Extract ordered turn-tree snapshots from an observed Codex lifecycle ledger.
+ * Extract ordered snapshot states from an observed Codex lifecycle ledger.
+ * Session baseline (turn zero) precedes completed-turn tree snapshots.
  */
 export function turnStatesFromLedger(ledger: CodexLifecycleLedger): TurnState[] {
   const states: TurnState[] = [];
   for (const record of ledger.events) {
+    if (record.event.type === "SESSION_BASELINE_SNAPSHOT") {
+      const snapshot = TurnTreeSnapshotSchema.parse(record.event.payload.snapshot);
+      states.push({
+        index: states.length,
+        turnId: SESSION_BASELINE_TURN_ID,
+        turnOrdinal: 0,
+        role: "SESSION_BASELINE",
+        treeDigest: snapshot.treeDigest,
+        snapshotDigest: snapshot.digest,
+        dirty: snapshot.dirty
+      });
+      continue;
+    }
     if (record.event.type !== "TURN_TREE_SNAPSHOT") continue;
     const snapshot = TurnTreeSnapshotSchema.parse(record.event.payload.snapshot);
     states.push({
       index: states.length,
       turnId: record.event.payload.turnId,
       turnOrdinal: record.event.payload.turnOrdinal,
+      role: "TURN",
       treeDigest: snapshot.treeDigest,
       snapshotDigest: snapshot.digest,
       dirty: snapshot.dirty
@@ -82,7 +131,49 @@ export function duplicateTurnOrdinalError(states: readonly TurnState[]): string 
   const ordinals = states.map((state) => state.turnOrdinal);
   return new Set(ordinals).size === ordinals.length
     ? null
-    : "Duplicate turnOrdinal in TURN_TREE_SNAPSHOT sequence.";
+    : "Duplicate turnOrdinal in session baseline / TURN_TREE_SNAPSHOT sequence.";
+}
+
+/**
+ * Attribute "introduced the failure" only when a session baseline proves the
+ * repository passed before the first failing turn.
+ */
+export function attributeFailureIntroduction(
+  states: readonly TurnState[],
+  transitions: readonly TurnTransition[]
+): TurnIntroduction {
+  const hasBaseline = states.some((state) => state.role === "SESSION_BASELINE" && state.turnOrdinal === 0);
+  const firstPassToFail = transitions.find((transition) => transition.kind === "PASS_TO_FAIL");
+  if (!firstPassToFail) {
+    return {
+      status: "NOT_APPLICABLE",
+      turnOrdinal: null,
+      turnId: null,
+      reason: "No PASS→FAIL transition is available to attribute."
+    };
+  }
+  if (!hasBaseline) {
+    return {
+      status: "UNATTRIBUTED",
+      turnOrdinal: null,
+      turnId: null,
+      reason: "No SESSION_BASELINE_SNAPSHOT; cannot claim a turn introduced the failure."
+    };
+  }
+  if (firstPassToFail.before.role !== "SESSION_BASELINE" || firstPassToFail.before.turnOrdinal !== 0) {
+    return {
+      status: "UNATTRIBUTED",
+      turnOrdinal: null,
+      turnId: null,
+      reason: "The first PASS→FAIL transition is not anchored at the session baseline."
+    };
+  }
+  return {
+    status: "ATTRIBUTED",
+    turnOrdinal: firstPassToFail.after.turnOrdinal,
+    turnId: firstPassToFail.after.turnId,
+    reason: `Failure introduced at turn ${firstPassToFail.after.turnOrdinal}.`
+  };
 }
 
 async function materializeTree(repository: string, treeDigest: string, worktree: string): Promise<void> {
@@ -108,17 +199,6 @@ async function assertNoDangerousAttributes(worktree: string): Promise<void> {
   }
 }
 
-export type TurnInvestigationResult = {
-  schemaVersion: typeof TURN_INVESTIGATION_SCHEMA_VERSION;
-  recorder: "codex-turn-tree-replay";
-  nativeCodexInterception: false;
-  status: "COMPLETED" | "INVALID_WITNESS" | "NO_TURN_SNAPSHOTS" | "EXECUTION_ERROR" | "ENVIRONMENT_CHANGED" | "DUPLICATE_TURN_SNAPSHOTS";
-  states: TurnState[];
-  transitions: Array<{ kind: "PASS_TO_FAIL" | "FAIL_TO_PASS"; before: TurnState; after: TurnState; beforeVerdict: "PASS" | "FAIL"; afterVerdict: "PASS" | "FAIL" }>;
-  proof: { isProof: boolean; reason: string; evidenceGrade: "EXPERIMENTAL_TURN" | "NONE" };
-  errors: string[];
-};
-
 /**
  * Replay a frozen witness across Codex turn-tree snapshots (including dirty Stops).
  * This is the Codex-native localization path; Git commit-range replay remains the mature proof fallback.
@@ -137,6 +217,12 @@ export async function investigateTurnTrees(options: {
     reason,
     evidenceGrade: "NONE"
   });
+  const emptyIntroduction = (reason: string): TurnIntroduction => ({
+    status: "NOT_APPLICABLE",
+    turnOrdinal: null,
+    turnId: null,
+    reason
+  });
 
   const repository = resolve(options.repository);
   const verification = verifyFrozenWitnessRecord(options.frozenWitness, options.expectedFrozenDigest);
@@ -148,6 +234,7 @@ export async function investigateTurnTrees(options: {
       status: "INVALID_WITNESS",
       states: [],
       transitions: [],
+      introduction: emptyIntroduction("Frozen witness digest mismatch."),
       proof: emptyProof("Frozen witness digest mismatch."),
       errors: verification.errors
     };
@@ -163,7 +250,8 @@ export async function investigateTurnTrees(options: {
       status: "NO_TURN_SNAPSHOTS",
       states,
       transitions: [],
-      proof: emptyProof("Need at least two TURN_TREE_SNAPSHOT events for turn localization."),
+      introduction: emptyIntroduction("Need at least two snapshot states for turn localization."),
+      proof: emptyProof("Need at least two snapshot states (session baseline and/or TURN_TREE_SNAPSHOT events) for turn localization."),
       errors: []
     };
   }
@@ -177,7 +265,8 @@ export async function investigateTurnTrees(options: {
       status: "DUPLICATE_TURN_SNAPSHOTS",
       states,
       transitions: [],
-      proof: emptyProof("Multiple TURN_TREE_SNAPSHOT events share a turnOrdinal; refuse ambiguous localization."),
+      introduction: emptyIntroduction(duplicateError),
+      proof: emptyProof("Multiple snapshot events share a turnOrdinal; refuse ambiguous localization."),
       errors: [duplicateError]
     };
   }
@@ -235,6 +324,7 @@ export async function investigateTurnTrees(options: {
       status: "ENVIRONMENT_CHANGED",
       states,
       transitions: [],
+      introduction: emptyIntroduction("Environment changed between turn states."),
       proof: emptyProof("Environment changed between turn states. Supply a runtime mapping for each fingerprint before proof can continue."),
       errors: [
         ...errors,
@@ -243,7 +333,7 @@ export async function investigateTurnTrees(options: {
     };
   }
 
-  const transitions: TurnInvestigationResult["transitions"] = [];
+  const transitions: TurnTransition[] = [];
   for (let index = 1; index < states.length; index += 1) {
     const beforeVerdict = verdicts[index - 1];
     const afterVerdict = verdicts[index];
@@ -260,6 +350,7 @@ export async function investigateTurnTrees(options: {
     });
   }
 
+  const introduction = attributeFailureIntroduction(states, transitions);
   const certified = options.runner === undefined && transitions.length > 0 && errors.length === 0;
   return {
     schemaVersion: TURN_INVESTIGATION_SCHEMA_VERSION,
@@ -268,6 +359,7 @@ export async function investigateTurnTrees(options: {
     status: errors.length > 0 ? "EXECUTION_ERROR" : "COMPLETED",
     states,
     transitions,
+    introduction,
     proof: {
       // Native Docker turn localization can set isProof when transitions are
       // stable, but evidenceGrade remains EXPERIMENTAL_TURN until a portable
