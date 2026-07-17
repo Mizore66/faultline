@@ -38,7 +38,37 @@ The resolver runs only a fixed, local `docker image inspect` command. It rejects
 
 These are starting environments, not universal build environments. The proof runner has no network and mounts source read-only, so dependencies and the witness command must already be runnable in the selected image. For any other stack, use your own explicit digest-pinned image.
 
-## 3. Create a draft; FaultLine does not execute it
+## 3. Preferred: one guided command from a CI log
+
+When you have a CI log, use the resumable Option B workflow. FaultLine still keeps intake, witness lock, runtime selection, localization, and proof export modular internally, but you drive one coherent command:
+
+```powershell
+pnpm fl -- investigate --ci-log .\ci.log `
+  --repo . `
+  --command "pnpm test -- checkout" `
+  --runtime node
+```
+
+State transitions the operator sees:
+
+1. **Preflight** — `fl doctor` (Node must be ready; Docker readiness is required for proof-grade continuation).
+2. **Intake** — write-once draft + proposed witness from the CI log (nothing executed, not approved, not frozen).
+3. **Witness review pause** — local `127.0.0.1` review URL; you Approve, then Freeze as separate clicks. The command polls until freeze and binds the freeze digest in-process as the retained `--expect-digest`.
+4. **Runtime selection** — draft-bound image, or `--runtime` / `--image` (never pulls).
+5. **Localization → proof export** — same engine as `fl incident continue`, then print the `fl serve --bundle … --expect-root …` next step.
+
+If you interrupt during review, resume without redoing intake:
+
+```powershell
+pnpm fl -- investigate --resume <id> `
+  --repo . `
+  --expect-digest <frozen-digest> `
+  --runtime node
+```
+
+FaultLine never auto-approves or auto-freezes. `--unsafe-local` is diagnosis-only and cannot publish a portable proof package.
+
+## 4. Modular alternative: create a draft; FaultLine does not execute it
 
 Paste the command that is failing in CI or locally. With no `--from` / `--to`, FaultLine accepts only a conservative, locally observed one-parent `HEAD~1 -> HEAD` bracket. It refuses a root commit or merge head rather than choosing a remote/PR base.
 
@@ -56,7 +86,7 @@ The command writes two immutable, local artifacts:
 
 It does not execute the command, pull an image, infer a remote base, approve a witness, or freeze a witness. Give `--id <safe-id>` to choose the record identifier, or provide both `--from` and `--to` for an explicit bracket.
 
-## 4. Review, approve, and freeze explicitly
+## 5. Modular alternative: review, approve, and freeze explicitly
 
 Open the local review workbench returned by intake (or run the command below). It binds only to `127.0.0.1`, disables browser caching, and shows the exact command, canonical base64 overlay bytes, and execution policy without executing or materializing them. Raw CI-log text stays off the browser page. Treat the visible command and overlays as sensitive incident material.
 
@@ -68,7 +98,7 @@ The screen verifies the strict blinded-packet shape and proposal digests before 
 
 The freeze screen contains the externally retainable frozen digest. Keep it with the incident record before asking FaultLine to localize anything. A displayed reviewer name remains an assertion unless you add the optional reviewer signature workflow.
 
-## 5. Continue the same incident and share the real incident page
+## 6. Modular alternative: continue the same incident and share the real incident page
 
 Do not retype the Git range, proposal ID, or selected runtime. `fl incident continue` re-reads the immutable draft and the frozen witness, refuses any mismatch, and uses the recorded bracket. Check the durable state first. Proof-grade continuation requires the frozen digest retained outside the witness store after review; without it, `status` reports `RETAIN_DIGEST_REQUIRED` and `continue` refuses to publish proof:
 

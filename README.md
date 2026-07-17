@@ -84,7 +84,33 @@ Before making a real claim, let FaultLine surface local prerequisites:
 pnpm fl -- doctor --repo .
 ```
 
-Then record a review-only draft from the command that is failing. It never runs the command, guesses a remote base, approves a witness, or freezes it. With no explicit range, it uses only an unambiguous locally observed one-parent `HEAD~1 -> HEAD` bracket:
+### One-command guided path (`fl investigate --ci-log`)
+
+For a CI log plus a failing command, use the resumable guided workflow. It creates the review-only draft, opens the local witness review workbench, pauses until you Approve and then Freeze (separate clicks), retains the freeze digest in-process, selects the runtime, localizes, and exports the proof package — without forcing you to retype subcommands:
+
+```powershell
+docker pull node:22-alpine
+pnpm fl -- runtime resolve node
+pnpm fl -- investigate --ci-log .\ci.log `
+  --repo . `
+  --command "pnpm test -- checkout" `
+  --runtime node
+```
+
+If you cancel during review, resume the same durable incident:
+
+```powershell
+pnpm fl -- investigate --resume <incident-id> `
+  --repo . `
+  --expect-digest <retained-frozen-digest> `
+  --runtime node
+```
+
+FaultLine never auto-approves or auto-freezes. Internal steps still reuse `incident` / `witness` / `investigate git` primitives; you see one coherent CLI sequence. Use `--unsafe-local` only for non-proof diagnosis when Docker is unavailable.
+
+### Modular path (`fl incident start` → review → continue)
+
+You can still drive the same primitives manually. Intake never runs the command, guesses a remote base, approves a witness, or freezes it. With no explicit range, it uses only an unambiguous locally observed one-parent `HEAD~1 -> HEAD` bracket:
 
 ```powershell
 pnpm fl -- incident start `
@@ -104,7 +130,7 @@ The draft and human-origin proposal are write-once local records. Run `pnpm fl -
 
 ## Real Git investigation
 
-The guided path is `fl incident start` → `fl witness review` → `fl incident continue`. The lower-level commands below remain available for automation or a pre-existing witness store. First create and freeze a reviewed witness. The proposal input is a blinded incident packet plus the exact overlay bytes to execute.
+The preferred operator path is `fl investigate --ci-log` (or the modular `fl incident start` → `fl witness review` → `fl incident continue`). The lower-level commands below remain available for automation or a pre-existing witness store. First create and freeze a reviewed witness. The proposal input is a blinded incident packet plus the exact overlay bytes to execute.
 
 ```powershell
 pnpm fl -- witness propose --input .\proposal.json

@@ -386,6 +386,16 @@ function preflightStatus(diagnostics: readonly DoctorDiagnostic[]): DockerInvest
 }
 
 /**
+ * CLI exit code for machine preflight that blocks guided intake.
+ * Node must be READY; Docker readiness is reported separately and does not
+ * block review-only draft creation.
+ */
+export function doctorCliExitCode(report: FaultLineDoctorReport): number {
+  const node = report.diagnostics.find((diagnostic) => diagnostic.id === "node");
+  return node && node.status === "READY" ? 0 : 1;
+}
+
+/**
  * Run the fixed, read-only preflight. This does not invoke a witness, pull an
  * image, access the network, write to the repository, or certify any proof.
  */

@@ -70,7 +70,7 @@ node ..\faultline-tool\dist\cli.js witness review <proposal-id> `
 
 The page verifies that the incident draft’s range, optional selected runtime, packet digest, and exact command binding all match the proposal before it enables separate approval and freeze actions.
 
-After freezing, use the same durable object rather than manually copying its range and witness identifiers into `fl investigate git`:
+After freezing, prefer the resumable guided command (`fl investigate --resume <id> --expect-digest <frozen-digest>`) or `fl incident continue` rather than manually copying its range and witness identifiers into `fl investigate git`:
 
 ```powershell
 node ..\faultline-tool\dist\cli.js incident status <proposal-id> `
