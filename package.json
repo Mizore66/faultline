@@ -1,16 +1,17 @@
 {
-  "name": "faultline",
+  "name": "@mizore66/faultline",
   "version": "0.1.0",
   "description": "Executable evidence for regressions introduced during Codex-assisted development.",
   "license": "MIT",
-  "private": true,
   "type": "module",
   "keywords": [
     "regression",
     "reproducibility",
     "proof",
     "git",
-    "cli"
+    "cli",
+    "codex",
+    "agent"
   ],
   "homepage": "https://github.com/Mizore66/faultline#readme",
   "bugs": {
@@ -19,6 +20,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Mizore66/faultline.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist",

@@ -18,7 +18,7 @@ import {
   writeGithubProvenanceReceipt
 } from "./github-provenance.js";
 import { createDemoAnalysis } from "./engine.js";
-import { runFaultLineDoctor, type FaultLineDoctorReport } from "./doctor.js";
+import { doctorCliExitCode, runFaultLineDoctor, type FaultLineDoctorReport } from "./doctor.js";
 import { createIncidentDraft, type IncidentDraft } from "./incident.js";
 import { suggestIncidentRanges } from "./incident-intake.js";
 import { defaultIncidentDraftStore, readIncidentDraft, writeIncidentDraft } from "./incident-store.js";
@@ -267,17 +267,23 @@ function doctorSummary(report: FaultLineDoctorReport): string {
   const runtime = report.likelyRuntime.kind === "UNKNOWN"
     ? "unknown; choose an explicit digest-pinned image"
     : `${report.likelyRuntime.kind.toLowerCase()} (${report.likelyRuntime.markers.join(", ") || "no markers"})`;
+  const proofGrade = report.dockerInvestigationPreflight === "READY"
+    ? "READY (Docker proof-grade path available)"
+    : `${report.dockerInvestigationPreflight} (proof-grade Git investigation unavailable; fl judge-demo and offline verify still work)`;
   return [
     "FaultLine doctor",
     `Repository: ${report.repositoryRoot ?? report.repository}`,
-    `Machine preflight: ${report.dockerInvestigationPreflight}`,
+    `Local CLI: ${doctorCliExitCode(report) === 0 ? "READY" : "ACTION_REQUIRED"}`,
+    `Proof-grade preflight: ${proofGrade}`,
     `Image selection: ${report.imageSelection} (run fl runtime prepare <runtime> --yes for a reviewed base, fl runtime project plan for an explicit dependency image, or fl runtime resolve after you choose one yourself)`,
     `Likely runtime: ${runtime}`,
     "",
     ...diagnostics,
     "",
     "Limits:",
-    ...report.limitations.map((limitation) => `- ${limitation}`)
+    ...report.limitations.map((limitation) => `- ${limitation}`),
+    "",
+    "Exit status: 0 when Node can run the local CLI (including the no-Docker judge path). Non-zero only when Node itself is missing or unsupported. Docker gaps are reported above and do not fail this command."
   ].join("\n");
 }
 
@@ -285,11 +291,11 @@ async function doctorCommand(args: string[]): Promise<void> {
   const repository = resolve(option(args, "--repo") ?? process.cwd());
   const report = await runFaultLineDoctor({ repository });
   if (hasFlag(args, "--json")) {
-    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ ...report, cliExitCode: doctorCliExitCode(report) }, null, 2)}\n`);
   } else {
     process.stdout.write(`${doctorSummary(report)}\n`);
   }
-  process.exitCode = report.dockerInvestigationPreflight === "READY" ? 0 : 1;
+  process.exitCode = doctorCliExitCode(report);
 }
 
 const INTAKE_SAFE_GIT_CONFIG = [

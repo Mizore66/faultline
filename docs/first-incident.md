@@ -9,9 +9,18 @@ FaultLine has two deliberately different states:
 | Review-only intake | A command and Git bracket are recorded for a human to inspect. Nothing has run, been approved, or been frozen. | No |
 | Proof-grade replay | The exact frozen witness ran in isolated Docker against immutable Git states. | Only if the recorded executions establish the required stable transition. |
 
-## Before you start: build FaultLine once and target the application repository
+## Before you start: install FaultLine, then target the application repository
 
-FaultLine is currently source-distributed. Run this once from a FaultLine checkout, then keep using the resolved CLI path while your current directory is the application repository. This keeps that application's `.faultline` records beside the source under investigation rather than in the FaultLine checkout.
+Prefer the published CLI when available:
+
+```powershell
+npm install -g @mizore66/faultline
+$TargetRepo = (Resolve-Path C:\path\to\the\application).Path
+Push-Location $TargetRepo
+# Remaining commands use `fl …` with the application as cwd so `.faultline` stays beside that repo.
+```
+
+From a FaultLine source checkout instead:
 
 ```powershell
 # In the FaultLine checkout.
@@ -22,6 +31,7 @@ $TargetRepo = (Resolve-Path C:\path\to\the\application).Path
 
 # All remaining commands in this guide run from the application repository.
 Push-Location $TargetRepo
+# Use `node $FaultLineCli …` wherever this guide shows `fl …`.
 ```
 
 ## 1. Check the machine before you invest in setup

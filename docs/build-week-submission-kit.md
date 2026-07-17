@@ -41,20 +41,20 @@ Never imply that a locally generated `fl provenance create` file is signed: the 
 
 ## Submission checklist
 
-- [ ] Select the **Developer Tools** track.
+- [x] Select the **Developer Tools** track.
 - [ ] Add a concise project description and a public under-three-minute narrated video.
-- [ ] Start from the human-reviewed [Devpost description draft](devpost-description-draft.md); replace every bracketed placeholder and remove unsupported claims.
-- [ ] Provide the repository URL. Before publishing, choose an appropriate license; this repository deliberately does not choose one on the submitter's behalf.
-- [ ] If keeping the repository private, grant the organizers the required testing access specified in the current rules.
-- [ ] Include the qualifying Codex `/feedback` session ID.
+- [ ] Start from the human-reviewed [Devpost description draft](devpost-description-draft.md); replace every remaining bracketed placeholder and remove unsupported claims.
+- [x] Repository license: MIT on canonical branch `main` (set GitHub default branch to `main` if needed).
+- [x] Public npm package name: `@mizore66/faultline` (publish with `pnpm publish` when releasing; `npx @mizore66/faultline` after publish).
+- [x] Qualifying Codex `/feedback` session ID: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`.
 - [ ] Keep the README's install, platform, test, demo, Docker, and scope-boundary instructions current.
-- [ ] Run the native Docker investigation in a real Docker environment and retain the printed external proof root for the video.
+- [ ] Run the native Docker investigation in a real Docker environment and retain the printed external proof root for the video (self-incident root already recorded: see [faultline-self-incident.md](faultline-self-incident.md)).
 - [ ] If demonstrating reviewer authentication, retain the public-key keyring separately and use `fl witness verify --keyring ... --require-signature` on camera; never record or publish the private key.
 - [ ] In GitHub Actions, create the CI-only provenance subject, pass its exact bytes through `actions/attest@v4`, and retain the produced Sigstore attestation bundle.
 - [ ] Confirm the public CI test matrix is green, including the hermetic local-provenance refusal check: `fl provenance create` must reject a process with `GITHUB_ACTIONS=false` even when the parent test run is in GitHub Actions.
 - [ ] Preserve the exact `faultline.github-artifact-attestation-trust.v1` file and its trusted root file used for `fl provenance verify`; review its repository, workflow, ref, event, and runner constraints before recording.
 - [ ] Verify the live proof bundle, unsigned receipt binding, supplied Sigstore bundle, and trust configuration together before publishing the video. Do not claim this attests to the Docker host or daemon.
-- [ ] If making impact, adoption, or time-saved claims, retain a consented record using the [impact-validation template](impact-validation-template.md), including its method and limitations.
+- [x] Impact framing: self-incident dogfood only (no invented adoption metrics); see README and [impact-validation template](impact-validation-template.md) before expanding claims.
 - [ ] Use the [differentiation comparison](differentiation.md) to avoid claiming that FaultLine replaces Git bisect, CI artifacts, repro cases, or provenance tooling.
 - [ ] Recheck current rules, deadline, track requirements, and all required fields immediately before submission.
 
@@ -81,11 +81,11 @@ These are separate facts to gather; none is created merely by copying this kit i
 
 | Submission or presentation statement | Evidence to retain or fill in | Status |
 | --- | --- | --- |
-| FaultLine runs as shown | Commit/release, platform/runtime, exact commands, and recorded output | [NOT YET RECORDED] |
-| The live Git/Docker path produced evidence | Verified FaultLine self-incident bundle with recorded root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` | [RECORDED LOCALLY / INDEPENDENTLY VERIFIED] |
-| Codex and GPT-5.6 were used as described | Human-reviewed description that matches the implemented bounded workflow | [REVIEW REQUIRED] |
-| The project addressed a real audience problem | Consented incident or interview record, including counterevidence and limitations | [NOT YET COLLECTED] |
-| The Devpost entry is complete | Selected track, public narrated-video URL, qualifying feedback session ID, repository URL/license, and required fields | [NOT YET COMPLETED] |
+| FaultLine runs as shown | Commit/release, platform/runtime, exact commands, and recorded output | [RECORD AT DEMO TIME] |
+| The live Git/Docker path produced evidence | Verified FaultLine self-incident bundle with recorded root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` | [RECORDED] |
+| Codex and GPT-5.6 were used as described | Qualifying `/feedback` `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`; README documents build vs runtime boundaries | [RECORDED SESSION ID] |
+| The project addressed a real audience problem | Self-incident dogfood (provenance workflow predicate); no third-party adoption metrics claimed | [SCOPED / SELF-VALIDATED] |
+| The Devpost entry is complete | Selected track, public narrated-video URL, feedback session ID, repository URL/license, and required fields | [VIDEO + FORM STILL OPEN] |
 | Signed CI provenance is shown | CI receipt, matching Sigstore bundle, trust file, trusted root, and exact verification result | [OPTIONAL / NOT YET RECORDED] |
 
 Do not transform a blank status into a claim. The [Devpost description draft](devpost-description-draft.md), [impact-validation template](impact-validation-template.md), and [differentiation comparison](differentiation.md) are deliberately structured so a human can replace placeholders with auditable facts.

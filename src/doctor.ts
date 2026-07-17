@@ -386,6 +386,19 @@ function preflightStatus(diagnostics: readonly DoctorDiagnostic[]): DockerInvest
 }
 
 /**
+ * CLI process status for `fl doctor`.
+ *
+ * Exit 0 when Node can run the local CLI (including the no-Docker judge path).
+ * Docker daemon / CLI gaps and dirty-worktree warnings stay visible in the
+ * report but do not fail the process — proof-grade investigation is optional.
+ * Exit 1 only when Node itself is not READY (unsupported version or missing).
+ */
+export function doctorCliExitCode(report: FaultLineDoctorReport): number {
+  const node = report.diagnostics.find((diagnostic) => diagnostic.id === "node");
+  return node && node.status === "READY" ? 0 : 1;
+}
+
+/**
  * Run the fixed, read-only preflight. This does not invoke a witness, pull an
  * image, access the network, write to the repository, or certify any proof.
  */

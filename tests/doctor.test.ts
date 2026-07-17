@@ -4,6 +4,7 @@ import {
   DOCTOR_SCHEMA_VERSION,
   DOCTOR_SAFE_GIT_CONFIG,
   detectLikelyRuntime,
+  doctorCliExitCode,
   runFaultLineDoctor,
   type DoctorCommand,
   type DoctorCommandResult,
@@ -183,6 +184,7 @@ describe("FaultLine doctor", () => {
     expect(diagnostic(report, "docker-cli")).toMatchObject({ status: "UNAVAILABLE" });
     expect(diagnostic(report, "docker-daemon")).toMatchObject({ status: "INAPPLICABLE" });
     expect(report.dockerInvestigationPreflight).toBe("UNAVAILABLE");
+    expect(doctorCliExitCode(report)).toBe(0);
     expect(fake.calls.some((command) => command.executable === "docker" && command.arguments[0] === "info")).toBe(false);
   });
 
@@ -207,6 +209,7 @@ describe("FaultLine doctor", () => {
       imageFamily: null
     });
     expect(report.dockerInvestigationPreflight).toBe("ACTION_REQUIRED");
+    expect(doctorCliExitCode(report)).toBe(1);
   });
 
   it("keeps unknown marker detection inapplicable instead of inventing an image", () => {
@@ -227,5 +230,17 @@ describe("FaultLine doctor", () => {
       observation: expect.stringMatching(/output limit/)
     });
     expect(report.dockerInvestigationPreflight).toBe("UNAVAILABLE");
+    expect(doctorCliExitCode(report)).toBe(1);
+  });
+
+  it("treats a ready Node install as a successful CLI exit even when proof-grade Docker is unavailable", async () => {
+    const repositoryRoot = resolve(".faultline-doctor-cli-exit");
+    const fake = fakeRunner((command) => {
+      if (command.executable === "docker") return response({ exitCode: null });
+      return readyResponse(repositoryRoot)(command);
+    });
+    const report = await runFaultLineDoctor({ repository: repositoryRoot, runner: fake.runner, fileProbe: markerProbe(["package.json"]) });
+    expect(report.dockerInvestigationPreflight).toBe("UNAVAILABLE");
+    expect(doctorCliExitCode(report)).toBe(0);
   });
 });

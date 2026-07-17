@@ -30,13 +30,21 @@ The included `fl judge-demo` is deterministic and intentionally limited: it lets
 
 ## How Codex and GPT-5.6 are used
 
-Codex was used to accelerate FaultLine's implementation, adversarial testing, and product hardening. At runtime, FaultLine accepts a hash-chained Codex-compatible lifecycle ledger and labels its observed transport rather than claiming private Codex interception.
+**Qualifying Codex Project session (`/feedback`):** `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
+
+Codex accelerated FaultLine's implementation, adversarial testing, and product hardening (witness lock, Git investigation/minimization, sandbox policy, proof bundles). Product decisions stayed human-owned: evidence labels, fail-closed sandbox rules, and refusing model text as verdicts. At runtime, FaultLine can observe public Codex hook metadata via an opt-in sidecar or accept a hash-chained Codex-compatible lifecycle ledger; transports are labeled rather than claimed as private Codex interception.
 
 GPT-5.6 is used through the Responses API only at two bounded points: proposing a blinded witness and producing an evidence-cited repair brief from an already verified package. GPT-5.6 cannot decide the PASS/FAIL verdict, assign model intent, replace the frozen witness, or create proof evidence.
 
 ## Fast judge path
 
-Run this no-Docker, no-API-key path from a checkout with Node.js 22+ and pnpm 10.32.1:
+Install from npm (after publish) or clone `main`:
+
+    npm install -g @mizore66/faultline
+    fl judge-demo --rerun-all --export-only
+    fl verify .faultline/bundles/judge-demo
+
+From a checkout with Node.js 22+ and pnpm 10.32.1:
 
     pnpm install --frozen-lockfile
     pnpm fl -- judge-demo --rerun-all --export-only
@@ -44,23 +52,25 @@ Run this no-Docker, no-API-key path from a checkout with Node.js 22+ and pnpm 10
 
 This produces and verifies the deterministic judge bundle. For the live Git/Docker path, run:
 
-    pnpm fl -- demo live-git --export-only
+    fl demo live-git --export-only
 
 The submitter should record the exact commit, platform, command output, and any external proof root shown in the demo:
 
 - Commit or release: [INSERT COMMIT SHA OR RELEASE]
 - Platform and runtime: [INSERT OS, NODE VERSION, AND DOCKER VERSION IF USED]
-- Recorded live-demo root: [INSERT EXTERNALLY RETAINED PROOF ROOT, OR OMIT]
+- Recorded live-demo / self-incident root: `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` (self-incident; replace if demoing a fresh live-git root)
 - CI run URL and status: [INSERT URL, OR OMIT]
 
 ## Why it matters
 
 FaultLine is intended for engineers responsible for diagnosing an agent-assisted regression under review, incident, or audit pressure. Its value proposition is not that it diagnoses every bug: it narrows one high-friction handoff by preserving an executable question, the replay facts, the proof boundary, and the limits of those facts.
 
-Do not add adoption, time-saved, incident-rate, customer, or accuracy claims unless they are supported by a consented record. Use [the impact-validation template](impact-validation-template.md) to collect that evidence. Current validated evidence:
+**Validated so far (dogfood only):** FaultLine's first completed proof package is this repository's own provenance-workflow regression (`PASS -> FAIL` at `97c3290`, recovery at `07ee7f1`). That supports the frozen workflow predicate only—not agent intent, unique semantic cause, or third-party adoption. Do not add time-saved, customer, or accuracy claims unless supported by a consented record in [the impact-validation template](impact-validation-template.md).
 
-- [INSERT LINK OR SUMMARY OF A CONSENTED INTERVIEW OR INCIDENT; OTHERWISE WRITE NOT YET COLLECTED]
-- [INSERT OBSERVED BEFORE/AFTER FACT WITH MEASUREMENT METHOD; OTHERWISE WRITE NOT YET MEASURED]
+Current validated evidence:
+
+- Self-incident runbook and recorded root: [faultline-self-incident.md](faultline-self-incident.md)
+- Third-party / time-saved metrics: NOT YET COLLECTED (intentionally omitted)
 
 ## How FaultLine differs
 
@@ -70,9 +80,10 @@ FaultLine composes a reviewed executable witness, repeated isolated Git-state re
 
 - Track: Developer Tools
 - Public narrated demo video URL: [INSERT URL]
-- Qualifying Codex feedback session ID: [INSERT SESSION ID]
-- Repository URL and license: [INSERT URL AND LICENSE]
+- Qualifying Codex feedback session ID: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
+- Repository URL and license: https://github.com/Mizore66/faultline (MIT, branch `main`)
+- npm package: `@mizore66/faultline` (publish before claiming global install in the video if not yet on the registry)
 - Human-reviewed final project description: [CONFIRM COMPLETED]
 - Optional signed-CI evidence, if shown: [INSERT ATTESTATION BUNDLE AND TRUST-CONFIGURATION REFERENCE, OR OMIT]
 
-The submitter must verify the current event rules, required fields, access requirements, and deadlines immediately before submission. This draft deliberately does not invent missing links, results, metrics, user quotes, or submission status.
+The submitter must verify the current event rules, required fields, access requirements, and deadlines immediately before submission. This draft deliberately does not invent missing video links, metrics, user quotes, or submission status.

@@ -59,7 +59,7 @@ try {
   const bundle = join(consumer, ".faultline", "bundles", "package-smoke");
   runInstalledFl(["judge-demo", "--rerun-all", "--export-only", "--output", bundle]);
   runInstalledFl(["verify", bundle]);
-  process.stdout.write(`Packed and executed faultline@${metadata.version} from a clean install.\n`);
+  process.stdout.write(`Packed and executed ${metadata.name}@${metadata.version} from a clean install.\n`);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }

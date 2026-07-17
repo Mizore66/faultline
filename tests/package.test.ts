@@ -2,15 +2,21 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
-  private: boolean;
+  name: string;
+  private?: boolean;
+  publishConfig?: { access?: string };
   bin: Record<string, string>;
   files: string[];
   scripts: Record<string, string | undefined>;
+  license?: string;
 };
 
 describe("package distribution contract", () => {
-  it("ships the compiled CLI while keeping publication an explicit owner decision", () => {
-    expect(packageJson.private).toBe(true);
+  it("publishes the compiled CLI under an available scoped npm name", () => {
+    expect(packageJson.name).toBe("@mizore66/faultline");
+    expect(packageJson.private).toBeUndefined();
+    expect(packageJson.publishConfig?.access).toBe("public");
+    expect(packageJson.license).toBe("MIT");
     expect(packageJson.bin.fl).toBe("./dist/cli.js");
     expect(packageJson.files).toContain("dist");
     expect(packageJson.files).toContain("LICENSE");

@@ -658,10 +658,12 @@ describe("FaultLine CLI workflows", () => {
       ].join(" ");
       git(repository, ["config", "core.fsmonitor", hostileHook]);
 
-      // Docker readiness is environment-dependent and may rightly return a
-      // nonzero preflight. The security assertion is that fixed doctor Git
-      // probes never dispatch the repository's configured executable.
-      runFl(["doctor", "--repo", repository], { cwd: directory });
+      // Docker may be unavailable; doctor still exits 0 when Node is usable.
+      // The security assertion is that fixed doctor Git probes never dispatch
+      // the repository's configured executable.
+      const doctor = runFl(["doctor", "--repo", repository], { cwd: directory });
+      expect(doctor.status).toBe(0);
+      expect(doctor.stdout).toContain("Proof-grade preflight:");
       expect(existsSync(marker)).toBe(false);
     } finally {
       try {
