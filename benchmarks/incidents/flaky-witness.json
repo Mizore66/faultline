@@ -1,0 +1,1 @@
+{"id":"flaky-witness","description":"Witness returns inconsistent verdicts across three reruns.","expectedOutcome":"REFUSE_UNSTABLE","notes":"No stable state and no A-grade proof."}

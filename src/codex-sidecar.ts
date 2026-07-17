@@ -29,6 +29,7 @@ import {
   type GitCheckpoint,
   type LifecycleEventInput
 } from "./ledger.js";
+import { captureTurnTreeSnapshot, TurnSnapshotError, type TurnTreeSnapshot } from "./turn-snapshot.js";
 
 /**
  * This adapter deliberately consumes only the stable, documented Codex hook
@@ -76,7 +77,9 @@ export type CodexSidecarStatus =
   | "TURN_STARTED"
   | "CHECKPOINT_RECORDED"
   | "CHECKPOINT_SKIPPED_DIRTY"
-  | "CHECKPOINT_SKIPPED_UNAVAILABLE";
+  | "CHECKPOINT_SKIPPED_UNAVAILABLE"
+  /** A turn tree snapshot was recorded, but no clean-worktree checkpoint decision exists yet for this turn. */
+  | "TURN_SNAPSHOT_RECORDED";
 
 export type CodexSidecarResult = {
   readonly status: CodexSidecarStatus;
@@ -86,6 +89,8 @@ export type CodexSidecarResult = {
   readonly idempotent: boolean;
   readonly checkpointDigest?: string;
   readonly reason?: "DIRTY_WORKTREE" | "CHECKPOINT_UNAVAILABLE";
+  /** Present whenever a dirty-worktree-safe turn tree snapshot was captured for this Stop, regardless of checkpoint outcome. */
+  readonly turnSnapshot?: TurnTreeSnapshot;
 };
 
 export type CodexSidecarInspection = {
@@ -118,22 +123,27 @@ export type CodexSidecarInspection = {
   }[];
 };
 
+type StopReceiptStatus = Extract<CodexSidecarStatus, "CHECKPOINT_RECORDED" | "CHECKPOINT_SKIPPED_DIRTY" | "CHECKPOINT_SKIPPED_UNAVAILABLE" | "TURN_SNAPSHOT_RECORDED">;
+
 type StopReceipt = {
   readonly schemaVersion: "faultline.codex-sidecar-stop-receipt.v1";
   readonly sessionId: string;
   readonly turnId: string;
-  readonly status: Extract<CodexSidecarStatus, "CHECKPOINT_RECORDED" | "CHECKPOINT_SKIPPED_DIRTY" | "CHECKPOINT_SKIPPED_UNAVAILABLE">;
+  readonly status: StopReceiptStatus;
   readonly checkpointDigest?: string | undefined;
   readonly reason?: "DIRTY_WORKTREE" | "CHECKPOINT_UNAVAILABLE" | undefined;
+  /** Present whenever this Stop also produced a dirty-worktree-safe turn tree snapshot. */
+  readonly turnSnapshotDigest?: string | undefined;
 };
 
 const StopReceiptSchema = z.object({
   schemaVersion: z.literal("faultline.codex-sidecar-stop-receipt.v1"),
   sessionId: IdentifierSchema,
   turnId: IdentifierSchema,
-  status: z.enum(["CHECKPOINT_RECORDED", "CHECKPOINT_SKIPPED_DIRTY", "CHECKPOINT_SKIPPED_UNAVAILABLE"]),
+  status: z.enum(["CHECKPOINT_RECORDED", "CHECKPOINT_SKIPPED_DIRTY", "CHECKPOINT_SKIPPED_UNAVAILABLE", "TURN_SNAPSHOT_RECORDED"]),
   checkpointDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional(),
-  reason: z.enum(["DIRTY_WORKTREE", "CHECKPOINT_UNAVAILABLE"]).optional()
+  reason: z.enum(["DIRTY_WORKTREE", "CHECKPOINT_UNAVAILABLE"]).optional(),
+  turnSnapshotDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/).optional()
 }).strict();
 
 export class CodexSidecarError extends Error {
@@ -286,7 +296,7 @@ function stopReceiptPath(directory: string, sessionId: string, turnId: string): 
   return join(directory, `codex-stop-${key}.json`);
 }
 
-function sidecarEventId(sessionId: string, turnId: string | null, phase: "session-start" | "turn-start" | "turn-stop" | "checkpoint"): string {
+export function sidecarEventId(sessionId: string, turnId: string | null, phase: "session-start" | "turn-start" | "turn-stop" | "checkpoint" | "turn-snapshot"): string {
   const sessionKey = sha256(sessionId).slice(0, 24);
   const turnKey = turnId === null ? "session" : sha256(turnId).slice(0, 24);
   return `codex-sidecar-${sessionKey}-${turnKey}-${phase}`;
@@ -478,11 +488,13 @@ function checkpointResult(
   sessionId: string,
   turnId: string,
   idempotent: boolean,
-  checkpoint?: GitCheckpoint
+  checkpoint?: GitCheckpoint,
+  turnSnapshot?: TurnTreeSnapshot
 ): CodexSidecarResult {
+  const turnSnapshotField = turnSnapshot === undefined ? {} : { turnSnapshot };
   if (status === "CHECKPOINT_RECORDED") {
     if (!checkpoint) throw new CodexSidecarError("A recorded checkpoint result requires a checkpoint digest.");
-    return { status, ledgerPath, sessionId, turnId, idempotent, checkpointDigest: checkpoint.digest };
+    return { status, ledgerPath, sessionId, turnId, idempotent, checkpointDigest: checkpoint.digest, ...turnSnapshotField };
   }
   return {
     status,
@@ -490,11 +502,25 @@ function checkpointResult(
     sessionId,
     turnId,
     idempotent,
-    reason: status === "CHECKPOINT_SKIPPED_DIRTY" ? "DIRTY_WORKTREE" : "CHECKPOINT_UNAVAILABLE"
+    reason: status === "CHECKPOINT_SKIPPED_DIRTY" ? "DIRTY_WORKTREE" : "CHECKPOINT_UNAVAILABLE",
+    ...turnSnapshotField
   };
 }
 
-function resultFromReceipt(receipt: StopReceipt, ledgerPath: string): CodexSidecarResult {
+/** A recovery-only outcome for a completed turn that has a durable turn tree snapshot but no checkpoint decision yet. */
+function turnSnapshotOnlyResult(
+  ledgerPath: string,
+  sessionId: string,
+  turnId: string,
+  idempotent: boolean,
+  turnSnapshot: TurnTreeSnapshot
+): CodexSidecarResult {
+  return { status: "TURN_SNAPSHOT_RECORDED", ledgerPath, sessionId, turnId, idempotent, turnSnapshot };
+}
+
+function resultFromReceipt(receipt: StopReceipt, ledger: CodexLifecycleLedger, ledgerPath: string, input: z.infer<typeof StopHookSchema>): CodexSidecarResult {
+  const turnSnapshot = receipt.turnSnapshotDigest === undefined ? undefined : turnSnapshotForTurn(ledger, input);
+  const turnSnapshotField = turnSnapshot === undefined ? {} : { turnSnapshot };
   if (receipt.status === "CHECKPOINT_RECORDED") {
     if (!receipt.checkpointDigest) throw new CodexSidecarError("The sidecar stop receipt omitted its checkpoint digest.");
     return {
@@ -503,8 +529,13 @@ function resultFromReceipt(receipt: StopReceipt, ledgerPath: string): CodexSidec
       sessionId: receipt.sessionId,
       turnId: receipt.turnId,
       idempotent: true,
-      checkpointDigest: receipt.checkpointDigest
+      checkpointDigest: receipt.checkpointDigest,
+      ...turnSnapshotField
     };
+  }
+  if (receipt.status === "TURN_SNAPSHOT_RECORDED") {
+    if (!turnSnapshot) throw new CodexSidecarError("The sidecar stop receipt claims a turn tree snapshot that is absent from the ledger.");
+    return turnSnapshotOnlyResult(ledgerPath, receipt.sessionId, receipt.turnId, true, turnSnapshot);
   }
   return {
     status: receipt.status,
@@ -512,7 +543,8 @@ function resultFromReceipt(receipt: StopReceipt, ledgerPath: string): CodexSidec
     sessionId: receipt.sessionId,
     turnId: receipt.turnId,
     idempotent: true,
-    reason: receipt.reason ?? (receipt.status === "CHECKPOINT_SKIPPED_DIRTY" ? "DIRTY_WORKTREE" : "CHECKPOINT_UNAVAILABLE")
+    reason: receipt.reason ?? (receipt.status === "CHECKPOINT_SKIPPED_DIRTY" ? "DIRTY_WORKTREE" : "CHECKPOINT_UNAVAILABLE"),
+    ...turnSnapshotField
   };
 }
 
@@ -529,6 +561,17 @@ function assertReceiptMatchesLedger(
   };
   if (!completion || !sameJson(completion.event, expectedCompletion)) {
     throw new CodexSidecarError("The sidecar stop receipt has no matching completed-turn ledger event.");
+  }
+  const snapshotEvent = eventById(ledger, sidecarEventId(input.session_id, input.turn_id, "turn-snapshot"));
+  if (receipt.turnSnapshotDigest === undefined) {
+    if (snapshotEvent) throw new CodexSidecarError("A sidecar stop receipt without a turn tree snapshot contradicts a recorded one.");
+  } else {
+    if (!snapshotEvent || snapshotEvent.event.type !== "TURN_TREE_SNAPSHOT" || snapshotEvent.event.payload.turnOrdinal !== turnOrdinal) {
+      throw new CodexSidecarError("The sidecar stop receipt has no matching turn tree snapshot ledger event.");
+    }
+    if (receipt.turnSnapshotDigest !== snapshotEvent.event.payload.snapshot.digest) {
+      throw new CodexSidecarError("The sidecar stop receipt turn tree snapshot digest does not match the ledger.");
+    }
   }
   const checkpoint = eventById(ledger, sidecarEventId(input.session_id, input.turn_id, "checkpoint"));
   if (receipt.status !== "CHECKPOINT_RECORDED") {
@@ -556,6 +599,19 @@ function checkpointForTurn(
   return checkpoint.event.payload.checkpoint;
 }
 
+function turnSnapshotForTurn(
+  ledger: CodexLifecycleLedger,
+  input: z.infer<typeof StopHookSchema>
+): TurnTreeSnapshot | undefined {
+  const event = eventById(ledger, sidecarEventId(input.session_id, input.turn_id, "turn-snapshot"));
+  if (!event) return undefined;
+  const turnOrdinal = turnOrdinalForStartedTurn(ledger, input.turn_id);
+  if (event.event.type !== "TURN_TREE_SNAPSHOT" || event.event.payload.turnOrdinal !== turnOrdinal) {
+    throw new CodexSidecarError("The sidecar turn tree snapshot does not match its completed Codex turn.");
+  }
+  return event.event.payload.snapshot;
+}
+
 function hasMatchingCompletedTurn(
   ledger: CodexLifecycleLedger,
   input: z.infer<typeof StopHookSchema>
@@ -577,6 +633,8 @@ function hasMatchingCompletedTurn(
 }
 
 function writeReceipt(directory: string, input: z.infer<typeof StopHookSchema>, result: CodexSidecarResult): void {
+  const turnSnapshotDigest = result.turnSnapshot?.digest;
+  const turnSnapshotField = turnSnapshotDigest === undefined ? {} : { turnSnapshotDigest };
   let receipt: StopReceipt;
   if (result.status === "CHECKPOINT_RECORDED") {
     if (!result.checkpointDigest) throw new CodexSidecarError("A checkpoint receipt requires a checkpoint digest.");
@@ -585,7 +643,8 @@ function writeReceipt(directory: string, input: z.infer<typeof StopHookSchema>, 
       sessionId: input.session_id,
       turnId: input.turn_id,
       status: result.status,
-      checkpointDigest: result.checkpointDigest
+      checkpointDigest: result.checkpointDigest,
+      ...turnSnapshotField
     };
   } else if (result.status === "CHECKPOINT_SKIPPED_DIRTY" || result.status === "CHECKPOINT_SKIPPED_UNAVAILABLE") {
     receipt = {
@@ -593,7 +652,17 @@ function writeReceipt(directory: string, input: z.infer<typeof StopHookSchema>, 
       sessionId: input.session_id,
       turnId: input.turn_id,
       status: result.status,
-      reason: result.status === "CHECKPOINT_SKIPPED_DIRTY" ? "DIRTY_WORKTREE" : "CHECKPOINT_UNAVAILABLE"
+      reason: result.status === "CHECKPOINT_SKIPPED_DIRTY" ? "DIRTY_WORKTREE" : "CHECKPOINT_UNAVAILABLE",
+      ...turnSnapshotField
+    };
+  } else if (result.status === "TURN_SNAPSHOT_RECORDED") {
+    if (!turnSnapshotDigest) throw new CodexSidecarError("A turn snapshot receipt requires a turn tree snapshot digest.");
+    receipt = {
+      schemaVersion: "faultline.codex-sidecar-stop-receipt.v1",
+      sessionId: input.session_id,
+      turnId: input.turn_id,
+      status: result.status,
+      turnSnapshotDigest
     };
   } else {
     throw new CodexSidecarError("Only Stop checkpoint outcomes can be persisted as a sidecar receipt.");
@@ -669,7 +738,7 @@ function recordTurnStop(
       throw new CodexSidecarError("The sidecar stop receipt belongs to different Codex lifecycle facts.");
     }
     assertReceiptMatchesLedger(receipt, ledger, input);
-    return resultFromReceipt(receipt, ledgerPath);
+    return resultFromReceipt(receipt, ledger, ledgerPath, input);
   }
 
   const existingCheckpoint = checkpointForTurn(ledger, input);
@@ -677,14 +746,23 @@ function recordTurnStop(
     // The ledger is the durable proof record. A process can stop after it is
     // written but before its operational receipt; never capture a later state
     // for the same observed Stop event.
-    const recovered = checkpointResult("CHECKPOINT_RECORDED", ledgerPath, input.session_id, input.turn_id, true, existingCheckpoint);
+    const recovered = checkpointResult("CHECKPOINT_RECORDED", ledgerPath, input.session_id, input.turn_id, true, existingCheckpoint, turnSnapshotForTurn(ledger, input));
     writeReceipt(directory, input, recovered);
     return recovered;
   }
   if (hasMatchingCompletedTurn(ledger, input)) {
-    // A completed turn without a receipt/checkpoint is an interrupted
-    // transaction. Preserve an unavailable outcome instead of attaching a
-    // later clean tree to this older turn.
+    const existingSnapshot = turnSnapshotForTurn(ledger, input);
+    if (existingSnapshot) {
+      // The turn tree snapshot was durably written but the checkpoint
+      // decision was interrupted before its receipt. The snapshot remains
+      // valid evidence for this exact turn; recover it without recapturing.
+      const recovered = turnSnapshotOnlyResult(ledgerPath, input.session_id, input.turn_id, true, existingSnapshot);
+      writeReceipt(directory, input, recovered);
+      return recovered;
+    }
+    // A completed turn without a receipt/checkpoint/snapshot is an
+    // interrupted transaction. Preserve an unavailable outcome instead of
+    // attaching a later state to this older turn.
     const recovered = checkpointResult("CHECKPOINT_SKIPPED_UNAVAILABLE", ledgerPath, input.session_id, input.turn_id, true);
     writeReceipt(directory, input, recovered);
     return recovered;
@@ -698,15 +776,38 @@ function recordTurnStop(
   const completion = appendIfAbsent(ledger, completionInput, sidecarEventId(input.session_id, input.turn_id, "turn-stop"));
   ledger = completion.ledger;
 
+  // A turn tree snapshot never requires a clean worktree, so it is always
+  // attempted first. A capture failure (e.g. a filesystem changing
+  // mid-write) must not block the existing clean-checkpoint path below.
+  let turnSnapshot: TurnTreeSnapshot | undefined;
+  let snapshotIdempotent = true;
+  try {
+    turnSnapshot = captureTurnTreeSnapshot(cwd);
+  } catch (error) {
+    if (!(error instanceof TurnSnapshotError)) throw error;
+    turnSnapshot = undefined;
+  }
+  if (turnSnapshot) {
+    const snapshotInput: LifecycleEventInput = {
+      type: "TURN_TREE_SNAPSHOT",
+      payload: { turnId: input.turn_id, turnOrdinal, snapshot: turnSnapshot }
+    };
+    const snapshotAppend = appendIfAbsent(ledger, snapshotInput, sidecarEventId(input.session_id, input.turn_id, "turn-snapshot"));
+    ledger = snapshotAppend.ledger;
+    snapshotIdempotent = snapshotAppend.idempotent;
+  }
+
   let checkpoint: GitCheckpoint;
   try {
     checkpoint = captureGitCleanCheckpoint(cwd, { runGit: runHardenedGit });
   } catch (error) {
-    // Persist the completed turn even when no clean Git state can be observed.
+    // Persist the completed turn (and any captured snapshot) even when no
+    // clean Git state can be observed.
     writeSidecarLedger(ledgerPath, ledger);
+    const idempotent = completion.idempotent && snapshotIdempotent;
     const result = isDirtyCheckpointError(error)
-      ? checkpointResult("CHECKPOINT_SKIPPED_DIRTY", ledgerPath, input.session_id, input.turn_id, completion.idempotent)
-      : checkpointResult("CHECKPOINT_SKIPPED_UNAVAILABLE", ledgerPath, input.session_id, input.turn_id, completion.idempotent);
+      ? checkpointResult("CHECKPOINT_SKIPPED_DIRTY", ledgerPath, input.session_id, input.turn_id, idempotent, undefined, turnSnapshot)
+      : checkpointResult("CHECKPOINT_SKIPPED_UNAVAILABLE", ledgerPath, input.session_id, input.turn_id, idempotent, undefined, turnSnapshot);
     writeReceipt(directory, input, result);
     return result;
   }
@@ -717,7 +818,15 @@ function recordTurnStop(
   const checkpointAppend = appendIfAbsent(ledger, checkpointInput, sidecarEventId(input.session_id, input.turn_id, "checkpoint"));
   ledger = checkpointAppend.ledger;
   writeSidecarLedger(ledgerPath, ledger);
-  const result = checkpointResult("CHECKPOINT_RECORDED", ledgerPath, input.session_id, input.turn_id, completion.idempotent && checkpointAppend.idempotent, checkpoint);
+  const result = checkpointResult(
+    "CHECKPOINT_RECORDED",
+    ledgerPath,
+    input.session_id,
+    input.turn_id,
+    completion.idempotent && checkpointAppend.idempotent && snapshotIdempotent,
+    checkpoint,
+    turnSnapshot
+  );
   writeReceipt(directory, input, result);
   return result;
 }

@@ -1,0 +1,1 @@
+{"id":"lockfile-change","description":"pnpm-lock.yaml changes inside the investigated range.","expectedOutcome":"REQUIRE_ENV_MAPPING","notes":"Heterogeneous environment fingerprints refuse single-image proof."}

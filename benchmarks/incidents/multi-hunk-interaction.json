@@ -1,0 +1,1 @@
+{"id":"multi-hunk-interaction","description":"Two hunks together are necessary and sufficient for failure.","expectedOutcome":"ONE_MINIMAL_SET","notes":"Bidirectional counterfactual validation."}

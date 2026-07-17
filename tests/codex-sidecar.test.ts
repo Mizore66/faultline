@@ -8,7 +8,8 @@ import { sha256 } from "../src/canonical.js";
 import {
   codexSidecarLedgerPath,
   inspectObservedCodexSidecar,
-  recordObservedCodexHook
+  recordObservedCodexHook,
+  sidecarEventId
 } from "../src/codex-sidecar.js";
 import {
   appendLifecycleEvent,
@@ -16,6 +17,7 @@ import {
   verifyCodexLifecycleLedgerFile,
   writeCodexLifecycleLedgerAtomic
 } from "../src/ledger.js";
+import { captureTurnTreeSnapshot } from "../src/turn-snapshot.js";
 
 function git(repository: string, args: string[]): void {
   const result = spawnSync("git", ["-C", repository, ...args], { encoding: "utf8" });
@@ -86,17 +88,20 @@ describe("Codex observed hook sidecar", () => {
       expect(turn).toMatchObject({ status: "TURN_STARTED", idempotent: false, turnId: "codex-turn-1" });
       expect(stopped).toMatchObject({ status: "CHECKPOINT_RECORDED", idempotent: false, turnId: "codex-turn-1" });
       expect(stopped.checkpointDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+      expect(stopped.turnSnapshot).toMatchObject({ dirty: false, headCommit: expect.stringMatching(/^[a-f0-9]{40}$/) });
+      expect(stopped.turnSnapshot?.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
 
       const ledgerPath = codexSidecarLedgerPath(repository, "codex-session-1");
       expect(ledgerPath).toBe(started.ledgerPath);
       expect(existsSync(ledgerPath)).toBe(true);
-      expect(verifyCodexLifecycleLedgerFile(ledgerPath)).toMatchObject({ valid: true, eventCount: 4 });
+      expect(verifyCodexLifecycleLedgerFile(ledgerPath)).toMatchObject({ valid: true, eventCount: 5 });
       const ledger = readVerifiedCodexLifecycleLedger(ledgerPath);
       expect(ledger.sessionId).toBe("codex-session-1");
       expect(ledger.events.map((event) => event.event.type)).toEqual([
         "SESSION_STARTED",
         "TURN_STARTED",
         "TURN_COMPLETED",
+        "TURN_TREE_SNAPSHOT",
         "WORKTREE_CHECKPOINT"
       ]);
       expect(ledger.events[0]?.event).toMatchObject({
@@ -108,6 +113,10 @@ describe("Codex observed hook sidecar", () => {
         payload: { turnId: "codex-turn-1", turnOrdinal: 1, promptDigest: `sha256:${sha256(prompt)}` }
       });
       expect(ledger.events[3]?.event).toMatchObject({
+        type: "TURN_TREE_SNAPSHOT",
+        payload: { turnId: "codex-turn-1", turnOrdinal: 1, snapshot: { dirty: false } }
+      });
+      expect(ledger.events[4]?.event).toMatchObject({
         type: "WORKTREE_CHECKPOINT",
         payload: { afterTurnOrdinal: 1, checkpoint: { clean: true } }
       });
@@ -144,9 +153,10 @@ describe("Codex observed hook sidecar", () => {
       expect(repeatedStop).toMatchObject({
         status: "CHECKPOINT_RECORDED",
         idempotent: true,
-        checkpointDigest: initialStop.checkpointDigest
+        checkpointDigest: initialStop.checkpointDigest,
+        turnSnapshot: { digest: initialStop.turnSnapshot?.digest }
       });
-      expect(readVerifiedCodexLifecycleLedger(initialStart.ledgerPath).events).toHaveLength(4);
+      expect(readVerifiedCodexLifecycleLedger(initialStart.ledgerPath).events).toHaveLength(5);
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
@@ -166,18 +176,28 @@ describe("Codex observed hook sidecar", () => {
         reason: "DIRTY_WORKTREE",
         idempotent: false
       });
+      // A dirty worktree still yields a real tree digest: the turn tree
+      // snapshot never requires a clean checkout, unlike WORKTREE_CHECKPOINT.
+      expect(skipped.turnSnapshot).toMatchObject({ dirty: true });
+      expect(skipped.turnSnapshot?.treeDigest).toMatch(/^[a-f0-9]{40}$/);
       expect(repeated).toMatchObject({
         status: "CHECKPOINT_SKIPPED_DIRTY",
         reason: "DIRTY_WORKTREE",
-        idempotent: true
+        idempotent: true,
+        turnSnapshot: { digest: skipped.turnSnapshot?.digest }
       });
       const ledger = readVerifiedCodexLifecycleLedger(started.ledgerPath);
       expect(ledger.events.map((event) => event.event.type)).toEqual([
         "SESSION_STARTED",
         "TURN_STARTED",
-        "TURN_COMPLETED"
+        "TURN_COMPLETED",
+        "TURN_TREE_SNAPSHOT"
       ]);
-      expect(verifyCodexLifecycleLedgerFile(started.ledgerPath)).toMatchObject({ valid: true, eventCount: 3 });
+      expect(ledger.events[3]?.event).toMatchObject({
+        type: "TURN_TREE_SNAPSHOT",
+        payload: { turnId: "codex-turn-dirty", turnOrdinal: 1, snapshot: { dirty: true } }
+      });
+      expect(verifyCodexLifecycleLedgerFile(started.ledgerPath)).toMatchObject({ valid: true, eventCount: 4 });
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
@@ -224,9 +244,10 @@ describe("Codex observed hook sidecar", () => {
       expect(recovered).toMatchObject({
         status: "CHECKPOINT_RECORDED",
         idempotent: true,
-        checkpointDigest: initial.checkpointDigest
+        checkpointDigest: initial.checkpointDigest,
+        turnSnapshot: { digest: initial.turnSnapshot?.digest }
       });
-      expect(readVerifiedCodexLifecycleLedger(ledgerPath).events).toHaveLength(4);
+      expect(readVerifiedCodexLifecycleLedger(ledgerPath).events).toHaveLength(5);
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
@@ -252,6 +273,52 @@ describe("Codex observed hook sidecar", () => {
         idempotent: true
       });
       expect(readVerifiedCodexLifecycleLedger(ledgerPath).events).toHaveLength(3);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers a durable turn tree snapshot when the checkpoint decision itself was interrupted", () => {
+    const repository = repositoryFixture();
+    try {
+      recordObservedCodexHook(sessionStart(repository, "codex-session-snapshot-only"));
+      recordObservedCodexHook(promptEvent(repository, "Prepare a snapshot-only interrupted stop.", "codex-session-snapshot-only", "codex-turn-snapshot-only"));
+      const ledgerPath = codexSidecarLedgerPath(repository, "codex-session-snapshot-only");
+      const snapshot = captureTurnTreeSnapshot(repository);
+
+      let ledger = readVerifiedCodexLifecycleLedger(ledgerPath);
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_COMPLETED",
+        payload: { turnId: "codex-turn-snapshot-only", turnOrdinal: 1, outcome: "COMPLETED" }
+      }, { eventId: sidecarEventId("codex-session-snapshot-only", "codex-turn-snapshot-only", "turn-stop") });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_TREE_SNAPSHOT",
+        payload: { turnId: "codex-turn-snapshot-only", turnOrdinal: 1, snapshot }
+      }, { eventId: sidecarEventId("codex-session-snapshot-only", "codex-turn-snapshot-only", "turn-snapshot") });
+      writeCodexLifecycleLedgerAtomic(ledgerPath, ledger);
+
+      const recovered = recordObservedCodexHook(stopEvent(repository, "codex-session-snapshot-only", "codex-turn-snapshot-only"));
+      expect(recovered).toMatchObject({
+        status: "TURN_SNAPSHOT_RECORDED",
+        idempotent: true,
+        turnSnapshot: { digest: snapshot.digest }
+      });
+      expect(recovered.checkpointDigest).toBeUndefined();
+      // Recovery must not recapture: the ledger keeps exactly the two
+      // manually-simulated events, with no additional WORKTREE_CHECKPOINT.
+      expect(readVerifiedCodexLifecycleLedger(ledgerPath).events.map((event) => event.event.type)).toEqual([
+        "SESSION_STARTED",
+        "TURN_STARTED",
+        "TURN_COMPLETED",
+        "TURN_TREE_SNAPSHOT"
+      ]);
+
+      const repeated = recordObservedCodexHook(stopEvent(repository, "codex-session-snapshot-only", "codex-turn-snapshot-only"));
+      expect(repeated).toMatchObject({
+        status: "TURN_SNAPSHOT_RECORDED",
+        idempotent: true,
+        turnSnapshot: { digest: snapshot.digest }
+      });
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }

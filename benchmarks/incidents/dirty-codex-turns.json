@@ -1,0 +1,1 @@
+{"id":"dirty-codex-turns","description":"Codex Stop events occur on dirty worktrees before a commit.","expectedOutcome":"PROVENANCE_GAP","notes":"Turn tree snapshots exist; clean checkpoints may be skipped."}

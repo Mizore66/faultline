@@ -16,6 +16,7 @@ import {
 } from "../src/git-minimization.js";
 import { digestJson } from "../src/canonical.js";
 import type { SandboxCommandRunner } from "../src/sandbox.js";
+import { formatWitnessResult } from "../src/witness-result.js";
 import {
   approveWitnessProposal,
   freezeApprovedWitness,
@@ -76,8 +77,8 @@ function interactionRunner(): SandboxCommandRunner {
       const overlay = readFileSync(join(invocation.cwd, "witness.mjs"), "utf8");
       if (overlay !== "export const approved = true;\n") return { exitCode: 2, stdout: "", stderr: "overlay mismatch" };
       return left === "new" && right === "new"
-        ? { exitCode: 1, stdout: "interaction failed\n", stderr: "both changed" }
-        : { exitCode: 0, stdout: "interaction passed\n", stderr: "" };
+        ? { exitCode: 1, stdout: `interaction failed\n${formatWitnessResult("PREDICATE_FAIL")}\n`, stderr: "both changed" }
+        : { exitCode: 0, stdout: `interaction passed\n${formatWitnessResult("PREDICATE_PASS")}\n`, stderr: "" };
     }
   };
 }
@@ -298,8 +299,8 @@ describe("Git diff counterfactual minimization", () => {
           })();
           const flag = readFileSync(join(invocation.cwd, "flag.txt"), "utf8").trim();
           return hasNested && flag === "new"
-            ? { exitCode: 1, stdout: "failed\n", stderr: "interaction" }
-            : { exitCode: 0, stdout: "passed\n", stderr: "" };
+            ? { exitCode: 1, stdout: `failed\n${formatWitnessResult("PREDICATE_FAIL")}\n`, stderr: "interaction" }
+            : { exitCode: 0, stdout: `passed\n${formatWitnessResult("PREDICATE_PASS")}\n`, stderr: "" };
         }
       };
       const result = await minimizeGitDiff(requestFor(root, before, after, witness, runner));

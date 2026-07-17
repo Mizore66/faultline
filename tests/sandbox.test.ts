@@ -11,6 +11,7 @@ import {
   type SandboxPlanRequest
 } from "../src/sandbox.js";
 import { digestJson } from "../src/canonical.js";
+import { formatWitnessResult } from "../src/witness-result.js";
 
 const pinnedImage = `registry.example/faultline-node@sha256:${"a".repeat(64)}`;
 const witness = {
@@ -111,36 +112,44 @@ describe("FaultLine frozen-witness sandbox plans", () => {
   });
 
   it("classifies injected runner results without requiring a Docker daemon", async () => {
-    const plan = createSandboxPlan(dockerRequest({ limits: { timeoutMs: 7_000, maxOutputBytes: 64 } }));
+    const plan = createSandboxPlan(dockerRequest({ limits: { timeoutMs: 7_000, maxOutputBytes: 1_024 } }));
     const calls: unknown[] = [];
     const passingRunner: SandboxCommandRunner = {
       async run(invocation) {
         calls.push(invocation);
-        return { exitCode: 0, stdout: "witness passed\n", stderr: "" };
+        return { exitCode: 0, stdout: `witness passed\n${formatWitnessResult("PREDICATE_PASS")}\n`, stderr: "" };
       }
     };
 
     await expect(executeSandboxPlan(plan, passingRunner)).resolves.toMatchObject({
       verdict: "PASS",
-      reason: "EXIT_ZERO",
+      reason: "PREDICATE_PASS",
       kind: "DOCKER_ISOLATED"
     });
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ executable: "docker", timeoutMs: 7_000, maxOutputBytes: 64 });
+    expect(calls[0]).toMatchObject({ executable: "docker", timeoutMs: 7_000, maxOutputBytes: 1_024 });
 
+    expect(classifySandboxResult(plan, {
+      exitCode: 0,
+      stdout: "unstructured pass",
+      stderr: ""
+    })).toMatchObject({ verdict: "ERROR", reason: "EXIT_ZERO_UNSTRUCTURED" });
     const dockerUnavailablePlan = createSandboxPlan(dockerRequest({ limits: { maxOutputBytes: 1_024 } }));
+    // An unstructured nonzero exit is never trusted as a real predicate
+    // failure: a compile/setup incompatibility looks identical to it.
     expect(classifySandboxResult(dockerUnavailablePlan, {
       exitCode: 1,
       stdout: "expected failure",
       stderr: ""
-    })).toMatchObject({ verdict: "FAIL", reason: "EXIT_NONZERO" });
+    })).toMatchObject({ verdict: "ERROR", reason: "EXIT_NONZERO_UNSTRUCTURED" });
     expect(classifySandboxResult(plan, {
       exitCode: null,
       stdout: "",
       stderr: "Docker daemon unavailable",
       timedOut: true
     })).toMatchObject({ verdict: "ERROR", reason: "TIMEOUT" });
-    expect(classifySandboxResult(plan, {
+    const tightLimitPlan = createSandboxPlan(dockerRequest({ limits: { maxOutputBytes: 64 } }));
+    expect(classifySandboxResult(tightLimitPlan, {
       exitCode: 0,
       stdout: "x".repeat(65),
       stderr: ""
@@ -159,5 +168,71 @@ describe("FaultLine frozen-witness sandbox plans", () => {
       stdout: "local command passed",
       stderr: ""
     })).toMatchObject({ verdict: "INAPPLICABLE", reason: "UNSAFE_LOCAL_NOT_PROOF" });
+  });
+
+  it("classifies structured witness-result outcomes independently of exit code", () => {
+    const plan = createSandboxPlan(dockerRequest({ limits: { maxOutputBytes: 4_096 } }));
+
+    expect(classifySandboxResult(plan, {
+      exitCode: 1,
+      stdout: `some diagnostic noise\n${formatWitnessResult("PREDICATE_FAIL")}\n`,
+      stderr: ""
+    })).toMatchObject({ verdict: "FAIL", reason: "PREDICATE_FAIL" });
+
+    expect(classifySandboxResult(plan, {
+      exitCode: 0,
+      stdout: `${formatWitnessResult("PREDICATE_PASS")}\n`,
+      stderr: ""
+    })).toMatchObject({ verdict: "PASS", reason: "PREDICATE_PASS" });
+
+    // A structured outcome wins even against an exit code that would
+    // otherwise imply the opposite legacy verdict.
+    expect(classifySandboxResult(plan, {
+      exitCode: 0,
+      stdout: `${formatWitnessResult("PREDICATE_FAIL")}\n`,
+      stderr: ""
+    })).toMatchObject({ verdict: "FAIL", reason: "PREDICATE_FAIL" });
+
+    expect(classifySandboxResult(plan, {
+      exitCode: 1,
+      stdout: `${formatWitnessResult("INCOMPATIBLE_STATE")}\n`,
+      stderr: ""
+    })).toMatchObject({ verdict: "INAPPLICABLE", reason: "INCOMPATIBLE_STATE" });
+
+    expect(classifySandboxResult(plan, {
+      exitCode: 1,
+      stdout: `${formatWitnessResult("HARNESS_ERROR")}\n`,
+      stderr: ""
+    })).toMatchObject({ verdict: "ERROR", reason: "HARNESS_ERROR" });
+
+    expect(classifySandboxResult(plan, {
+      exitCode: 1,
+      stdout: `${formatWitnessResult("INFRASTRUCTURE_ERROR")}\n`,
+      stderr: ""
+    })).toMatchObject({ verdict: "ERROR", reason: "SANDBOX_UNAVAILABLE" });
+  });
+
+  it("classifies compile/setup incompatibility signatures as inapplicable rather than a predicate failure", () => {
+    const plan = createSandboxPlan(dockerRequest({ limits: { maxOutputBytes: 4_096 } }));
+
+    expect(classifySandboxResult(plan, {
+      exitCode: 1,
+      stdout: "",
+      stderr: "file.ts:3:1 - error TS2304: Cannot find name 'foo'.\nSyntaxError: Unexpected token"
+    })).toMatchObject({ verdict: "INAPPLICABLE", reason: "INCOMPATIBLE_STATE" });
+
+    expect(classifySandboxResult(plan, {
+      exitCode: 1,
+      stdout: "",
+      stderr: "error[E0433]: failed to resolve: use of undeclared crate\nerror: could not compile `witness`"
+    })).toMatchObject({ verdict: "INAPPLICABLE", reason: "INCOMPATIBLE_STATE" });
+
+    // Still ERROR (not FAIL) for a genuinely unstructured nonzero exit that
+    // matches none of the known infra/compile signatures.
+    expect(classifySandboxResult(plan, {
+      exitCode: 3,
+      stdout: "predicate produced no structured result\n",
+      stderr: ""
+    })).toMatchObject({ verdict: "ERROR", reason: "EXIT_NONZERO_UNSTRUCTURED" });
   });
 });

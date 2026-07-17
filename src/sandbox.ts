@@ -4,6 +4,7 @@ import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, parse, resolve } from "node:path";
 import { digestJson, sha256 } from "./canonical.js";
 import type { Witness } from "./domain.js";
+import { classifyFromWitnessResult, parseWitnessResult } from "./witness-result.js";
 
 /**
  * The sandbox boundary is intentionally conservative. A plan is evidence only
@@ -58,8 +59,16 @@ export type SandboxKind = "DOCKER_ISOLATED" | "UNSAFE_LOCAL";
 export type SandboxExecutor = "NATIVE_DOCKER" | "INJECTED_RUNNER" | "UNSAFE_LOCAL";
 export type SandboxVerdict = "PASS" | "FAIL" | "ERROR" | "INAPPLICABLE";
 export type SandboxReason =
+  // Legacy reasons retained only so old stored records still parse. New runs
+  // never emit EXIT_ZERO/EXIT_NONZERO as PASS/FAIL.
   | "EXIT_ZERO"
   | "EXIT_NONZERO"
+  | "PREDICATE_PASS"
+  | "PREDICATE_FAIL"
+  | "INCOMPATIBLE_STATE"
+  | "HARNESS_ERROR"
+  | "EXIT_NONZERO_UNSTRUCTURED"
+  | "EXIT_ZERO_UNSTRUCTURED"
   | "TIMEOUT"
   | "OUTPUT_LIMIT_EXCEEDED"
   | "SANDBOX_UNAVAILABLE"
@@ -68,6 +77,14 @@ export type SandboxReason =
   | "UNSAFE_LOCAL_NOT_PROOF";
 
 const DOCKER_INFRASTRUCTURE_ERROR = /(?:cannot connect to the docker daemon|is the docker daemon running|error during connect|docker daemon is not running|error response from daemon|unable to find image|pull access denied|no such image)/i;
+
+/**
+ * Signatures of a compile/setup incompatibility rather than a genuine
+ * predicate failure. "cannot find module" and "permission denied" are
+ * deliberately absent here: they are already classified as
+ * WITNESS_SETUP_ERROR above this check runs.
+ */
+const COMPILE_OR_SETUP_INCOMPATIBILITY = /(?:SyntaxError|TS\d{4}\s*:|error\s+TS\d{4}|failed to compile|error\[E\d{4}\]|could not compile `|cargo:.*error|rustc.*error:|ModuleNotFoundError|ImportError:\s*No module named)/i;
 
 export interface SandboxLimits {
   readonly timeoutMs: number;
@@ -727,10 +744,29 @@ export function classifySandboxResult(
   if (result.exitCode === 126 || result.exitCode === 127 || /(?:command not found|not found|no such file|cannot find module|permission denied)/i.test(result.stderr)) {
     return { ...base, verdict: "ERROR", reason: "WITNESS_SETUP_ERROR" };
   }
-  if (result.exitCode === 0) {
-    return { ...base, verdict: "PASS", reason: "EXIT_ZERO" };
+  // A witness that opts into the structured witness-result protocol is
+  // classified from that outcome alone; its exit code is not consulted.
+  // This is what keeps a compile/setup incompatibility that happens to exit
+  // nonzero from ever being reported as a behavioral predicate failure.
+  const witnessResult = parseWitnessResult(result.stdout);
+  if (witnessResult) {
+    const classified = classifyFromWitnessResult(witnessResult.outcome);
+    return { ...base, verdict: classified.verdict, reason: classified.reason as SandboxReason };
   }
-  return { ...base, verdict: "FAIL", reason: "EXIT_NONZERO" };
+  // No structured result was found. Before trusting a nonzero exit as a real
+  // predicate failure, check for well-known compile/syntax incompatibility
+  // signatures: these mean the witness never actually ran to a verdict.
+  if (COMPILE_OR_SETUP_INCOMPATIBILITY.test(result.stderr) || COMPILE_OR_SETUP_INCOMPATIBILITY.test(result.stdout)) {
+    return { ...base, verdict: "INAPPLICABLE", reason: "INCOMPATIBLE_STATE" };
+  }
+  if (result.exitCode === 0) {
+    // Unstructured exit 0 is not proof of predicate satisfaction.
+    return { ...base, verdict: "ERROR", reason: "EXIT_ZERO_UNSTRUCTURED" };
+  }
+  // An unstructured nonzero exit is never treated as a behavioral FAIL: it
+  // could just as easily be an unclassified setup problem in a witness that
+  // never opted into structured results.
+  return { ...base, verdict: "ERROR", reason: "EXIT_NONZERO_UNSTRUCTURED" };
 }
 
 /**

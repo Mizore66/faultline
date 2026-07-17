@@ -1,101 +1,96 @@
 # FaultLine
 
-> Freeze one reviewed executable question. Replay it over Git states. Prove only what the executions support.
+> **First Bad Turn** evidence for agent-assisted regressions: freeze one reviewed predicate, replay historical states, prove only what executions support.
 
-FaultLine is a **Developer Tools** CLI for the moment after agent-assisted work turns CI red. A human freezes one witness before localization; FaultLine replays that exact predicate across recorded Git states, records stable `PASS -> FAIL` / `FAIL -> PASS` boundaries, can minimize the implicated diff, and writes a portable proof package another engineer can verify offline.
+FaultLine executes historical states to prove where a frozen witness changed from pass to fail — without claiming agent intent or a unique semantic root cause.
 
-It does **not** claim model intent, a unique semantic root cause, or native Codex interception. Models may propose a witness or an evidence-cited repair brief; they never assign verdicts.
+**Break → Find → Prove → Fix → Prevent**
 
-**Canonical branch:** `main` (MIT-licensed). Use this branch for clones, CI, and npm publishes.
+| Proves | Never claims |
+| --- | --- |
+| Earliest stable PASS→FAIL under a frozen witness | Model intent / “the agent meant to…” |
+| Bidirectional edit necessity/sufficiency when certified | Unique semantic root cause |
+| Turn tree snapshots from dirty Codex Stops (when sidecar installed) | Private Codex interception |
+| Structured `PREDICATE_*` outcomes (compile ≠ FAIL) | That one Docker image fits every lockfile era |
 
-## Judges: three commands (no Docker, no API key)
+**Hero demo for judges (real self-incident — prefer this in the video):**
+
+1. Open [docs/faultline-self-incident.md](docs/faultline-self-incident.md)
+2. Show historical CI failure → frozen witness → `PASS→FAIL` at `97c3290` → recorded root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`
+3. Optional live re-verify path in that doc
+4. Optional: `fl investigate turns` when a Codex sidecar ledger with dirty-turn snapshots is available
+
+The deterministic `judge-demo` fixture is only the **protocol sample** (no Docker/API key). Do not center the submission video on its synthetic session metrics.
+
+## Protocol sample (no Docker, no API key)
 
 ```powershell
-npm install -g @mizore66/faultline
-fl judge-demo --rerun-all --export-only
-fl verify .faultline/bundles/judge-demo
-```
-
-Or from a clone (Node 22+, pnpm 10.32.1):
-
-```powershell
+git clone https://github.com/Mizore66/faultline.git
+cd faultline
+git checkout main
 pnpm install --frozen-lockfile
 pnpm fl -- judge-demo --rerun-all --export-only
 pnpm fl -- verify .faultline/bundles/judge-demo
 ```
 
-This is the product’s evidence vocabulary in a deterministic sample. For a zero-install visual pass, open [`docs/judge-preview.html`](docs/judge-preview.html) in a browser.
+Zero-install visual: open [`docs/judge-preview.html`](docs/judge-preview.html).
 
-With Docker, the live product path is one more command:
-
-```powershell
-fl demo live-git --export-only
-# or: pnpm fl -- demo live-git --export-only
-```
+With Docker (product path smoke): `pnpm fl -- demo live-git --export-only`
 
 ## Install
+
+**Canonical path today:** clone `main` (MIT) and use `pnpm fl -- …` as above.
+
+Public package name is `@mizore66/faultline` (the unscoped `faultline` name is taken). Registry install is supported **after** the first `pnpm publish`:
 
 ```powershell
 npm install -g @mizore66/faultline
 fl --version
 fl doctor --repo .
+fl doctor --proof-ready   # nonzero unless Docker proof-grade is READY
 ```
 
-`fl doctor` exits `0` when Node can run the local CLI (including the no-Docker judge path). Missing Docker is reported as a **proof-grade warning**, not a hard failure. Supported platforms: Windows, macOS, and Ubuntu (Node 22+). Docker is required only for proof-grade Git investigation; Ubuntu CI exercises that path.
+Until publish completes, do not treat `npm install -g` as the judge path.
 
-From source: `pnpm install --frozen-lockfile`, then `pnpm fl -- …` or `pnpm build` and use `node dist/cli.js`.
+## One guided command
 
-## One product path (real incident)
+```powershell
+pnpm fl -- investigate --ci-log .\ci.log --repo . --command "pnpm test"
+```
 
-1. **Preflight** — `fl doctor --repo .`
-2. **Draft** — `fl incident start --repo . --command "<failing command>"` (review-only; does not approve or freeze)
-3. **Human freeze** — `fl witness review <id>` → Approve → Freeze; retain the freeze digest outside `.faultline`
-4. **Replay** — `fl incident continue <id> --expect-digest <retained-frozen-digest>` (needs a digest-pinned Docker image)
-5. **Read** — `fl serve --bundle <proof> --expect-root <retained-root>`
-6. **Share** — `fl verify <proof> --expect-root <retained-root>`
+Creates a review-only draft, prints next steps (`witness review` → freeze → `incident continue`). Never auto-approves.
 
-Full guide: [your first FaultLine incident](docs/first-incident.md).  
-Dogfooded case: [FaultLine’s first self-incident](docs/faultline-self-incident.md).
+## One product path (expert)
+
+1. `fl doctor --repo .` / `fl doctor --proof-ready`
+2. `fl incident start` or `fl investigate --ci-log`
+3. `fl witness review` → Approve → Freeze (retain digest)
+4. Optional: `fl witness implement` (Codex drafts overlay; human still freezes)
+5. `fl incident continue` / `fl investigate git`
+6. `fl serve --bundle` / `fl verify --expect-root`
+7. Optional: `fl repair --bundle … --with-codex` then re-verify three-state prevention
+
+Full guide: [docs/first-incident.md](docs/first-incident.md).
 
 ## What this is validated on (impact)
 
-FaultLine is aimed at engineers who merge agent-assisted changes and then own a red CI run. The first completed, human-reviewed proof package is **this repository’s own provenance-workflow regression** (`PASS -> FAIL` at `97c3290`, recovery at `07ee7f1`; recorded root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`). That package supports only the frozen workflow predicate—not agent intent, not “unique root cause,” and not broad adoption metrics.
-
-Until more consented incidents exist, impact claims stay scoped to: *we used FaultLine on ourselves first, and the replay matched the historical CI symptom for that predicate.* Use [impact-validation template](docs/impact-validation-template.md) before adding time-saved or third-party claims.
+Dogfood only: FaultLine’s first completed proof is **this repository’s provenance-workflow regression** (`PASS→FAIL` at `97c3290`, recovery at `07ee7f1`). No third-party adoption metrics.
 
 ## How Codex and GPT-5.6 are used
 
-**Build Week qualifying Codex session:** `/feedback` id `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` (core functionality was built in this Project thread).
+**Qualifying `/feedback`:** `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 
-**Codex (build):** Accelerated implementation of the witness lock, Git investigation/minimization, Docker sandbox policy, proof bundles, adversarial tests, and product hardening. We kept product decisions human-owned: evidence labels, fail-closed sandbox rules, and refusing to treat model text as verdicts.
+- **Codex (build):** implementation, adversarial tests, hardening.
+- **Codex (runtime):** opt-in sidecar records public hooks + **turn tree snapshots even on dirty Stops**; clean checkpoints when possible. `fl witness implement` / `fl repair --with-codex` draft overlays/repairs for human review.
+- **GPT-5.6:** blinded witness proposal + evidence-cited repair brief only. Never assigns PASS/FAIL.
 
-**Codex (runtime, optional):** `fl codex sidecar` consumes documented public hook envelopes, hashes prompts in memory, and records clean Git checkpoints. It does **not** read private model state, reasoning, assistant text, or transcripts. Manual `fl record` remains available for a hash-chained lifecycle ledger labeled `CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR`.
+## Benchmark matrix
 
-**GPT-5.6 (runtime):** Responses API only for (1) a blinded witness proposal and (2) an evidence-cited repair brief after a verified investigation. It cannot assign PASS/FAIL, name a culprit, replace the frozen witness, or manufacture proof.
+`pnpm benchmark` writes `benchmarks/REPORT.md` (8 adversarial incident expectations, 0 unsupported exact-cause claims).
 
-## What is implemented (advanced surface)
+## What is implemented (advanced)
 
-- `fl judge-demo` — deterministic five-beat sample: **BREAK → FIND → PROVE → FIX → PREVENT**
-- `fl serve --bundle <proof>` — same incident page for a verified Git proof package (optional minimization/repair attachments require separately retained digests)
-- Guided intake: `fl doctor`, `fl incident start|suggest|continue`, `fl runtime prepare|resolve`, `fl witness review`
-- Proof-grade `fl investigate git` / `fl minimize git` with digest-pinned Docker isolation
-- Portable proof packages, offline `fl verify`, attestations, optional reviewer Ed25519 signatures and CI provenance
-- Opt-in Codex sidecar + manual lifecycle ledger binding
-- Reusable GitHub Actions: root [incident-intake](docs/github-action.md) and nested [actions/proof](actions/proof)
-
-## CI and npm distribution
-
-Package: **`@mizore66/faultline`** (public, MIT). Binary: `fl`. Publish with `pnpm publish` from `main` after `pnpm test` / `pnpm test:package`.
-
-```powershell
-npm install -g @mizore66/faultline
-# or one-shot:
-npx @mizore66/faultline --version
-```
-
-The unscoped name `faultline` is already taken on npm by an unrelated package; the scoped name is intentional.
-
-CI incident-intake action: [docs/github-action.md](docs/github-action.md). Nested proof action: `actions/proof`.
+See prior surface: Docker-isolated Git replay, env-fingerprint refusal on lockfile skew, structured witness results, minimization, proof packages, attestations, GitHub Actions. Parallel multi-session *fleet blame* is **not** claimed — contribution attribution in the sample is fixture theater; production proves Git/turn-tree boundaries under one frozen witness.
 
 ## Fast judge check (no Docker or API key)
 

@@ -1,0 +1,1 @@
+{"id":"historical-api-incompatibility","description":"Older states cannot compile or import the witness harness.","expectedOutcome":"INAPPLICABLE","notes":"INCOMPATIBLE_STATE must not become FAIL."}

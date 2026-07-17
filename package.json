@@ -44,6 +44,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:package": "node scripts/package-smoke.mjs",
+    "benchmark": "node scripts/run-benchmark.mjs",
     "dev": "tsx src/server.ts",
     "fl": "tsx src/cli.ts",
     "prepack": "pnpm build",

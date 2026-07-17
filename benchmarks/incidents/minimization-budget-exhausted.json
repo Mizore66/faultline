@@ -1,0 +1,1 @@
+{"id":"minimization-budget-exhausted","description":"Execution budget ends before a 1-minimal set is certified.","expectedOutcome":"ASSOCIATED_NONMINIMAL","notes":"Return associated set without unsupported exact-cause claims."}

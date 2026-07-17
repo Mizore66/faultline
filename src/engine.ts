@@ -128,7 +128,13 @@ export function createDemoAnalysis(mode: RunMode): DemoAnalysis {
       stateFidelity: "DEMO_SAMPLE"
     },
     witness,
-    metrics: { sessions: 4, turns: 31, files: 42, changedLines: 1284, implicatedHunks: 2 },
+    metrics: {
+      sessions: contributionStates.length,
+      turns: timelineStates.length,
+      files: new Set(timelineStates.flatMap((state) => state.hunks)).size || 1,
+      changedLines: timelineStates.reduce((sum, state) => sum + state.hunks.length * 2, 0) || 1,
+      implicatedHunks: new Set([sourceHunk, rendererHunk]).size
+    },
     contributionRuns,
     timelineRuns: localized.timeline,
     transitions: localized.transitions,

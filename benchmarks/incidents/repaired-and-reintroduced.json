@@ -1,0 +1,1 @@
+{"id":"repaired-and-reintroduced","description":"Failure is repaired then reintroduced later in history.","expectedOutcome":"MULTIPLE_TRANSITIONS","notes":"Non-monotonic PASS/FAIL transitions must remain visible."}

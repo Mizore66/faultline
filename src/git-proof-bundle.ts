@@ -59,6 +59,11 @@ const MAX_GIT_PROOF_TOTAL_BYTES = 512 * 1024 * 1024;
 const DigestSchema = z.string().regex(SHA256_DIGEST, "expected sha256:<64 lowercase hex characters>");
 const TimestampSchema = z.string().datetime({ offset: true });
 
+/** A PASS run is legitimate either as a legacy unstructured exit-zero or a structured witness-result predicate pass. */
+const PASS_VERDICT_REASONS = new Set(["PREDICATE_PASS"]);
+/** Proof-grade FAIL requires a structured witness-result predicate fail — never legacy EXIT_NONZERO. */
+const FAIL_VERDICT_REASONS = new Set(["PREDICATE_FAIL"]);
+
 function isSafeRelativeArtifactPath(value: string): boolean {
   if (!value || value.startsWith("/") || value.includes("\\") || value.includes("\0")) return false;
   const parts = value.split("/");
@@ -503,7 +508,8 @@ function reconstructStableStates(result: GitInvestigationResult): StableGitState
       || (verdict !== "PASS" && verdict !== "FAIL")
       || !runs.every((run) => run.commit === state.commit && run.tree === state.tree
         && run.result.kind === "DOCKER_ISOLATED" && run.result.executor === "NATIVE_DOCKER"
-        && run.result.verdict === verdict)) continue;
+        && run.result.verdict === verdict
+        && (run.result.reason === "PREDICATE_PASS" || run.result.reason === "PREDICATE_FAIL"))) continue;
     stable.push({
       stateIndex: state.index,
       commit: state.commit,
@@ -685,10 +691,10 @@ export function validateGitInvestigationProofSemantics(
     if (run.result.kind !== "DOCKER_ISOLATED") errors.push(`non-Docker run cannot support this proof bundle: ${run.runId}`);
     if (run.result.executor !== "NATIVE_DOCKER") errors.push(`non-native Docker executor cannot support this proof bundle: ${run.runId}`);
     if (run.result.verdict !== "PASS" && run.result.verdict !== "FAIL") errors.push(`non-decisive run cannot support this proof bundle: ${run.runId}`);
-    if (run.result.verdict === "PASS" && (run.result.reason !== "EXIT_ZERO" || run.result.exitCode !== 0)) {
+    if (run.result.verdict === "PASS" && (!PASS_VERDICT_REASONS.has(run.result.reason) || run.result.exitCode !== 0)) {
       errors.push(`PASS run has inconsistent execution result: ${run.runId}`);
     }
-    if (run.result.verdict === "FAIL" && (run.result.reason !== "EXIT_NONZERO" || run.result.exitCode === 0 || run.result.exitCode === null)) {
+    if (run.result.verdict === "FAIL" && (!FAIL_VERDICT_REASONS.has(run.result.reason) || run.result.exitCode === 0 || run.result.exitCode === null)) {
       errors.push(`FAIL run has inconsistent execution result: ${run.runId}`);
     }
     const attempts = attemptsByState.get(run.stateIndex) ?? new Set<number>();
@@ -715,10 +721,14 @@ export function validateGitInvestigationProofSemantics(
   if (result.nonMonotonic !== nonMonotonic) errors.push("persisted nonMonotonic flag contradicts reconstructed transitions");
   if (result.proof.proofTransitions !== transitions.length) errors.push("proof transition count contradicts reconstructed transitions");
   const expectedProof = result.proof.dockerIsolated && result.proof.executionTrust === "NATIVE_DOCKER"
-    && result.status === "COMPLETED" && transitions.length > 0;
-  if (result.proof.isProof !== expectedProof) errors.push("proof isProof flag contradicts reconstructed transitions and status");
+    && result.status === "COMPLETED" && transitions.length > 0
+    && result.environment.homogeneity !== "HETEROGENEOUS";
+  if (result.proof.isProof !== expectedProof) errors.push("proof isProof flag contradicts reconstructed transitions, status, and environment homogeneity");
   if (expectedProof && result.proof.reason !== "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.") {
     errors.push("proof reason does not match a completed Docker transition proof");
+  }
+  if (result.environment.homogeneity === "HETEROGENEOUS" && result.proof.isProof) {
+    errors.push("heterogeneous environment fingerprints cannot certify a single-image proof");
   }
   return errors;
 }

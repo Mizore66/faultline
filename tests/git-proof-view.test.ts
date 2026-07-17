@@ -105,7 +105,7 @@ function syntheticInvestigation(frozen: FrozenWitness): GitInvestigationResult {
         kind: "DOCKER_ISOLATED" as const,
         executor: "NATIVE_DOCKER" as const,
         verdict,
-        reason: verdict === "PASS" ? "EXIT_ZERO" as const : "EXIT_NONZERO" as const,
+        reason: verdict === "PASS" ? "PREDICATE_PASS" as const : "PREDICATE_FAIL" as const,
         exitCode: verdict === "PASS" ? 0 : 1,
         signal: null,
         outputTruncated: false,
@@ -164,6 +164,7 @@ function syntheticInvestigation(frozen: FrozenWitness): GitInvestigationResult {
     stableStates: [before, after],
     transitions: [{ kind: "PASS_TO_FAIL", before, after }],
     nonMonotonic: false,
+    environment: { homogeneity: "HOMOGENEOUS", fingerprints: [], distinctDigests: [] },
     proof: {
       requiresDockerIsolation: true,
       dockerIsolated: true,

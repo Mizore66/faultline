@@ -21,6 +21,7 @@ import {
 } from "../src/ledger-binding.js";
 import { investigateGitRange, type GitInvestigationResult } from "../src/git-investigation.js";
 import type { SandboxCommandRunner } from "../src/sandbox.js";
+import { formatWitnessResult } from "../src/witness-result.js";
 import {
   approveWitnessProposal,
   freezeApprovedWitness,
@@ -157,8 +158,8 @@ function stateRunner(): SandboxCommandRunner {
     async run(invocation) {
       const state = readFileSync(join(invocation.cwd, "state.txt"), "utf8").trim();
       return state === "bad"
-        ? { exitCode: 1, stdout: `state=${state}\n`, stderr: "witness failed" }
-        : { exitCode: 0, stdout: `state=${state}\n`, stderr: "" };
+        ? { exitCode: 1, stdout: `state=${state}\n${formatWitnessResult("PREDICATE_FAIL")}\n`, stderr: "witness failed" }
+        : { exitCode: 0, stdout: `state=${state}\n${formatWitnessResult("PREDICATE_PASS")}\n`, stderr: "" };
     }
   };
 }

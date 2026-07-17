@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { digestJson } from "./canonical.js";
 import type { FixtureState, RunRecord, Verdict, Witness } from "./domain.js";
+import { classifyFromWitnessResult, parseWitnessResult, WITNESS_RESULT_PROTOCOL } from "./witness-result.js";
 
 export const sourceHunk = "settlement-display-default";
 export const rendererHunk = "settlement-display-boundary";
@@ -130,19 +131,30 @@ function implementationFor(hunks: string[]): string {
   ].join("\n");
 }
 
+// This built-in sample witness emits a structured faultline.witness-result.v1
+// line before exiting, so the judge demo dogfoods the same protocol that
+// distinguishes a real predicate result from a compile/setup incompatibility
+// instead of trusting a bare exit code.
 const witnessProgram = [
   'import { completeRefund } from "./reconcile.mjs";',
   'const result = completeRefund({ currency: "USD" }, {});',
   'if (result.settlementCurrency !== "USD") {',
   '  console.error(`expected settlement USD; received ${result.settlementCurrency}`);',
+  `  console.log(JSON.stringify({ protocol: "${WITNESS_RESULT_PROTOCOL}", outcome: "PREDICATE_FAIL" }));`,
   '  process.exit(1);',
   '}',
-  'console.log("settlement currency preserved");'
+  'console.log("settlement currency preserved");',
+  `console.log(JSON.stringify({ protocol: "${WITNESS_RESULT_PROTOCOL}", outcome: "PREDICATE_PASS" }));`
 ].join("\n");
 
 function verdictFor(result: ReturnType<typeof spawnSync>): { verdict: Verdict; reasonCode: string } {
   if (result.error || result.status === null || result.signal) {
     return { verdict: "ERROR", reasonCode: "RUNNER_ERROR" };
+  }
+  const structured = parseWitnessResult(String(result.stdout ?? ""));
+  if (structured) {
+    const classified = classifyFromWitnessResult(structured.outcome);
+    return { verdict: classified.verdict, reasonCode: classified.reason };
   }
   if (String(result.stderr ?? "").includes("SyntaxError")) {
     return { verdict: "ERROR", reasonCode: "FIXTURE_COMPILE_ERROR" };

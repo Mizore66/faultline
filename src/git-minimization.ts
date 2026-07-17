@@ -48,6 +48,11 @@ const GitObjectIdSchema = z.string().regex(GIT_OBJECT_ID, "expected a 40- or 64-
 const GitRevisionSchema = z.string().regex(SAFE_GIT_REVISION, "revision must be non-empty, cannot start with '-', and cannot contain NUL or line breaks");
 const TimestampSchema = z.string().datetime({ offset: true });
 
+/** A PASS verdict is legitimate either as a legacy unstructured exit-zero or a structured witness-result predicate pass. */
+const PASS_VERDICT_REASONS = new Set(["PREDICATE_PASS"]);
+/** Certified minimization accepts structured predicate failures only — never legacy EXIT_NONZERO. */
+const FAIL_VERDICT_REASONS = new Set(["PREDICATE_FAIL"]);
+
 export const GitMinimizationSandboxSchema = z.object({
   mode: z.enum(["DOCKER_ISOLATED", "UNSAFE_LOCAL"]).default("DOCKER_ISOLATED"),
   image: z.string().min(1).max(1_024).optional(),
@@ -203,6 +208,12 @@ export const GitMinimizationRunFactSchema = z.object({
     reason: z.enum([
       "EXIT_ZERO",
       "EXIT_NONZERO",
+      "PREDICATE_PASS",
+      "PREDICATE_FAIL",
+      "INCOMPATIBLE_STATE",
+      "HARNESS_ERROR",
+      "EXIT_NONZERO_UNSTRUCTURED",
+      "EXIT_ZERO_UNSTRUCTURED",
       "TIMEOUT",
       "OUTPUT_LIMIT_EXCEEDED",
       "SANDBOX_UNAVAILABLE",
@@ -1720,10 +1731,10 @@ export function verifyGitMinimizationResult(value: unknown, expectedDigest?: str
         if (run.result.executor !== "UNSAFE_LOCAL" && run.result.kind !== "DOCKER_ISOLATED") {
           errors.push(`Docker executor has a non-Docker result kind: ${run.runId}`);
         }
-        if (run.result.verdict === "PASS" && (run.result.reason !== "EXIT_ZERO" || run.result.exitCode !== 0)) {
+        if (run.result.verdict === "PASS" && (!PASS_VERDICT_REASONS.has(run.result.reason) || run.result.exitCode !== 0)) {
           errors.push(`PASS execution result is inconsistent: ${run.runId}`);
         }
-        if (run.result.verdict === "FAIL" && (run.result.reason !== "EXIT_NONZERO" || run.result.exitCode === null || run.result.exitCode === 0)) {
+        if (run.result.verdict === "FAIL" && (!FAIL_VERDICT_REASONS.has(run.result.reason) || run.result.exitCode === null || run.result.exitCode === 0)) {
           errors.push(`FAIL execution result is inconsistent: ${run.runId}`);
         }
         if (run.result.kind === "UNSAFE_LOCAL" && (run.result.verdict !== "INAPPLICABLE" || run.result.reason !== "UNSAFE_LOCAL_NOT_PROOF")) {

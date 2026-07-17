@@ -7,6 +7,13 @@ import { z } from "zod";
 import { digestJson, sha256 } from "./canonical.js";
 import { redactText } from "./redaction.js";
 import {
+  computeEnvironmentFingerprint,
+  environmentHomogeneity,
+  EnvironmentFingerprintSchema,
+  type EnvironmentFingerprint,
+  type EnvironmentHomogeneity
+} from "./environment-fingerprint.js";
+import {
   auditSandboxPlan,
   createSandboxPlan,
   executeSandboxPlan,
@@ -160,6 +167,12 @@ export const GitInvestigationRunFactSchema = z.object({
     reason: z.enum([
       "EXIT_ZERO",
       "EXIT_NONZERO",
+      "PREDICATE_PASS",
+      "PREDICATE_FAIL",
+      "INCOMPATIBLE_STATE",
+      "HARNESS_ERROR",
+      "EXIT_NONZERO_UNSTRUCTURED",
+      "EXIT_ZERO_UNSTRUCTURED",
       "TIMEOUT",
       "OUTPUT_LIMIT_EXCEEDED",
       "SANDBOX_UNAVAILABLE",
@@ -233,6 +246,15 @@ export const GitInvestigationResultSchema = z.object({
   stableStates: z.array(StableGitStateSchema),
   transitions: z.array(StableGitTransitionSchema),
   nonMonotonic: z.boolean(),
+  environment: z.object({
+    homogeneity: z.enum(["HOMOGENEOUS", "HETEROGENEOUS", "EMPTY"]),
+    fingerprints: z.array(z.object({
+      stateIndex: z.number().int().nonnegative(),
+      commit: GitObjectIdSchema,
+      fingerprint: EnvironmentFingerprintSchema
+    }).strict()),
+    distinctDigests: z.array(DigestSchema)
+  }).strict(),
   proof: z.object({
     requiresDockerIsolation: z.literal(true),
     dockerIsolated: z.boolean(),
@@ -623,8 +645,13 @@ function stableStates(
     const executionIds = new Set(stateRuns.map((run) => run.executionId));
     if (attempts.size !== STABLE_EXECUTION_COUNT || executionIds.size !== STABLE_EXECUTION_COUNT) continue;
     const verdict = stateRuns[0]?.result.verdict;
-    if ((verdict !== "PASS" && verdict !== "FAIL") || !stateRuns.every((run) => run.result.kind === "DOCKER_ISOLATED"
-      && run.result.verdict === verdict)) {
+    const reason = stateRuns[0]?.result.reason;
+    // Proof-grade localization requires structured PREDICATE_* outcomes only.
+    // Legacy EXIT_ZERO / EXIT_NONZERO / heuristic INCOMPATIBLE paths never form stable proof states.
+    const proofGradeReason = reason === "PREDICATE_PASS" || reason === "PREDICATE_FAIL";
+    if ((verdict !== "PASS" && verdict !== "FAIL") || !proofGradeReason || !stateRuns.every((run) => run.result.kind === "DOCKER_ISOLATED"
+      && run.result.verdict === verdict
+      && (run.result.reason === "PREDICATE_PASS" || run.result.reason === "PREDICATE_FAIL"))) {
       continue;
     }
     stable.push({
@@ -709,6 +736,11 @@ function baseResult(
     stableStates: [],
     transitions: [],
     nonMonotonic: false,
+    environment: {
+      homogeneity: "EMPTY",
+      fingerprints: [],
+      distinctDigests: []
+    },
     proof: emptyProof(sandboxMode, errors[0] ?? "Investigation did not produce proof.", executionTrust),
     errors: [...errors]
   });
@@ -862,6 +894,7 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
   const tempRoot = await mkdtemp(join(tmpdir(), "faultline-git-investigation-"));
   const runs: GitInvestigationRunFact[] = [];
   const errors: string[] = [];
+  const fingerprints: Array<{ stateIndex: number; commit: string; fingerprint: EnvironmentFingerprint }> = [];
   let configurationError = false;
   try {
     for (const state of states) {
@@ -873,6 +906,11 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
           throw new Error(`Could not create detached worktree for ${state.commit}: ${add.stderr.trim() || add.error || "Git failed."}`);
         }
         created = true;
+        fingerprints.push({
+          stateIndex: state.index,
+          commit: state.commit,
+          fingerprint: computeEnvironmentFingerprint(worktree)
+        });
         const overlays = await materializeFrozenOverlays(worktree, input.frozenWitness);
         let plan;
         try {
@@ -932,6 +970,11 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
       stableStates: [],
       transitions: [],
       nonMonotonic: false,
+      environment: {
+        homogeneity: environmentHomogeneity(fingerprints.map((entry) => entry.fingerprint)),
+        fingerprints,
+        distinctDigests: [...new Set(fingerprints.map((entry) => entry.fingerprint.digest))].sort()
+      },
       proof: emptyProof(input.sandbox.mode, errors[0] ?? "Sandbox configuration failed.", executionTrustFor(input.sandbox.mode, request.runner !== undefined)),
       errors
     };
@@ -943,6 +986,9 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
   const transitions = findTransitions(stable);
   const status = classifyStatus(runs, errors);
   const dockerIsolated = executionTrust === "NATIVE_DOCKER";
+  const homogeneity = environmentHomogeneity(fingerprints.map((entry) => entry.fingerprint));
+  const distinctDigests = [...new Set(fingerprints.map((entry) => entry.fingerprint.digest))].sort();
+  const environmentChanged = homogeneity === "HETEROGENEOUS";
   const proofReason = executionTrust === "INJECTED_RUNNER"
     ? "An injected runner produced these observations; FaultLine refuses to certify it as native Docker proof."
     : !dockerIsolated
@@ -951,6 +997,8 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
       ? "Docker was unavailable; no execution result is proof."
       : status === "EXECUTION_ERROR"
         ? "An execution or worktree error prevents an investigation-wide proof claim."
+        : environmentChanged
+          ? "Environment descriptors (lockfiles/toolchains) changed across the investigated range; FaultLine refuses a single-image proof grade. Provide per-fingerprint runtimes or narrow the range."
         : transitions.length === 0
           ? "No adjacent states produced three matching Docker PASS/FAIL executions."
           : "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.";
@@ -969,12 +1017,17 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
     stableStates: stable,
     transitions,
     nonMonotonic: hasNonMonotonicTransitions(transitions),
+    environment: {
+      homogeneity,
+      fingerprints,
+      distinctDigests
+    },
     proof: {
       requiresDockerIsolation: true as const,
       dockerIsolated,
       executionTrust,
       proofTransitions: transitions.length,
-      isProof: dockerIsolated && status === "COMPLETED" && transitions.length > 0,
+      isProof: dockerIsolated && status === "COMPLETED" && transitions.length > 0 && !environmentChanged,
       reason: proofReason
     },
     errors

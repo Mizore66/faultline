@@ -1,0 +1,1 @@
+{"id":"simple-source-regression","description":"Single-file source change flips a structured witness from pass to fail.","expectedOutcome":"LOCALIZE_BOUNDARY","notes":"Expect one stable PASS->FAIL boundary."}

@@ -92,17 +92,20 @@ import {
 } from "./authenticated-witness-approval.js";
 import type { RunMode } from "./domain.js";
 
-const usage = `FaultLine — executable evidence for agent-assisted code
+const usage = `FaultLine — First Bad Turn evidence for agent-assisted code
 
 Usage:
   fl judge-demo [--replay | --rerun-all] [--output <managed-bundle-directory>] [--export-only]
   fl --version
   fl judge-preview [--output <static-preview.html>]
-  fl doctor [--repo <directory>] [--json]
+  fl doctor [--repo <directory>] [--json] [--proof-ready]
   fl incident suggest --repo <directory>
   fl incident start --repo <directory> (--command <failing-command> | --command-file <utf8-file>) [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--store <directory>]
   fl incident status <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--expect-digest <sha256:...>]
   fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>] [--unsafe-local]
+  fl investigate --ci-log <file> [--repo <directory>] [--command <failing-command>] [--from <commit> --to <commit>] [--id <safe-id>]
+  fl investigate turns --repo <directory> --ledger <ledger.json> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image>
+  fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]
   fl runtime resolve <node|python|go>
   fl runtime prepare <node|python|go> --yes
   fl runtime project <plan|build|resolve> [--context <directory>] [--dockerfile <file>] --tag <repository:tag> [--network <none|default>] [--yes]
@@ -117,7 +120,6 @@ Usage:
   fl codex sidecar hook [--input <hook.json>] [--quiet]
   fl codex sidecar status [--repo <directory>] [--session <session-id>]
   fl record <init|stdin|checkpoint|attach|verify> [...]
-  fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]
   fl minimize git --repo <directory> --before <commit> --after <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--max-executions <count>] [--output <managed-result.json>]
   fl minimize verify <result.json> [--expect-digest <sha256:...>]
   fl ledger bind --ledger <ledger.json> --investigation <investigation.json> --output <binding.json>
@@ -126,10 +128,12 @@ Usage:
   fl attest verify <receipt-id> [--expect-digest <sha256:...>] [--store <directory>]
   fl provenance create --bundle <git-proof-bundle-directory> [--output <managed-receipt.json>]
   fl provenance verify --bundle <git-proof-bundle-directory> --receipt <ci-receipt.json> --attestation-bundle <sigstore-bundle.json> --trust <trust.json>
+  fl repair --bundle <git-proof-bundle-directory> --expect-root <sha256:...> [--repo <directory>] [--output <directory>] [--with-codex]
   fl repair brief (--bundle <git-proof-bundle-directory> | --investigation <verified-bundle>/investigation.json) (--live | --input <repair-brief.json>) [--expect-root <sha256:...>] [--model <model>] [--output <managed-directory>]
   fl repair verify <repair-brief-directory> [--expect-digest <sha256:...>]
   fl witness propose --input <proposal.json> [--store <directory>]
   fl witness propose --live --incident <incident.json> --proposal-id <id> --overlay-root <directory> [--model <model>] [--store <directory>]
+  fl witness implement --incident <incident.json> --proposal-id <id> --overlay-out <directory> [--repo <directory>] [--with-codex] [--behavior <text>]
   fl witness review <proposal-id> [--json | --port <number>] [--store <directory>] [--draft-store <directory>]
   fl witness approve <proposal-id> --approved-by <actor> [--store <directory>]
   fl witness freeze <proposal-id> [--store <directory>]
@@ -139,7 +143,8 @@ Usage:
 The judge demo is a reviewed, deterministic Node fixture. It does not require an OpenAI API key.
 The lifecycle adapter accepts observed Codex-compatible events; it does not claim to intercept private Codex internals.
 Evidence outputs are intentionally confined to their managed .faultline roots; --output selects a child of that root rather than an arbitrary directory.
-Use --live for a GPT-5.6 witness proposal or an inferred repair brief after setting OPENAI_API_KEY.`;
+Use --live for a GPT-5.6 witness proposal or an inferred repair brief after setting OPENAI_API_KEY.
+fl doctor exits 0 when Node can run the local CLI; fl doctor --proof-ready exits nonzero unless Docker proof-grade preflight is READY.`;
 
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
@@ -290,12 +295,22 @@ function doctorSummary(report: FaultLineDoctorReport): string {
 async function doctorCommand(args: string[]): Promise<void> {
   const repository = resolve(option(args, "--repo") ?? process.cwd());
   const report = await runFaultLineDoctor({ repository });
+  const proofReadyOnly = hasFlag(args, "--proof-ready");
   if (hasFlag(args, "--json")) {
-    process.stdout.write(`${JSON.stringify({ ...report, cliExitCode: doctorCliExitCode(report) }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({
+      ...report,
+      cliExitCode: doctorCliExitCode(report),
+      proofReadyExitCode: report.dockerInvestigationPreflight === "READY" ? 0 : 1
+    }, null, 2)}\n`);
   } else {
     process.stdout.write(`${doctorSummary(report)}\n`);
+    if (proofReadyOnly) {
+      process.stdout.write(`\n--proof-ready: ${report.dockerInvestigationPreflight === "READY" ? "READY" : "NOT READY"}\n`);
+    }
   }
-  process.exitCode = doctorCliExitCode(report);
+  process.exitCode = proofReadyOnly
+    ? (report.dockerInvestigationPreflight === "READY" ? 0 : 1)
+    : doctorCliExitCode(report);
 }
 
 const INTAKE_SAFE_GIT_CONFIG = [
@@ -935,6 +950,44 @@ async function witnessCommand(args: string[]): Promise<void> {
   const [action, proposalId] = args;
   const store = witnessStore(args);
   switch (action) {
+    case "implement": {
+      const { implementWitnessWithCodex } = await import("./codex-loop.js");
+      const incident = JSON.parse(readFileSync(resolve(requiredOption(args, "--incident")), "utf8")) as unknown;
+      const result = await implementWitnessWithCodex({
+        proposalId: requiredOption(args, "--proposal-id"),
+        incident,
+        behavior: option(args, "--behavior") ?? "The human-reviewed predicate must hold.",
+        overlayOut: resolve(requiredOption(args, "--overlay-out")),
+        repository: resolve(option(args, "--repo") ?? process.cwd()),
+        ...(hasFlag(args, "--with-codex")
+          ? {
+              runner: {
+                async run(codexArgs, options) {
+                  if (!hasFlag(args, "--allow-codex-full-auto")) {
+                    throw new Error("Codex drafting requires explicit --allow-codex-full-auto in addition to --with-codex.");
+                  }
+                  const { spawnSync } = await import("node:child_process");
+                  const executed = spawnSync("codex", [...codexArgs], {
+                    cwd: options.cwd,
+                    encoding: "utf8",
+                    input: options.input,
+                    timeout: 120_000,
+                    env: { PATH: process.env.PATH ?? "", COMSPEC: process.env.COMSPEC }
+                  });
+                  return {
+                    exitCode: executed.status,
+                    stdout: executed.stdout ?? "",
+                    stderr: executed.stderr ?? ""
+                  };
+                }
+              }
+            }
+          : {})
+      });
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      process.exitCode = result.status === "OVERLAY_DRAFTED" || result.status === "TEMPLATE_ONLY" ? 0 : 1;
+      return;
+    }
     case "review": {
       if (!proposalId) throw new Error("Usage: fl witness review <proposal-id> [--json | --port <number>] [--draft-store <directory>]");
       if (hasFlag(args, "--json")) {
@@ -1423,8 +1476,41 @@ async function codexSidecarCommand(args: string[]): Promise<void> {
 }
 
 async function investigateCommand(args: string[]): Promise<void> {
+  if (hasFlag(args, "--ci-log") || args[0] === "--ci-log") {
+    const { guidedInvestigateFromCiLog } = await import("./guided-investigate.js");
+    const ciLog = requiredOption(args, "--ci-log");
+    const command = option(args, "--command");
+    const from = option(args, "--from");
+    const to = option(args, "--to");
+    const incidentId = option(args, "--id");
+    const result = await guidedInvestigateFromCiLog({
+      repository: resolve(option(args, "--repo") ?? process.cwd()),
+      ciLogPath: ciLog,
+      ...(command === undefined ? {} : { command }),
+      ...(from !== undefined && to !== undefined ? { from, to } : {}),
+      ...(incidentId === undefined ? {} : { incidentId })
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = result.status === "GUIDED_DRAFT_READY" ? 0 : 1;
+    return;
+  }
+  if (args[0] === "turns") {
+    const { investigateTurnTrees } = await import("./turn-investigation.js");
+    const store = witnessStore(args);
+    const proposalId = requiredOption(args, "--proposal");
+    const result = await investigateTurnTrees({
+      repository: resolve(requiredOption(args, "--repo")),
+      ledgerPath: resolve(requiredOption(args, "--ledger")),
+      frozenWitness: readFrozenWitness(store, proposalId),
+      expectedFrozenDigest: requiredOption(args, "--expect-digest"),
+      image: requiredOption(args, "--image")
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = result.proof.isProof ? 0 : 1;
+    return;
+  }
   if (args[0] !== "git") {
-    throw new Error("Usage: fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <bundle-directory>]");
+    throw new Error("Usage: fl investigate --ci-log <file> | fl investigate turns --repo ... --ledger ... --proposal ... --expect-digest ... --image ... | fl investigate git ...");
   }
   const store = witnessStore(args);
   const proposalId = requiredOption(args, "--proposal");
@@ -1674,8 +1760,53 @@ async function repairCommand(args: string[]): Promise<void> {
     process.exitCode = verification.valid ? 0 : 1;
     return;
   }
+  if (hasFlag(args, "--bundle") && args[0] !== "brief") {
+    const { repairWithCodex } = await import("./codex-loop.js");
+    const result = await repairWithCodex({
+      bundleDirectory: resolve(requiredOption(args, "--bundle")),
+      expectRoot: requiredOption(args, "--expect-root"),
+      repository: resolve(option(args, "--repo") ?? process.cwd()),
+      outputDirectory: resolve(option(args, "--output") ?? join(".faultline", "repairs", `repair-${Date.now()}`)),
+      withCodex: hasFlag(args, "--with-codex"),
+      verifyBundle: (directory, expectRoot) => {
+        const verification = verifyGitInvestigationProofBundle(directory, expectRoot);
+        return {
+          valid: verification.valid,
+          errors: [...verification.errors],
+          rootDigest: verification.rootDigest
+        };
+      },
+      ...(hasFlag(args, "--with-codex")
+        ? {
+            runner: {
+              async run(codexArgs, options) {
+                if (!hasFlag(args, "--allow-codex-full-auto")) {
+                  throw new Error("Codex repair drafting requires explicit --allow-codex-full-auto in addition to --with-codex.");
+                }
+                const { spawnSync } = await import("node:child_process");
+                const executed = spawnSync("codex", [...codexArgs], {
+                  cwd: options.cwd,
+                  encoding: "utf8",
+                  input: options.input,
+                  timeout: 180_000,
+                  env: { PATH: process.env.PATH ?? "", COMSPEC: process.env.COMSPEC }
+                });
+                return {
+                  exitCode: executed.status,
+                  stdout: executed.stdout ?? "",
+                  stderr: executed.stderr ?? ""
+                };
+              }
+            }
+          }
+        : {})
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = result.status === "BUNDLE_INVALID" ? 1 : 0;
+    return;
+  }
   if (args[0] !== "brief") {
-    throw new Error("Usage: fl repair brief|verify ...");
+    throw new Error("Usage: fl repair --bundle <dir> --expect-root <digest> [--with-codex] | fl repair brief|verify ...");
   }
   const live = hasFlag(args, "--live");
   const input = option(args, "--input");

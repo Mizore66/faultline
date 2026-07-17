@@ -15,6 +15,7 @@ import {
   writeGitInvestigationProofBundle
 } from "../src/git-proof-bundle.js";
 import type { SandboxCommandRunner } from "../src/sandbox.js";
+import { formatWitnessResult } from "../src/witness-result.js";
 import {
   approveWitnessProposal,
   freezeApprovedWitness,
@@ -89,8 +90,8 @@ function deterministicDockerRunner(): SandboxCommandRunner {
         return { exitCode: 2, stdout: "", stderr: "approved overlay bytes changed" };
       }
       return state === "bad"
-        ? { exitCode: 1, stdout: `state=${state}\n`, stderr: "witness failed" }
-        : { exitCode: 0, stdout: `state=${state}\n`, stderr: "" };
+        ? { exitCode: 1, stdout: `state=${state}\n${formatWitnessResult("PREDICATE_FAIL")}\n`, stderr: "witness failed" }
+        : { exitCode: 0, stdout: `state=${state}\n${formatWitnessResult("PREDICATE_PASS")}\n`, stderr: "" };
     }
   };
 }

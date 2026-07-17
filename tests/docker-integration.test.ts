@@ -10,6 +10,7 @@ import {
 } from "../src/git-proof-bundle.js";
 import { loadVerifiedGitProofView, renderGitProofIncidentPage } from "../src/git-proof-view.js";
 import { createDockerSandboxPlan, executeSandboxPlan } from "../src/sandbox.js";
+import { WITNESS_RESULT_PROTOCOL } from "../src/witness-result.js";
 import {
   approveWitnessProposal,
   freezeApprovedWitness,
@@ -71,8 +72,12 @@ function createFrozenWitness(store: string): FrozenWitness {
         bytesBase64: Buffer.from([
           'import { readFileSync } from "node:fs";',
           'const state = readFileSync("state.txt", "utf8").trim();',
-          'if (state === "good") process.exit(0);',
+          'if (state === "good") {',
+          `  console.log(JSON.stringify({ protocol: "${WITNESS_RESULT_PROTOCOL}", outcome: "PREDICATE_PASS" }));`,
+          "  process.exit(0);",
+          "}",
           'console.error("state witness failed");',
+          `console.log(JSON.stringify({ protocol: "${WITNESS_RESULT_PROTOCOL}", outcome: "PREDICATE_FAIL" }));`,
           "process.exit(1);",
           ""
         ].join("\n"), "utf8").toString("base64")

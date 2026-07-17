@@ -15,6 +15,7 @@ import {
   type FrozenWitness
 } from "./witness-lock.js";
 import { resolveSafeDirectorySegment } from "./safe-directory.js";
+import { WITNESS_RESULT_PROTOCOL } from "./witness-result.js";
 
 const DIGEST_PINNED_IMAGE = /^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$/;
 const DEFAULT_DEMO_IMAGE = "node:22-alpine";
@@ -116,9 +117,11 @@ function createFrozenWitness(store: string): FrozenWitness {
         bytesBase64: Buffer.from([
           'import { readFileSync } from "node:fs";',
           'const state = readFileSync("state.txt", "utf8").trim();',
-          'if (state === "bad") { console.error("FaultLine demo witness: bad state"); process.exit(1); }',
-          'if (state !== "good" && state !== "repaired") { console.error(`Unexpected state: ${state}`); process.exit(2); }',
-          'console.log(`FaultLine demo witness: ${state}`);'
+          `const report = (outcome) => console.log(JSON.stringify({ protocol: "${WITNESS_RESULT_PROTOCOL}", outcome }));`,
+          'if (state === "bad") { console.error("FaultLine demo witness: bad state"); report("PREDICATE_FAIL"); process.exit(1); }',
+          'if (state !== "good" && state !== "repaired") { console.error(`Unexpected state: ${state}`); report("HARNESS_ERROR"); process.exit(2); }',
+          'console.log(`FaultLine demo witness: ${state}`);',
+          'report("PREDICATE_PASS");'
         ].join("\n"), "utf8").toString("base64")
       }],
       policy: { network: "disabled", credentials: "redacted", timeoutSeconds: 30 }
