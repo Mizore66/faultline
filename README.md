@@ -15,8 +15,9 @@ It deliberately does **not** claim model intent, a unique semantic root cause, o
 - `fl witness review <id>` starts a local, token-protected human review workbench and prints its URL for the exact command, canonical overlay bytes, and policy. Approval and freeze are separate explicit actions; malformed or unblinded proposals are refused before a freeze record can be written.
 - Witness proposals, human approval, and freeze records are immutable, content-addressed, and verified before an investigation can run.
 - `fl record` stores a hash-chained, versioned Codex-compatible lifecycle ledger and captures real clean-Git checkpoints. It labels the transport (`CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR`) rather than pretending to intercept private Codex internals.
-- `fl investigate git` materializes a real Git commit range into detached temporary worktrees and runs the frozen witness three times per state.
-- Proof-grade runs require a digest-pinned Docker image with no network, read-only source/root, dropped capabilities, an unprivileged user, bounded resources, and a scrubbed environment. An explicit local escape hatch is always `INAPPLICABLE`, never proof.
+- `fl investigate git` materializes a real Git commit range into detached temporary worktrees and runs the frozen witness three times per state. Successful Docker-isolated results carry evidence grade `COMMIT_PROOF` — the highest portable proof tier.
+- Turn-tree localization (Codex sidecar snapshots) is a separate path graded `EXPERIMENTAL_TURN` / “Turn localization — experimental evidence” until it meets the same write-once portable proof contract as the commit path. Do not equate turn results with `COMMIT_PROOF`.
+- Proof-grade commit-path runs require a digest-pinned Docker image with no network, read-only source/root, dropped capabilities, an unprivileged user, bounded resources, and a scrubbed environment. An explicit local escape hatch is always `INAPPLICABLE`, never proof.
 - A Git proof package contains the frozen witness, raw run facts, stable transitions, a portable descendant Git bundle, a binary range patch, hashes, and an offline semantic verifier. It rejects rehashed contradictions rather than trusting a checksum alone.
 - Optional lifecycle evidence is bound to matching Git checkpoints. The stricter ledger-binding artifact can require every replayed state to map to an ordered checkpoint.
 - Incident packets and captured fields are redacted with explicit limited-coverage warnings. FaultLine does not claim perfect secret discovery.
@@ -345,6 +346,8 @@ Codex accelerated FaultLine's implementation, adversarial testing, and product h
 
 ### Turn-tree snapshot storage warning
 
+Turn-tree capture supports experimental turn localization (`EXPERIMENTAL_TURN`). It is not commit-path portable proof (`COMMIT_PROOF`).
+
 Codex sidecar SessionStart/Stop turn-tree snapshots use a **temporary Git index**, but they are **not storage-neutral**: staging still writes blob objects into this repository's object database. Eligible **untracked** files may be included unless you opt out.
 
 Mitigations:
@@ -368,7 +371,15 @@ GPT-5.6 is used only through the Responses API for a blinded witness proposal or
 | `INFERRED` | A model or human interpretation that must cite evidence. |
 | `UNKNOWN` | A material question the evidence does not answer. |
 
-Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. A `PASS -> FAIL` boundary becomes proof only when each side has three distinct, matching Docker-isolated executions.
+### Evidence grades (commit path vs turn path)
+
+| Grade | Path | Meaning |
+| --- | --- | --- |
+| `COMMIT_PROOF` | Git commit-range investigation | Highest portable proof tier: Docker-isolated replay over immutable commits, write-once Git proof bundle, offline verifier. Shown on `fl investigate git` output and `fl serve --bundle`. |
+| `EXPERIMENTAL_TURN` | Turn-tree localization | Explicitly lower tier. May record transitions and (library) packages, but is **not** interchangeable with commit-path portable proof until turn/Git parity lands. Label: “Turn localization — experimental evidence”. |
+| `NONE` | Either path | No certified transitions / not proof-eligible. |
+
+Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. On the **commit path**, a `PASS -> FAIL` boundary becomes `COMMIT_PROOF` only when each side has three distinct, matching Docker-isolated executions. Turn-path transitions stay experimental even when three-run stability is observed.
 
 ## Judge path
 

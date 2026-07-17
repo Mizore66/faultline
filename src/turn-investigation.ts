@@ -37,8 +37,16 @@ import {
   type WitnessLockVerification
 } from "./witness-lock.js";
 
+import {
+  TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL,
+  TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED,
+  TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL,
+  turnPathEvidence
+} from "./evidence-grade.js";
+
 export const TURN_INVESTIGATION_SCHEMA_VERSION = "faultline.turn-investigation.v1" as const;
-export const TURN_EVIDENCE_LABEL_EXPERIMENTAL = "Turn localization — experimental evidence" as const;
+/** @deprecated Prefer TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL from evidence-grade.js */
+export const TURN_EVIDENCE_LABEL_EXPERIMENTAL = TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL;
 
 const DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 const DigestPinnedImageSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$/);
@@ -227,7 +235,15 @@ export const TurnInvestigationResultSchema = z.object({
     proofTransitions: z.number().int().nonnegative(),
     isProof: z.boolean(),
     reason: z.string().min(1),
-    evidenceGrade: z.enum(["TURN_PROOF", "EXPERIMENTAL_TURN", "NONE"]),
+    /**
+     * User-facing maturity tier. `TURN_PROOF` is schema-reserved for future
+     * parity and must not be assigned until the turn path meets the Git contract.
+     */
+    evidenceGrade: z.enum([
+      TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED,
+      TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL,
+      "NONE"
+    ]),
     evidenceLabel: z.string().min(1)
   }).strict(),
   errors: z.array(z.string())
@@ -270,6 +286,7 @@ function executionTrustFor(hasInjectedRunner: boolean): "NATIVE_DOCKER" | "INJEC
 }
 
 function emptyProof(reason: string, executionTrust: "NATIVE_DOCKER" | "INJECTED_RUNNER" = "NATIVE_DOCKER"): TurnInvestigationResult["proof"] {
+  const evidence = turnPathEvidence({ hasTransitions: false });
   return {
     requiresDockerIsolation: true,
     dockerIsolated: executionTrust === "NATIVE_DOCKER",
@@ -277,8 +294,8 @@ function emptyProof(reason: string, executionTrust: "NATIVE_DOCKER" | "INJECTED_
     proofTransitions: 0,
     isProof: false,
     reason,
-    evidenceGrade: "NONE",
-    evidenceLabel: TURN_EVIDENCE_LABEL_EXPERIMENTAL
+    evidenceGrade: evidence.evidenceGrade as TurnInvestigationResult["proof"]["evidenceGrade"],
+    evidenceLabel: evidence.evidenceLabel
   };
 }
 
@@ -782,11 +799,9 @@ export async function investigateTurnTrees(options: {
         : transitions.length === 0
           ? "No adjacent turn states produced three matching Docker PASS/FAIL executions."
           : "Each listed transition has three distinct Docker-isolated executions on both adjacent turn-tree states.";
-  const evidenceGrade = isProof
-    ? "TURN_PROOF"
-    : transitions.length > 0
-      ? "EXPERIMENTAL_TURN"
-      : "NONE";
+  // isProof may be true for turn-bundle eligibility; the evidence grade stays
+  // experimental until turn investigation meets the Git-path portable contract.
+  const evidence = turnPathEvidence({ hasTransitions: transitions.length > 0 });
 
   return TurnInvestigationResultSchema.parse({
     schemaVersion: TURN_INVESTIGATION_SCHEMA_VERSION,
@@ -813,10 +828,8 @@ export async function investigateTurnTrees(options: {
       proofTransitions: transitions.length,
       isProof,
       reason: proofReason,
-      evidenceGrade,
-      evidenceLabel: isProof
-        ? "Turn localization — portable proof bundle eligible"
-        : TURN_EVIDENCE_LABEL_EXPERIMENTAL
+      evidenceGrade: evidence.evidenceGrade as TurnInvestigationResult["proof"]["evidenceGrade"],
+      evidenceLabel: evidence.evidenceLabel
     },
     errors
   });

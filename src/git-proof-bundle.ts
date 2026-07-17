@@ -711,6 +711,12 @@ export function validateGitInvestigationProofSemantics(
   if (expectedProof && result.proof.reason !== "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.") {
     errors.push("proof reason does not match a completed Docker transition proof");
   }
+  if (expectedProof && result.proof.evidenceGrade !== "COMMIT_PROOF") {
+    errors.push("proof evidenceGrade must be COMMIT_PROOF when isProof is true");
+  }
+  if (!expectedProof && result.proof.evidenceGrade === "COMMIT_PROOF") {
+    errors.push("COMMIT_PROOF evidence grade requires a completed Docker-isolated proof");
+  }
   return errors;
 }
 
