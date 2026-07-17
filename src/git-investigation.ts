@@ -9,6 +9,7 @@ import {
   materializeGitTree,
   runHardenedGit
 } from "./git-materialization.js";
+import { materializeFrozenOverlays } from "./safe-overlay.js";
 import { redactText } from "./redaction.js";
 import {
   computeEnvironmentFingerprint,

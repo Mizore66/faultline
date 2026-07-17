@@ -1,15 +1,16 @@
-import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import { sha256 } from "./canonical.js";
 import type { FrozenWitness } from "./witness-lock.js";
 
 const SAFE_OVERLAY_PATH = /^[^\\/\0]+(?:\/[^\\/\0]+)*$/;
+const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/;
 
 export const MaterializedOverlaySchema = z.object({
   path: z.string().min(1),
-  bytesDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  bytesDigest: z.string().regex(SHA256_DIGEST, "expected sha256:<64 lowercase hex characters>"),
   bytesLength: z.number().int().nonnegative()
 }).strict();
 
@@ -57,6 +58,8 @@ export async function safeOverlayTarget(worktree: string, overlayPath: string): 
     current = join(current, part);
     const entry = await lstatIfPresent(current);
     if (entry === null) {
+      // Docker's sandbox runs as uid 65534; newly created overlay directories
+      // must be traversable, while the bind mount itself remains read-only.
       await mkdir(current, { mode: 0o755 });
       const created = await lstat(current);
       if (!created.isDirectory() || created.isSymbolicLink()) {
@@ -75,7 +78,10 @@ export async function safeOverlayTarget(worktree: string, overlayPath: string): 
   return target;
 }
 
-/** Materialize, then re-read, every approved overlay byte-for-byte. */
+/**
+ * Materialize, then re-read, every approved overlay byte-for-byte.
+ * This is the only permitted overlay writer for Git range and turn/minimization paths.
+ */
 export async function materializeFrozenOverlays(
   worktree: string,
   frozenWitness: FrozenWitness
@@ -88,8 +94,14 @@ export async function materializeFrozenOverlays(
       throw new Error(`Frozen overlay digest does not match its bytes: ${overlay.path}`);
     }
     const target = await safeOverlayTarget(worktree, overlay.path);
+    // Replace instead of writing through an existing inode. That avoids
+    // mutating an unexpected hard link and means a raced leaf symlink is
+    // replaced rather than followed. The temp file is in the checked parent.
     const staged = join(dirname(target), `.faultline-overlay-${randomUUID()}`);
     try {
+      // The unprivileged Docker user needs to read the frozen command's
+      // overlays. The container bind mount is read-only, so 0644 does not
+      // grant it a way to mutate this temporary worktree.
       await writeFile(staged, bytes, { encoding: undefined, flag: "wx", mode: 0o644 });
       await rename(staged, target);
     } finally {
