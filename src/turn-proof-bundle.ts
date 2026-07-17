@@ -15,7 +15,7 @@ import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { z } from "zod";
 import { canonicalJson, digestJson, sha256 } from "./canonical.js";
 import { STABLE_EXECUTION_COUNT } from "./git-investigation.js";
-import { runHardenedGit } from "./git-materialization.js";
+import { runHardenedGit, toGitPath } from "./git-materialization.js";
 import {
   CodexLifecycleLedgerSchema,
   verifyCodexLifecycleLedger,
@@ -402,6 +402,22 @@ async function packTurnTrees(repository: string, states: readonly TurnState[]): 
   return packed.stdout;
 }
 
+function removeTemporaryDirectory(path: string): void {
+  try {
+    rmSync(path, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === "win32" ? 20 : 3,
+      retryDelay: process.platform === "win32" ? 250 : 50
+    });
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
+    // Hosted Windows runners can retain a just-closed Git pack handle briefly.
+    if (process.platform === "win32" && (code === "EPERM" || code === "EBUSY")) return;
+    throw error;
+  }
+}
+
 async function verifyTreesPack(pack: Buffer, states: readonly TurnState[], errors: string[]): Promise<void> {
   const bare = mkdtempSync(join(tmpdir(), "faultline-turn-proof-pack-"));
   try {
@@ -410,15 +426,31 @@ async function verifyTreesPack(pack: Buffer, states: readonly TurnState[], error
       errors.push(`Could not create temporary bare repository for pack verification: ${init.stderr.toString("utf8").trim() || init.error || "Git failed."}`);
       return;
     }
-    // Write the pack to a real path: Windows Git's index-pack rejects --stdin --strict.
-    const packDir = join(bare, "objects", "pack");
-    mkdirSync(packDir, { recursive: true, mode: 0o700 });
-    const packFile = join(packDir, "turn-trees.pack");
-    writeFileSync(packFile, pack, { mode: 0o600 });
-    const indexed = await runHardenedGit(bare, ["index-pack", "--strict", packFile], { gitDir: bare });
-    if (indexed.exitCode !== 0 || indexed.error !== undefined) {
-      errors.push(`Turn tree pack is not a valid Git pack: ${indexed.stderr.toString("utf8").trim() || indexed.error || "Git failed."}`);
-      return;
+    // Prefer unpack-objects over `index-pack --stdin --strict`: older Windows
+    // Git builds reject that flag combination. File-path index-pack is kept as
+    // a fallback and always receives a forward-slash path.
+    const unpacked = await runHardenedGit(bare, ["unpack-objects", "-q", "--strict"], {
+      stdin: pack,
+      gitDir: bare
+    });
+    if (unpacked.exitCode !== 0 || unpacked.error !== undefined) {
+      const packDir = join(bare, "objects", "pack");
+      mkdirSync(packDir, { recursive: true, mode: 0o700 });
+      const packFile = join(packDir, "turn-trees.pack");
+      writeFileSync(packFile, pack, { mode: 0o600 });
+      const indexed = await runHardenedGit(bare, ["index-pack", "--strict", toGitPath(packFile)], { gitDir: bare });
+      if (indexed.exitCode !== 0 || indexed.error !== undefined) {
+        errors.push(
+          `Turn tree pack is not a valid Git pack: ${
+            indexed.stderr.toString("utf8").trim()
+            || unpacked.stderr.toString("utf8").trim()
+            || indexed.error
+            || unpacked.error
+            || "Git failed."
+          }`
+        );
+        return;
+      }
     }
     for (const state of states) {
       const typed = await runHardenedGit(bare, ["cat-file", "-t", state.treeDigest], { gitDir: bare });
@@ -427,7 +459,7 @@ async function verifyTreesPack(pack: Buffer, states: readonly TurnState[], error
       }
     }
   } finally {
-    rmSync(bare, { recursive: true, force: true });
+    removeTemporaryDirectory(bare);
   }
 }
 

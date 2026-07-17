@@ -360,12 +360,19 @@ type GitCommandResult = {
   error?: Error;
 };
 
+function toGitPath(path: string): string {
+  return resolve(path).replaceAll("\\", "/");
+}
+
 function runGit(repository: string | undefined, argumentsList: readonly string[]): GitCommandResult {
-  const argumentsWithRepository = repository === undefined ? [...argumentsList] : ["-C", repository, ...argumentsList];
+  const argumentsWithRepository = repository === undefined
+    ? [...argumentsList]
+    : ["-C", toGitPath(repository), ...argumentsList];
   const result = spawnSync("git", argumentsWithRepository, {
     encoding: "buffer",
     windowsHide: true,
-    maxBuffer: MAX_GIT_OUTPUT_BYTES
+    maxBuffer: MAX_GIT_OUTPUT_BYTES,
+    shell: false
   });
   return {
     status: result.status,
@@ -441,15 +448,18 @@ function parseBundleHeads(bytes: Buffer): Array<{ commit: string; ref: string }>
 function writePortableGitBundle(repository: string, descendant: string, destination: string): { bytes: Buffer; headCommit: string } {
   const temporaryBare = mkdtempSync(join(tmpdir(), "faultline-git-proof-source-"));
   try {
-    gitBytes(undefined, ["clone", "--bare", "--shared", "--no-tags", "--quiet", repository, temporaryBare], "Temporary Git source clone");
+    const sourceRepo = toGitPath(repository);
+    const barePath = toGitPath(temporaryBare);
+    const bundlePath = toGitPath(destination);
+    gitBytes(undefined, ["clone", "--bare", "--shared", "--no-tags", "--quiet", sourceRepo, barePath], "Temporary Git source clone");
     gitBytes(temporaryBare, ["update-ref", BUNDLE_HEAD_REF, descendant], "Temporary Git bundle ref creation");
-    gitBytes(temporaryBare, ["bundle", "create", destination, BUNDLE_HEAD_REF], "Git bundle creation");
+    gitBytes(temporaryBare, ["bundle", "create", bundlePath, BUNDLE_HEAD_REF], "Git bundle creation");
     assertRegularFile(destination, "Git bundle");
-    const heads = parseBundleHeads(gitBytes(undefined, ["bundle", "list-heads", destination], "Git bundle head listing"));
+    const heads = parseBundleHeads(gitBytes(undefined, ["bundle", "list-heads", bundlePath], "Git bundle head listing"));
     if (heads.length !== 1 || heads[0]?.ref !== BUNDLE_HEAD_REF || heads[0].commit !== descendant) {
       throw new Error("Git bundle did not expose exactly the expected descendant reference.");
     }
-    gitBytes(temporaryBare, ["bundle", "verify", destination], "Git bundle verification");
+    gitBytes(temporaryBare, ["bundle", "verify", bundlePath], "Git bundle verification");
     const bytes = readBoundedFile(destination, "Git bundle");
     if (bytes.length === 0 || bytes.length > MAX_SOURCE_ARTIFACT_BYTES) {
       throw new Error("Git bundle is empty or exceeds FaultLine's portable artifact limit.");
@@ -852,14 +862,15 @@ function verifyPortableGitSource(
   assertRegularFile(patchPath, "portable Git range patch");
   const temporaryBare = mkdtempSync(join(tmpdir(), "faultline-git-proof-verify-"));
   try {
-    const heads = parseBundleHeads(gitBytes(undefined, ["bundle", "list-heads", bundlePath], "Git bundle head listing"));
+    const gitBundlePath = toGitPath(bundlePath);
+    const heads = parseBundleHeads(gitBytes(undefined, ["bundle", "list-heads", gitBundlePath], "Git bundle head listing"));
     if (heads.length !== 1 || heads[0]?.ref !== metadata.bundle.headRef || heads[0].commit !== metadata.bundle.headCommit
       || heads[0].commit !== metadata.descendant.commit) {
       errors.push("Git bundle heads do not match source metadata descendant");
     }
-    gitBytes(undefined, ["init", "--bare", "--quiet", temporaryBare], "Temporary Git verifier initialization");
-    gitBytes(temporaryBare, ["bundle", "verify", bundlePath], "Git bundle verification");
-    gitBytes(temporaryBare, ["fetch", "--quiet", bundlePath, `${BUNDLE_HEAD_REF}:refs/heads/faultline-descendant`], "Git bundle extraction");
+    gitBytes(undefined, ["init", "--bare", "--quiet", toGitPath(temporaryBare)], "Temporary Git verifier initialization");
+    gitBytes(temporaryBare, ["bundle", "verify", gitBundlePath], "Git bundle verification");
+    gitBytes(temporaryBare, ["fetch", "--quiet", gitBundlePath, `${BUNDLE_HEAD_REF}:refs/heads/faultline-descendant`], "Git bundle extraction");
     const descendant = resolveGitState(temporaryBare, "refs/heads/faultline-descendant");
     const ancestor = resolveGitState(temporaryBare, metadata.ancestor.commit);
     if (!sameCanonical(descendant, { commit: metadata.descendant.commit, tree: metadata.descendant.tree })) {

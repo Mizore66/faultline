@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -10,7 +10,8 @@ import {
 } from "../src/ledger.js";
 import type { SandboxCommandRunner } from "../src/sandbox.js";
 import { formatWitnessResult } from "../src/witness-result.js";
-import { captureTurnTreeSnapshot } from "../src/turn-snapshot.js";
+import { captureTurnTreeSnapshot, signTurnTreeSnapshot, TURN_TREE_SNAPSHOT_VERSION } from "../src/turn-snapshot.js";
+import { sha256 } from "../src/canonical.js";
 import { ENVIRONMENT_CHANGED_PROOF_MESSAGE } from "../src/environment-fingerprint.js";
 import {
   attributeFailureIntroduction,
@@ -514,25 +515,62 @@ describe("turn-tree localization", () => {
       git(root, ["init", "repo"]);
       git(repository, ["config", "user.email", "faultline@example.test"]);
       git(repository, ["config", "user.name", "FaultLine"]);
+      // Match Windows Git's default: checkout materializes mode 120000 as a plain
+      // file. The product must still refuse using the index mode, not lstat alone.
+      git(repository, ["config", "core.symlinks", "false"]);
       writeFileSync(join(repository, "state.txt"), "good\n", "utf8");
       writeFileSync(join(repository, "real-witness.mjs"), "export const x = 1;\n", "utf8");
-      try {
-        symlinkSync("real-witness.mjs", join(repository, "witness.mjs"));
-      } catch {
-        // Symlink creation can be denied on some Windows CI images.
-        return;
-      }
-      git(repository, ["add", "state.txt", "real-witness.mjs", "witness.mjs"]);
+      git(repository, ["add", "state.txt", "real-witness.mjs"]);
+      // Create a Git symlink without requiring OS symlink privilege.
+      const symlinkBlob = spawnSync("git", ["-C", repository, "hash-object", "-w", "--stdin"], {
+        encoding: "utf8",
+        input: "real-witness.mjs"
+      });
+      if (symlinkBlob.status !== 0) throw new Error(symlinkBlob.stderr || "hash-object failed");
+      git(repository, ["update-index", "--add", "--cacheinfo", `120000,${symlinkBlob.stdout.trim()},witness.mjs`]);
       git(repository, ["commit", "-m", "symlink overlay target"]);
+
+      const appendCommittedTurnSnapshot = (
+        ledger: ReturnType<typeof createCodexLifecycleLedger>,
+        turnOrdinal: number,
+        turnId: string
+      ) => {
+        // Use the committed tree so mode 120000 is preserved. A worktree
+        // capture under core.symlinks=false would flatten the symlink to a file.
+        const snapshot = signTurnTreeSnapshot({
+          schemaVersion: TURN_TREE_SNAPSHOT_VERSION,
+          repositoryRoot: repository,
+          headCommit: git(repository, ["rev-parse", "HEAD"]),
+          treeDigest: git(repository, ["rev-parse", "HEAD^{tree}"]),
+          // Must be at-or-before the lifecycle event timestamp that records it.
+          capturedAt: new Date(Date.now() - 1_000).toISOString(),
+          dirty: false,
+          statusDigest: `sha256:${sha256(`turn-symlink-${turnOrdinal}`)}`
+        });
+        let next = appendLifecycleEvent(ledger, {
+          type: "TURN_STARTED",
+          payload: { turnId, turnOrdinal, promptDigest: `sha256:${"a".repeat(64)}` }
+        });
+        next = appendLifecycleEvent(next, {
+          type: "TURN_COMPLETED",
+          payload: { turnId, turnOrdinal, outcome: "COMPLETED" }
+        });
+        return appendLifecycleEvent(next, {
+          type: "TURN_TREE_SNAPSHOT",
+          payload: { turnId, turnOrdinal, snapshot }
+        });
+      };
 
       let ledger = createCodexLifecycleLedger({ sessionId: "turn-symlink" });
       ledger = appendLifecycleEvent(ledger, {
         type: "SESSION_STARTED",
         payload: { transport: "SIDE_CAR", workingDirectory: repository }
       });
-      ledger = appendTurnSnapshot(ledger, repository, 1, "turn-1");
+      ledger = appendCommittedTurnSnapshot(ledger, 1, "turn-1");
       writeFileSync(join(repository, "state.txt"), "bad\n", "utf8");
-      ledger = appendTurnSnapshot(ledger, repository, 2, "turn-2");
+      git(repository, ["add", "state.txt"]);
+      git(repository, ["commit", "-m", "state became bad"]);
+      ledger = appendCommittedTurnSnapshot(ledger, 2, "turn-2");
       const ledgerPath = join(root, "ledger.json");
       writeCodexLifecycleLedgerAtomic(ledgerPath, ledger);
 

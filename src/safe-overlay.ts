@@ -3,6 +3,7 @@ import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import { sha256 } from "./canonical.js";
+import { assertOverlayTargetsNotGitSymlinks } from "./git-materialization.js";
 import type { FrozenWitness } from "./witness-lock.js";
 
 const SAFE_OVERLAY_PATH = /^[^\\/\0]+(?:\/[^\\/\0]+)*$/;
@@ -78,14 +79,33 @@ export async function safeOverlayTarget(worktree: string, overlayPath: string): 
   return target;
 }
 
+export type OverlayIndexInspector = {
+  runGit(args: readonly string[]): Promise<{
+    readonly exitCode: number | null;
+    readonly stdout: Buffer;
+    readonly stderr: Buffer;
+    readonly error?: string;
+  }>;
+};
+
 /**
  * Materialize, then re-read, every approved overlay byte-for-byte.
  * This is the only permitted overlay writer for Git range and turn/minimization paths.
+ *
+ * When `index` is provided, Git symlink modes (120000) are refused even if the
+ * host checked the entry out as a regular file (common on Windows).
  */
 export async function materializeFrozenOverlays(
   worktree: string,
-  frozenWitness: FrozenWitness
+  frozenWitness: FrozenWitness,
+  index?: OverlayIndexInspector
 ): Promise<MaterializedOverlay[]> {
+  if (index) {
+    await assertOverlayTargetsNotGitSymlinks(
+      index,
+      frozenWitness.proposal.witness.overlays.map((overlay) => overlay.path)
+    );
+  }
   const facts: MaterializedOverlay[] = [];
   for (const overlay of frozenWitness.proposal.witness.overlays) {
     const bytes = Buffer.from(overlay.bytesBase64, "base64");

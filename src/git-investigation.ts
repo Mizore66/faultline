@@ -676,7 +676,7 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
           commit: state.commit,
           fingerprint: computeEnvironmentFingerprint(materialized.worktree)
         });
-        const overlays = await materializeFrozenOverlays(materialized.worktree, input.frozenWitness);
+        const overlays = await materializeFrozenOverlays(materialized.worktree, input.frozenWitness, materialized);
         let plan;
         try {
           plan = createSandboxPlan(planRequestForState(input.sandbox, materialized.worktree, input.frozenWitness));

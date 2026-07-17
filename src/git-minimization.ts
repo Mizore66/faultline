@@ -889,7 +889,7 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
       }
 
       if (application.status === "APPLIED" || application.status === "NO_PATCHES") {
-        overlays = await materializeFrozenOverlays(worktree, input.frozenWitness);
+        overlays = await materializeFrozenOverlays(worktree, input.frozenWitness, materialized);
         let plan;
         try {
           plan = createSandboxPlan(planRequestForWorktree(input.sandbox, worktree, input.frozenWitness));
