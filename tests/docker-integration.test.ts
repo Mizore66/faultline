@@ -10,7 +10,7 @@ import {
 } from "../src/git-proof-bundle.js";
 import { loadVerifiedGitProofView, renderGitProofIncidentPage } from "../src/git-proof-view.js";
 import { createDockerSandboxPlan, executeSandboxPlan } from "../src/sandbox.js";
-import { WITNESS_RESULT_PROTOCOL } from "../src/witness-result.js";
+import { formatWitnessResult } from "../src/witness-result.js";
 import {
   approveWitnessProposal,
   freezeApprovedWitness,
@@ -50,6 +50,8 @@ function commit(repository: string, state: "good" | "bad", message: string): str
 }
 
 function createFrozenWitness(store: string): FrozenWitness {
+  const passLine = formatWitnessResult("PREDICATE_PASS");
+  const failLine = formatWitnessResult("PREDICATE_FAIL");
   const proposal = proposeWitness(store, {
     proposalId: "native-docker-git-proof",
     proposalOrigin: "HUMAN",
@@ -73,11 +75,11 @@ function createFrozenWitness(store: string): FrozenWitness {
           'import { readFileSync } from "node:fs";',
           'const state = readFileSync("state.txt", "utf8").trim();',
           'if (state === "good") {',
-          `  console.log(JSON.stringify({ protocol: "${WITNESS_RESULT_PROTOCOL}", outcome: "PREDICATE_PASS" }));`,
+          `  console.log(${JSON.stringify(passLine)});`,
           "  process.exit(0);",
           "}",
           'console.error("state witness failed");',
-          `console.log(JSON.stringify({ protocol: "${WITNESS_RESULT_PROTOCOL}", outcome: "PREDICATE_FAIL" }));`,
+          `console.log(${JSON.stringify(failLine)});`,
           "process.exit(1);",
           ""
         ].join("\n"), "utf8").toString("base64")
@@ -107,16 +109,22 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
       // without making the mounted source writable.
       chmodSync(source, 0o755);
       chmodSync(join(source, "sealed.txt"), 0o644);
+      const passLine = formatWitnessResult("PREDICATE_PASS");
       const plan = createDockerSandboxPlan({
         sourceDirectory: source,
         image,
         witness: {
           digest: `sha256:${"a".repeat(64)}`,
+          // Boundary checks still exercise uid/network/read-only; the final
+          // node -e emits a structured witness result so PASS is earned only
+          // via PREDICATE_PASS (unstructured exit 0 is never proof-grade).
           command: [
             'test "$(id -u)" = "65534"',
             'test "$(cat sealed.txt)" = "FaultLine source is immutable"',
             "if touch sealed.txt; then exit 91; fi",
-            "node -e \"fetch('https://example.com').then(()=>process.exit(92)).catch(()=>process.exit(0))\""
+            `node -e ${JSON.stringify(
+              `fetch("https://example.com").then(()=>process.exit(92)).catch(()=>{console.log(${JSON.stringify(passLine)});process.exit(0)})`
+            )}`
           ].join(" && ")
         },
         limits: { timeoutMs: 20_000, maxOutputBytes: 32_768 }
@@ -126,7 +134,7 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
         kind: "DOCKER_ISOLATED",
         executor: "NATIVE_DOCKER",
         verdict: "PASS",
-        reason: "EXIT_ZERO"
+        reason: "PREDICATE_PASS"
       });
       expect(plan.arguments).toContain("--entrypoint");
       expect(plan.arguments).toContain("--network");
