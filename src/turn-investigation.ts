@@ -5,10 +5,14 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { digestJson, sha256 } from "./canonical.js";
 import {
+  buildEffectiveRuntimeMapping,
   computeEnvironmentFingerprint,
+  ENVIRONMENT_CHANGED_PROOF_MESSAGE,
   EnvironmentFingerprintSchema,
   environmentHomogeneity,
-  type EnvironmentFingerprint
+  missingRuntimeMappingDigests,
+  type EnvironmentFingerprint,
+  type RuntimeMapping
 } from "./environment-fingerprint.js";
 import { STABLE_EXECUTION_COUNT } from "./git-investigation.js";
 import { materializeGitTree } from "./git-materialization.js";
@@ -37,6 +41,7 @@ export const TURN_INVESTIGATION_SCHEMA_VERSION = "faultline.turn-investigation.v
 export const TURN_EVIDENCE_LABEL_EXPERIMENTAL = "Turn localization — experimental evidence" as const;
 
 const DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const DigestPinnedImageSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$/);
 const GitObjectIdSchema = z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/);
 const TimestampSchema = z.string().datetime({ offset: true });
 const EVIDENCE_LOG_PREVIEW_BYTES = 16 * 1024;
@@ -101,6 +106,7 @@ export const TurnInvestigationRunFactSchema = z.object({
   role: z.enum(["SESSION_BASELINE", "TURN"]),
   treeDigest: GitObjectIdSchema,
   snapshotDigest: DigestSchema,
+  environmentFingerprintDigest: DigestSchema,
   frozenDigest: DigestSchema,
   witnessDigest: DigestSchema,
   startedAt: TimestampSchema,
@@ -210,6 +216,8 @@ export const TurnInvestigationResultSchema = z.object({
   transitions: z.array(StableTurnTransitionSchema),
   environmentFingerprints: z.array(EnvironmentFingerprintSchema),
   environmentHomogeneity: z.enum(["HOMOGENEOUS", "HETEROGENEOUS", "EMPTY"]),
+  /** Effective fingerprint digest → digest-pinned image used for execution. */
+  runtimeMapping: z.record(DigestSchema, DigestPinnedImageSchema),
   introduction: TurnIntroductionSchema,
   nonMonotonic: z.boolean(),
   proof: z.object({
@@ -286,7 +294,7 @@ function emptyIntroduction(reason: string): TurnIntroduction {
 function baseResult(
   status: TurnInvestigationResult["status"],
   errors: readonly string[],
-  fields: Partial<Pick<TurnInvestigationResult, "repository" | "ledgerDigest" | "witness" | "states" | "runs" | "environmentFingerprints" | "environmentHomogeneity">> & {
+  fields: Partial<Pick<TurnInvestigationResult, "repository" | "ledgerDigest" | "witness" | "states" | "runs" | "environmentFingerprints" | "environmentHomogeneity" | "runtimeMapping">> & {
     executionTrust?: "NATIVE_DOCKER" | "INJECTED_RUNNER";
     proofReason?: string;
   } = {}
@@ -307,6 +315,7 @@ function baseResult(
     transitions: [],
     environmentFingerprints: fields.environmentFingerprints ?? [],
     environmentHomogeneity: fields.environmentHomogeneity ?? "EMPTY",
+    runtimeMapping: fields.runtimeMapping ?? {},
     introduction: emptyIntroduction(fields.proofReason ?? errors[0] ?? "Turn investigation did not localize a transition."),
     nonMonotonic: false,
     proof: emptyProof(fields.proofReason ?? errors[0] ?? "Turn investigation did not produce proof.", executionTrust),
@@ -483,7 +492,8 @@ function runFact(
   result: SandboxExecutionResult,
   startedAt: string,
   finishedAt: string,
-  durationMs: number
+  durationMs: number,
+  environmentFingerprintDigest: string
 ): TurnInvestigationRunFact {
   const executionNonce = randomUUID();
   const executionId = digestJson({
@@ -494,6 +504,7 @@ function runFact(
     turnOrdinal: state.turnOrdinal,
     treeDigest: state.treeDigest,
     snapshotDigest: state.snapshotDigest,
+    environmentFingerprintDigest,
     frozenDigest: frozenWitness.frozenDigest,
     executionAttempt
   });
@@ -510,6 +521,7 @@ function runFact(
     role: state.role,
     treeDigest: state.treeDigest,
     snapshotDigest: state.snapshotDigest,
+    environmentFingerprintDigest,
     frozenDigest: frozenWitness.frozenDigest,
     witnessDigest: frozenWitness.witnessDigest,
     startedAt,
@@ -550,16 +562,25 @@ function classifyStatus(runs: readonly TurnInvestigationRunFact[], errors: reado
 /**
  * Replay a frozen witness across Codex turn-tree snapshots (including dirty Stops).
  * Retains per-attempt run facts matching the Git investigation evidence model.
+ * Environment fingerprints drive per-state runtime image selection; heterogeneous
+ * histories require an explicit runtimeMapping for every distinct fingerprint.
  */
 export async function investigateTurnTrees(options: {
   repository: string;
   ledgerPath: string;
   frozenWitness: FrozenWitness;
   expectedFrozenDigest: string;
+  /** Homogeneous fallback image; insufficient alone when fingerprints diverge. */
   image: string;
+  /**
+   * fingerprint digest → digest-pinned image. Required for every distinct
+   * fingerprint whenever environmentHomogeneity is HETEROGENEOUS.
+   */
+  runtimeMapping?: RuntimeMapping;
   runner?: SandboxCommandRunner;
 }): Promise<TurnInvestigationResult> {
   const executionTrust = executionTrustFor(options.runner !== undefined);
+  const callerMapping: RuntimeMapping = options.runtimeMapping ?? {};
   const repository = resolve(options.repository);
   const verification = verifyFrozenWitnessRecord(options.frozenWitness, options.expectedFrozenDigest);
   const summary = witnessSummary(options.frozenWitness, verification);
@@ -601,7 +622,10 @@ export async function investigateTurnTrees(options: {
   const runs: TurnInvestigationRunFact[] = [];
   const errors: string[] = [];
   const fingerprints: EnvironmentFingerprint[] = [];
+  let effectiveRuntimeMapping: Record<string, string> = {};
+
   try {
+    // Phase 1: materialize each state only to fingerprint the environment.
     for (const state of states) {
       let materialized: Awaited<ReturnType<typeof materializeGitTree>> | null = null;
       try {
@@ -609,15 +633,106 @@ export async function investigateTurnTrees(options: {
           repository,
           commit: state.treeDigest,
           tempRoot,
-          name: `turn-${String(state.turnOrdinal).padStart(4, "0")}-${state.treeDigest.slice(0, 12)}`
+          name: `fp-${String(state.turnOrdinal).padStart(4, "0")}-${state.treeDigest.slice(0, 12)}`
         });
         fingerprints.push(computeEnvironmentFingerprint(materialized.worktree));
+      } catch (error) {
+        errors.push(errorMessage(error));
+        // Keep fingerprint list aligned with states when possible; a failed
+        // materialization contributes no fingerprint and blocks later proof.
+      } finally {
+        if (materialized) {
+          const cleanupError = await materialized.cleanup();
+          if (cleanupError) errors.push(cleanupError);
+        }
+      }
+    }
+
+    if (fingerprints.length !== states.length) {
+      return baseResult("EXECUTION_ERROR", errors.length > 0 ? errors : ["Could not fingerprint every turn state."], {
+        repository,
+        ledgerDigest,
+        witness: summary,
+        states,
+        environmentFingerprints: fingerprints,
+        environmentHomogeneity: environmentHomogeneity(fingerprints),
+        runtimeMapping: {},
+        executionTrust,
+        proofReason: "Could not compute an environment fingerprint for every turn state."
+      });
+    }
+
+    const homogeneity = environmentHomogeneity(fingerprints);
+    if (homogeneity === "HETEROGENEOUS") {
+      const missing = missingRuntimeMappingDigests(fingerprints, callerMapping);
+      if (missing.length > 0) {
+        return baseResult("ENVIRONMENT_CHANGED", [
+          ...errors,
+          ENVIRONMENT_CHANGED_PROOF_MESSAGE
+        ], {
+          repository,
+          ledgerDigest,
+          witness: summary,
+          states,
+          environmentFingerprints: fingerprints,
+          environmentHomogeneity: homogeneity,
+          runtimeMapping: {},
+          executionTrust,
+          proofReason: ENVIRONMENT_CHANGED_PROOF_MESSAGE
+        });
+      }
+    }
+
+    try {
+      effectiveRuntimeMapping = buildEffectiveRuntimeMapping(
+        fingerprints,
+        callerMapping,
+        options.image,
+        homogeneity
+      );
+    } catch (error) {
+      const message = errorMessage(error);
+      const status = message === ENVIRONMENT_CHANGED_PROOF_MESSAGE ? "ENVIRONMENT_CHANGED" as const : "EXECUTION_ERROR" as const;
+      return baseResult(status, [...errors, message], {
+        repository,
+        ledgerDigest,
+        witness: summary,
+        states,
+        environmentFingerprints: fingerprints,
+        environmentHomogeneity: homogeneity,
+        runtimeMapping: {},
+        executionTrust,
+        proofReason: message
+      });
+    }
+
+    // Phase 2: rematerialize and execute with the fingerprint-selected image.
+    for (let stateIndex = 0; stateIndex < states.length; stateIndex += 1) {
+      const state = states[stateIndex];
+      const fingerprint = fingerprints[stateIndex];
+      if (!state || !fingerprint) {
+        errors.push(`Missing prepared state or fingerprint at index ${stateIndex}`);
+        continue;
+      }
+      const image = effectiveRuntimeMapping[fingerprint.digest];
+      if (!image) {
+        errors.push(`No resolved runtime image for fingerprint ${fingerprint.digest}`);
+        continue;
+      }
+      let materialized: Awaited<ReturnType<typeof materializeGitTree>> | null = null;
+      try {
+        materialized = await materializeGitTree({
+          repository,
+          commit: state.treeDigest,
+          tempRoot,
+          name: `run-${String(state.turnOrdinal).padStart(4, "0")}-${state.treeDigest.slice(0, 12)}`
+        });
         const overlays = await materializeFrozenOverlays(materialized.worktree, options.frozenWitness);
         const plan = createSandboxPlan({
           witness: { digest: options.frozenWitness.frozenDigest, command: options.frozenWitness.proposal.witness.command },
           sourceDirectory: materialized.worktree,
           mode: "DOCKER_ISOLATED",
-          image: options.image
+          image
         });
         const audit = auditSandboxPlan(plan);
         for (let attempt = 1; attempt <= STABLE_EXECUTION_COUNT; attempt += 1) {
@@ -634,7 +749,8 @@ export async function investigateTurnTrees(options: {
             execution,
             startedAt,
             new Date(finishedEpoch).toISOString(),
-            Math.max(0, finishedEpoch - startedEpoch)
+            Math.max(0, finishedEpoch - startedEpoch),
+            fingerprint.digest
           ));
         }
       } catch (error) {
@@ -651,23 +767,6 @@ export async function investigateTurnTrees(options: {
   }
 
   const homogeneity = environmentHomogeneity(fingerprints);
-  if (homogeneity === "HETEROGENEOUS") {
-    return baseResult("ENVIRONMENT_CHANGED", [
-      ...errors,
-      "Environment fingerprint changed across turn snapshots; refuse cross-environment proof."
-    ], {
-      repository,
-      ledgerDigest,
-      witness: summary,
-      states,
-      runs,
-      environmentFingerprints: fingerprints,
-      environmentHomogeneity: homogeneity,
-      executionTrust,
-      proofReason: "Environment changed between turn states. Supply a runtime mapping for each fingerprint before proof can continue."
-    });
-  }
-
   const stableStates = reconstructStableTurnStates(states, runs);
   const transitions = findStableTurnTransitions(stableStates);
   const status = classifyStatus(runs, errors);
@@ -704,6 +803,7 @@ export async function investigateTurnTrees(options: {
     transitions,
     environmentFingerprints: fingerprints,
     environmentHomogeneity: homogeneity,
+    runtimeMapping: effectiveRuntimeMapping,
     introduction,
     nonMonotonic: hasNonMonotonicTransitions(transitions),
     proof: {

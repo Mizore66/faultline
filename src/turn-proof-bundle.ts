@@ -319,6 +319,7 @@ function expectedExecutionId(run: TurnInvestigationRunFact): string {
     turnOrdinal: run.turnOrdinal,
     treeDigest: run.treeDigest,
     snapshotDigest: run.snapshotDigest,
+    environmentFingerprintDigest: run.environmentFingerprintDigest,
     frozenDigest: run.frozenDigest,
     executionAttempt: run.executionAttempt
   });
@@ -483,8 +484,33 @@ export function validateTurnInvestigationProofSemantics(
   if (!result.witness?.valid || result.witness.externalDigestStatus !== "MATCH") {
     errors.push("investigation does not attest a valid externally matched frozen witness");
   }
+  if (result.environmentFingerprints.length !== result.states.length) {
+    errors.push("turn proof requires one environment fingerprint per recorded state");
+  }
+  for (const [index, fingerprint] of result.environmentFingerprints.entries()) {
+    const mappedImage = result.runtimeMapping[fingerprint.digest];
+    if (!mappedImage) {
+      errors.push(`runtimeMapping is missing fingerprint ${fingerprint.digest}`);
+    }
+    const state = result.states[index];
+    if (state) {
+      const stateRuns = result.runs.filter((run) => run.stateIndex === state.index);
+      for (const run of stateRuns) {
+        if (run.environmentFingerprintDigest !== fingerprint.digest) {
+          errors.push(`run fingerprint digest does not match state fingerprint: ${run.runId}`);
+        }
+        if (mappedImage && run.sandbox.runtime.image !== mappedImage) {
+          errors.push(`run image does not match runtimeMapping for its fingerprint: ${run.runId}`);
+        }
+      }
+    }
+  }
   if (result.environmentHomogeneity === "HETEROGENEOUS") {
-    errors.push("turn proof refuses heterogeneous environment fingerprints");
+    const mapped = new Set(Object.keys(result.runtimeMapping));
+    const required = new Set(result.environmentFingerprints.map((fingerprint) => fingerprint.digest));
+    for (const digest of required) {
+      if (!mapped.has(digest)) errors.push(`heterogeneous proof missing runtimeMapping entry: ${digest}`);
+    }
   }
 
   const witnessVerification = verifyFrozenWitnessRecord(frozenWitness, frozenWitness.frozenDigest);
