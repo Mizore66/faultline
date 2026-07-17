@@ -43,7 +43,17 @@ import {
   type FrozenWitness
 } from "./witness-lock.js";
 
-/** A portable turn-tree proof package mirroring the Git proof integrity contract. */
+import {
+  TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL,
+  TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED,
+  TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL
+} from "./evidence-grade.js";
+
+/**
+ * A turn-tree investigation package with Git-inspired integrity checks.
+ * User-facing maturity remains experimental (`EXPERIMENTAL_TURN`) until the
+ * turn path meets the commit-path portable proof contract.
+ */
 export const TURN_PROOF_BUNDLE_SCHEMA_VERSION = "faultline.turn-proof-bundle.v1" as const;
 export const TURN_PROOF_SOURCE_SCHEMA_VERSION = "faultline.turn-proof-source.v1" as const;
 
@@ -332,13 +342,19 @@ function expectedRunId(run: TurnInvestigationRunFact): string {
 
 function verificationReadme(): Buffer {
   return Buffer.from([
-    "# Verify this turn investigation package",
+    "# Verify this experimental turn investigation package",
+    "",
+    "## Evidence grade",
+    "",
+    `${TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL} (\`${TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL}\`).`,
+    "This is not the same maturity tier as commit-path portable proof (`COMMIT_PROOF`).",
+    "Do not treat a turn package as interchangeable with a Git proof bundle until turn investigation meets that contract.",
     "",
     "## Handling warning",
     "",
     "This package retains a frozen witness, Codex lifecycle ledger, turn-tree object pack, and bounded recorded evidence so it can be independently checked. Treat it as sensitive incident material and share it only with authorized reviewers.",
     "",
-    "Run FaultLine's turn proof verifier with an externally retained root digest.",
+    "Run FaultLine's turn package verifier with an externally retained root digest.",
     "",
     "The verifier never executes the frozen witness. It validates every declared byte, reconstructs stable states and transitions from raw run facts, rebinds the lifecycle ledger to turn states, and confirms each recorded tree object is present in the portable pack.",
     "",
@@ -640,8 +656,16 @@ export function validateTurnInvestigationProofSemantics(
   if (expectedProof && result.proof.reason !== "Each listed transition has three distinct Docker-isolated executions on both adjacent turn-tree states.") {
     errors.push("proof reason does not match a completed Docker transition proof");
   }
-  if (expectedProof && result.proof.evidenceGrade !== "TURN_PROOF") {
-    errors.push("proof evidenceGrade must be TURN_PROOF when isProof is true");
+  if (result.proof.evidenceGrade === TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED) {
+    errors.push(
+      "TURN_PROOF evidence grade is reserved until turn investigation meets the Git-path portable proof contract; use EXPERIMENTAL_TURN"
+    );
+  }
+  if (expectedProof && result.proof.evidenceGrade !== TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL) {
+    errors.push("until turn/Git proof parity, isProof turn packages must remain graded EXPERIMENTAL_TURN");
+  }
+  if (expectedProof && result.proof.evidenceLabel !== TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL) {
+    errors.push(`isProof turn packages must carry evidenceLabel "${TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL}"`);
   }
   return errors;
 }

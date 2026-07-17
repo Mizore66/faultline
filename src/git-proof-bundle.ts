@@ -740,6 +740,12 @@ export function validateGitInvestigationProofSemantics(
   if (result.environment.homogeneity === "HETEROGENEOUS" && result.proof.isProof) {
     errors.push("heterogeneous environment fingerprints cannot certify a single-image proof");
   }
+  if (expectedProof && result.proof.evidenceGrade !== "COMMIT_PROOF") {
+    errors.push("proof evidenceGrade must be COMMIT_PROOF when isProof is true");
+  }
+  if (!expectedProof && result.proof.evidenceGrade === "COMMIT_PROOF") {
+    errors.push("COMMIT_PROOF evidence grade requires a completed Docker-isolated proof");
+  }
   return errors;
 }
 

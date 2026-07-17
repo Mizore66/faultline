@@ -28,6 +28,10 @@ import {
   type SandboxPlanRequest
 } from "./sandbox.js";
 import {
+  COMMIT_PATH_EVIDENCE_GRADE,
+  commitPathEvidence
+} from "./evidence-grade.js";
+import {
   MaterializedOverlaySchema,
   materializeFrozenOverlays,
   type MaterializedOverlay
@@ -46,6 +50,10 @@ export { MaterializedOverlaySchema, type MaterializedOverlay } from "./safe-over
  * claim to observe, intercept, or reconstruct native Codex lifecycle events.
  * A caller supplies the commit range and an already human-approved frozen
  * witness; FaultLine replays that witness against immutable Git tree states.
+ *
+ * Successful Docker-isolated results carry evidence grade COMMIT_PROOF — the
+ * project's highest portable proof tier. Turn localization is a separate,
+ * experimental grade until it meets this contract.
  */
 export const GIT_INVESTIGATION_SCHEMA_VERSION = "faultline.git-investigation.v1" as const;
 export const STABLE_EXECUTION_COUNT = 3 as const;
@@ -263,7 +271,9 @@ export const GitInvestigationResultSchema = z.object({
     executionTrust: z.enum(["NATIVE_DOCKER", "INJECTED_RUNNER", "UNSAFE_LOCAL"]),
     proofTransitions: z.number().int().nonnegative(),
     isProof: z.boolean(),
-    reason: z.string()
+    reason: z.string(),
+    evidenceGrade: z.enum([COMMIT_PATH_EVIDENCE_GRADE, "NONE"]),
+    evidenceLabel: z.string().min(1)
   }).strict(),
   errors: z.array(z.string())
 }).strict();
@@ -483,13 +493,16 @@ function emptyProof(
   reason: string,
   executionTrust = executionTrustFor(sandboxMode, false)
 ) {
+  const evidence = commitPathEvidence(false);
   return {
     requiresDockerIsolation: true as const,
     dockerIsolated: executionTrust === "NATIVE_DOCKER",
     executionTrust,
     proofTransitions: 0,
     isProof: false,
-    reason
+    reason,
+    evidenceGrade: evidence.evidenceGrade as "COMMIT_PROOF" | "NONE",
+    evidenceLabel: evidence.evidenceLabel
   };
 }
 
@@ -787,14 +800,20 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
       fingerprints,
       distinctDigests
     },
-    proof: {
-      requiresDockerIsolation: true as const,
-      dockerIsolated,
-      executionTrust,
-      proofTransitions: transitions.length,
-      isProof: dockerIsolated && status === "COMPLETED" && transitions.length > 0 && !environmentChanged,
-      reason: proofReason
-    },
+    proof: (() => {
+      const isProof = dockerIsolated && status === "COMPLETED" && transitions.length > 0 && !environmentChanged;
+      const evidence = commitPathEvidence(isProof);
+      return {
+        requiresDockerIsolation: true as const,
+        dockerIsolated,
+        executionTrust,
+        proofTransitions: transitions.length,
+        isProof,
+        reason: proofReason,
+        evidenceGrade: evidence.evidenceGrade as "COMMIT_PROOF" | "NONE",
+        evidenceLabel: evidence.evidenceLabel
+      };
+    })(),
     errors
   };
   return GitInvestigationResultSchema.parse(result);

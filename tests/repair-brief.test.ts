@@ -27,7 +27,16 @@ function completedInvestigation() {
     transitions: [{ kind: "PASS_TO_FAIL", before: stablePass, after: stableFail }],
     nonMonotonic: false,
     environment: { homogeneity: "HOMOGENEOUS", fingerprints: [], distinctDigests: [] },
-    proof: { requiresDockerIsolation: true, dockerIsolated: true, executionTrust: "NATIVE_DOCKER", proofTransitions: 1, isProof: true, reason: "three Docker runs" },
+    proof: {
+      requiresDockerIsolation: true,
+      dockerIsolated: true,
+      executionTrust: "NATIVE_DOCKER",
+      proofTransitions: 1,
+      isProof: true,
+      reason: "three Docker runs",
+      evidenceGrade: "COMMIT_PROOF",
+      evidenceLabel: "Commit-path localization — portable proof"
+    },
     errors: []
   };
 }

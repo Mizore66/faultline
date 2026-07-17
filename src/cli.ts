@@ -1517,6 +1517,8 @@ async function investigateCommand(args: string[]): Promise<void> {
     ledgerBinding = { path, bindingDigest: binding.bindingDigest };
   }
   process.stdout.write(`${JSON.stringify({
+    evidenceGrade: result.proof.evidenceGrade,
+    evidenceLabel: result.proof.evidenceLabel,
     investigation: result,
     proofBundle: {
       directory: bundle.directory,
