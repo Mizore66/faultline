@@ -376,4 +376,58 @@ describe("Git diff counterfactual minimization", () => {
       rmSync(repository.root, { recursive: true, force: true });
     }
   });
+
+  it("fails closed before a turn can execute a checkout smudge filter on the host", async () => {
+    const store = mkdtempSync(join(tmpdir(), "faultline-git-minimization-store-"));
+    const repository = interactionRepository();
+    try {
+      const filter = join(repository.root, "faultline-forbidden-smudge-filter.cjs");
+      const marker = join(repository.root, "faultline-smudge-filter-invoked");
+      writeFileSync(
+        filter,
+        [
+          'const fs = require("node:fs");',
+          'fs.writeFileSync(process.argv[2], "invoked", "utf8");',
+          "process.stdin.pipe(process.stdout);",
+          ""
+        ].join("\n"),
+        "utf8"
+      );
+      const hostileFilter = [
+        quoteFsmonitorCommandPart(process.execPath),
+        quoteFsmonitorCommandPart(filter),
+        quoteFsmonitorCommandPart(marker)
+      ].join(" ");
+      writeFileSync(join(repository.root, ".gitattributes"), "*.txt filter=hostile\n", "utf8");
+      const hostileAfter = commit(repository.root, "hostile checkout filter");
+      git(repository.root, ["config", "filter.hostile.smudge", hostileFilter]);
+      git(repository.root, ["config", "filter.hostile.required", "true"]);
+      expect(existsSync(marker)).toBe(false);
+
+      let runnerCalls = 0;
+      const runner: SandboxCommandRunner = {
+        async run() {
+          runnerCalls += 1;
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+      };
+      const witness = frozenWitness(store, "hostile-smudge-minimization");
+      const result = await minimizeGitDiff(requestFor(
+        repository.root,
+        repository.before,
+        hostileAfter,
+        witness,
+        runner
+      ));
+
+      expect(result.status).toBe("RANGE_ERROR");
+      expect(result.errors.join("\n")).toMatch(/filter configuration|filter attribute/);
+      expect(runnerCalls).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+      expect(git(repository.root, ["worktree", "list", "--porcelain"]).split("\n").filter((line) => line.startsWith("worktree "))).toHaveLength(1);
+    } finally {
+      rmSync(store, { recursive: true, force: true });
+      rmSync(repository.root, { recursive: true, force: true });
+    }
+  });
 });
