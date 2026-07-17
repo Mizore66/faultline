@@ -246,6 +246,11 @@ describe("read-only Git proof view", () => {
       expect(page).toContain("PROVE");
       expect(page).toContain("FIX");
       expect(page).toContain("PREVENT");
+      expect(page).toContain("COMMIT_PROOF");
+      expect(page).toContain("Commit-path localization — portable proof");
+      expect(page).toContain("EXPERIMENTAL_TURN");
+      expect(page).toContain("Turn localization — experimental evidence");
+      expect(page).toContain("Turn-path contrast");
       expect(page).toContain("Stable Git states");
       expect(page).toContain("Stable transitions");
       expect(page).toContain("Recovery evidence");
@@ -308,7 +313,9 @@ describe("read-only Git proof view", () => {
         expect(pageText).toContain("COMMIT-PATH PORTABLE PROOF");
         expect(pageText).toContain("COMMIT_PROOF");
         expect(pageText).toContain("Commit-path localization — portable proof");
-        expect(pageText).toContain("experimental evidence tier");
+        expect(pageText).toContain("EXPERIMENTAL_TURN");
+        expect(pageText).toContain("Turn localization — experimental evidence");
+        expect(pageText).toContain("Turn-path contrast");
         expect((await fetch(`${server.url}/api/rerun`, { method: "POST" })).status).toBe(404);
         expect((await fetch(`${server.url}/api/analysis`)).status).toBe(404);
       } finally {
