@@ -12,7 +12,9 @@ import {
   signTurnTreeSnapshot,
   verifyTurnTreeSnapshot,
   TurnSnapshotError,
-  type TurnSnapshotGitRunner
+  type CaptureTurnTreeSnapshotOptions,
+  type TurnSnapshotGitRunner,
+  type TurnTreeSnapshot
 } from "../src/turn-snapshot.js";
 
 function git(repository: string, args: string[]): string {
@@ -32,6 +34,10 @@ function repositoryFixture(): string {
   return repository;
 }
 
+function capture(repository: string, options?: CaptureTurnTreeSnapshotOptions): TurnTreeSnapshot {
+  return captureTurnTreeSnapshot(repository, options).snapshot;
+}
+
 function realIndexBytes(repository: string): Buffer {
   return readFileSync(join(repository, ".git", "index"));
 }
@@ -40,7 +46,7 @@ describe("Turn tree snapshot capture", () => {
   it("captures a real tree digest for a clean worktree and signs/verifies it", () => {
     const repository = repositoryFixture();
     try {
-      const snapshot = captureTurnTreeSnapshot(repository, { now: () => new Date("2026-07-17T00:00:00.000Z") });
+      const snapshot = capture(repository, { now: () => new Date("2026-07-17T00:00:00.000Z") });
       expect(snapshot.schemaVersion).toBe(TURN_TREE_SNAPSHOT_VERSION);
       expect(snapshot.dirty).toBe(false);
       expect(snapshot.headCommit).toMatch(/^[a-f0-9]{40}$/);
@@ -60,40 +66,96 @@ describe("Turn tree snapshot capture", () => {
       writeFileSync(join(repository, "tracked.txt"), "modified by the turn\n", "utf8");
       writeFileSync(join(repository, "untracked.txt"), "new from the turn\n", "utf8");
 
-      const snapshot = captureTurnTreeSnapshot(repository);
-      expect(snapshot.dirty).toBe(true);
-      expect(snapshot.treeDigest).toMatch(/^[a-f0-9]{40}$/);
-      // The dirty tree must differ from HEAD's tree: it reflects the actual
-      // modified/untracked content, not merely a copy of the last commit.
-      expect(snapshot.treeDigest).not.toBe(git(repository, ["rev-parse", "HEAD^{tree}"]));
+      const result = captureTurnTreeSnapshot(repository);
+      expect(result.snapshot.dirty).toBe(true);
+      expect(result.warnings.some((warning) => warning.includes("untracked.txt"))).toBe(true);
+      expect(result.snapshot.treeDigest).toMatch(/^[a-f0-9]{40}$/);
+      expect(result.snapshot.treeDigest).not.toBe(git(repository, ["rev-parse", "HEAD^{tree}"]));
 
-      const lsTree = git(repository, ["ls-tree", "-r", "--name-only", snapshot.treeDigest]);
+      const lsTree = git(repository, ["ls-tree", "-r", "--name-only", result.snapshot.treeDigest]);
       expect(lsTree.split("\n").sort()).toEqual(["tracked.txt", "untracked.txt"]);
-      const trackedBlob = git(repository, ["show", `${snapshot.treeDigest}:tracked.txt`]);
+      const trackedBlob = git(repository, ["show", `${result.snapshot.treeDigest}:tracked.txt`]);
       expect(trackedBlob).toBe("modified by the turn");
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
   });
 
-  it("excludes .faultline/, node_modules/, and .env-shaped secret files from the captured tree", () => {
+  it("excludes .faultline/, node_modules/, build caches, and .env-shaped secret files", () => {
     const repository = repositoryFixture();
     try {
       mkdirSync(join(repository, ".faultline"));
       writeFileSync(join(repository, ".faultline", "recording.json"), "{}", "utf8");
       mkdirSync(join(repository, "node_modules", "some-pkg"), { recursive: true });
       writeFileSync(join(repository, "node_modules", "some-pkg", "index.js"), "module.exports = {};\n", "utf8");
+      mkdirSync(join(repository, "dist"), { recursive: true });
+      writeFileSync(join(repository, "dist", "bundle.js"), "console.log(1);\n", "utf8");
       writeFileSync(join(repository, ".env"), "SECRET=do-not-capture\n", "utf8");
       writeFileSync(join(repository, "included.txt"), "keep me\n", "utf8");
 
-      const snapshot = captureTurnTreeSnapshot(repository);
+      const snapshot = capture(repository);
       const lsTree = git(repository, ["ls-tree", "-r", "--name-only", snapshot.treeDigest]);
       const paths = lsTree.split("\n").filter(Boolean);
       expect(paths).toContain("tracked.txt");
       expect(paths).toContain("included.txt");
       expect(paths.some((path) => path.startsWith(".faultline/"))).toBe(false);
       expect(paths.some((path) => path.startsWith("node_modules/"))).toBe(false);
+      expect(paths.some((path) => path.startsWith("dist/"))).toBe(false);
       expect(paths).not.toContain(".env");
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("honors .faultlineignore before writing any Git objects", () => {
+    const repository = repositoryFixture();
+    try {
+      writeFileSync(join(repository, ".faultlineignore"), "scratch/\nsecret-notes.txt\n", "utf8");
+      mkdirSync(join(repository, "scratch"), { recursive: true });
+      writeFileSync(join(repository, "scratch", "tmp.txt"), "ignore me\n", "utf8");
+      writeFileSync(join(repository, "secret-notes.txt"), "ignore me too\n", "utf8");
+      writeFileSync(join(repository, "kept.txt"), "visible\n", "utf8");
+
+      const snapshot = capture(repository);
+      const paths = git(repository, ["ls-tree", "-r", "--name-only", snapshot.treeDigest]).split("\n").filter(Boolean);
+      expect(paths).toContain("tracked.txt");
+      expect(paths).toContain("kept.txt");
+      expect(paths).not.toContain("secret-notes.txt");
+      expect(paths.some((path) => path.startsWith("scratch/"))).toBe(false);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects oversized files before git add writes blobs", () => {
+    const repository = repositoryFixture();
+    try {
+      writeFileSync(join(repository, "huge.bin"), Buffer.alloc(2_048));
+      expect(() => capture(repository, { maxFileBytes: 1_024 })).toThrow(/max 1024 per file|exceed/i);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects high-confidence secrets before snapshot acceptance", () => {
+    const repository = repositoryFixture();
+    try {
+      writeFileSync(join(repository, "leaked.txt"), "token = sk-proj-abcdefghijklmnopqrstuvwxyz012345\n", "utf8");
+      expect(() => capture(repository)).toThrow(/secret material|high-entropy/i);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("supports tracked-files-only mode and skips untracked paths", () => {
+    const repository = repositoryFixture();
+    try {
+      writeFileSync(join(repository, "tracked.txt"), "modified\n", "utf8");
+      writeFileSync(join(repository, "untracked-only.txt"), "should not appear\n", "utf8");
+      const result = captureTurnTreeSnapshot(repository, { trackedFilesOnly: true });
+      const paths = git(repository, ["ls-tree", "-r", "--name-only", result.snapshot.treeDigest]).split("\n").filter(Boolean);
+      expect(paths).toEqual(["tracked.txt"]);
+      expect(result.warnings.some((warning) => warning.includes("untracked-only.txt"))).toBe(false);
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
@@ -109,7 +171,7 @@ describe("Turn tree snapshot capture", () => {
       const branchBefore = git(repository, ["rev-parse", "--abbrev-ref", "HEAD"]);
       const statusBefore = git(repository, ["status", "--porcelain=v1", "--untracked-files=all"]);
 
-      captureTurnTreeSnapshot(repository);
+      capture(repository);
 
       expect(realIndexBytes(repository)).toEqual(indexBefore);
       expect(git(repository, ["rev-parse", "HEAD"])).toBe(headBefore);
@@ -128,7 +190,6 @@ describe("Turn tree snapshot capture", () => {
         const runGit: TurnSnapshotGitRunner = (root, args, env) => {
           if (args[0] === "status") {
             statusCalls += 1;
-            // Alternate so every capture bracket sees a status change.
             return statusCalls % 2 === 1 ? "" : "?? changed-mid-write.txt\0";
           }
           return defaultTurnSnapshotGitRunner(root, args, env);
@@ -137,16 +198,15 @@ describe("Turn tree snapshot capture", () => {
       };
 
       const first = torn();
-      expect(() => captureTurnTreeSnapshot(repository, {
+      expect(() => capture(repository, {
         runGit: first.runGit,
         sleep: () => {},
         maxQuiescenceAttempts: 2
       })).toThrow(TurnSnapshotError);
-      // Two attempts × (status before + status after) around the first tree.
       expect(first.calls()).toBe(4);
 
       const second = torn();
-      expect(() => captureTurnTreeSnapshot(repository, {
+      expect(() => capture(repository, {
         runGit: second.runGit,
         sleep: () => {},
         maxQuiescenceAttempts: 2
@@ -163,14 +223,13 @@ describe("Turn tree snapshot capture", () => {
       const runGit: TurnSnapshotGitRunner = (root, args, env) => {
         if (args[0] === "write-tree") {
           writeTreeCalls += 1;
-          // Distinct valid-looking tree ids so quiescence never converges.
           return writeTreeCalls % 2 === 1 ? "a".repeat(40) : "b".repeat(40);
         }
         if (args[0] === "add") return "";
         return defaultTurnSnapshotGitRunner(root, args, env);
       };
 
-      expect(() => captureTurnTreeSnapshot(repository, {
+      expect(() => capture(repository, {
         runGit,
         sleep: () => {},
         maxQuiescenceAttempts: 3
@@ -184,7 +243,7 @@ describe("Turn tree snapshot capture", () => {
   it("refuses a snapshot when the worktree mutates during the quiescence delay", () => {
     const repository = repositoryFixture();
     try {
-      expect(() => captureTurnTreeSnapshot(repository, {
+      expect(() => capture(repository, {
         maxQuiescenceAttempts: 2,
         sleep: () => {
           writeFileSync(join(repository, "tracked.txt"), `mutated-${Date.now()}\n`, "utf8");
@@ -199,7 +258,7 @@ describe("Turn tree snapshot capture", () => {
     const repository = repositoryFixture();
     try {
       let sleepCalls = 0;
-      const snapshot = captureTurnTreeSnapshot(repository, {
+      const snapshot = capture(repository, {
         sleep: (milliseconds) => {
           sleepCalls += 1;
           expect(milliseconds).toBe(TURN_SNAPSHOT_QUIESCENCE_DELAY_MS);
@@ -217,7 +276,7 @@ describe("Turn tree snapshot capture", () => {
   it("rejects a signed snapshot whose digest was tampered with", () => {
     const repository = repositoryFixture();
     try {
-      const snapshot = captureTurnTreeSnapshot(repository);
+      const snapshot = capture(repository);
       const tampered = { ...snapshot, dirty: !snapshot.dirty };
       expect(verifyTurnTreeSnapshot(tampered)).toEqual(["Turn tree snapshot digest does not match its contents"]);
       expect(verifyTurnTreeSnapshot({ ...snapshot, digest: "not-a-digest" }).length).toBeGreaterThan(0);

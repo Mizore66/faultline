@@ -311,7 +311,7 @@ describe("Codex observed hook sidecar", () => {
       recordObservedCodexHook(sessionStart(repository, "codex-session-snapshot-only"));
       recordObservedCodexHook(promptEvent(repository, "Prepare a snapshot-only interrupted stop.", "codex-session-snapshot-only", "codex-turn-snapshot-only"));
       const ledgerPath = codexSidecarLedgerPath(repository, "codex-session-snapshot-only");
-      const snapshot = captureTurnTreeSnapshot(repository);
+      const snapshot = captureTurnTreeSnapshot(repository).snapshot;
 
       let ledger = readVerifiedCodexLifecycleLedger(ledgerPath);
       ledger = appendLifecycleEvent(ledger, {
