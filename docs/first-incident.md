@@ -88,6 +88,36 @@ The resolver runs only a fixed, local `docker image inspect` command. It rejects
 
 These are starting environments, not universal build environments. The preparation pull is setup only, not a witness execution or proof. The proof runner has no network and mounts source read-only, so dependencies and the witness command must already be runnable in the selected image.
 
+## 3. Preferred: one guided command from a CI log
+
+When you have a CI log, use the resumable Option B workflow. FaultLine still keeps intake, witness lock, runtime selection, localization, and proof export modular internally, but you drive one coherent command:
+
+```powershell
+pnpm fl -- investigate --ci-log .\ci.log `
+  --repo . `
+  --command "pnpm test -- checkout" `
+  --runtime node
+```
+
+State transitions the operator sees:
+
+1. **Preflight** — `fl doctor` (Node must be ready; Docker readiness is required for proof-grade continuation).
+2. **Intake** — write-once draft + proposed witness from the CI log (nothing executed, not approved, not frozen).
+3. **Witness review pause** — local `127.0.0.1` review URL; you Approve, then Freeze as separate clicks. The command polls until freeze and binds the freeze digest in-process as the retained `--expect-digest`.
+4. **Runtime selection** — draft-bound image, or `--runtime` / `--image` (never pulls).
+5. **Localization → proof export** — same engine as `fl incident continue`, then print the `fl serve --bundle … --expect-root …` next step.
+
+If you interrupt during review, resume without redoing intake:
+
+```powershell
+pnpm fl -- investigate --resume <id> `
+  --repo . `
+  --expect-digest <frozen-digest> `
+  --runtime node
+```
+
+FaultLine never auto-approves or auto-freezes. `--unsafe-local` is diagnosis-only and cannot publish a portable proof package.
+
 ### For a normal project: make the dependency image an explicit setup step
 
 When a base image cannot run the selected command, FaultLine can prepare a project-owned dependency image from a Dockerfile you review. The plan is deliberately separate from replay: it fingerprints every regular file in the reviewable context and emits `plan.review.planDigest`. A build requires that exact digest plus `--yes`, so an edited Dockerfile, context file, tag, or network choice is refused for re-review. It never uses a host shell, pushes an image, or sends registry credentials.
@@ -119,7 +149,7 @@ node $FaultLineCli runtime project resolve --tag registry.example/acme/my-app:fa
 
 Use the returned `repository@sha256:...` value as `--image` when starting the incident. For another stack, use your own reviewed digest-pinned image directly.
 
-## 3. Suggest a bracket, then create a draft; FaultLine does not execute it
+## 4. Suggest a bracket, then create a draft; FaultLine does not execute it
 
 Paste the command that is failing in CI or locally. If you do not know its bracket, first request local-only suggestions. FaultLine can show a locally cached upstream merge-base and/or `HEAD`'s parent; it does not fetch, contact a forge, parse CI, or automatically choose one. Every candidate is a human-review input, not a verdict.
 
@@ -149,7 +179,7 @@ It does not execute the command, pull an image, fetch or auto-select a remote ba
 
 For an ordinary command, pass `--command`. If the command contains nested quotes, shell metacharacters, or multiple lines that your shell could reinterpret, write its reviewed UTF-8-without-BOM text to a regular file and pass `--command-file <path>` instead. FaultLine reads it once at intake, rejects links, directories, malformed UTF-8, and files over 32 KB, then stores those exact command bytes in the immutable proposal. It does not retain a live reference to the source file.
 
-## 4. Review, approve, and freeze explicitly
+## 5. Modular alternative: review, approve, and freeze explicitly
 
 Open the local review workbench returned by intake (or run the command below). It binds only to `127.0.0.1`, disables browser caching, and shows the exact command, canonical base64 overlay bytes, and execution policy without executing or materializing them. Raw CI-log text stays off the browser page. Treat the visible command and overlays as sensitive incident material.
 
@@ -161,7 +191,7 @@ The screen verifies the strict blinded-packet shape and proposal digests before 
 
 The freeze screen contains the externally retainable frozen digest. Keep it with the incident record before asking FaultLine to localize anything. A displayed reviewer name remains an assertion unless you add the optional reviewer signature workflow.
 
-## 5. Continue the same incident and share the real incident page
+## 6. Modular alternative: continue the same incident and share the real incident page
 
 Do not retype the Git range, proposal ID, or selected runtime. `fl incident continue` re-reads the immutable draft and the frozen witness, refuses any mismatch, and uses the recorded bracket. Check the durable state first. Proof-grade continuation requires the frozen digest retained outside the witness store after review; without it, `status` reports `RETAIN_DIGEST_REQUIRED` and `continue` refuses to publish proof:
 

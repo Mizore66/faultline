@@ -557,6 +557,14 @@ describe("FaultLine CLI workflows", () => {
     }
   });
 
+  it("documents the guided investigate --ci-log / --resume entrypoints in usage", () => {
+    const help = runFl(["investigate"]);
+    expect(help.status).toBe(1);
+    expect(help.stderr).toMatch(/--ci-log/);
+    expect(help.stderr).toMatch(/--resume/);
+    expect(help.stderr).toMatch(/investigate git/);
+  });
+
   it("continues one immutable incident after a human freeze without retyping its range or witness digest", () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-cli-incident-continue-"));
     try {
