@@ -16,10 +16,12 @@ import {
   duplicateTurnOrdinalError,
   investigateTurnTrees,
   SESSION_BASELINE_TURN_ID,
+  TURN_EVIDENCE_LABEL_EXPERIMENTAL,
   turnInvestigationDigest,
   turnStatesFromLedger,
-  type TurnState,
-  type TurnTransition
+  type StableTurnState,
+  type StableTurnTransition,
+  type TurnState
 } from "../src/turn-investigation.js";
 import {
   approveWitnessProposal,
@@ -137,6 +139,28 @@ function turnState(partial: Omit<TurnState, "index"> & { index?: number }): Turn
     treeDigest: partial.treeDigest,
     snapshotDigest: partial.snapshotDigest,
     dirty: partial.dirty
+  };
+}
+
+function stableTurnState(partial: {
+  stateIndex: number;
+  turnId: string;
+  turnOrdinal: number;
+  role: "SESSION_BASELINE" | "TURN";
+  treeDigest: string;
+  snapshotDigest: string;
+  verdict: "PASS" | "FAIL";
+}): StableTurnState {
+  return {
+    stateIndex: partial.stateIndex,
+    turnId: partial.turnId,
+    turnOrdinal: partial.turnOrdinal,
+    role: partial.role,
+    treeDigest: partial.treeDigest,
+    snapshotDigest: partial.snapshotDigest,
+    verdict: partial.verdict,
+    executionIds: [`sha256:${"1".repeat(64)}`, `sha256:${"2".repeat(64)}`, `sha256:${"3".repeat(64)}`],
+    runIds: [`sha256:${"4".repeat(64)}`, `sha256:${"5".repeat(64)}`, `sha256:${"6".repeat(64)}`]
   };
 }
 
@@ -274,7 +298,12 @@ describe("turn-tree localization", () => {
         turnId: null
       });
       expect(result.proof.evidenceGrade).toBe("EXPERIMENTAL_TURN");
+      expect(result.proof.evidenceLabel).toBe(TURN_EVIDENCE_LABEL_EXPERIMENTAL);
       expect(result.proof.isProof).toBe(false);
+      expect(result.proof.executionTrust).toBe("INJECTED_RUNNER");
+      expect(result.runs).toHaveLength(result.states.length * 3);
+      expect(result.runs.every((run) => run.executionAttempt >= 1 && run.result.stdoutDigest.startsWith("sha256:"))).toBe(true);
+      expect(result.stableStates).toHaveLength(2);
       expect(turnInvestigationDigest(result)).toMatch(/^sha256:[a-f0-9]{64}$/);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -359,13 +388,25 @@ describe("turn-tree localization", () => {
       snapshotDigest: `sha256:${"f".repeat(64)}`,
       dirty: true
     });
-    const transitions: TurnTransition[] = [{
-      kind: "PASS_TO_FAIL",
-      before: turn1,
-      after: turn2,
-      beforeVerdict: "PASS",
-      afterVerdict: "FAIL"
-    }];
+    const before = stableTurnState({
+      stateIndex: 1,
+      turnId: "turn-1",
+      turnOrdinal: 1,
+      role: "TURN",
+      treeDigest: "c".repeat(40),
+      snapshotDigest: `sha256:${"d".repeat(64)}`,
+      verdict: "PASS"
+    });
+    const after = stableTurnState({
+      stateIndex: 2,
+      turnId: "turn-2",
+      turnOrdinal: 2,
+      role: "TURN",
+      treeDigest: "e".repeat(40),
+      snapshotDigest: `sha256:${"f".repeat(64)}`,
+      verdict: "FAIL"
+    });
+    const transitions: StableTurnTransition[] = [{ kind: "PASS_TO_FAIL", before, after }];
     expect(attributeFailureIntroduction([baseline, turn1, turn2], transitions)).toMatchObject({
       status: "UNATTRIBUTED",
       turnOrdinal: null,
