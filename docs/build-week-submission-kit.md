@@ -18,7 +18,7 @@ It demonstrates the frozen witness, evidence labels, stable-boundary rules, coun
 
 | Time | Screen | Narration point |
 | --- | --- | --- |
-| 0:00–0:18 | A recorded FaultLine self-incident and its incident screen | "When an agent-assisted change turns CI red, FaultLine answers a narrower, useful question: where does a reviewed executable witness first become bad?" Do not call it recorded until the [self-incident runbook](faultline-self-incident.md) has produced a verified bundle/root. |
+| 0:00–0:18 | The recorded FaultLine self-incident and its incident screen | "When an agent-assisted change turns CI red, FaultLine answers a narrower, useful question: where does a reviewed executable witness first become bad?" The [self-incident evidence](faultline-self-incident.md) records the proof root, the first measured `PASS -> FAIL` transition, and the later recovery; state its bounded predicate and limits on camera. |
 | 0:18–0:40 | `fl witness propose`, approval, and freeze output | "A human freezes the exact predicate before localization. The model may suggest it, but never decides the verdict." |
 | 0:40–1:10 | `fl demo live-git --export-only` plus the Docker policy in the verified proof view | "FaultLine replays that immutable witness over real Git states, three times per state, in a constrained Docker environment. It only calls a boundary when the executions support it." |
 | 1:10–1:35 | `fl minimize git` results | "It then asks whether the selected diff is actually sufficient and necessary, preserving conflicts and unknowns instead of guessing." |
@@ -82,7 +82,7 @@ These are separate facts to gather; none is created merely by copying this kit i
 | Submission or presentation statement | Evidence to retain or fill in | Status |
 | --- | --- | --- |
 | FaultLine runs as shown | Commit/release, platform/runtime, exact commands, and recorded output | [NOT YET RECORDED] |
-| The live Git/Docker path produced evidence | Verified bundle plus externally retained proof root | [NOT YET RECORDED] |
+| The live Git/Docker path produced evidence | Verified FaultLine self-incident bundle with recorded root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` | [RECORDED LOCALLY / INDEPENDENTLY VERIFIED] |
 | Codex and GPT-5.6 were used as described | Human-reviewed description that matches the implemented bounded workflow | [REVIEW REQUIRED] |
 | The project addressed a real audience problem | Consented incident or interview record, including counterevidence and limitations | [NOT YET COLLECTED] |
 | The Devpost entry is complete | Selected track, public narrated-video URL, qualifying feedback session ID, repository URL/license, and required fields | [NOT YET COMPLETED] |

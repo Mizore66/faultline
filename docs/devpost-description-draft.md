@@ -26,7 +26,7 @@ FaultLine is a runnable TypeScript CLI and read-only proof view. Its implemented
 4. It writes a portable proof package that another engineer can inspect and verify without rerunning repository code.
 5. It can retain bounded, explicitly inferred GPT-5.6 repair guidance that cites verified evidence rather than changing the verdict.
 
-The included `fl judge-demo` is deterministic and intentionally limited: it lets a reviewer inspect the evidence model without Docker, a network call, an API key, or a pre-existing incident. The separate `fl demo live-git` path is the actual Docker-backed Git replay demonstration. The README explains the boundary between those paths.
+The included `fl judge-demo` is deterministic and intentionally limited: it lets a reviewer inspect the evidence model without Docker, a network call, an API key, or a pre-existing incident. The separate `fl demo live-git` path is the actual Docker-backed Git replay demonstration. FaultLine has also completed a bounded self-incident: a human-frozen witness measured `PASS -> FAIL` at `97c3290` and `FAIL -> PASS` at `07ee7f1` in its historical provenance workflow; the recorded package root is `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`. This is evidence for that exact workflow predicate, not an attribution of model intent or a universal diagnosis claim. The README explains the boundary between those paths.
 
 ## How Codex and GPT-5.6 are used
 

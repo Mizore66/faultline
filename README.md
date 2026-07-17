@@ -38,7 +38,7 @@ When supplied, `--output` must also be a new or previously verified child direct
 
 For the actual user path—not the deterministic sample—start with [your first FaultLine incident](docs/first-incident.md). It documents the early `fl doctor` preflight, conservative human-reviewed intake, explicit runtime digest resolution, freeze, proof-grade replay, and verified incident page.
 
-For the project’s own reproducible historical CI case, use the clearly scoped [FaultLine self-incident runbook](docs/faultline-self-incident.md). It remains a prepared runbook until a human-reviewed Docker proof bundle and externally retained root have actually been recorded.
+For the project’s own reproducible historical CI case, see the clearly scoped [FaultLine self-incident evidence and runbook](docs/faultline-self-incident.md). A human-reviewed Docker proof package is now recorded for its bounded workflow predicate, including the recorded root and measured transitions; the page also preserves the fresh-run workflow and its limits.
 
 ## CI and distribution boundary
 
