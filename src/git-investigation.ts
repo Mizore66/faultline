@@ -1,10 +1,15 @@
-import { spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import { digestJson, sha256 } from "./canonical.js";
+import {
+  assertSafeGitMaterialization,
+  materializeFrozenOverlays,
+  materializeGitTree,
+  runHardenedGit
+} from "./git-materialization.js";
 import { redactText } from "./redaction.js";
 import {
   auditSandboxPlan,
@@ -35,10 +40,7 @@ export const STABLE_EXECUTION_COUNT = 3 as const;
 const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/;
 const GIT_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const SAFE_GIT_REVISION = /^(?!-)[^\0\r\n]{1,512}$/;
-const SAFE_OVERLAY_PATH = /^[^\\/\0]+(?:\/[^\\/\0]+)*$/;
-const MAX_GIT_OUTPUT_BYTES = 1_048_576;
 const EVIDENCE_LOG_PREVIEW_BYTES = 16 * 1024;
-const DANGEROUS_GIT_ATTRIBUTE = /(?:^|\s)filter=[^\s]+/m;
 
 const DigestSchema = z.string().regex(SHA256_DIGEST, "expected sha256:<64 lowercase hex characters>");
 const GitObjectIdSchema = z.string().regex(GIT_OBJECT_ID, "expected a 40- or 64-character lowercase Git object id");
@@ -258,71 +260,6 @@ type ProcessResult = {
   error?: string;
 };
 
-/**
- * Git materialization is a pre-Docker boundary. Disable system/global config,
- * hooks, prompts, replace refs, and LFS smudging rather than treating a
- * checkout as harmless input preparation.
- */
-function hardenedGitEnvironment(): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH ?? "",
-    GIT_CONFIG_NOSYSTEM: "1",
-    // A random nonexistent config path prevents accidental use of a user's
-    // global Git configuration without relying on an OS-specific null device.
-    GIT_CONFIG_GLOBAL: join(tmpdir(), `faultline-empty-git-config-${randomUUID()}`),
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_OPTIONAL_LOCKS: "0",
-    GIT_NO_REPLACE_OBJECTS: "1",
-    GIT_LFS_SKIP_SMUDGE: "1",
-    // The recorder never fetches, clones, or initializes submodules. Keep
-    // every transport unavailable at this pre-Docker boundary so a local
-    // repository configuration cannot turn an otherwise read-only Git query
-    // into a network or helper invocation. "none" is deliberately not a
-    // Git transport name, which makes all real transport protocols fail the
-    // GIT_ALLOW_PROTOCOL allow-list.
-    GIT_ALLOW_PROTOCOL: "none"
-  };
-  if (process.platform === "win32") {
-    if (process.env.SystemRoot) environment.SystemRoot = process.env.SystemRoot;
-    if (process.env.ComSpec) environment.ComSpec = process.env.ComSpec;
-    if (process.env.PATHEXT) environment.PATHEXT = process.env.PATHEXT;
-  }
-  return environment;
-}
-
-function hardenedGitArguments(repository: string, args: readonly string[]): string[] {
-  return [
-    "-c", "core.hooksPath=/nonexistent/faultline-hooks",
-    // core.fsmonitor accepts a command from repository-local configuration.
-    // Explicitly override it before every host-side Git invocation: a
-    // detached worktree checkout is still pre-Docker code execution surface.
-    "-c", "core.fsmonitor=false",
-    "-c", "core.useBuiltinFSMonitor=false",
-    "-c", "core.autocrlf=false",
-    "-c", "filter.lfs.process=",
-    "-c", "filter.lfs.smudge=",
-    "-c", "filter.lfs.required=false",
-    "-c", "diff.external=",
-    // No FaultLine Git operation needs a recursive submodule update. Make
-    // that invariant explicit instead of inheriting a repository preference.
-    "-c", "submodule.recurse=false",
-    "-c", "fetch.recurseSubmodules=false",
-    // Git transport is outside this recorder's contract. The environment
-    // allow-list above is the primary lock; these command-line settings also
-    // defeat repository-local protocol.* overrides on Git versions that use
-    // the config policy directly.
-    "-c", "protocol.allow=never",
-    "-c", "protocol.file.allow=never",
-    "-c", "protocol.ext.allow=never",
-    "-c", "protocol.git.allow=never",
-    "-c", "protocol.ssh.allow=never",
-    "-c", "protocol.http.allow=never",
-    "-c", "protocol.https.allow=never",
-    "-C", repository,
-    ...args
-  ];
-}
-
 function sha256Digest(value: string | Buffer): string {
   return `sha256:${sha256(value)}`;
 }
@@ -342,73 +279,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function saneOutput(value: Buffer): string {
-  return value.subarray(0, MAX_GIT_OUTPUT_BYTES).toString("utf8");
-}
-
-/** Runs an argv vector with bounded output. No Git revision is ever interpolated into a shell. */
-async function runProcess(executable: string, argumentsList: readonly string[]): Promise<ProcessResult> {
-  return new Promise((resolveResult) => {
-    let stdout: Buffer = Buffer.alloc(0);
-    let stderr: Buffer = Buffer.alloc(0);
-    let outputLimitReached = false;
-    let settled = false;
-
-    const settle = (result: ProcessResult): void => {
-      if (settled) return;
-      settled = true;
-      resolveResult(result);
-    };
-
-    let child;
-    try {
-      child = spawn(executable, [...argumentsList], {
-        shell: false,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: hardenedGitEnvironment()
-      });
-    } catch (error) {
-      settle({ exitCode: null, stdout: "", stderr: "", error: errorMessage(error) });
-      return;
-    }
-
-    const append = (current: Buffer, chunk: Buffer): Buffer => {
-      if (current.length >= MAX_GIT_OUTPUT_BYTES) return current;
-      const available = MAX_GIT_OUTPUT_BYTES - current.length;
-      return Buffer.concat([current, chunk.subarray(0, available)]);
-    };
-    const capture = (chunk: Buffer, destination: "stdout" | "stderr"): void => {
-      const next = Buffer.from(chunk);
-      if (destination === "stdout") stdout = append(stdout, next);
-      else stderr = append(stderr, next);
-      if (stdout.length + stderr.length >= MAX_GIT_OUTPUT_BYTES && !outputLimitReached) {
-        outputLimitReached = true;
-        child.kill();
-      }
-    };
-
-    child.stdout?.on("data", (chunk: Buffer) => capture(chunk, "stdout"));
-    child.stderr?.on("data", (chunk: Buffer) => capture(chunk, "stderr"));
-    child.once("error", (error) => settle({
-      exitCode: null,
-      stdout: saneOutput(stdout),
-      stderr: saneOutput(stderr),
-      error: errorMessage(error)
-    }));
-    child.once("close", (exitCode) => settle({
-      exitCode,
-      stdout: saneOutput(stdout),
-      stderr: outputLimitReached
-        ? `${saneOutput(stderr)}\nFaultLine stopped Git after its bounded output limit.`.trim()
-        : saneOutput(stderr),
-      ...(outputLimitReached ? { error: "Git command exceeded bounded output limit" } : {})
-    }));
-  });
-}
-
 async function runGit(repository: string, args: readonly string[]): Promise<ProcessResult> {
-  return runProcess("git", hardenedGitArguments(repository, args));
+  const result = await runHardenedGit(repository, args);
+  return {
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString("utf8"),
+    stderr: result.stderr.toString("utf8"),
+    ...(result.error === undefined ? {} : { error: result.error })
+  };
 }
 
 async function gitText(repository: string, args: readonly string[]): Promise<string> {
@@ -487,107 +365,6 @@ async function resolveCommitRange(repository: string, range: z.output<typeof Git
     states.push({ index, commit, tree: await resolveTree(repository, commit) });
   }
   return states;
-}
-
-/** Refuse checkout-time filters before any untrusted tree is materialized on the host. */
-async function assertSafeGitMaterialization(repository: string, states: readonly GitCommitState[]): Promise<void> {
-  const localFilters = await runGit(repository, ["config", "--local", "--get-regexp", "^filter\\."]);
-  if (localFilters.exitCode === 0 && localFilters.stdout.trim()) {
-    throw new Error("Refusing host worktree materialization: repository local Git filter configuration is present.");
-  }
-  for (const state of states) {
-    const attributes = await runGit(repository, ["show", "--no-textconv", "--end-of-options", `${state.commit}:.gitattributes`]);
-    if (attributes.exitCode === 0 && DANGEROUS_GIT_ATTRIBUTE.test(attributes.stdout)) {
-      throw new Error(`Refusing host worktree materialization: ${state.commit} declares a Git filter attribute.`);
-    }
-  }
-}
-
-function safeOverlayParts(value: string): string[] {
-  if (!SAFE_OVERLAY_PATH.test(value) || value.startsWith("/") || value.includes("\\")) {
-    throw new Error(`Frozen overlay path is unsafe: ${value}`);
-  }
-  const parts = value.split("/");
-  if (parts.some((part) => !part || part === "." || part === "..")) {
-    throw new Error(`Frozen overlay path is unsafe: ${value}`);
-  }
-  return parts;
-}
-
-async function lstatIfPresent(path: string): Promise<Awaited<ReturnType<typeof lstat>> | null> {
-  try {
-    return await lstat(path);
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
-    if (code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-/** Create only non-symlink parent directories beneath this temporary worktree. */
-async function safeOverlayTarget(worktree: string, overlayPath: string): Promise<string> {
-  const parts = safeOverlayParts(overlayPath);
-  const target = resolve(worktree, ...parts);
-  const containment = relative(worktree, target);
-  if (!containment || containment === ".." || containment.startsWith("../") || containment.startsWith("..\\") || isAbsolute(containment)) {
-    throw new Error(`Frozen overlay path escaped its worktree: ${overlayPath}`);
-  }
-
-  let current = worktree;
-  for (const part of parts.slice(0, -1)) {
-    current = join(current, part);
-    const entry = await lstatIfPresent(current);
-    if (entry === null) {
-      // Docker's sandbox runs as uid 65534; newly created overlay directories
-      // must be traversable, while the bind mount itself remains read-only.
-      await mkdir(current, { mode: 0o755 });
-      const created = await lstat(current);
-      if (!created.isDirectory() || created.isSymbolicLink()) {
-        throw new Error(`Could not safely create overlay directory: ${overlayPath}`);
-      }
-      continue;
-    }
-    if (!entry.isDirectory() || entry.isSymbolicLink()) {
-      throw new Error(`Frozen overlay parent is not a safe directory: ${overlayPath}`);
-    }
-  }
-  const existing = await lstatIfPresent(target);
-  if (existing?.isSymbolicLink()) {
-    throw new Error(`Frozen overlay target is a symbolic link: ${overlayPath}`);
-  }
-  return target;
-}
-
-/** Materialize, then re-read, every approved overlay byte-for-byte. */
-async function materializeFrozenOverlays(worktree: string, frozenWitness: FrozenWitness): Promise<MaterializedOverlay[]> {
-  const facts: MaterializedOverlay[] = [];
-  for (const overlay of frozenWitness.proposal.witness.overlays) {
-    const bytes = Buffer.from(overlay.bytesBase64, "base64");
-    const expectedDigest = sha256Digest(bytes);
-    if (expectedDigest !== overlay.bytesDigest) {
-      throw new Error(`Frozen overlay digest does not match its bytes: ${overlay.path}`);
-    }
-    const target = await safeOverlayTarget(worktree, overlay.path);
-    // Replace instead of writing through an existing inode. That avoids
-    // mutating an unexpected hard link and means a raced leaf symlink is
-    // replaced rather than followed. The temp file is in the checked parent.
-    const staged = join(dirname(target), `.faultline-overlay-${randomUUID()}`);
-    try {
-      // The unprivileged Docker user needs to read the frozen command's
-      // overlays. The container bind mount is read-only, so 0644 does not
-      // grant it a way to mutate this temporary worktree.
-      await writeFile(staged, bytes, { encoding: undefined, flag: "wx", mode: 0o644 });
-      await rename(staged, target);
-    } finally {
-      await rm(staged, { force: true });
-    }
-    const reread = await readFile(target);
-    if (!reread.equals(bytes) || sha256Digest(reread) !== overlay.bytesDigest) {
-      throw new Error(`FaultLine could not verify exact materialized overlay bytes: ${overlay.path}`);
-    }
-    facts.push({ path: overlay.path, bytesDigest: overlay.bytesDigest, bytesLength: bytes.length });
-  }
-  return facts;
 }
 
 function planRequestForState(
@@ -775,17 +552,6 @@ function runFact(
   return GitInvestigationRunFactSchema.parse({ ...unsigned, runId: digestJson(unsigned) });
 }
 
-async function removeWorktree(repository: string, worktree: string): Promise<string | null> {
-  const removal = await runGit(repository, ["worktree", "remove", "--force", worktree]);
-  if (removal.exitCode === 0) return null;
-  try {
-    await rm(worktree, { recursive: true, force: true });
-  } catch (error) {
-    return `Could not remove temporary worktree ${worktree}: ${errorMessage(error)}`;
-  }
-  return `Git could not deregister temporary worktree ${worktree}: ${removal.stderr.trim() || removal.error || "unknown error"}`;
-}
-
 function classifyStatus(runs: readonly GitInvestigationRunFact[], errors: readonly string[]): GitInvestigationResult["status"] {
   if (errors.length > 0) return "EXECUTION_ERROR";
   if (runs.some((run) => run.result.reason === "SANDBOX_UNAVAILABLE")) return "SANDBOX_UNAVAILABLE";
@@ -838,7 +604,7 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
   try {
     repository = await resolveRepositoryRoot(input.repository);
     states = await resolveCommitRange(repository, input.range, input.maxStates);
-    await assertSafeGitMaterialization(repository, states);
+    await assertSafeGitMaterialization(repository, states.map((state) => state.commit));
   } catch (error) {
     return baseResult("RANGE_ERROR", input.sandbox.mode, [errorMessage(error)], {
       repository: null,
@@ -865,18 +631,18 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
   let configurationError = false;
   try {
     for (const state of states) {
-      const worktree = join(tempRoot, `state-${String(state.index).padStart(4, "0")}-${state.commit.slice(0, 16)}`);
-      let created = false;
+      let materialized: Awaited<ReturnType<typeof materializeGitTree>> | null = null;
       try {
-        const add = await runGit(repository, ["worktree", "add", "--detach", worktree, state.commit]);
-        if (add.exitCode !== 0 || add.error !== undefined) {
-          throw new Error(`Could not create detached worktree for ${state.commit}: ${add.stderr.trim() || add.error || "Git failed."}`);
-        }
-        created = true;
-        const overlays = await materializeFrozenOverlays(worktree, input.frozenWitness);
+        materialized = await materializeGitTree({
+          repository,
+          commit: state.commit,
+          tempRoot,
+          name: `state-${String(state.index).padStart(4, "0")}-${state.commit.slice(0, 16)}`
+        });
+        const overlays = await materializeFrozenOverlays(materialized.worktree, input.frozenWitness);
         let plan;
         try {
-          plan = createSandboxPlan(planRequestForState(input.sandbox, worktree, input.frozenWitness));
+          plan = createSandboxPlan(planRequestForState(input.sandbox, materialized.worktree, input.frozenWitness));
         } catch (error) {
           configurationError = true;
           throw new Error(`Could not create sandbox plan for ${state.commit}: ${errorMessage(error)}`);
@@ -902,8 +668,8 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
       } catch (error) {
         errors.push(errorMessage(error));
       } finally {
-        if (created) {
-          const cleanupError = await removeWorktree(repository, worktree);
+        if (materialized) {
+          const cleanupError = await materialized.cleanup();
           if (cleanupError) errors.push(cleanupError);
         }
       }
