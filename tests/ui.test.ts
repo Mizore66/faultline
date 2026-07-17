@@ -37,5 +37,7 @@ describe("deterministic sample page", () => {
     expect(page).toContain("softDur=520");
     expect(page).toContain("ease=t=>t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2");
     expect(page).toContain("duration=1100");
+    expect(page).toContain("scrollRestoration");
+    expect(page).toContain("window.scrollTo(0,targetY(panels[0]))");
   });
 });
