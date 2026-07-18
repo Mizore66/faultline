@@ -1,7 +1,7 @@
 {
   "schemaVersion": "faultline.coverage-matrix.v1",
   "title": "FaultLine adversarial scenario coverage matrix",
-  "generatedAt": "2026-07-18T16:55:06.851Z",
+  "generatedAt": "2026-07-18T17:09:00.006Z",
   "kind": "COVERAGE_MATRIX",
   "executionMode": "UNIT_AND_INTEGRATION_COVERAGE",
   "incidents": 8,
