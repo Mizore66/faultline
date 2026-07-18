@@ -344,12 +344,16 @@ function assertNoSnapshotSecrets(relativePath: string, absolutePath: string, byt
   if (report.highConfidenceCount > 0) {
     const kinds = [...new Set(report.occurrences.filter((item) => item.confidence === "HIGH").map((item) => item.kind))];
     throw new TurnSnapshotError(
-      `Refusing turn-tree snapshot: high-confidence secret material detected in ${relativePath} (${kinds.join(", ")}).`
+      `Refusing turn-tree snapshot: high-confidence secret material detected in ${relativePath} (rules/kinds: ${kinds.join(", ")}). ` +
+        "Exclude the path via .faultlineignore after human review, or remove the secret. " +
+        "Broad secret-scan bypasses are not supported; a digest-bound allowlist is tracked separately."
     );
   }
   if (hasHighEntropyToken(text)) {
     throw new TurnSnapshotError(
-      `Refusing turn-tree snapshot: high-entropy secret-like token detected in ${relativePath}.`
+      `Refusing turn-tree snapshot: high-entropy secret-like token detected in ${relativePath}. ` +
+        "Exclude via .faultlineignore after human review, or remove the token. " +
+        "Broad secret-scan bypasses are not supported; a digest-bound allowlist is tracked separately."
     );
   }
 }

@@ -63,7 +63,12 @@ export const PreventionProofBodySchema = z.object({
 
 export const PreventionProofManifestSchema = z.object({
   schemaVersion: z.literal(PREVENTION_PROOF_SCHEMA_VERSION),
-  classification: z.literal("PREVENTION_VERIFIED"),
+  /**
+   * Interim honest label: package checks self-consistency of supplied fields.
+   * It does not yet reconstruct three-state verdicts from original proof-bundle
+   * run facts + repaired-state records. Do not treat as fully grounded proof.
+   */
+  classification: z.literal("PREVENTION_EVIDENCE_SUMMARY"),
   prevention: z.object({
     path: z.literal("prevention.json"),
     digest: DigestSchema
@@ -331,7 +336,8 @@ export function writePreventionProof(
     ...(input.codexThreadId === undefined ? {} : { codexThreadId: input.codexThreadId }),
     verified: true,
     limitations: [
-      "PREVENTION_VERIFIED means last-good PASS, first-bad FAIL, and repaired PASS under the same frozen witness and environment in NATIVE_DOCKER.",
+      "PREVENTION_EVIDENCE_SUMMARY records caller-supplied last-good PASS, first-bad FAIL, and repaired PASS fields under one frozen witness digest.",
+      "Offline verify checks package integrity and internal field consistency; it does not yet reconstruct those verdicts from original proof-bundle run IDs and repaired-state run records.",
       "This package does not claim model intent, a unique semantic root cause, or host/Docker-daemon attestation beyond the recorded execution trust."
     ]
   });
@@ -344,7 +350,7 @@ export function writePreventionProof(
   const stage = join(dirname(output), `.${output.split(/[\\/]/).at(-1) ?? "prevention"}.${randomUUID()}.tmp`);
   const unsigned = {
     schemaVersion: PREVENTION_PROOF_SCHEMA_VERSION,
-    classification: "PREVENTION_VERIFIED" as const,
+    classification: "PREVENTION_EVIDENCE_SUMMARY" as const,
     prevention: { path: "prevention.json" as const, digest: digestJson(body) },
     limitations: body.limitations
   };
@@ -358,11 +364,12 @@ export function writePreventionProof(
     const readme = [
       "# FaultLine prevention proof",
       "",
-      "Status: **PREVENTION_VERIFIED**",
+      "Status: **PREVENTION_EVIDENCE_SUMMARY** (not fully grounded Prevention verified)",
       "",
-      "This package binds an original Git proof root, a frozen witness digest, and three executed NATIVE_DOCKER states (PASS → FAIL → PASS).",
+      "This package binds an original Git proof root, a frozen witness digest, and three caller-supplied NATIVE_DOCKER state summaries (PASS → FAIL → PASS).",
       "",
       "Verify offline with `fl verify <this-directory> --expect-root <retained-root>` (or `fl prevention verify`).",
+      "Verification does not reconstruct run facts from the original proof bundle yet.",
       "It does not claim model intent or a unique semantic root cause."
     ].join("\n");
     writePrivateFile(join(stage, "README.md"), `${readme}\n`);

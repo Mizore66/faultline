@@ -72,7 +72,7 @@ describe("faultline.prevention-proof.v1", () => {
       const written = writePreventionProof(join(defaultPreventionProofRoot(), "case-1"), sampleInput());
       expect(written.rootDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(written.prevention.schemaVersion).toBe(PREVENTION_PROOF_SCHEMA_VERSION);
-      expect(written.manifest.classification).toBe("PREVENTION_VERIFIED");
+      expect(written.manifest.classification).toBe("PREVENTION_EVIDENCE_SUMMARY");
 
       const verified = verifyPreventionProof(written.directory, written.rootDigest);
       expect(verified.valid).toBe(true);

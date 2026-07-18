@@ -2010,7 +2010,7 @@ async function preventionCommand(args: string[]): Promise<void> {
     const input = JSON.parse(readFileSync(resolve(inputPath), "utf8")) as PreventionProofWriteInput;
     const written = writePreventionProof(output, input);
     process.stdout.write(`${JSON.stringify({
-      status: "PREVENTION_VERIFIED",
+      status: "PREVENTION_EVIDENCE_SUMMARY",
       directory: written.directory,
       rootDigest: written.rootDigest,
       originalProofRoot: written.prevention.originalProofRoot,
@@ -2210,7 +2210,7 @@ async function main(): Promise<void> {
         const result = verifyPreventionProof(root, option(args, "--expect-root"));
         process.stdout.write(`${result.externalRootStatus === "NOT_PROVIDED" ? "Prevention proof self-consistency" : "Integrity"}: ${result.valid ? "VALID" : "INVALID"}\n`);
         process.stdout.write(`Classification: ${result.manifest?.classification ?? "unavailable"}\nBundle root: ${result.rootDigest ?? "unavailable"}\nExternal root: ${result.externalRootStatus}\n`);
-        if (result.valid) process.stdout.write("Prevention verified\n");
+        if (result.valid) process.stdout.write("Prevention evidence summary\n");
         if (!result.valid) process.stdout.write(`${result.errors.map((error) => `- ${error}`).join("\n")}\n`);
         process.exitCode = result.valid ? 0 : 1;
         return;

@@ -2,11 +2,17 @@
 
 **Audience:** developer / maintainer of [monashblockchain/MUMBCS](https://github.com/monashblockchain/MUMBCS) (MUMBCS website).  
 **FaultLine repo:** [Mizore66/faultline](https://github.com/Mizore66/faultline)  
-**Goal:** Run FaultLine on a **real MUMBCS Codex session** so FaultLine can publish a later-turn **First Bad Turn** evidence package (`EXPERIMENTAL_TURN`) with retained digests — closing the external validation gap (issues **#42** / **#46**). Separately: practical CI/CD suggestions for MUMBCS.
+**Goal:** Run FaultLine on a **real MUMBCS Codex session** so FaultLine can publish a later-turn **First Bad Turn** evidence package (`EXPERIMENTAL_TURN`) with retained digests — closing the external validation gap (issues **#42** / **#46** / **#55**). Separately: practical CI/CD suggestions for MUMBCS.
 
 This is a collaboration guide, not a claim that FaultLine is already part of MUMBCS production.
 
-**Important:** the strongest publishable result is **not** “it worked well.” Fill [../external-case-study-template.md](../external-case-study-template.md) with digests, timings, onboarding friction, and one approved quote.
+**What this run proves (honest framing):**  
+*An independent developer successfully used FaultLine on their repository to record a real Codex session and independently verify a later-turn boundary* (**protocol / interoperability validation**).
+
+**What this scripted run does *not* prove:**  
+That FaultLine “caught a real bug in production.” A second, naturally occurring incident would be needed for that impact claim.
+
+**Mandatory evidence rule:** the frozen witness **overlay bytes** must be identical on every turn state. Codex must change **production code/data only** — never the witness. Fill [../external-case-study-template.md](../external-case-study-template.md) with digests, timings, onboarding friction, one criticism, and one approved quote.
 
 > **Access note:** MUMBCS is a **private** repo (`master` default branch). The FaultLine collaborator needs read access (or a redacted handoff zip) to help verify packages.
 
@@ -38,10 +44,11 @@ You still should **not** try to freeze “boot full Payload + Mongo + Vercel Blo
 | Turn proof bundle + `fl verify --expect-root` **MATCH** | Independent check |
 | `introduction.turnOrdinal` (e.g. 3) + transition kind | First Bad Turn beyond Turn 1 |
 | Optional `fl investigate turns … --minimize` / `fl prove transition` | Chains turn boundary → counterfactual edit isolation |
-| Structured case-study fields (below) + approved quote | Impact / credibility — not generic praise |
+| Immutable overlay + production-only Turn 3 | Same frozen witness across states (#55/#56) |
+| Structured case-study fields + criticism + approved quote | Protocol-validation testimony — not generic praise |
 | Explicit consent for private-repo redaction | Required before any public write-up |
 
-Grade stays **`EXPERIMENTAL_TURN`** (not `COMMIT_PROOF` / `TURN_PROOF`). That is honest.
+Grade stays **`EXPERIMENTAL_TURN`**. Publish as **protocol validation** unless the failure was organic.
 
 ### Case-study fields you must capture (not optional)
 
@@ -172,56 +179,83 @@ Agree before recording:
 
 ---
 
-## 4. Recommended demo design (MUMBCS-shaped)
+## 4. Recommended demo design (immutable overlay + real production)
 
-### 4.1 Add a tiny demo surface in MUMBCS
+### 4.0 Correctness model (mandatory — Sol #55 / #56)
+
+FaultLine freezes **overlay bytes + command**, then replays that **same** predicate on every historical tree. If Codex edits the witness file on Turn 3, each state carries a *different* predicate and the central claim collapses.
 
 ```text
-tools/faultline/
-  README.md
-  witness.mjs
-  fixture-ok.json          # optional
-  scenarios/later-turn.md  # Codex turn script
+Frozen overlay witness  (.faultline-witness/check-slug.mjs)  ← identical on every state
+        │
+        └── imports / calls real production behavior (src/utils/slug.ts)
+
+Turn 1  → harmless docs/comment (not the witness)
+Turn 2  → another harmless change (not the witness)
+Turn 3  → changes production code or production data ONLY
 ```
 
-**Suggested witness:** assert a real pure helper (prefer something under `src/utils/` such as date formatting / URL helpers), or a tiny checked-in fixture that mirrors a club invariant (e.g. committee slug rules, FAQ shape).
+**Codex must never edit:**
 
-Emit **exactly one JSON line** on stdout:
+- the witness / overlay file  
+- expected output strings  
+- fixtures used solely by the witness  
+- the structured-result emitter (`faultline.witness-result.v1` print path)  
+
+**Do not duplicate production logic inside the witness** for the published case study. A copied regex proves the copy, not MUMBCS. Require one of:
+
+- `import` the real helper (Node 22 `--experimental-strip-types` can load `.ts` in `node:22-alpine`)  
+- compile the helper into the prepared image  
+- invoke a real CLI/API contract  
+- inspect a real generated artifact  
+- call a production validation function  
+
+A duplicated ten-line rule is OK only as a *mechanical* FaultLine exercise — **not** for external testimony that claims meaningful product validation.
+
+### 4.1 Files to add in MUMBCS
+
+```text
+src/utils/slug.ts                 ← production contract Codex may break on Turn 3
+.faultline-witness/check-slug.mjs ← frozen overlay (never edited after freeze)
+.faultline-witness/README.md
+tools/faultline/scenarios/later-turn.md
+```
+
+**Production helper (example — adapt to a real MUMBCS rule if you already have one):**
+
+```ts
+// src/utils/slug.ts
+export function isValidSlug(value: string): boolean {
+  return typeof value === "string" && /^[a-z0-9-]+$/.test(value) && value.length > 0;
+}
+```
+
+**Frozen overlay (imports production — no shadow regex):**
 
 ```js
-// tools/faultline/witness.mjs (sketch — wire to a real MUMBCS pure helper)
-import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
-
-// Prefer importing a compiled/plain helper that needs no Mongo/Payload.
- // If TS import is awkward in Alpine without a build step, duplicate a
- // 10-line pure check that matches production logic for the demo.
+// .faultline-witness/check-slug.mjs
+import { isValidSlug } from "../src/utils/slug.ts";
 
 const protocol = "faultline.witness-result.v1";
+const sample = "committee-2026";
 let pass = false;
 try {
-  const fixture = JSON.parse(
-    readFileSync(new URL("./fixture-ok.json", import.meta.url), "utf8")
-  );
-  // Example invariant — replace with a real MUMBCS rule:
-  pass =
-    typeof fixture.slug === "string"
-    && /^[a-z0-9-]+$/.test(fixture.slug)
-    && fixture.slug.length > 0;
+  pass = isValidSlug(sample) === true && isValidSlug("") === false;
 } catch {
   pass = false;
 }
-
 const outcome = pass ? "PREDICATE_PASS" : "PREDICATE_FAIL";
 console.log(JSON.stringify({ protocol, outcome }));
 process.exit(pass ? 0 : 1);
 ```
 
-**Why this shape:**
+**Frozen command (host + Docker):**
 
-- Runs in FaultLine’s Node catalog image with no network  
-- Easy for Codex to break on Turn 3 (loosen the slug regex, invert a date check, rename a required field)  
-- Still **MUMBCS-real** if it mirrors a production validation rule  
+```text
+node --experimental-strip-types .faultline-witness/check-slug.mjs
+```
+
+Prefer an existing pure helper under `src/utils/` (e.g. date helpers) if it already encodes a club invariant — same pattern: overlay imports it; Codex breaks *that* module on Turn 3.
 
 ### 4.2 What not to freeze first
 
@@ -231,25 +265,22 @@ process.exit(pass ? 0 : 1);
 | Playwright against `next start` | Needs server + often DB/content |
 | Payload seed / Mongo scripts | Needs credentials + network/DB |
 | Auth / passkey flows | Secrets + external services |
-
-Those belong in **CI phases** below, not in the first FaultLine turn package.
+| Editing the overlay after freeze | Breaks “same frozen witness” |
 
 ### 4.3 Target Codex timeline
 
-| Moment | Worktree intent | Witness |
+| Moment | Worktree intent | Frozen overlay |
 | --- | --- | --- |
-| Session baseline | Predicate holds | PASS |
-| Turn 1 | Harmless comment / docs | PASS |
-| Turn 2 | Another safe change | PASS |
-| Turn 3 | Break the frozen predicate | FAIL ← earliest recorded stable failure |
-
-Story FaultLine wants:
+| Session baseline | Production helper correct | PASS |
+| Turn 1 | Harmless docs/comment | PASS |
+| Turn 2 | Another harmless change | PASS |
+| Turn 3 | Break `src/utils/slug.ts` (or real helper) only | FAIL |
 
 ```text
 Session baseline  PASS
 Turn 1            PASS
 Turn 2            PASS
-Turn 3            FAIL  ← ATTRIBUTED
+Turn 3            FAIL  ← ATTRIBUTED (same overlay bytes every state)
 ```
 
 ---
@@ -298,73 +329,73 @@ Note `ledgerPath`. Use a **fresh session** after install for the hero capture.
 
 ---
 
-## 6. Scripted Codex session (#42 capture)
+## 6. Freeze the overlay **before** the Codex session
 
 Work on a dedicated branch, e.g. `faultline/later-turn-demo`.
 
-### 6.1 Commit known-good baseline
+### 6.1 Commit known-good production + overlay
 
-1. Land `tools/faultline/witness.mjs` (+ fixture) so the predicate **passes**  
-2. Commit  
-3. Confirm:
+1. Land `src/utils/slug.ts` (or chosen real helper) in a **passing** state  
+2. Land `.faultline-witness/check-slug.mjs` that imports it  
+3. Commit  
+4. Confirm:
 
 ```powershell
-node .\tools\faultline\witness.mjs
+node --experimental-strip-types .\.faultline-witness\check-slug.mjs
 # PREDICATE_PASS, exit 0
 ```
 
-### 6.2 Fresh Codex session (hooks on)
+### 6.2 Human freeze (Approve ≠ Freeze)
+
+FaultLine must not auto-freeze. Freeze **before** the scripted Codex turns whenever practical so the overlay cannot drift.
+
+1. Propose a witness with:
+   - **command:** `node --experimental-strip-types .faultline-witness/check-slug.mjs`
+   - **overlays:** copy `.faultline-witness/check-slug.mjs` into the proposal overlay root as the same relative path (so every replayed tree gets identical overlay bytes even if someone later dirties the worktree copy)
+2. Human **Approve**  
+3. Separate action: **Freeze**  
+4. Retain proposal id + `sha256:…` frozen digest  
+
+Optional: `fl witness propose --live` — still human-reviewed before freeze.
+
+After freeze, treat `.faultline-witness/check-slug.mjs` as **read-only for the rest of the session**.
+
+---
+
+## 7. Scripted Codex session (#42 protocol capture)
+
+Hooks on. Fresh Codex session after freeze.
+
+### 7.1 Turn prompts (production-only edits)
 
 **Turn 1 (keep green):**
 
-> In `tools/faultline/`, add a short comment to `witness.mjs` explaining this predicate is used by FaultLine. Do not change pass/fail logic.
+> Add a one-line comment to `src/utils/slug.ts` documenting that FaultLine exercises `isValidSlug`. Do **not** change the function body. Do **not** edit anything under `.faultline-witness/`.
 
 **Turn 2 (still green):**
 
-> Update `tools/faultline/README.md` with how to run `node tools/faultline/witness.mjs`. Do not change validation logic.
+> Update `tools/faultline/scenarios/later-turn.md` (or a short README) describing the protocol-validation session. Do **not** edit `.faultline-witness/` or change `isValidSlug` behavior.
 
-**Turn 3 (introduce regression):**
+**Turn 3 (introduce regression in production only):**
 
-> Change the validation used by `tools/faultline/witness.mjs` so the fixture fails (e.g. allow empty slugs, invert the date/slug check, or rename a required field). It’s OK if the FaultLine witness fails — we are capturing a regression.
+> Change `src/utils/slug.ts` so `isValidSlug` incorrectly accepts an empty string (or inverts the regex). Do **not** edit `.faultline-witness/`, fixtures, or any FaultLine overlay. We are capturing a protocol regression under a frozen witness.
 
-Stop after each turn. Confirm host-side:
+Stop after each turn. Confirm host-side with the **same** frozen command:
 
 ```powershell
-node .\tools\faultline\witness.mjs   # should be PREDICATE_FAIL after Turn 3
+node --experimental-strip-types .\.faultline-witness\check-slug.mjs
+# PASS after T1/T2; PREDICATE_FAIL after Turn 3
 ```
 
-### 6.3 Verify the ledger
+If the overlay file hash changed after Turn 3, **abort and restart** — that session is not publishable as “same frozen witness.”
+
+### 7.2 Verify the ledger
 
 ```powershell
 node $FaultLineCli codex sidecar status --repo .
 ```
 
-Confirm the ledger contains:
-
-- session baseline snapshot  
-- `TURN_TREE_SNAPSHOT` (or equivalent) for ordinals 1, 2, 3  
-
-If missing: hooks not trusted / session started too early / Stop didn’t fire → **new session**, don’t hand-edit a “fake” Codex ledger if you want the real-session claim.
-
----
-
-## 7. Freeze the witness (human in the loop)
-
-FaultLine must not auto-freeze.
-
-1. Propose a witness whose command is effectively `node tools/faultline/witness.mjs`  
-2. Human **Approve**  
-3. Separate action: **Freeze**  
-4. Retain proposal id + `sha256:…` frozen digest  
-
-Optional: `fl witness propose --live` (GPT-5.6 blinded draft) — still human-reviewed before freeze.
-
-Host sanity (not proof):
-
-```powershell
-node .\tools\faultline\witness.mjs
-```
-
+Confirm baseline + turn-tree snapshots for ordinals 1–3. If missing → new session (don’t hand-edit a fake ledger).
 ---
 
 ## 8. Turn investigation + verify (Docker)
@@ -463,7 +494,7 @@ Once CI exists and you have a real failing log:
 ```powershell
 node $FaultLineCli investigate --ci-log .\ci.log `
   --repo . `
-  --command "node tools/faultline/witness.mjs" `
+  --command "node --experimental-strip-types .faultline-witness/check-slug.mjs" `
   --runtime node
 ```
 
@@ -503,8 +534,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm exec tsc --noEmit
-      # optional demo invariant (once tools/faultline exists):
-      # - run: node tools/faultline/witness.mjs
+      # optional demo invariant (once overlay exists):
+      # - run: node --experimental-strip-types .faultline-witness/check-slug.mjs
 ```
 
 Keep secrets out of PR logs (`.env`, Mongo, Blob, Resend, auth).
@@ -606,24 +637,24 @@ Keep proof-grade Docker investigate on a **manual** workflow until stable — do
 ### Product experience first (minimal intervention)
 
 1. [ ] Start timer; point partner at FaultLine README only  
-2. [ ] Record install time, proof-ready time, command count, confusion points  
-3. [ ] Only assist after a documented blocker (note what blocked them)  
+2. [ ] Record install / proof-ready / freeze→verify times, command count, confusion points  
+3. [ ] Record one criticism (not only praise)  
+4. [ ] Only assist after a documented blocker  
 
 ### Correctness capture
 
-4. [ ] Consent / redaction agreed (private repo → what can be public)  
-5. [ ] `doctor` OK for Docker proof  
-6. [ ] Sidecar installed + trusted in Codex `/hooks`  
-7. [ ] Known-good `tools/faultline` witness committed  
-8. [ ] Fresh session: baseline + T1/T2 PASS + T3 FAIL  
-9. [ ] Ledger has baseline + 3 turn trees  
-10. [ ] Witness frozen (Approve ≠ Freeze)  
-11. [ ] `investigate turns` attributes later turn; optional `--minimize`  
-12. [ ] `verify --expect-root` MATCH  
-13. [ ] [external-case-study-template.md](../external-case-study-template.md) filled + approved quote  
-14. [ ] Handoff zip / shared folder prepared (no secrets)  
-15. [ ] Optional screenshots for Build Week video  
-16. [ ] Follow-up: Phase 0 `ci.yml` PR on MUMBCS  
+5. [ ] Consent / redaction agreed  
+6. [ ] Overlay imports **real** production helper (no shadow logic)  
+7. [ ] Witness **frozen before** Codex turns; overlay hash stable through Turn 3  
+8. [ ] Codex Turn 3 edits production only (forbid list enforced)  
+9. [ ] Sidecar ledger: baseline + turns 1–3  
+10. [ ] `investigate turns` attributes later turn; optional `--minimize`  
+11. [ ] Partner independently ran `fl verify --expect-root`  
+12. [ ] Case study framed as **protocol validation** (not “caught a prod bug”)  
+13. [ ] [external-case-study-template.md](../external-case-study-template.md) complete  
+14. [ ] Handoff zip scrubbed  
+15. [ ] Optional video screenshots  
+16. [ ] Follow-up CI Phase 0 on MUMBCS  
 
 ---
 
@@ -631,11 +662,11 @@ Keep proof-grade Docker investigate on a **manual** workflow until stable — do
 
 **Good:**
 
-> We ran FaultLine on the MUMBCS Next.js site with the opt-in Codex sidecar. Under a human-frozen witness, the earliest recorded stable PASS→FAIL was Turn 3. The turn package verifies offline as experimental evidence.
+> An independent developer used FaultLine on the MUMBCS repository to record a real Codex session and independently verify a later-turn boundary. Under one human-frozen overlay witness importing production slug validation, the earliest recorded stable PASS→FAIL was Turn 3 (`EXPERIMENTAL_TURN`).
 
 **Avoid:**
 
-> FaultLine proved the agent’s intent / unique root cause / this is COMMIT_PROOF / MUMBCS production is FaultLine-powered / we replayed full Payload+Mongo in the sandbox on day one.
+> FaultLine caught a real production bug / proved agent intent / unique root cause / this is COMMIT_PROOF / Prevention verified from self-asserted JSON / we mutated the witness on Turn 3.
 
 ---
 
@@ -656,7 +687,10 @@ Keep proof-grade Docker investigate on a **manual** workflow until stable — do
 ## 15. FAQ
 
 **Q: Why not Playwright as the FaultLine witness?**  
-A: Needs a running server (and often DB/content). Perfect for CI; awkward for the first no-network Docker proof. Use `tools/faultline/witness.mjs` for FaultLine; keep Playwright in GitHub Actions.
+A: Needs a running server (and often DB/content). Perfect for CI; awkward for the first no-network Docker proof. Use an immutable `.faultline-witness/` overlay that imports production; keep Playwright in GitHub Actions.
+
+**Q: Did we catch a real production bug?**  
+A: Not with this scripted protocol run. Publish it as interoperability / usability evidence unless a naturally occurring failure is used instead.
 
 **Q: Do we need Mongo for #42?**  
 A: No. Keep the frozen witness offline.

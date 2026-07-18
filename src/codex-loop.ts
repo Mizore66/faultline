@@ -529,7 +529,8 @@ export async function repairWithCodex(options: {
       ...(patchPath ? [`Inspect ${patchPath}`] : []),
       "Human-review any Codex draft before merge",
       "Collect NATIVE_DOCKER last-good PASS / first-bad FAIL / repaired PASS facts, then: fl prevention write --input <prevention-input.json>",
-      "Only claim Prevention verified after: fl prevention verify <dir> --expect-root sha256:…"
+      "After three-state facts exist: fl prevention write --input <prevention-input.json>",
+      "fl prevention verify currently yields a Prevention evidence summary (not fully grounded Prevention verified)"
     ],
     note,
     limitation,

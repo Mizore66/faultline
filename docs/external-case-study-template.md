@@ -4,6 +4,10 @@ Use this after an external developer runs FaultLine on **their** repository (e.g
 
 Partner runbook: [partners/mumbcs-faultline-guide.md](partners/mumbcs-faultline-guide.md).
 
+**Framing:** a scripted Baseline→T1/T2 PASS→T3 FAIL session is **protocol / interoperability validation** (install, hooks, freeze, Docker replay, offline verify, onboarding). Do **not** title it “FaultLine caught a real production bug” unless the failure was naturally occurring.
+
+**Witness integrity (mandatory):** frozen overlay bytes identical on every state; Codex mutated production only; no shadow duplicate of production logic in the witness.
+
 ## Consent
 
 | Question | Answer |
@@ -29,12 +33,19 @@ Partner runbook: [partners/mumbcs-faultline-guide.md](partners/mumbcs-faultline-
 | Assistance required (none / light / facilitated) | |
 | Recorded turns or states | |
 | Frozen-witness digest | `sha256:…` |
-| Located transition | e.g. Turn 3 PASS→FAIL / commit `…` |
+| Overlay path (immutable) | e.g. `.faultline-witness/check-slug.mjs` |
+| Production module exercised | e.g. `src/utils/slug.ts` (not a shadow copy) |
+| Overlay hash stable through Turn 3? | yes / no |
+| Located transition | e.g. Turn 3 PASS→FAIL |
 | Proof-package root digest | `sha256:…` |
+| Partner independently verified root? | yes / no |
 | Evidence grade | `EXPERIMENTAL_TURN` / `COMMIT_PROOF` |
+| Organic incident or scripted protocol run? | |
 | Changed developer’s diagnosis? | yes / no — how |
-| Time to locate the boundary | |
+| Time from freeze → verified boundary | |
+| Would use on a naturally occurring failure? | yes / no |
 | Codex repair outcome | none / drafted / verified candidate / N/A |
+| One criticism (required) | |
 | Rough edges / failures | |
 
 ## Onboarding metrics (product experience)

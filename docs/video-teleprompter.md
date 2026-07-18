@@ -6,13 +6,19 @@ Record with product on screen. Prefer PowerShell: `pnpm.cmd fl …` if Execution
 
 ---
 
-## 0:00–0:20 — Cold open (Idea)
+## 0:00–0:20 — Cold open (prefer external later-turn when ready)
 
-**Screen:** run `pnpm fl judge-proof` (proof page). Sample root ends in `…eafeb7d9` / starts `sha256:f85c446d…`.
+**Preferred screen:** external / partner later-turn package or ledger story (Turn 3 earliest stable failure; say **`EXPERIMENTAL_TURN`**).
 
-**Say:**
+**Fallback screen:** `pnpm fl judge-proof` sample root `sha256:f85c446d…`.
 
-> When an agent-assisted change turns CI red, FaultLine answers a narrower question: where does *this* human-frozen witness first go bad? It packages that answer so another engineer can verify the evidence offline — without re-running the repo, and without trusting model intent. Here’s a real COMMIT_PROOF package in the product UI — root sha256:f85c446d. Separately, we dogfooded the same protocol on our own provenance regression at ninety-seven-c-three-two-nine-zero. Complements bisect and CI logs — doesn’t replace them.
+**Say (with external case study):**
+
+> An independent developer used FaultLine on their repository to record a real Codex session. Under one human-frozen overlay witness, Turn 3 was the earliest stable PASS→FAIL. That’s experimental turn evidence — then we show mature portable COMMIT_PROOF for trust.
+
+**Say (fallback without external package):**
+
+> When an agent-assisted change turns CI red, FaultLine answers: where does *this* human-frozen witness first go bad? Here’s a verified COMMIT_PROOF **sample** package — root sha256:f85c446d — not our historical self-incident unless we open that package. Complements bisect and CI logs — doesn’t replace them.
 
 ---
 

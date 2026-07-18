@@ -2,7 +2,7 @@
 
 Optional **Codex / turn-level** demo beat: show an earliest recorded stable failure that is **not** limited to Turn 1.
 
-Evidence grade remains `EXPERIMENTAL_TURN` (not `COMMIT_PROOF`). Lead the submission video with the Idea / `COMMIT_PROOF` path (`pnpm fl judge-proof`); use this doc as the experimental First Bad Turn follow-up. Mature Git dogfood: [faultline-self-incident.md](faultline-self-incident.md).
+Evidence grade remains `EXPERIMENTAL_TURN` (not `COMMIT_PROOF`). After a permissioned external case study, prefer leading the demo with that later-turn beat, then a verified `COMMIT_PROOF` **sample**. Partner runbook (immutable overlay + production-only Turn 3): [partners/mumbcs-faultline-guide.md](partners/mumbcs-faultline-guide.md). Mature Git dogfood: [faultline-self-incident.md](faultline-self-incident.md).
 
 ## What this incident demonstrates
 

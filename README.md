@@ -15,8 +15,10 @@
 | Path | Grade | Role |
 | --- | --- | --- |
 | `fl investigate git` / `judge-proof` | **`COMMIT_PROOF`** | Mature portable proof — lead demos here |
-| `fl investigate turns` | **`EXPERIMENTAL_TURN`** | Codex-native First Bad Turn — see [promotion criteria](docs/concepts.md#why-turn-stays-experimental_turn-not-missing-a-portable-package) |
+| `fl investigate turns` | **`EXPERIMENTAL_TURN`** | Codex-native First Bad Turn — remains experimental until the criteria below |
 | `fl judge-demo` | Sample | Evidence-model UI only |
+
+`EXPERIMENTAL_TURN` stays until: an external repository validates the full workflow, turn-boundary minimization is exercised end to end, prevention evidence is automatically bound from verified run artifacts, and the recorder completes platform soak testing. Details: [docs/concepts.md](docs/concepts.md#why-turn-stays-experimental_turn-not-missing-a-portable-package).
 
 ## Judges: three commands
 
@@ -28,6 +30,7 @@ pnpm install --frozen-lockfile
 pnpm fl judge-proof
 ```
 
+Opens a **verified `COMMIT_PROOF` sample** package (disposable live-git sample root `sha256:f85c446d…`) — not the historical self-incident unless you open that package separately.  
 Zero-install snapshot: [`docs/self-incident-proof-preview.html`](docs/self-incident-proof-preview.html).  
 Fixture sandbox (not a real incident): `pnpm fl judge-demo`.
 
@@ -37,9 +40,9 @@ Fixture sandbox (not a real incident): `pnpm fl judge-demo`.
 ## Validation
 
 - **Dogfood (published):** Git self-incident at `97c3290` — [docs/faultline-self-incident.md](docs/faultline-self-incident.md)
-- **External test (underway):** permissioned partner capture — [docs/external-case-study-template.md](docs/external-case-study-template.md), [docs/partners/mumbcs-faultline-guide.md](docs/partners/mumbcs-faultline-guide.md)
+- **External protocol test (underway):** independent developer + real Codex session + verified later-turn boundary — [docs/partners/mumbcs-faultline-guide.md](docs/partners/mumbcs-faultline-guide.md), [docs/external-case-study-template.md](docs/external-case-study-template.md)
 
-Until the external case study is published with retained digests and approved quote, public evidence remains dogfood + fixtures.
+The scripted partner run validates interoperability/usability. It is **not** automatically “FaultLine caught a real production bug.” Until the permissioned case study lands, public evidence remains dogfood + fixtures.
 
 ## Codex + GPT-5.6
 
@@ -48,7 +51,7 @@ Until the external case study is published with retained digests and approved qu
 - **GPT-5.6:** blinded witness proposal + evidence-cited repair brief only — never PASS/FAIL
 
 Continuous product arc (turn path still experimental):  
-`investigate turns` → optional `--minimize` / `fl prove transition` → repair → `fl prevention verify`
+`investigate turns` → `--minimize` / `fl prove transition` → repair → `fl prevention verify` (today: Prevention evidence summary)
 
 ## Learn more
 

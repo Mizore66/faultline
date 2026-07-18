@@ -98,14 +98,14 @@ This creates synthetic orphan commits from turn `treeDigest`s so existing `minim
 
 ## Prevention proof
 
-Recovery evidence and a stable boundary do not establish prevention. FaultLine packages prevention as `faultline.prevention-proof.v1`. The shareable page and CLI say **Prevention verified** only when that package verifies. After `fl repair`, collect three-state NATIVE_DOCKER facts and run `fl prevention write` — do not claim prevention from repair instructions alone.
+Recovery evidence and a stable boundary do not establish prevention. FaultLine packages prevention as `faultline.prevention-proof.v1`. Until creation binds verified run artifacts from the original proof bundle and repaired-state records, the honest classification is **`PREVENTION_EVIDENCE_SUMMARY`** (not “Prevention verified”). After `fl repair`, collect three-state NATIVE_DOCKER facts and run `fl prevention write` — do not overclaim from repair instructions alone.
 
 ```powershell
 pnpm fl prevention write --input .\prevention-input.json
 pnpm fl prevention verify .faultline\prevention-proofs\<directory> --expect-root sha256:<recorded-root>
 ```
 
-`fl verify` on a directory whose manifest is `faultline.prevention-proof.v1` also prints `Prevention verified` when valid.
+`fl verify` on a directory whose manifest is `faultline.prevention-proof.v1` prints `Prevention evidence summary` when the package is internally consistent.
 
 Attach a verified prevention package to the read-only Git proof page (both flags required):
 
