@@ -32,7 +32,11 @@ Do not paste markdown backticks around the command. Do not insert `--` between `
 
 No Docker or API key required. Press Ctrl+C in the terminal when you are done. Use `--export-only` if you only want the proof bundle written without serving or opening a browser.
 
-FaultLine proves where a frozen witness changed from pass to fail — without claiming agent intent or a unique semantic root cause.
+Zero-install static preview (no install): open [`docs/judge-preview.html`](docs/judge-preview.html).
+
+## What it is
+
+FaultLine is a **CLI evidence tool** for regressions after agent-assisted coding. It freezes one human-reviewed executable witness, replays it across immutable source states, and proves only what those executions support — not model intent or a unique semantic root cause.
 
 **Break → Find → Prove → Fix → Prevent**
 
@@ -43,72 +47,66 @@ FaultLine proves where a frozen witness changed from pass to fail — without cl
 | Bidirectional edit necessity/sufficiency when certified (Git path) | Unique semantic root cause |
 | Structured `PREDICATE_*` outcomes (compile ≠ FAIL) | That one Docker image fits every lockfile era |
 
-### Evidence grades (honest)
-
-Successful Docker-isolated `fl investigate git` results carry evidence grade `COMMIT_PROOF` — the highest portable proof tier. Turn-tree localization (Codex sidecar snapshots) is graded `EXPERIMENTAL_TURN` / “Turn localization — experimental evidence” until it meets the same write-once portable proof contract. Do not equate turn results with `COMMIT_PROOF`.
-
-| Path | Grade today | Notes |
+| Path | Grade | Notes |
 | --- | --- | --- |
-| `fl investigate turns` | **Experimental turn evidence** (`EXPERIMENTAL_TURN`) | Localizes across captured turn trees; portable turn proof bundle parity with Git is still tracked (#21) |
-| `fl investigate git` / live self-incident | **Mature Git proof** (`COMMIT_PROOF`) | Portable, independently verifiable proof packages |
+| `fl investigate git` / live self-incident | **`COMMIT_PROOF`** | Mature, portable Git proof packages |
+| `fl investigate turns` | **`EXPERIMENTAL_TURN`** | Useful localization; not interchangeable with commit-path proof yet |
 
-**Hero demo for judges (prefer this in the video):**
+## What to do next
 
-1. Open [docs/faultline-self-incident.md](docs/faultline-self-incident.md) — real Git `PASS→FAIL` at `97c3290`, retained proof root
-2. Show `fl investigate turns` when a Codex sidecar ledger with turn-tree snapshots is available (experimental grade)
-3. Keep the deterministic `judge-demo` fixture as the **protocol sample** only (no Docker/API key) — do not center the submission video on its synthetic session metrics
+1. **Real incident** — [docs/first-incident.md](docs/first-incident.md) (`fl doctor`, then guided `fl investigate --ci-log` when you have a failing command).
+2. **Docker proof smoke** — `pnpm fl demo live-git --export-only` (digest-pinned native Docker path).
+3. **Judges / recorded self-incident** — [docs/faultline-self-incident.md](docs/faultline-self-incident.md) (real `PASS→FAIL` at `97c3290`). Treat `judge-demo` as the protocol sample, not the center of a submission video.
 
-## Protocol sample (no Docker, no API key)
+Everything below is reference material: install boundaries, expert flows, vocabulary, and handoff checklists.
 
-```powershell
-git clone https://github.com/Mizore66/faultline.git
-cd faultline
-git checkout main
-pnpm install --frozen-lockfile
-pnpm fl -- judge-demo --rerun-all --export-only
-pnpm fl -- verify .faultline/bundles/judge-demo
-```
+---
 
-Zero-install visual: open [`docs/judge-preview.html`](docs/judge-preview.html).
+## Advanced reference
 
-With Docker (mature Git product-path smoke): `pnpm fl -- demo live-git --export-only`
+### Install and package boundary
 
-## Install
-
-**Canonical judge path (only supported install today):** clone `main` (MIT) and run via pnpm.
+**Supported install today:** clone `main` (MIT) and run via pnpm (see [See it in one command](#see-it-in-one-command)).
 
 ```powershell
-git clone https://github.com/Mizore66/faultline.git
-cd faultline
-git checkout main
-pnpm install --frozen-lockfile
-pnpm fl -- doctor --repo .
-pnpm fl -- doctor --proof-ready   # nonzero unless Docker proof-grade is READY
+pnpm fl doctor --repo .
+pnpm fl doctor --proof-ready   # nonzero unless Docker proof-grade is READY
 ```
 
 The public package name `@mizore66/faultline` is reserved for a future registry publish. **npm/global install is not supported yet** — there is no published release. Do not run `npm install -g @mizore66/faultline` or `npm install faultline` until an owner-published version exists. To exercise the packaged binary before publish, use `pnpm pack` and install the local tarball (see [Package and clean-install use](#package-and-clean-install-use)).
 
-## Primary investigation paths
+### Export-only judge check
 
-**Turn localization (Codex-native, experimental evidence grade):**
-
-```powershell
-pnpm fl -- investigate turns --repo . --ledger .faultline\ledgers\session.json --proposal <id> --expect-digest sha256:... --image <digest-pinned-image>
-```
-
-**Guided intake from a CI log (draft + next steps; does not auto-approve):**
+Write and verify the deterministic sample without opening a browser:
 
 ```powershell
-pnpm fl -- investigate --ci-log .\ci.log --repo . --command "pnpm test"
+pnpm fl judge-demo --rerun-all --export-only
+pnpm fl verify .faultline/bundles/judge-demo
 ```
 
-**Mature Git commit-range proof (fallback / portable packages):**
+Regenerate the static preview with `pnpm fl judge-preview`. `--replay` is cached and cannot certify a stable boundary or A-grade claim.
+
+### Primary investigation paths
+
+**Guided intake from a CI log (preferred product path; does not auto-approve):**
 
 ```powershell
-pnpm fl -- investigate git --repo . --from <good> --to <bad> --proposal <id> --expect-digest sha256:... --image <digest-pinned-image>
+pnpm fl investigate --ci-log .\ci.log --repo . --command "pnpm test"
 ```
 
-## One product path (expert)
+**Turn localization (experimental evidence grade):**
+
+```powershell
+pnpm fl investigate turns --repo . --ledger .faultline\ledgers\session.json --proposal <id> --expect-digest sha256:... --image <digest-pinned-image>
+```
+
+**Mature Git commit-range proof:**
+
+```powershell
+pnpm fl investigate git --repo . --from <good> --to <bad> --proposal <id> --expect-digest sha256:... --image <digest-pinned-image>
+```
+
+### Expert product path
 
 1. `fl doctor --repo .` / `fl doctor --proof-ready`
 2. Install Codex sidecar hooks; capture turn trees (including dirty Stops)
@@ -119,55 +117,31 @@ pnpm fl -- investigate git --repo . --from <good> --to <bad> --proposal <id> --e
 7. `fl serve --bundle` / `fl verify --expect-root` (Git packages)
 8. Optional: `fl repair --bundle …` prepares instructions (`REPAIR_INSTRUCTIONS_PREPARED`); `--with-codex` is opt-in and never auto-merges
 
-Full guide: [docs/first-incident.md](docs/first-incident.md).
-
-## What this is validated on (impact)
+### Impact, models, and capability summary
 
 Dogfood only: FaultLine’s first completed proof is **this repository’s provenance-workflow regression** (`PASS→FAIL` at `97c3290`, recovery at `07ee7f1`). No third-party adoption metrics.
-
-## How Codex and GPT-5.6 are used
 
 **Qualifying `/feedback`:** `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 
 - **Codex (build):** implementation, adversarial tests, hardening.
-- **Codex (runtime):** opt-in sidecar records public hooks + **turn tree snapshots even on dirty Stops**; clean checkpoints when possible. `fl witness implement` / `fl repair --with-codex` draft overlays/repairs for human review.
+- **Codex (runtime):** opt-in sidecar records public hooks + turn tree snapshots (including dirty Stops).
 - **GPT-5.6:** blinded witness proposal + evidence-cited repair brief only. Never assigns PASS/FAIL.
-
-## Benchmark matrix
 
 `pnpm benchmark` writes `benchmarks/REPORT.md` (8 adversarial incident expectations, 0 unsupported exact-cause claims).
 
-## What is implemented (advanced)
+Implemented today: Docker-isolated Git replay (mature proof packages), env-fingerprint refusal on lockfile skew, structured witness results, experimental turn-tree localization, minimization, attestations, GitHub Actions. Parallel multi-session *fleet blame* is **not** claimed.
 
-Docker-isolated Git replay (mature proof packages), env-fingerprint refusal on lockfile skew (Git and turn paths), structured witness results, turn-tree localization (experimental), minimization, attestations, GitHub Actions. Parallel multi-session *fleet blame* is **not** claimed — contribution attribution in the sample is fixture theater; production proves Git/turn-tree boundaries under one frozen witness.
-
-## Fast judge check (no Docker or API key)
-
-The fastest reproducible product check is the deterministic, export-only path:
-
-```powershell
-pnpm install --frozen-lockfile
-pnpm fl -- judge-demo --rerun-all --export-only
-pnpm fl -- verify .faultline/bundles/judge-demo
-```
-
-This produces a managed judge bundle and verifies its stored evidence without executing repository code during verification. It lets a reviewer inspect the frozen witness, evidence vocabulary, stable-boundary rules, counterfactual result, and scope limits without Docker, a network call, or an API key. It is not a live customer incident and does not establish proof-grade Docker execution; use `fl demo live-git` below for that separate path.
-
-For a zero-install visual walkthrough, download and open the committed [static judge preview](docs/judge-preview.html) in any browser. It is intentionally read-only and visibly labeled as a deterministic sample; regenerate the exact artifact with `pnpm fl -- judge-preview`.
-
-`--replay` is available for the instant sample view, but it is visibly cached and cannot certify a stable boundary, an A-grade claim, prevention, or minimization.
-
-## One-command live Git demo
+### One-command live Git demo
 
 On a machine with Docker, run the actual product path—not the deterministic sample—against a disposable good → bad → repaired Git repository:
 
 ```powershell
-pnpm fl -- demo live-git --export-only
+pnpm fl demo live-git --export-only
 ```
 
 The command pulls `node:22-alpine` only to resolve a concrete immutable image digest; all witness executions then use that digest with `--pull=never`. It creates immutable witness-review records and disposable source material beneath `.faultline\live-git-demo\`, replays the frozen witness in native Docker, writes a verified Git proof package, and prints its root. Omit `--export-only` to open the read-only proof view. Pass `--image registry.example/name@sha256:<64-lowercase-hex>` to use an already-resolved image instead.
 
-## First real incident (guided intake)
+### First real incident (guided intake)
 
 Before making a real claim, let FaultLine surface local prerequisites:
 
@@ -175,7 +149,7 @@ Before making a real claim, let FaultLine surface local prerequisites:
 pnpm fl -- doctor --repo .
 ```
 
-### One-command guided path (`fl investigate --ci-log`)
+#### One-command guided path (`fl investigate --ci-log`)
 
 For a CI log plus a failing command, use the resumable guided workflow. It creates the review-only draft, opens the local witness review workbench, pauses until you Approve and then Freeze (separate clicks), retains the freeze digest in-process, selects the runtime, localizes, and exports the proof package — without forcing you to retype subcommands:
 
@@ -250,7 +224,7 @@ pnpm fl -- incident start --repo . --command "pnpm test -- checkout" --image <re
 
 The draft and human-origin proposal are write-once local records. Run `pnpm fl -- witness review <id>` to review the exact command, overlay bytes, and policy in a local browser workbench; it requires separate human approval and freeze clicks. Retain the freeze digest outside the witness store, then use `pnpm fl -- incident status <id>` and `pnpm fl -- incident continue <id> --expect-digest <retained-frozen-digest>` to carry that same immutable incident into proof-grade replay without retyping its range or witness identifier. The full happy path, support boundary, CI handoff, and failure modes are in [docs/first-incident.md](docs/first-incident.md) and [docs/github-action.md](docs/github-action.md).
 
-## Real Git investigation
+### Real Git investigation
 
 The preferred operator path is `fl investigate --ci-log` (or the modular `fl incident start` → `fl witness review` → `fl incident continue`). The lower-level commands below remain available for automation or a pre-existing witness store. First create and freeze a reviewed witness. The proposal input is a blinded incident packet plus the exact overlay bytes to execute.
 
@@ -261,7 +235,7 @@ pnpm fl -- witness review <proposal-id>
 pnpm fl -- witness verify <proposal-id> --expect-digest <frozen-digest>
 ```
 
-### Optional authenticated reviewer approval
+#### Optional authenticated reviewer approval
 
 `fl witness approve` records a reviewed approval but is intentionally not an identity assertion. When a reviewer needs to authenticate the approval, sign the already-frozen witness with an Ed25519 private key and verify it against a separately retained reviewer keyring:
 
@@ -338,7 +312,7 @@ pnpm fl -- minimize verify .faultline\minimizations\<result>.json `
 
 Verification rechecks schema, nonce-bound run and execution IDs, attempt links, certificates, and the proof claim. It detects a rewritten record only when an externally retained digest is supplied; it is not a cryptographic signature, identity assertion, or host-attestation claim.
 
-### Optional observed lifecycle ledger
+#### Optional observed lifecycle ledger
 
 For an opt-in Codex App/CLI hook path, build FaultLine once and point the installer at that exact built CLI. It generates safe Unix and Windows command variants even when the path contains spaces, shows the complete root `hooks` document for review, and changes nothing until `--yes`. It only creates a new target project's `.codex/hooks.json`; it never overwrites or guesses how to merge an existing hook document.
 
@@ -400,7 +374,7 @@ pnpm fl -- ledger verify .faultline\bindings\<investigation>.json
 
 `record attach` is a convenience path for sidecar session attribution: it appends a started/completed turn pair and, when requested, a clean Git checkpoint for the completed turn. The attribution fields are reviewer-supplied context, not identity proof, private Codex interception, model intent, or turn-level blame. The ledger is observed evidence, not a claim that FaultLine reads private model reasoning.
 
-## Verify and retain integrity evidence
+### Verify and retain integrity evidence
 
 Offline verification never executes repository code:
 
@@ -421,7 +395,7 @@ pnpm fl -- attest verify <receipt-id> --expect-digest sha256:<recorded-receipt-d
 
 `fl attest` is an **integrity-only** receipt. An external digest detects an editor who rewrites both local content and local checksums. It is not a cryptographic signature, an identity check, proof of authorship, or a provenance guarantee.
 
-### Signed GitHub CI provenance
+#### Signed GitHub CI provenance
 
 For a CI identity assertion, create a provenance subject from a fully verified Git proof bundle inside GitHub Actions:
 
@@ -462,7 +436,7 @@ Start from [`docs/faultline-github-attestation-trust.example.json`](docs/faultli
 
 `sourceDigest` is optional; when set it must be the recorded 40- or 64-hex Git source commit. Retain the trust file and its referenced root file with the evidence, review every allowlisted value before using it, and rotate or replace them deliberately when CI policy changes. This signed provenance says that the configured GitHub Actions identity signed the receipt bytes. It does **not** cryptographically prove that a host, Docker client, or Docker daemon enforced FaultLine's recorded sandbox policy, nor does it expand the predicate-specific proof into a general build or authorship claim.
 
-## Package and clean-install use
+### Package and clean-install use
 
 FaultLine is licensed under the MIT License. **It is not published to npm yet.** The owner still controls the first registry release. Do not treat `npm install -g @mizore66/faultline` or `npm install faultline` as supported installation commands.
 
@@ -479,7 +453,7 @@ fl --version
 
 `prepack` builds `dist/`, and the package allowlist contains `dist/`, `LICENSE`, `README.md`, the selected `docs/` guides, and npm's required package metadata. CI installs the tarball into an empty project and executes the installed `fl` binary before a release can be considered.
 
-## Reusable GitHub Action (proof replay)
+### Reusable GitHub Action (proof replay)
 
 The root `action.yml` is the review-only [incident-intake action](docs/github-action.md). Proof replay lives at `actions/proof` so the two surfaces do not collide.
 
@@ -525,7 +499,7 @@ Support matrix:
 - GitHub.com Actions is supported. GitHub Enterprise Server is not currently claimed because `actions/upload-artifact@v4` availability differs by GHES version.
 - npm registry installation remains **unsupported**. There are no GitHub Releases for a published CLI package yet. Source checkout + `pnpm fl` is the only judge install path.
 
-## GPT-5.6 boundaries
+### GPT-5.6 boundaries
 
 `fl witness propose --live` uses the Responses API with strict structured output after `OPENAI_API_KEY` is set. The model sees a blinded, redacted incident packet: candidate commits, turns, diffs, timeline data, and localization results are excluded by schema.
 
@@ -564,11 +538,11 @@ pnpm fl -- serve `
 
 The page re-verifies each attachment against its retained digest. A minimization must match the proof's frozen witness and stable pass-to-fail transition; a repair artifact must match the exact investigation and frozen witness. The shareable page renders only certification status, counts, and evidence IDs—free-form repair text stays in the private repair artifact. Attachments remain outside the original Git proof root.
 
-## How Codex and GPT-5.6 are used
+### How Codex and GPT-5.6 are used
 
 Codex accelerated FaultLine's implementation, adversarial testing, and product hardening. At runtime, `fl record` accepts a strictly ordered, hash-chained Codex-compatible NDJSON lifecycle stream and records clean Git checkpoints; it labels the supplied transport as `CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR` rather than claiming private event interception. Start a recording with `pnpm fl -- codex record init --session <id> --repo . --transport CODEX_CLI`, pipe observed events through `fl codex record stdin`, and capture checkpoints with `fl codex record checkpoint`.
 
-### Turn-tree snapshot storage warning
+#### Turn-tree snapshot storage warning
 
 Turn-tree capture supports experimental turn localization (`EXPERIMENTAL_TURN`). It is not commit-path portable proof (`COMMIT_PROOF`).
 
@@ -586,7 +560,7 @@ The sidecar prints this warning when it primes the SessionStart baseline snapsho
 
 GPT-5.6 is used only through the Responses API for a blinded witness proposal or an evidence-cited repair brief. It never decides a pass/fail verdict, identifies a culprit, replaces the frozen witness, or creates proof evidence.
 
-## Evidence vocabulary
+### Evidence vocabulary
 
 | Label | Meaning |
 | --- | --- |
@@ -595,7 +569,7 @@ GPT-5.6 is used only through the Responses API for a blinded witness proposal or
 | `INFERRED` | A model or human interpretation that must cite evidence. |
 | `UNKNOWN` | A material question the evidence does not answer. |
 
-### Evidence grades (commit path vs turn path)
+#### Evidence grades (commit path vs turn path)
 
 | Grade | Path | Meaning |
 | --- | --- | --- |
@@ -605,9 +579,9 @@ GPT-5.6 is used only through the Responses API for a blinded witness proposal or
 
 Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. On the **commit path**, a `PASS -> FAIL` boundary becomes `COMMIT_PROOF` only when each side has three distinct, matching Docker-isolated executions. Turn-path transitions stay experimental even when three-run stability is observed.
 
-## Judge path
+### Judge path
 
-1. Start with the [three-command judge check](#judges-three-commands-no-docker-no-api-key).
+1. Start with [See it in one command](#see-it-in-one-command) (or the [export-only judge check](#export-only-judge-check)).
 2. Inspect the reviewed frozen witness before the sample exposes a suspect state.
 3. Watch the timeline keep non-monotonic history visible rather than assuming once-failing means always-failing.
 4. Inspect the two-direction counterfactual and the explicit unresolved partial-patch result.
@@ -616,7 +590,7 @@ Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. On th
 
 The deterministic path proves only its included sample workflow. A real incident claim needs a recorded live Git/Docker run, the exact retained proof root, and an accurate description of what the replay did and did not establish.
 
-### Judge-facing factual evidence
+#### Judge-facing factual evidence
 
 | Claim or requirement | Factual evidence | Status |
 | --- | --- | --- |
