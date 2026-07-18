@@ -40,7 +40,14 @@ try {
     "README.md",
     "docs/faultline-self-incident.md",
     "docs/first-incident.md",
-    "docs/github-action.md"
+    "docs/github-action.md",
+    "docs/concepts.md",
+    "docs/security-model.md",
+    "docs/witness-protocol.md",
+    "docs/runtime-preparation.md",
+    "docs/proof-bundles.md",
+    "docs/codex-sidecar.md",
+    "docs/turn-snapshot-overhead.md"
   ]);
   const unexpected = packedFiles.filter((path) => !allowedExact.has(path) && !path.startsWith("dist/"));
   if (unexpected.length > 0) throw new Error(`Package contains files outside the allowlist: ${unexpected.join(", ")}`);
