@@ -81,7 +81,16 @@ function walkEligibleEstimate(dir) {
   return { files, bytes };
 }
 
-function measureTarget(label, repoPath, trials, captureTurnTreeSnapshot, planTurnSnapshotPaths, runGit) {
+function summarizeSamples(samples) {
+  const sorted = [...samples].sort((a, b) => a - b);
+  return {
+    trials: samples.length,
+    snapshotP50Ms: percentile(sorted, 50),
+    snapshotP95Ms: percentile(sorted, 95)
+  };
+}
+
+function measureCold(label, repoPath, trials, captureTurnTreeSnapshot, planTurnSnapshotPaths, runGit) {
   const plan = planTurnSnapshotPaths(repoPath, runGit);
   const samples = [];
   let secretRejections = 0;
@@ -98,6 +107,7 @@ function measureTarget(label, repoPath, trials, captureTurnTreeSnapshot, planTur
     };
     const t0 = process.hrtime.bigint();
     try {
+      // Cold path: no session cache.
       captureTurnTreeSnapshot(repoPath, { sleep, maxQuiescenceAttempts: 4 });
       samples.push(Number(process.hrtime.bigint() - t0) / 1e6);
       if (sleepCalls > 0) quiescenceRetryHints += sleepCalls;
@@ -111,22 +121,99 @@ function measureTarget(label, repoPath, trials, captureTurnTreeSnapshot, planTur
     bytesStored += Math.max(0, (after.size + after.sizePack) - (before.size + before.sizePack));
   }
 
-  const sorted = [...samples].sort((a, b) => a - b);
   const estimate = walkEligibleEstimate(repoPath);
   return {
     repository: label,
+    mode: "cold",
     filesEligible: plan.paths.length,
     filesOnDiskEstimate: estimate.files,
     bytesOnDiskEstimate: estimate.bytes,
-    trials: samples.length,
-    snapshotP50Ms: percentile(sorted, 50),
-    snapshotP95Ms: percentile(sorted, 95),
+    ...summarizeSamples(samples),
     blobsAddedTotal: blobsAdded,
     bytesStoredTotal: bytesStored,
     secretScanRejections: secretRejections,
     quiescenceRetryHints,
     planWarnings: plan.warnings.length
   };
+}
+
+function measureWarmAndModified(labelPrefix, fileCount, trials, captureTurnTreeSnapshot) {
+  const repoPath = createFixtureRepo(fileCount, 64);
+  const cachePath = join(tmpdir(), `faultline-measure-cache-${fileCount}-${Date.now()}.json`);
+  const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  try {
+    // Prime cache.
+    captureTurnTreeSnapshot(repoPath, { sleep, sessionCachePath: cachePath, maxQuiescenceAttempts: 4 });
+
+    const warmSamples = [];
+    for (let i = 0; i < trials; i += 1) {
+      const t0 = process.hrtime.bigint();
+      captureTurnTreeSnapshot(repoPath, { sleep, sessionCachePath: cachePath, maxQuiescenceAttempts: 4 });
+      warmSamples.push(Number(process.hrtime.bigint() - t0) / 1e6);
+    }
+
+    const oneFileSamples = [];
+    for (let i = 0; i < trials; i += 1) {
+      writeFileSync(join(repoPath, "f00000.txt"), `one-file-edit-${i}\n${"x".repeat(64)}\n`, "utf8");
+      const t0 = process.hrtime.bigint();
+      captureTurnTreeSnapshot(repoPath, { sleep, sessionCachePath: cachePath, maxQuiescenceAttempts: 4 });
+      oneFileSamples.push(Number(process.hrtime.bigint() - t0) / 1e6);
+    }
+
+    const hundredFileSamples = [];
+    const editCount = Math.min(100, fileCount);
+    for (let i = 0; i < Math.max(3, Math.floor(trials / 2)); i += 1) {
+      for (let n = 0; n < editCount; n += 1) {
+        writeFileSync(
+          join(repoPath, `f${String(n).padStart(5, "0")}.txt`),
+          `hundred-edit-${i}-${n}\n${"y".repeat(64)}\n`,
+          "utf8"
+        );
+      }
+      const t0 = process.hrtime.bigint();
+      captureTurnTreeSnapshot(repoPath, { sleep, sessionCachePath: cachePath, maxQuiescenceAttempts: 4 });
+      hundredFileSamples.push(Number(process.hrtime.bigint() - t0) / 1e6);
+    }
+
+    return [
+      {
+        repository: `${labelPrefix} warm unchanged`,
+        mode: "warm-unchanged",
+        filesEligible: fileCount,
+        ...summarizeSamples(warmSamples),
+        blobsAddedTotal: null,
+        bytesStoredTotal: null,
+        secretScanRejections: 0,
+        quiescenceRetryHints: null,
+        planWarnings: 0
+      },
+      {
+        repository: `${labelPrefix} one-file modified`,
+        mode: "one-file-modified",
+        filesEligible: fileCount,
+        ...summarizeSamples(oneFileSamples),
+        blobsAddedTotal: null,
+        bytesStoredTotal: null,
+        secretScanRejections: 0,
+        quiescenceRetryHints: null,
+        planWarnings: 0
+      },
+      {
+        repository: `${labelPrefix} ${editCount}-file modified`,
+        mode: "multi-file-modified",
+        filesEligible: fileCount,
+        ...summarizeSamples(hundredFileSamples),
+        blobsAddedTotal: null,
+        bytesStoredTotal: null,
+        secretScanRejections: 0,
+        quiescenceRetryHints: null,
+        planWarnings: 0
+      }
+    ];
+  } finally {
+    rmSync(repoPath, { recursive: true, force: true });
+    rmSync(cachePath, { force: true });
+  }
 }
 
 async function main() {
@@ -144,12 +231,13 @@ async function main() {
   const trials = Number(process.env.FAULTLINE_SNAPSHOT_TRIALS ?? "6");
   const rows = [];
   try {
-    rows.push(measureTarget("FaultLine", root, trials, captureTurnTreeSnapshot, planTurnSnapshotPaths, runGit));
+    rows.push(measureCold("FaultLine", root, trials, captureTurnTreeSnapshot, planTurnSnapshotPaths, runGit));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const estimate = walkEligibleEstimate(root);
     rows.push({
       repository: "FaultLine",
+      mode: "cold",
       filesEligible: estimate.files,
       filesOnDiskEstimate: estimate.files,
       bytesOnDiskEstimate: estimate.bytes,
@@ -167,22 +255,30 @@ async function main() {
 
   const fixtures = [];
   try {
-    // Stay under TURN_SNAPSHOT_MAX_FILE_COUNT (2000); a 5k-file tree is rejected by design.
     const medium = createFixtureRepo(1000, 64);
     fixtures.push(medium);
-    rows.push(measureTarget("Medium fixture (1,000)", medium, trials, captureTurnTreeSnapshot, planTurnSnapshotPaths, runGit));
+    rows.push(measureCold("Medium fixture (1,000)", medium, trials, captureTurnTreeSnapshot, planTurnSnapshotPaths, runGit));
+    rows.push(...measureWarmAndModified("Medium fixture (1,000)", 1000, trials, captureTurnTreeSnapshot));
+
     const large = createFixtureRepo(1800, 32);
     fixtures.push(large);
-    rows.push(measureTarget("Large fixture (1,800 under cap)", large, Math.max(3, Math.floor(trials / 2)), captureTurnTreeSnapshot, planTurnSnapshotPaths, runGit));
+    rows.push(measureCold(
+      "Large fixture (1,800 under cap)",
+      large,
+      Math.max(3, Math.floor(trials / 2)),
+      captureTurnTreeSnapshot,
+      planTurnSnapshotPaths,
+      runGit
+    ));
   } finally {
     for (const fixture of fixtures) rmSync(fixture, { recursive: true, force: true });
   }
 
   const report = {
-    schemaVersion: "faultline.turn-snapshot-overhead.v1",
+    schemaVersion: "faultline.turn-snapshot-overhead.v2",
     generatedAt: new Date().toISOString(),
     trialsDefault: trials,
-    note: "Wall-clock captureTurnTreeSnapshot including quiescence. Blob/byte deltas from git count-objects before/after each trial.",
+    note: "Cold path has no session cache. Warm/modified paths use content-fingerprint session cache (v2). Cache is a performance hint only.",
     rows
   };
 
@@ -194,19 +290,20 @@ async function main() {
     "",
     "Measured with `pnpm measure:turn-snapshot` (`scripts/measure-turn-snapshot.mjs`).",
     "",
-    "**Does recording slow Codex?** Each Stop that captures a turn tree pays this cost once (bounded quiescence retries, ignore filters, secret scan, then throwaway index + `write-tree`).",
+    "**Does recording slow Codex?** Each Stop that captures a turn tree pays this cost once. Unchanged dirty trees can reuse a content-fingerprint session cache; porcelain status alone is never enough for reuse.",
     "",
-    `| Repository | Eligible files | Snapshot p50 (ms) | Snapshot p95 (ms) | Blobs added (sum) | Bytes stored (sum) | Secret rejections | Quiescence sleep calls |`,
-    `| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |`,
-    ...rows.map((row) => `| ${row.repository} | ${row.filesEligible} | ${row.snapshotP50Ms?.toFixed(1) ?? "n/a"} | ${row.snapshotP95Ms?.toFixed(1) ?? "n/a"} | ${row.blobsAddedTotal} | ${row.bytesStoredTotal} | ${row.secretScanRejections} | ${row.quiescenceRetryHints} |`),
+    `| Repository | Mode | Eligible files | Snapshot p50 (ms) | Snapshot p95 (ms) | Blobs added (sum) | Bytes stored (sum) | Secret rejections |`,
+    `| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |`,
+    ...rows.map((row) => `| ${row.repository} | ${row.mode ?? "cold"} | ${row.filesEligible} | ${row.snapshotP50Ms?.toFixed(1) ?? "n/a"} | ${row.snapshotP95Ms?.toFixed(1) ?? "n/a"} | ${row.blobsAddedTotal ?? "n/a"} | ${row.bytesStoredTotal ?? "n/a"} | ${row.secretScanRejections} |`),
     "",
     "## Method",
     "",
     `- Trials per target: ${trials} (override with \`FAULTLINE_SNAPSHOT_TRIALS\`)`,
     "- Caps: 1 MiB/file, 32 MiB total, 2000 files (see `src/turn-snapshot.ts`)",
     "- Quiescence: up to 4 dual-tree attempts with 50 ms delay",
-    "- FaultLine row uses this checkout with default ignore rules (`node_modules/`, `.faultline/`, `dist/`, …). If secret scanning refuses the tree, p50/p95 are omitted and the rejection is counted.",
-    "- Synthetic fixtures are tracked-file-only temp repos under the 2000-file hard cap (a 5 000-file tree is rejected by design).",
+    "- Cold: no `sessionCachePath`",
+    "- Warm unchanged / one-file / 100-file modified: content-fingerprint cache (`faultline.turn-snapshot-cache.v2`)",
+    "- FaultLine row uses this checkout with default ignore rules plus reviewed `.faultlineignore` (fixture paths only; lockfiles remain eligible)",
     "",
     "Regenerate: `pnpm measure:turn-snapshot`",
     ""

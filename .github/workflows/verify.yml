@@ -15,10 +15,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: [22, 24]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # The exact pnpm version is pinned in package.json.
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
@@ -27,7 +27,7 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm coverage-matrix
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: faultline-coverage-matrix-${{ matrix.os }}-node${{ matrix.node }}
           if-no-files-found: error
@@ -43,10 +43,10 @@ jobs:
     name: native Docker proof E2E gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # The exact pnpm version is pinned in package.json.
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -66,10 +66,10 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # The exact pnpm version is pinned in package.json.
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -88,7 +88,7 @@ jobs:
         with:
           subject-path: .faultline/provenance/ci-receipt.json
       - name: Publish proof, receipt, and offline verification collateral
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: faultline-ci-provenance-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error

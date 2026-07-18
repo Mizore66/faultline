@@ -1,6 +1,8 @@
 # Reviewed FaultLine turn-snapshot exclusions for this repository.
-# Fixture / sample paths contain intentional secret-shaped strings for tests and demos.
+# Prefer path exclusions over secret-scan bypasses.
+# Environment descriptors (package.json, pnpm-lock.yaml, go.mod, …) remain
+# snapshot-eligible even if listed here — FaultLine will not suppress them.
+#
+# Intentional secret-shaped fixtures for redaction / snapshot tests only:
 tests/
 docs/samples/
-benchmarks/
-pnpm-lock.yaml

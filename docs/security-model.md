@@ -10,8 +10,10 @@ Codex sidecar SessionStart/Stop turn-tree snapshots use a **temporary Git index*
 
 Mitigations:
 
-- Add a repository-root `.faultlineignore` (gitignore syntax) for project-specific exclusions.
+- Add a repository-root `.faultlineignore` (gitignore syntax) for project-specific exclusions. Prefer a minimal reviewed list; `fl init` writes a commented starter that does **not** exclude lockfiles or tests by default.
+- Environment descriptors (`package.json`, lockfiles, `go.mod`/`go.sum`, `Cargo.toml`/`Cargo.lock`, Dockerfiles, tool pins, …) are **protected**: `.faultlineignore` cannot suppress them from turn snapshots, because environment fingerprinting depends on them.
 - Built-in defaults already skip common build/cache trees (`dist/`, `build/`, `.next/`, `coverage/`, …), dependency dirs, and secret-shaped paths.
+- Session snapshot cache reuse requires a content fingerprint over every eligible dirty/untracked path plus the deleted-path set (porcelain status alone is never enough). The cache is a performance hint only; cached Git tree objects must still exist.
 - Hard caps reject oversized snapshots (per-file, total bytes, and file count) before any blob write.
 - Secret scanning (regex + entropy) rejects high-confidence credential material before acceptance.
 - Set `FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY=1` to stage tracked files only.

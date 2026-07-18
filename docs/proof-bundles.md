@@ -98,14 +98,17 @@ This creates synthetic orphan commits from turn `treeDigest`s so existing `minim
 
 ## Prevention proof
 
-Recovery evidence and a stable boundary do not establish prevention. FaultLine packages prevention as `faultline.prevention-proof.v1`. Until creation binds verified run artifacts from the original proof bundle and repaired-state records, the honest classification is **`PREVENTION_EVIDENCE_SUMMARY`** (not “Prevention verified”). After `fl repair`, collect three-state NATIVE_DOCKER facts and run `fl prevention write` — do not overclaim from repair instructions alone.
+Recovery evidence and a stable boundary do not establish prevention. FaultLine packages prevention as `faultline.prevention-proof.v1` with two classifications:
+
+- **`PREVENTION_VERIFIED`** — written via `fl prevention write --from-bundle` (or automatic export after a verified Codex repair) binding last-good/first-bad run IDs from the Git proof bundle plus three repaired-state NATIVE_DOCKER run bindings and the repair patch digest. CLI/UI may say **Prevention verified** only for this classification.
+- **`PREVENTION_EVIDENCE_SUMMARY`** — caller-supplied fields via `fl prevention write --input` without bundle grounding. Do not overclaim from repair instructions alone.
 
 ```powershell
 pnpm fl prevention write --input .\prevention-input.json
 pnpm fl prevention verify .faultline\prevention-proofs\<directory> --expect-root sha256:<recorded-root>
 ```
 
-`fl verify` on a directory whose manifest is `faultline.prevention-proof.v1` prints `Prevention evidence summary` when the package is internally consistent.
+`fl verify` on a directory whose manifest is `faultline.prevention-proof.v1` prints `Prevention verified` or `Prevention evidence summary` according to the package classification.
 
 Attach a verified prevention package to the read-only Git proof page (both flags required):
 

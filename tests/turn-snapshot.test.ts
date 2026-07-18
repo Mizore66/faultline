@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { sha256 } from "../src/canonical.js";
+import { computeEnvironmentFingerprint } from "../src/environment-fingerprint.js";
+import { STARTER_FAULTLINEIGNORE } from "../src/project-init.js";
 import { fileContentDigest, SECRET_ALLOWLIST_SCHEMA_VERSION } from "../src/secret-allowlist.js";
 import {
   TURN_SNAPSHOT_MAX_QUIESCENCE_ATTEMPTS,
@@ -348,7 +350,7 @@ describe("Turn tree snapshot capture", () => {
     }
   });
 
-  it("reuses a session cache when HEAD and statusDigest are unchanged", () => {
+  it("reuses a session cache only when dirty-path content fingerprints match", () => {
     const repository = repositoryFixture();
     // Cache must live outside the worktree so writing it does not change porcelain status.
     const cachePath = join(tmpdir(), `faultline-cache-${Date.now()}.turn-snapshot-cache.json`);
@@ -356,6 +358,7 @@ describe("Turn tree snapshot capture", () => {
       writeFileSync(join(repository, "tracked.txt"), "dirty once\n", "utf8");
       const first = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
       expect(existsSync(cachePath)).toBe(true);
+      expect(JSON.parse(readFileSync(cachePath, "utf8")).schemaVersion).toBe("faultline.turn-snapshot-cache.v2");
 
       let writeTreeCalls = 0;
       const runGit: TurnSnapshotGitRunner = (root, args, env) => {
@@ -368,6 +371,184 @@ describe("Turn tree snapshot capture", () => {
     } finally {
       rmSync(repository, { recursive: true, force: true });
       rmSync(cachePath, { force: true });
+    }
+  });
+
+  it("does not reuse cache when a modified tracked file keeps the same status but changes contents", () => {
+    const repository = repositoryFixture();
+    const cachePath = join(tmpdir(), `faultline-cache-content-${Date.now()}.json`);
+    try {
+      writeFileSync(join(repository, "tracked.txt"), "version A\n", "utf8");
+      const first = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+
+      writeFileSync(join(repository, "tracked.txt"), "version B — still modified, different bytes\n", "utf8");
+      let writeTreeCalls = 0;
+      const runGit: TurnSnapshotGitRunner = (root, args, env) => {
+        if (args[0] === "write-tree") writeTreeCalls += 1;
+        return defaultTurnSnapshotGitRunner(root, args, env);
+      };
+      const second = capture(repository, { sessionCachePath: cachePath, sleep: () => {}, runGit });
+      expect(second.treeDigest).not.toBe(first.treeDigest);
+      expect(writeTreeCalls).toBeGreaterThan(0);
+      const blob = git(repository, ["show", `${second.treeDigest}:tracked.txt`]);
+      expect(blob).toContain("version B");
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+      rmSync(cachePath, { force: true });
+    }
+  });
+
+  it("does not reuse cache when an untracked file keeps the same path but changes contents", () => {
+    const repository = repositoryFixture();
+    const cachePath = join(tmpdir(), `faultline-cache-untracked-${Date.now()}.json`);
+    try {
+      writeFileSync(join(repository, "generated-config.json"), "{\"v\":1}\n", "utf8");
+      const first = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+      writeFileSync(join(repository, "generated-config.json"), "{\"v\":2,\"changed\":true}\n", "utf8");
+      const second = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+      expect(second.treeDigest).not.toBe(first.treeDigest);
+      expect(git(repository, ["show", `${second.treeDigest}:generated-config.json`])).toContain("\"v\":2");
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+      rmSync(cachePath, { force: true });
+    }
+  });
+
+  it("invalidates session cache when .faultlineignore or secret allowlist changes", () => {
+    const repository = repositoryFixture();
+    const cachePath = join(tmpdir(), `faultline-cache-policy-${Date.now()}.json`);
+    try {
+      writeFileSync(join(repository, "tracked.txt"), "dirty\n", "utf8");
+      writeFileSync(join(repository, "scratch.txt"), "keep\n", "utf8");
+      // Keep allowlist out of the turn tree so policy-only changes are isolated.
+      writeFileSync(join(repository, ".faultlineignore"), ".faultline-secret-allowlist.json\n", "utf8");
+      writeFileSync(join(repository, ".faultline-secret-allowlist.json"), `${JSON.stringify({
+        schemaVersion: SECRET_ALLOWLIST_SCHEMA_VERSION,
+        entries: []
+      })}\n`, "utf8");
+      const first = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+      const policyFirst = JSON.parse(readFileSync(cachePath, "utf8")).policyDigest as string;
+
+      writeFileSync(
+        join(repository, ".faultlineignore"),
+        ".faultline-secret-allowlist.json\nscratch.txt\n",
+        "utf8"
+      );
+      let writeTreeCalls = 0;
+      const runGit: TurnSnapshotGitRunner = (root, args, env) => {
+        if (args[0] === "write-tree") writeTreeCalls += 1;
+        return defaultTurnSnapshotGitRunner(root, args, env);
+      };
+      const afterIgnore = capture(repository, { sessionCachePath: cachePath, sleep: () => {}, runGit });
+      expect(afterIgnore.treeDigest).not.toBe(first.treeDigest);
+      expect(writeTreeCalls).toBeGreaterThan(0);
+      expect(git(repository, ["ls-tree", "-r", "--name-only", afterIgnore.treeDigest])).not.toContain("scratch.txt");
+
+      writeTreeCalls = 0;
+      writeFileSync(join(repository, ".faultline-secret-allowlist.json"), `${JSON.stringify({
+        schemaVersion: SECRET_ALLOWLIST_SCHEMA_VERSION,
+        entries: [{
+          path: "never-matches.txt",
+          kind: "OPENAI_API_KEY",
+          occurrenceDigest: `sha256:${"a".repeat(64)}`
+        }]
+      })}\n`, "utf8");
+      const afterAllowlist = capture(repository, { sessionCachePath: cachePath, sleep: () => {}, runGit });
+      const policyAfterAllowlist = JSON.parse(readFileSync(cachePath, "utf8")).policyDigest as string;
+      expect(policyAfterAllowlist).not.toBe(policyFirst);
+      expect(writeTreeCalls).toBeGreaterThan(0);
+      // Worktree contents unchanged aside from ignored allowlist → same tree as afterIgnore.
+      expect(afterAllowlist.treeDigest).toBe(afterIgnore.treeDigest);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+      rmSync(cachePath, { force: true });
+    }
+  });
+
+  it("invalidates session cache when tracked-files-only mode changes", () => {
+    const repository = repositoryFixture();
+    const cachePath = join(tmpdir(), `faultline-cache-mode-${Date.now()}.json`);
+    try {
+      writeFileSync(join(repository, "tracked.txt"), "dirty\n", "utf8");
+      writeFileSync(join(repository, "untracked-only.txt"), "noise\n", "utf8");
+      const all = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+      const trackedOnly = capture(repository, {
+        sessionCachePath: cachePath,
+        sleep: () => {},
+        trackedFilesOnly: true
+      });
+      expect(trackedOnly.treeDigest).not.toBe(all.treeDigest);
+      expect(git(repository, ["ls-tree", "-r", "--name-only", trackedOnly.treeDigest])).not.toContain("untracked-only.txt");
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+      rmSync(cachePath, { force: true });
+    }
+  });
+
+  it("records distinct trees across delete and recreate of the same path", () => {
+    const repository = repositoryFixture();
+    const cachePath = join(tmpdir(), `faultline-cache-del-${Date.now()}.json`);
+    try {
+      writeFileSync(join(repository, "ephemeral.txt"), "first\n", "utf8");
+      const withFile = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+      rmSync(join(repository, "ephemeral.txt"), { force: true });
+      const deleted = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+      expect(deleted.treeDigest).not.toBe(withFile.treeDigest);
+      writeFileSync(join(repository, "ephemeral.txt"), "recreated\n", "utf8");
+      const recreated = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+      expect(recreated.treeDigest).not.toBe(deleted.treeDigest);
+      expect(recreated.treeDigest).not.toBe(withFile.treeDigest);
+      expect(git(repository, ["show", `${recreated.treeDigest}:ephemeral.txt`])).toBe("recreated");
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+      rmSync(cachePath, { force: true });
+    }
+  });
+
+  it("keeps lockfiles snapshot-eligible even when .faultlineignore lists them", () => {
+    const repository = repositoryFixture();
+    try {
+      writeFileSync(join(repository, ".faultlineignore"), "pnpm-lock.yaml\npackage.json\n", "utf8");
+      writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+      writeFileSync(join(repository, "package.json"), "{\"name\":\"demo\",\"version\":\"1.0.0\"}\n", "utf8");
+      const warnings: string[] = [];
+      const snapshot = capture(repository, {
+        sleep: () => {},
+        onWarning: (warning) => warnings.push(warning)
+      });
+      const paths = git(repository, ["ls-tree", "-r", "--name-only", snapshot.treeDigest]).split("\n");
+      expect(paths).toContain("pnpm-lock.yaml");
+      expect(paths).toContain("package.json");
+      expect(warnings.some((warning) => /Protected environment descriptor/i.test(warning))).toBe(true);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("starter ignore does not suppress lockfiles, and lockfile edits change environment fingerprints", () => {
+    const repository = repositoryFixture();
+    try {
+      expect(STARTER_FAULTLINEIGNORE).not.toMatch(/^pnpm-lock\.yaml$/m);
+      expect(STARTER_FAULTLINEIGNORE).not.toMatch(/^package-lock\.json$/m);
+      writeFileSync(join(repository, ".faultlineignore"), STARTER_FAULTLINEIGNORE, "utf8");
+      writeFileSync(join(repository, "package.json"), "{\"name\":\"demo\"}\n", "utf8");
+      writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nA\n", "utf8");
+      git(repository, ["add", "package.json", "pnpm-lock.yaml", ".faultlineignore"]);
+      git(repository, ["commit", "-m", "lock A"]);
+
+      const baselineFp = computeEnvironmentFingerprint(repository);
+      const snapA = capture(repository, { sleep: () => {} });
+      expect(git(repository, ["ls-tree", "-r", "--name-only", snapA.treeDigest])).toContain("pnpm-lock.yaml");
+
+      writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nB-changed\n", "utf8");
+      const snapB = capture(repository, { sleep: () => {} });
+      expect(snapB.treeDigest).not.toBe(snapA.treeDigest);
+      expect(git(repository, ["show", `${snapB.treeDigest}:pnpm-lock.yaml`])).toContain("B-changed");
+      const turnFp = computeEnvironmentFingerprint(repository);
+      expect(turnFp.digest).not.toBe(baselineFp.digest);
+      expect(turnFp.files["pnpm-lock.yaml"]).not.toBe(baselineFp.files["pnpm-lock.yaml"]);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
     }
   });
 });

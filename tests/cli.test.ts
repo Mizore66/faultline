@@ -1075,7 +1075,10 @@ describe("FaultLine CLI workflows", () => {
       expect(appliedPayload.sidecar.status).toBe("INSTALLED");
       expect(appliedPayload.ignoreFile.status).toBe("CREATED");
       expect(existsSync(join(repository, ".codex", "hooks.json"))).toBe(true);
-      expect(readFileSync(join(repository, ".faultlineignore"), "utf8")).toContain("tests/");
+      const ignoreText = readFileSync(join(repository, ".faultlineignore"), "utf8");
+      expect(ignoreText).toMatch(/environment descriptors|lockfiles/i);
+      expect(ignoreText).not.toMatch(/^pnpm-lock\.yaml$/m);
+      expect(ignoreText).not.toMatch(/^tests\/$/m);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

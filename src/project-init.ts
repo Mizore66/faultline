@@ -24,12 +24,15 @@ export type ProjectInitResult = {
 export const STARTER_FAULTLINEIGNORE = [
   "# Reviewed FaultLine turn-snapshot exclusions (edit carefully).",
   "# Prefer path exclusions over secret-scan bypasses.",
-  "tests/",
-  "docs/samples/",
-  "benchmarks/",
-  "pnpm-lock.yaml",
-  "package-lock.json",
-  "yarn.lock",
+  "#",
+  "# Do NOT ignore environment descriptors (lockfiles, package.json, go.mod,",
+  "# Cargo.lock, Dockerfiles, …). FaultLine refuses to suppress them for",
+  "# turn snapshots because they drive environment fingerprinting.",
+  "#",
+  "# Add only paths that must not enter the object database (local secrets,",
+  "# huge generated artifacts). Example:",
+  "#   scratch/",
+  "#   local-secrets/",
   ""
 ].join("\n");
 

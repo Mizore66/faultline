@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { digestJson, sha256 } from "./canonical.js";
 import { DOCTOR_SAFE_GIT_CONFIG } from "./doctor.js";
+import { ENVIRONMENT_DESCRIPTOR_FILES } from "./environment-fingerprint.js";
 import { redactText } from "./redaction.js";
 import {
   allowlistConfigDigest,
@@ -221,24 +222,38 @@ export type CaptureTurnTreeSnapshotOptions = {
   maxFileCount?: number;
   onWarning?: (warning: string) => void;
   /**
-   * Optional session cache path (sidecar recordings dir). When status+HEAD match
-   * the previous accepted capture, FaultLine reuses the tree digest and skips
-   * dual secret-scan / write-tree work.
+   * Optional session cache path (sidecar recordings dir). Cache is a performance
+   * hint only: reuse requires HEAD + policy + dirty-path content fingerprints,
+   * not porcelain status alone (status does not encode file contents).
    */
   sessionCachePath?: string;
 };
 
+const PathCacheEntrySchema = z.object({
+  status: z.string().min(1).max(8),
+  contentDigest: HashSchema
+}).strict();
+
+/** v2: content-aware cache; v1 caches are ignored (status-only was unsafe). */
 const TurnSnapshotSessionCacheSchema = z.object({
-  schemaVersion: z.literal("faultline.turn-snapshot-cache.v1"),
+  schemaVersion: z.literal("faultline.turn-snapshot-cache.v2"),
   headCommit: GitObjectIdSchema,
   treeDigest: GitObjectIdSchema,
-  statusDigest: HashSchema,
+  policyDigest: HashSchema,
   allowlistDigest: HashSchema,
+  contentFingerprint: HashSchema,
+  deletedPaths: z.array(z.string()).max(2_000),
+  paths: z.record(z.string(), PathCacheEntrySchema),
   pathDigests: z.record(z.string(), HashSchema),
   capturedAt: CanonicalTimestampSchema
 }).strict();
 
 type TurnSnapshotSessionCache = z.infer<typeof TurnSnapshotSessionCacheSchema>;
+type DirtyContentFingerprint = {
+  readonly contentFingerprint: string;
+  readonly deletedPaths: readonly string[];
+  readonly paths: Readonly<Record<string, { status: string; contentDigest: string }>>;
+};
 
 type IgnoreRule = {
   readonly raw: string;
@@ -300,6 +315,135 @@ function isIgnoredByRules(relativePath: string, rules: readonly IgnoreRule[]): b
     if (rule.regex.test(path)) ignored = !rule.negated;
   }
   return ignored;
+}
+
+/**
+ * Environment descriptors must remain snapshot-eligible even when listed in
+ * `.faultlineignore`. Suppressing them would hide lockfile/tooling changes from
+ * turn trees and falsely report environment homogeneity.
+ */
+export function isProtectedEnvironmentDescriptorPath(relativePath: string): boolean {
+  const normalized = normalizeRepoRelativePath(relativePath);
+  const base = normalized.includes("/") ? normalized.slice(normalized.lastIndexOf("/") + 1) : normalized;
+  if ((ENVIRONMENT_DESCRIPTOR_FILES as readonly string[]).includes(base)) return true;
+  if (/^Dockerfile(?:\..+)?$/i.test(base)) return true;
+  if (/^(?:docker-)?compose\.(?:ya?ml)$/i.test(base)) return true;
+  return false;
+}
+
+function pathIsSnapshotExcluded(relativePath: string, rules: readonly IgnoreRule[]): boolean {
+  if (isProtectedEnvironmentDescriptorPath(relativePath)) return false;
+  return isIgnoredByRules(relativePath, rules);
+}
+
+function fullFileContentDigest(absolutePath: string): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(readFileSync(absolutePath)).digest("hex")}`;
+}
+
+function ignorePolicyDigest(repositoryRoot: string): string {
+  const ignorePath = join(repositoryRoot, ".faultlineignore");
+  const userIgnore = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
+  return digestJson({
+    defaults: TURN_SNAPSHOT_DEFAULT_IGNORE_PATTERNS,
+    userIgnore,
+    protectedDescriptors: ENVIRONMENT_DESCRIPTOR_FILES
+  });
+}
+
+function snapshotPolicyDigest(options: {
+  repositoryRoot: string;
+  allowlistDigest: string;
+  trackedFilesOnly: boolean;
+  maxFileBytes: number;
+  maxTotalBytes: number;
+  maxFileCount: number;
+}): string {
+  return digestJson({
+    ignorePolicy: ignorePolicyDigest(options.repositoryRoot),
+    allowlistDigest: options.allowlistDigest,
+    trackedFilesOnly: options.trackedFilesOnly,
+    maxFileBytes: options.maxFileBytes,
+    maxTotalBytes: options.maxTotalBytes,
+    maxFileCount: options.maxFileCount
+  });
+}
+
+type PorcelainPath = { readonly status: string; readonly path: string };
+
+/** Parse `git status --porcelain=v1 -z` into path/status pairs (renames use the destination path). */
+export function parsePorcelainStatusZ(status: string): readonly PorcelainPath[] {
+  const parts = status.split("\0").filter(Boolean);
+  const out: PorcelainPath[] = [];
+  for (let index = 0; index < parts.length; index += 1) {
+    const record = parts[index]!;
+    if (record.length < 3) continue;
+    const xy = record.slice(0, 2);
+    const pathPart = record.slice(3);
+    if (xy.startsWith("R") || xy.startsWith("C")) {
+      const destination = parts[index + 1];
+      if (destination === undefined) continue;
+      out.push({ status: xy, path: normalizeRepoRelativePath(destination) });
+      index += 1;
+      continue;
+    }
+    out.push({ status: xy, path: normalizeRepoRelativePath(pathPart) });
+  }
+  return out;
+}
+
+/**
+ * Content fingerprint over dirty / untracked / deleted eligible paths.
+ * Porcelain status alone is never sufficient for cache validity.
+ */
+export function computeDirtyContentFingerprint(
+  repositoryRoot: string,
+  statusPorcelain: string,
+  options: { trackedFilesOnly?: boolean; ignoreRules?: readonly IgnoreRule[] } = {}
+): DirtyContentFingerprint {
+  const ignoreRules = options.ignoreRules ?? loadFaultlineIgnoreRules(repositoryRoot);
+  const trackedFilesOnly = options.trackedFilesOnly === true;
+  const paths: Record<string, { status: string; contentDigest: string }> = {};
+  const deletedPaths: string[] = [];
+
+  for (const entry of parsePorcelainStatusZ(statusPorcelain)) {
+    if (trackedFilesOnly && entry.status === "??") continue;
+    if (pathIsSnapshotExcluded(entry.path, ignoreRules)) continue;
+    const absolutePath = join(repositoryRoot, ...entry.path.split("/"));
+    const missing = entry.status.includes("D") || !existsSync(absolutePath);
+    if (missing) {
+      deletedPaths.push(entry.path);
+      continue;
+    }
+    try {
+      const stat = lstatSync(absolutePath);
+      if (stat.isSymbolicLink() || !stat.isFile()) continue;
+      paths[entry.path] = {
+        status: entry.status,
+        contentDigest: fullFileContentDigest(absolutePath)
+      };
+    } catch {
+      deletedPaths.push(entry.path);
+    }
+  }
+
+  deletedPaths.sort((left, right) => left.localeCompare(right));
+  const sortedPaths = Object.fromEntries(
+    Object.entries(paths).sort(([left], [right]) => left.localeCompare(right))
+  );
+  return {
+    contentFingerprint: digestJson({ paths: sortedPaths, deletedPaths }),
+    deletedPaths,
+    paths: sortedPaths
+  };
+}
+
+function gitTreeObjectExists(runGit: TurnSnapshotGitRunner, repositoryRoot: string, treeDigest: string): boolean {
+  try {
+    runGit(repositoryRoot, ["cat-file", "-e", `${treeDigest}^{tree}`]);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function loadFaultlineIgnoreRules(repositoryRoot: string): IgnoreRule[] {
@@ -516,7 +660,14 @@ export function planTurnSnapshotPaths(
   const candidates: SnapshotCandidate[] = [];
 
   for (const relativePath of [...tracked, ...untracked]) {
-    if (isIgnoredByRules(relativePath, ignoreRules)) continue;
+    const ignored = isIgnoredByRules(relativePath, ignoreRules);
+    const protectedDescriptor = isProtectedEnvironmentDescriptorPath(relativePath);
+    if (ignored && !protectedDescriptor) continue;
+    if (ignored && protectedDescriptor) {
+      warnings.push(
+        `Protected environment descriptor remains snapshot-eligible despite .faultlineignore: ${relativePath}`
+      );
+    }
     const absolutePath = join(repositoryRoot, ...relativePath.split("/"));
     let exists = false;
     let bytes = 0;
@@ -678,8 +829,9 @@ function writeThrowawayTreeDigest(
  *
  * Quiescence is proven by dual tree capture with status brackets and bounded
  * retries; exhaustion fails closed rather than returning a torn snapshot.
- * When `sessionCachePath` matches HEAD + statusDigest + allowlistDigest, the
- * previous tree digest is reused after a status re-check (no dual write-tree).
+ * When `sessionCachePath` matches HEAD + policyDigest + dirty content
+ * fingerprint (and the cached tree object still exists), the previous tree
+ * digest is reused after a delayed content re-check (no dual write-tree).
  */
 export function captureTurnTreeSnapshot(
   repository: string,
@@ -692,6 +844,10 @@ export function captureTurnTreeSnapshot(
     ?? TURN_SNAPSHOT_QUIESCENCE_DELAY_MS;
   const maxQuiescenceAttempts = options.maxQuiescenceAttempts ?? TURN_SNAPSHOT_MAX_QUIESCENCE_ATTEMPTS;
   const now = options.now ?? (() => new Date());
+  const trackedFilesOnly = options.trackedFilesOnly === true;
+  const maxFileBytes = options.maxFileBytes ?? TURN_SNAPSHOT_MAX_FILE_BYTES;
+  const maxTotalBytes = options.maxTotalBytes ?? TURN_SNAPSHOT_MAX_TOTAL_BYTES;
+  const maxFileCount = options.maxFileCount ?? TURN_SNAPSHOT_MAX_FILE_COUNT;
 
   if (!Number.isInteger(maxQuiescenceAttempts) || maxQuiescenceAttempts < 1) {
     throw new TurnSnapshotError("Turn tree snapshot quiescence attempt budget must be a positive integer.");
@@ -713,13 +869,23 @@ export function captureTurnTreeSnapshot(
     );
   }
   const allowlistDigest = allowlistConfigDigest(allowlist);
+  const policyDigest = snapshotPolicyDigest({
+    repositoryRoot,
+    allowlistDigest,
+    trackedFilesOnly,
+    maxFileBytes,
+    maxTotalBytes,
+    maxFileCount
+  });
   const previousCache = loadSessionCache(options.sessionCachePath);
+  const ignoreRules = loadFaultlineIgnoreRules(repositoryRoot);
 
   let acceptedTree: string | null = null;
   let acceptedStatus: string | null = null;
   let acceptedHead: string | null = null;
   let acceptedWarnings: readonly string[] = [];
   let acceptedPathDigests: Readonly<Record<string, string>> = {};
+  let acceptedDirtyFingerprint: DirtyContentFingerprint | null = null;
 
   for (let attempt = 1; attempt <= maxQuiescenceAttempts; attempt += 1) {
     const headBefore = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();
@@ -727,23 +893,36 @@ export function captureTurnTreeSnapshot(
       throw new TurnSnapshotError("Git did not return a resolvable HEAD commit for this turn tree snapshot.");
     }
     const statusBeforeA = sampleStatus();
-    const statusDigestCandidate = `sha256:${sha256(statusBeforeA)}`;
+    const dirtyBefore = computeDirtyContentFingerprint(repositoryRoot, statusBeforeA, {
+      trackedFilesOnly,
+      ignoreRules
+    });
 
     if (
       previousCache !== null
       && previousCache.headCommit === headBefore
-      && previousCache.statusDigest === statusDigestCandidate
-      && previousCache.allowlistDigest === allowlistDigest
+      && previousCache.policyDigest === policyDigest
+      && previousCache.contentFingerprint === dirtyBefore.contentFingerprint
+      && gitTreeObjectExists(runGit, repositoryRoot, previousCache.treeDigest)
     ) {
       sleep(quiescenceDelayMs);
       const statusAfterCache = sampleStatus();
       const headAfterCache = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();
-      if (statusAfterCache === statusBeforeA && headAfterCache === headBefore) {
+      const dirtyAfter = computeDirtyContentFingerprint(repositoryRoot, statusAfterCache, {
+        trackedFilesOnly,
+        ignoreRules
+      });
+      if (
+        headAfterCache === headBefore
+        && dirtyAfter.contentFingerprint === dirtyBefore.contentFingerprint
+        && gitTreeObjectExists(runGit, repositoryRoot, previousCache.treeDigest)
+      ) {
         acceptedTree = previousCache.treeDigest;
         acceptedStatus = statusAfterCache;
         acceptedHead = headAfterCache;
         acceptedWarnings = [];
         acceptedPathDigests = previousCache.pathDigests;
+        acceptedDirtyFingerprint = dirtyAfter;
         break;
       }
     }
@@ -760,6 +939,13 @@ export function captureTurnTreeSnapshot(
     });
     const statusAfterA = sampleStatus();
     if (statusBeforeA !== statusAfterA) {
+      continue;
+    }
+    const dirtyAfterA = computeDirtyContentFingerprint(repositoryRoot, statusAfterA, {
+      trackedFilesOnly,
+      ignoreRules
+    });
+    if (dirtyAfterA.contentFingerprint !== dirtyBefore.contentFingerprint) {
       continue;
     }
 
@@ -786,16 +972,24 @@ export function captureTurnTreeSnapshot(
     if (headBefore !== headAfter) {
       continue;
     }
+    const dirtyAfterB = computeDirtyContentFingerprint(repositoryRoot, statusAfterB, {
+      trackedFilesOnly,
+      ignoreRules
+    });
+    if (dirtyAfterB.contentFingerprint !== dirtyBefore.contentFingerprint) {
+      continue;
+    }
 
     acceptedTree = second.treeDigest;
     acceptedStatus = statusAfterB;
     acceptedHead = headAfter;
     acceptedWarnings = second.warnings;
     acceptedPathDigests = second.pathDigests;
+    acceptedDirtyFingerprint = dirtyAfterB;
     break;
   }
 
-  if (acceptedTree === null || acceptedStatus === null || acceptedHead === null) {
+  if (acceptedTree === null || acceptedStatus === null || acceptedHead === null || acceptedDirtyFingerprint === null) {
     throw new TurnSnapshotError(
       `FaultLine could not prove turn-tree quiescence after ${maxQuiescenceAttempts} dual-tree attempt(s) and refused a torn turn tree snapshot.`
     );
@@ -807,11 +1001,14 @@ export function captureTurnTreeSnapshot(
 
   const capturedAt = now().toISOString();
   writeSessionCache(options.sessionCachePath, {
-    schemaVersion: "faultline.turn-snapshot-cache.v1",
+    schemaVersion: "faultline.turn-snapshot-cache.v2",
     headCommit: acceptedHead,
     treeDigest: acceptedTree,
-    statusDigest: `sha256:${sha256(acceptedStatus)}`,
+    policyDigest,
     allowlistDigest,
+    contentFingerprint: acceptedDirtyFingerprint.contentFingerprint,
+    deletedPaths: [...acceptedDirtyFingerprint.deletedPaths],
+    paths: { ...acceptedDirtyFingerprint.paths },
     pathDigests: { ...acceptedPathDigests },
     capturedAt
   });

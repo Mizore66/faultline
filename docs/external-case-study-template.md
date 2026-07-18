@@ -29,24 +29,29 @@ Partner runbook: [partners/mumbcs-faultline-guide.md](partners/mumbcs-faultline-
 | Approximate size (files / LOC / packages) | |
 | Named publicly? | |
 | Original symptom | |
-| Setup time | |
+| Setup / installation time | |
 | Assistance required (none / light / facilitated) | |
+| Ecosystem + approximate size | language(s), packages, files/LOC |
+| Snapshot overhead observed | cold / warm / one-file edit (qualitative or ms) |
 | Recorded turns or states | |
 | Frozen-witness digest | `sha256:…` |
 | Overlay path (immutable) | e.g. `.faultline-witness/check-slug.mjs` |
 | Production module exercised | e.g. `src/utils/slug.ts` (not a shadow copy) |
 | Overlay hash stable through Turn 3? | yes / no |
-| Located transition | e.g. Turn 3 PASS→FAIL |
+| Exact stable transition found | e.g. Turn 3 PASS→FAIL (adjacent compatible) |
+| Offline verification succeeded? | yes / no — command + root digest |
+| Minimization succeeded? | yes / no / not attempted |
 | Proof-package root digest | `sha256:…` |
 | Partner independently verified root? | yes / no |
 | Evidence grade | `EXPERIMENTAL_TURN` / `COMMIT_PROOF` |
 | Organic incident or scripted protocol run? | |
+| Unexpected failure / rough edges | |
 | Changed developer’s diagnosis? | yes / no — how |
 | Time from freeze → verified boundary | |
 | Would use on a naturally occurring failure? | yes / no |
 | Codex repair outcome | none / drafted / verified candidate / N/A |
+| Approved quote (critical or mixed preferred) | |
 | One criticism (required) | |
-| Rough edges / failures | |
 
 ## Onboarding metrics (product experience)
 

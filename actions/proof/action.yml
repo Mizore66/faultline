@@ -44,11 +44,11 @@ runs:
         root="$(cd "${{ github.action_path }}/../.." && pwd)"
         echo "root=$root" >> "$GITHUB_OUTPUT"
     - name: Set up pnpm
-      uses: pnpm/action-setup@v4
+      uses: pnpm/action-setup@v6
       with:
         version: 10.32.1
     - name: Set up Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v5
       with:
         node-version: 22
         cache: pnpm
@@ -74,7 +74,7 @@ runs:
       run: node "$FAULTLINE_ACTION_PATH/scripts/run-action.mjs"
     - name: Upload proof package
       if: ${{ steps.run.outputs.proof-package != '' }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: ${{ inputs.artifact-name }}
         path: ${{ steps.run.outputs.proof-package }}
