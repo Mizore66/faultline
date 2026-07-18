@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { sha256 } from "../src/canonical.js";
+import { fileContentDigest, SECRET_ALLOWLIST_SCHEMA_VERSION } from "../src/secret-allowlist.js";
 import {
   TURN_SNAPSHOT_MAX_QUIESCENCE_ATTEMPTS,
   TURN_SNAPSHOT_QUIESCENCE_DELAY_MS,
@@ -299,5 +301,73 @@ describe("Turn tree snapshot capture", () => {
     const second = signTurnTreeSnapshot(unsigned);
     expect(first.digest).toBe(second.digest);
     expect(verifyTurnTreeSnapshot(first)).toEqual([]);
+  });
+
+  it("reports path and rule kind when rejecting secrets", () => {
+    const repository = repositoryFixture();
+    try {
+      writeFileSync(join(repository, "leaked.txt"), "token = sk-proj-abcdefghijklmnopqrstuvwxyz012345\n", "utf8");
+      expect(() => capture(repository)).toThrow(/leaked\.txt.*OPENAI_API_KEY|OPENAI_API_KEY.*leaked\.txt/is);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("allows a digest-bound secret allowlist entry and rejects wrong digests", () => {
+    const repository = repositoryFixture();
+    try {
+      const token = "sk-proj-abcdefghijklmnopqrstuvwxyz012345";
+      const content = `token = ${token}\n`;
+      writeFileSync(join(repository, "fixture-key.txt"), content, "utf8");
+      const absolute = join(repository, "fixture-key.txt");
+      writeFileSync(join(repository, ".faultline-secret-allowlist.json"), `${JSON.stringify({
+        schemaVersion: SECRET_ALLOWLIST_SCHEMA_VERSION,
+        entries: [{
+          path: "fixture-key.txt",
+          kind: "OPENAI_API_KEY",
+          occurrenceDigest: `sha256:${sha256(token)}`,
+          fileDigest: fileContentDigest(absolute, 256 * 1024),
+          note: "Reviewed test fixture"
+        }]
+      }, null, 2)}\n`, "utf8");
+      const snapshot = capture(repository);
+      expect(snapshot.dirty).toBe(true);
+      expect(git(repository, ["ls-tree", "-r", "--name-only", snapshot.treeDigest])).toContain("fixture-key.txt");
+
+      writeFileSync(join(repository, ".faultline-secret-allowlist.json"), `${JSON.stringify({
+        schemaVersion: SECRET_ALLOWLIST_SCHEMA_VERSION,
+        entries: [{
+          path: "fixture-key.txt",
+          kind: "OPENAI_API_KEY",
+          occurrenceDigest: `sha256:${"0".repeat(64)}`
+        }]
+      }, null, 2)}\n`, "utf8");
+      expect(() => capture(repository)).toThrow(/OPENAI_API_KEY|secret material/i);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses a session cache when HEAD and statusDigest are unchanged", () => {
+    const repository = repositoryFixture();
+    // Cache must live outside the worktree so writing it does not change porcelain status.
+    const cachePath = join(tmpdir(), `faultline-cache-${Date.now()}.turn-snapshot-cache.json`);
+    try {
+      writeFileSync(join(repository, "tracked.txt"), "dirty once\n", "utf8");
+      const first = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+      expect(existsSync(cachePath)).toBe(true);
+
+      let writeTreeCalls = 0;
+      const runGit: TurnSnapshotGitRunner = (root, args, env) => {
+        if (args[0] === "write-tree") writeTreeCalls += 1;
+        return defaultTurnSnapshotGitRunner(root, args, env);
+      };
+      const second = capture(repository, { sessionCachePath: cachePath, sleep: () => {}, runGit });
+      expect(second.treeDigest).toBe(first.treeDigest);
+      expect(writeTreeCalls).toBe(0);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+      rmSync(cachePath, { force: true });
+    }
   });
 });

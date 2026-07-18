@@ -19,6 +19,7 @@ import {
   writeCodexLifecycleLedgerAtomic
 } from "../src/ledger.js";
 import type { SandboxCommandRunner } from "../src/sandbox.js";
+import { codexSidecarLedgerPath } from "../src/codex-sidecar.js";
 import { captureTurnTreeSnapshot } from "../src/turn-snapshot.js";
 import { formatWitnessResult } from "../src/witness-result.js";
 import {
@@ -1024,6 +1025,131 @@ describe("FaultLine CLI workflows", () => {
         || payload.investigation?.proof.evidenceGrade === "NONE"
       ).toBe(true);
       expect(payload.investigation?.proof.isProof).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("plans fl init without writing hooks, and applies ignore + hooks with --yes", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-init-"));
+    const repository = join(directory, "repo");
+    try {
+      git(directory, ["init", "repo"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine"]);
+      writeFileSync(join(repository, "package.json"), "{\"name\":\"demo\"}\n", "utf8");
+      git(repository, ["add", "package.json"]);
+      git(repository, ["commit", "-m", "init"]);
+
+      const builtCli = join(workspace, "dist", "cli.js");
+      if (!existsSync(builtCli)) {
+        mkdirSync(dirname(builtCli), { recursive: true });
+        writeFileSync(builtCli, "#!/usr/bin/env node\nexport {};\n", "utf8");
+      }
+
+      const plan = runFl(["init", "--repo", repository, "--cli", builtCli, "--runtime", "node"], { cwd: directory });
+      expect(plan.status).toBe(0);
+      const planPayload = JSON.parse(plan.stdout) as {
+        status: string;
+        sidecar: { status: string };
+        ignoreFile: { status: string };
+        suggestedRuntime: string;
+      };
+      expect(planPayload.status).toBe("INIT_PLAN");
+      expect(planPayload.suggestedRuntime).toBe("node");
+      expect(planPayload.sidecar.status).toBe("PREVIEW_REQUIRED");
+      expect(planPayload.ignoreFile.status).toBe("SKIPPED");
+      expect(existsSync(join(repository, ".codex", "hooks.json"))).toBe(false);
+      expect(existsSync(join(repository, ".faultlineignore"))).toBe(false);
+
+      const applied = runFl([
+        "init", "--repo", repository, "--cli", builtCli, "--runtime", "node", "--yes"
+      ], { cwd: directory });
+      expect(applied.status).toBe(0);
+      const appliedPayload = JSON.parse(applied.stdout) as {
+        status: string;
+        sidecar: { status: string };
+        ignoreFile: { status: string };
+      };
+      expect(appliedPayload.status).toBe("INIT_APPLIED");
+      expect(appliedPayload.sidecar.status).toBe("INSTALLED");
+      expect(appliedPayload.ignoreFile.status).toBe("CREATED");
+      expect(existsSync(join(repository, ".codex", "hooks.json"))).toBe(true);
+      expect(readFileSync(join(repository, ".faultlineignore"), "utf8")).toContain("tests/");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves fl investigate turns --latest to a unique sidecar ledger", () => {
+    const directory = mkdtempSync(join(tmpdir(), "faultline-cli-turns-latest-"));
+    const repository = join(directory, "repo");
+    try {
+      git(directory, ["init", "repo"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine"]);
+      writeFileSync(join(repository, "state.txt"), "good\n", "utf8");
+      git(repository, ["add", "state.txt"]);
+      git(repository, ["commit", "-m", "good"]);
+
+      const sessionId = "latest-session-1";
+      let ledger = createCodexLifecycleLedger({ sessionId });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "SESSION_STARTED",
+        payload: { transport: "SIDE_CAR", workingDirectory: repository }
+      });
+      const snap = captureTurnTreeSnapshot(repository).snapshot;
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_STARTED",
+        payload: { turnId: "t1", turnOrdinal: 1, promptDigest: `sha256:${"a".repeat(64)}` }
+      });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_COMPLETED",
+        payload: { turnId: "t1", turnOrdinal: 1, outcome: "COMPLETED" }
+      });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "TURN_TREE_SNAPSHOT",
+        payload: { turnId: "t1", turnOrdinal: 1, snapshot: snap }
+      });
+
+      const ledgerPath = codexSidecarLedgerPath(repository, sessionId);
+      mkdirSync(dirname(ledgerPath), { recursive: true });
+      writeCodexLifecycleLedgerAtomic(ledgerPath, ledger);
+
+      const store = join(directory, "witnesses");
+      const frozen = createRepairWitness(store);
+      const both = runFl([
+        "investigate", "turns",
+        "--repo", repository,
+        "--ledger", ledgerPath,
+        "--latest",
+        "--proposal", frozen.proposal.proposalId,
+        "--expect-digest", frozen.frozenDigest,
+        "--image", pinnedImage,
+        "--store", store
+      ], { cwd: directory });
+      expect(both.status).not.toBe(0);
+      expect(both.stderr + both.stdout).toMatch(/exactly one of --ledger|--latest/i);
+
+      const result = runFl([
+        "investigate", "turns",
+        "--repo", repository,
+        "--latest",
+        "--proposal", frozen.proposal.proposalId,
+        "--expect-digest", frozen.frozenDigest,
+        "--image", pinnedImage,
+        "--store", store
+      ], { cwd: directory });
+      expect(result.status).toBe(1);
+      const payload = JSON.parse(result.stdout) as {
+        ledger?: { ledgerPath: string; sessionId?: string };
+        investigation?: { states: unknown[] };
+        proofBundle: null | unknown;
+      };
+      expect(payload.ledger?.ledgerPath).toBe(ledgerPath);
+      expect(payload.ledger?.sessionId).toBe(sessionId);
+      expect(payload.proofBundle).toBeNull();
+      expect(payload.investigation?.states.length).toBeGreaterThanOrEqual(1);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

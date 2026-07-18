@@ -33,7 +33,14 @@ import {
   writeCommitProofPreview
 } from "./judge-proof.js";
 import { captureCleanGitSnapshot, writeGitSidecarSnapshot } from "./git-snapshot.js";
-import { codexSidecarLedgerPath, inspectObservedCodexSidecar, recordObservedCodexHook } from "./codex-sidecar.js";
+import {
+  CodexSidecarError,
+  codexSidecarLedgerPath,
+  inspectObservedCodexSidecar,
+  recordObservedCodexHook,
+  resolveLatestSidecarLedgerPath
+} from "./codex-sidecar.js";
+import { planProjectInit, type ProjectInitRuntime } from "./project-init.js";
 import { GitInvestigationResultSchema, investigateGitRange } from "./git-investigation.js";
 import {
   defaultGitProofRoot,
@@ -117,13 +124,14 @@ Usage:
   fl --version
   fl judge-preview [--output <static-preview.html>]
   fl doctor [--repo <directory>] [--json] [--proof-ready]
+  fl init [--repo <directory>] [--cli <built-cli.js>] [--runtime <node|python|go>] [--yes]
   fl incident suggest --repo <directory>
   fl incident start --repo <directory> (--command <failing-command> | --command-file <utf8-file>) [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--store <directory>]
   fl incident status <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--expect-digest <sha256:...>]
   fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>] [--unsafe-local]
   fl investigate --ci-log <file> --repo <directory> [--command <failing-command>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--id <safe-id>] [--unsafe-local]
   fl investigate --resume <incident-id> --repo <directory> [--expect-digest <sha256:...>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--unsafe-local]
-  fl investigate turns --repo <directory> --ledger <ledger.json> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--runtime-mapping <mapping.json>] [--output <managed-bundle-directory>] [--minimize] [--transition <index>] [--max-executions <count>]
+  fl investigate turns --repo <directory> (--ledger <ledger.json> | --latest) --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--runtime-mapping <mapping.json>] [--output <managed-bundle-directory>] [--minimize] [--transition <index>] [--max-executions <count>]
   fl prove transition <turn-proof-bundle-directory> --repo <directory> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--transition <index>] [--max-executions <count>] [--output <managed-result.json>]
   fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]
   fl runtime resolve <node|python|go>
@@ -1481,12 +1489,67 @@ async function codexSidecarCommand(args: string[]): Promise<void> {
     }, null, 2)}\n`);
   } catch (error) {
     if (!quiet) throw error;
-    // Telemetry must not become a control plane. The direct (non-quiet)
-    // command and `sidecar status` remain available for a detailed,
-    // actionable health check without surfacing hook input bytes.
-    process.stderr.write("FaultLine sidecar did not record this hook; run fl codex sidecar status in the repository after the turn.\n");
+    // Telemetry must not become a control plane. Surface the actionable
+    // refusal (path/rule) on stderr; keep stdout as a JSON continuation so
+    // Codex is not blocked. `sidecar status` remains available for health.
+    const detail = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`FaultLine sidecar did not record this hook: ${detail}\n`);
+    process.stderr.write("Run fl codex sidecar status in the repository after the turn for a detailed health check.\n");
     process.stdout.write('{"continue":true}\n');
   }
+}
+
+async function initCommand(args: string[]): Promise<void> {
+  const repository = resolve(option(args, "--repo") ?? process.cwd());
+  const yes = hasFlag(args, "--yes");
+  const cliPath = option(args, "--cli");
+  const runtimeFlag = option(args, "--runtime");
+  if (runtimeFlag !== undefined && runtimeFlag !== "node" && runtimeFlag !== "python" && runtimeFlag !== "go") {
+    throw new Error("--runtime must be one of node, python, or go.");
+  }
+  const runtime = runtimeFlag as ProjectInitRuntime | undefined;
+  const resolvedCli = cliPath === undefined ? undefined : resolve(cliPath);
+
+  let installedSidecar = false;
+  if (yes && resolvedCli !== undefined) {
+    const preview = await planProjectInit({
+      repository,
+      ...(runtime === undefined ? {} : { runtime }),
+      cliPath: resolvedCli
+    });
+    if (preview.sidecar.status === "PREVIEW_REQUIRED") {
+      const command = sidecarCliCommand(["--cli", resolvedCli]);
+      writeSidecarProjectHookConfig(sidecarProjectHookTarget(repository), codexSidecarHookConfig(command));
+      installedSidecar = true;
+    }
+  }
+
+  const result = await planProjectInit({
+    repository,
+    ...(runtime === undefined ? {} : { runtime }),
+    ...(resolvedCli === undefined ? {} : { cliPath: resolvedCli }),
+    writeIgnoreIfMissing: yes,
+    ...(installedSidecar ? { markSidecarInstalled: true } : {})
+  });
+
+  process.stdout.write(`${JSON.stringify({
+    status: yes ? "INIT_APPLIED" : "INIT_PLAN",
+    repository: result.repository,
+    suggestedRuntime: result.suggestedRuntime,
+    doctor: {
+      dockerInvestigationPreflight: result.doctor.dockerInvestigationPreflight,
+      likelyRuntime: result.doctor.likelyRuntime,
+      diagnosticCount: result.doctor.diagnostics.length
+    },
+    ignoreFile: result.ignoreFile,
+    sidecar: result.sidecar,
+    nextCommands: result.nextCommands,
+    limitations: result.limitations,
+    note: yes
+      ? "Scaffolding applied where safe. Images are not pulled; witnesses are not frozen; proof is not claimed."
+      : "Dry plan only. Re-run with --yes to write .faultlineignore (when missing) and install sidecar hooks when --cli is provided and hooks are absent."
+  }, null, 2)}\n`);
+  process.exitCode = 0;
 }
 
 async function investigateCommand(args: string[]): Promise<void> {
@@ -1565,7 +1628,24 @@ async function investigateCommand(args: string[]): Promise<void> {
     const store = witnessStore(args);
     const proposalId = requiredOption(args, "--proposal");
     const repository = resolve(requiredOption(args, "--repo"));
-    const ledgerPath = resolve(requiredOption(args, "--ledger"));
+    const latest = hasFlag(args, "--latest");
+    const ledgerOption = option(args, "--ledger");
+    if (latest === (ledgerOption !== undefined)) {
+      throw new Error("fl investigate turns requires exactly one of --ledger <ledger.json> or --latest.");
+    }
+    let ledgerPath: string;
+    let latestResolution: ReturnType<typeof resolveLatestSidecarLedgerPath> | null = null;
+    if (latest) {
+      try {
+        latestResolution = resolveLatestSidecarLedgerPath(repository);
+      } catch (error) {
+        if (error instanceof CodexSidecarError) throw error;
+        throw error;
+      }
+      ledgerPath = resolve(latestResolution.ledgerPath);
+    } else {
+      ledgerPath = resolve(requiredOption(args, "--ledger"));
+    }
     const frozenWitness = readFrozenWitness(store, proposalId);
     const runtimeMappingPath = option(args, "--runtime-mapping");
     let runtimeMapping: Record<string, string> | undefined;
@@ -1594,6 +1674,7 @@ async function investigateCommand(args: string[]): Promise<void> {
     if (!result.proof.isProof) {
       process.stdout.write(`${JSON.stringify({
         investigation: result,
+        ...(latestResolution === null ? {} : { ledger: latestResolution }),
         proofBundle: null,
         note: "No portable turn proof bundle was written because the investigation did not establish Docker-isolated turn proof eligibility. Evidence grade remains experimental even when transitions are present."
       }, null, 2)}\n`);
@@ -1629,6 +1710,7 @@ async function investigateCommand(args: string[]): Promise<void> {
     }
     process.stdout.write(`${JSON.stringify({
       investigation: result,
+      ...(latestResolution === null ? {} : { ledger: latestResolution }),
       proofBundle: {
         directory: bundle.directory,
         rootDigest: bundle.rootDigest,
@@ -1643,7 +1725,7 @@ async function investigateCommand(args: string[]): Promise<void> {
     return;
   }
   if (args[0] !== "git") {
-    throw new Error("Usage: fl investigate --ci-log <file> --repo <directory> [...] | fl investigate --resume <id> --repo <directory> [...] | fl investigate turns --repo ... --ledger ... --proposal ... --expect-digest ... --image ... [--runtime-mapping <mapping.json>] [--output <dir>] | fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]");
+    throw new Error("Usage: fl investigate --ci-log <file> --repo <directory> [...] | fl investigate --resume <id> --repo <directory> [...] | fl investigate turns --repo ... (--ledger ... | --latest) --proposal ... --expect-digest ... --image ... [--runtime-mapping <mapping.json>] [--output <dir>] | fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]");
   }
   const store = witnessStore(args);
   const proposalId = requiredOption(args, "--proposal");
@@ -2185,6 +2267,9 @@ async function main(): Promise<void> {
       return;
     case "doctor":
       await doctorCommand(args);
+      return;
+    case "init":
+      await initCommand(args);
       return;
     case "incident":
       await incidentCommand(args);

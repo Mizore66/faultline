@@ -31,6 +31,7 @@ import {
 } from "./ledger.js";
 import {
   captureTurnTreeSnapshot,
+  turnSnapshotSessionCachePath,
   TurnSnapshotError,
   type TurnTreeSnapshot
 } from "./turn-snapshot.js";
@@ -41,10 +42,11 @@ const TURN_SNAPSHOT_OBJECT_DB_WARNING = [
   "FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY=1 for tracked-files-only capture."
 ].join(" ");
 
-function captureSidecarTurnTreeSnapshot(cwd: string): TurnTreeSnapshot {
+function captureSidecarTurnTreeSnapshot(cwd: string, ledgerPath: string): TurnTreeSnapshot {
   const trackedFilesOnly = process.env.FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY === "1";
   const { snapshot } = captureTurnTreeSnapshot(cwd, {
     trackedFilesOnly,
+    sessionCachePath: turnSnapshotSessionCachePath(ledgerPath),
     onWarning: (warning) => {
       process.stderr.write(`FaultLine snapshot warning: ${warning}\n`);
     }
@@ -699,7 +701,7 @@ function recordSessionStart(input: z.infer<typeof SessionStartHookSchema>, cwd: 
     process.stderr.write(`${TURN_SNAPSHOT_OBJECT_DB_WARNING}\n`);
     let baselineSnapshot: TurnTreeSnapshot;
     try {
-      baselineSnapshot = captureSidecarTurnTreeSnapshot(cwd);
+      baselineSnapshot = captureSidecarTurnTreeSnapshot(cwd, ledgerPath);
     } catch (error) {
       if (error instanceof TurnSnapshotError) {
         throw new CodexSidecarError(`SessionStart baseline snapshot failed: ${error.message}`);
@@ -819,9 +821,10 @@ function recordTurnStop(
   let turnSnapshot: TurnTreeSnapshot | undefined;
   let snapshotIdempotent = true;
   try {
-    turnSnapshot = captureSidecarTurnTreeSnapshot(cwd);
+    turnSnapshot = captureSidecarTurnTreeSnapshot(cwd, ledgerPath);
   } catch (error) {
     if (!(error instanceof TurnSnapshotError)) throw error;
+    process.stderr.write(`FaultLine turn-tree snapshot skipped: ${error.message}\n`);
     turnSnapshot = undefined;
   }
   if (turnSnapshot) {
@@ -1008,5 +1011,64 @@ export function inspectObservedCodexSidecar(cwd: string, sessionId?: string): Co
         errors: []
       };
     })
+  };
+}
+
+export type ResolvedLatestSidecarLedger = {
+  readonly ledgerPath: string;
+  readonly sessionId: string | undefined;
+  readonly validCandidateCount: number;
+  readonly lastEventOccurredAt: string | undefined;
+};
+
+/**
+ * Resolve a single newest valid sidecar ledger for `--latest`.
+ * Fail closed when zero or ambiguous (tied last-event timestamps).
+ */
+export function resolveLatestSidecarLedgerPath(cwd: string): ResolvedLatestSidecarLedger {
+  const inspection = inspectObservedCodexSidecar(resolve(cwd));
+  const valid = inspection.recordings.filter((recording) => recording.valid);
+  if (valid.length === 0) {
+    throw new CodexSidecarError(
+      "No valid Codex sidecar ledger found under Git metadata recordings. " +
+        "Run a Codex session with trusted FaultLine hooks, or pass --ledger <path> explicitly."
+    );
+  }
+  if (valid.length === 1) {
+    const only = valid[0]!;
+    return {
+      ledgerPath: only.ledgerPath,
+      sessionId: only.sessionId,
+      validCandidateCount: 1,
+      lastEventOccurredAt: only.lastEvent?.occurredAt
+    };
+  }
+  const withTime = valid.filter((recording) => recording.lastEvent?.occurredAt !== undefined);
+  if (withTime.length === 0) {
+    throw new CodexSidecarError(
+      `Ambiguous latest sidecar ledger: ${String(valid.length)} valid recordings without comparable last-event timestamps. ` +
+        `Pass --ledger explicitly. Candidates: ${valid.map((item) => item.ledgerPath).join("; ")}`
+    );
+  }
+  const latestTime = withTime.reduce(
+    (max, recording) => {
+      const occurredAt = recording.lastEvent!.occurredAt;
+      return occurredAt > max ? occurredAt : max;
+    },
+    withTime[0]!.lastEvent!.occurredAt
+  );
+  const tops = withTime.filter((recording) => recording.lastEvent!.occurredAt === latestTime);
+  if (tops.length !== 1) {
+    throw new CodexSidecarError(
+      `Ambiguous latest sidecar ledger: ${String(tops.length)} valid recordings share last-event time ${latestTime}. ` +
+        `Pass --ledger explicitly. Candidates: ${tops.map((item) => item.ledgerPath).join("; ")}`
+    );
+  }
+  const chosen = tops[0]!;
+  return {
+    ledgerPath: chosen.ledgerPath,
+    sessionId: chosen.sessionId,
+    validCandidateCount: valid.length,
+    lastEventOccurredAt: chosen.lastEvent?.occurredAt
   };
 }

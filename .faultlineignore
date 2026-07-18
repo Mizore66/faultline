@@ -1,0 +1,6 @@
+# Reviewed FaultLine turn-snapshot exclusions for this repository.
+# Fixture / sample paths contain intentional secret-shaped strings for tests and demos.
+tests/
+docs/samples/
+benchmarks/
+pnpm-lock.yaml

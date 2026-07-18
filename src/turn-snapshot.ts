@@ -1,12 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { digestJson, sha256 } from "./canonical.js";
 import { DOCTOR_SAFE_GIT_CONFIG } from "./doctor.js";
 import { redactText } from "./redaction.js";
+import {
+  allowlistConfigDigest,
+  fileContentDigest,
+  filterAllowlistedHighOccurrences,
+  isEntropyTokenAllowlisted,
+  isHighOccurrenceAllowlisted,
+  loadSecretAllowlist,
+  type SecretAllowlist
+} from "./secret-allowlist.js";
 
 /**
  * A dirty-worktree-safe Codex turn boundary marker. Unlike the clean Git
@@ -211,7 +220,25 @@ export type CaptureTurnTreeSnapshotOptions = {
   maxTotalBytes?: number;
   maxFileCount?: number;
   onWarning?: (warning: string) => void;
+  /**
+   * Optional session cache path (sidecar recordings dir). When status+HEAD match
+   * the previous accepted capture, FaultLine reuses the tree digest and skips
+   * dual secret-scan / write-tree work.
+   */
+  sessionCachePath?: string;
 };
+
+const TurnSnapshotSessionCacheSchema = z.object({
+  schemaVersion: z.literal("faultline.turn-snapshot-cache.v1"),
+  headCommit: GitObjectIdSchema,
+  treeDigest: GitObjectIdSchema,
+  statusDigest: HashSchema,
+  allowlistDigest: HashSchema,
+  pathDigests: z.record(z.string(), HashSchema),
+  capturedAt: CanonicalTimestampSchema
+}).strict();
+
+type TurnSnapshotSessionCache = z.infer<typeof TurnSnapshotSessionCacheSchema>;
 
 type IgnoreRule = {
   readonly raw: string;
@@ -319,15 +346,12 @@ function looksBinary(bytes: Buffer): boolean {
   return sample.includes(0);
 }
 
-function hasHighEntropyToken(text: string): boolean {
-  for (const match of text.matchAll(/[A-Za-z0-9_+\-\/=]{40,}/g)) {
-    const token = match[0];
-    if (shannonEntropy(token) >= 4.5) return true;
-  }
-  return false;
-}
-
-function assertNoSnapshotSecrets(relativePath: string, absolutePath: string, bytes: number): void {
+function assertNoSnapshotSecrets(
+  relativePath: string,
+  absolutePath: string,
+  bytes: number,
+  allowlist: SecretAllowlist
+): void {
   if (bytes === 0) return;
   const readBytes = Math.min(bytes, TURN_SNAPSHOT_SECRET_SCAN_BYTES);
   let buffer: Buffer;
@@ -341,21 +365,104 @@ function assertNoSnapshotSecrets(relativePath: string, absolutePath: string, byt
   if (looksBinary(buffer)) return;
   const text = buffer.toString("utf8");
   const report = redactText(text, relativePath).report;
-  if (report.highConfidenceCount > 0) {
-    const kinds = [...new Set(report.occurrences.filter((item) => item.confidence === "HIGH").map((item) => item.kind))];
+  const fileDigest = fileContentDigest(absolutePath, TURN_SNAPSHOT_SECRET_SCAN_BYTES);
+  const { remainingKinds } = filterAllowlistedHighOccurrences(allowlist, relativePath, report, fileDigest);
+  if (remainingKinds.length > 0) {
     throw new TurnSnapshotError(
-      `Refusing turn-tree snapshot: high-confidence secret material detected in ${relativePath} (rules/kinds: ${kinds.join(", ")}). ` +
-        "Exclude the path via .faultlineignore after human review, or remove the secret. " +
-        "Broad secret-scan bypasses are not supported; a digest-bound allowlist is tracked separately."
+      `Refusing turn-tree snapshot: high-confidence secret material detected in ${relativePath} (rules/kinds: ${remainingKinds.join(", ")}). ` +
+        "Exclude the path via .faultlineignore after human review, remove the secret, or add a path+kind+occurrenceDigest " +
+        "entry in .faultline-secret-allowlist.json (never a bare path allow)."
     );
   }
-  if (hasHighEntropyToken(text)) {
+  const allowlistedOccurrenceDigests = new Set(
+    report.occurrences
+      .filter((occurrence) =>
+        occurrence.confidence === "HIGH"
+        && isHighOccurrenceAllowlisted(
+          allowlist,
+          relativePath,
+          occurrence.kind,
+          occurrence.digest,
+          fileDigest
+        ))
+      .map((occurrence) => occurrence.digest)
+  );
+  for (const match of text.matchAll(/[A-Za-z0-9_+\-\/=]{40,}/g)) {
+    const token = match[0];
+    if (!isSuspiciousHighEntropyToken(token)) continue;
+    const tokenDigest = `sha256:${sha256(token)}` as const;
+    // A reviewed HIGH allowlist entry already covers this exact occurrence.
+    if (allowlistedOccurrenceDigests.has(tokenDigest)) continue;
+    if (isEntropyTokenAllowlisted(allowlist, relativePath, token, fileDigest)) continue;
     throw new TurnSnapshotError(
-      `Refusing turn-tree snapshot: high-entropy secret-like token detected in ${relativePath}. ` +
-        "Exclude via .faultlineignore after human review, or remove the token. " +
-        "Broad secret-scan bypasses are not supported; a digest-bound allowlist is tracked separately."
+      `Refusing turn-tree snapshot: high-entropy secret-like token detected in ${relativePath} (rule/kind: HIGH_ENTROPY_TOKEN). ` +
+        "Exclude via .faultlineignore after human review, remove the token, or add a digest-bound allowlist entry " +
+        "(path + kind HIGH_ENTROPY_TOKEN + occurrenceDigest)."
     );
   }
+}
+
+/**
+ * Entropy alone is a weak secret signal. Skip path-like strings, lockfile
+ * integrity digests, and bare hex object ids so turn capture remains usable
+ * on normal application repositories without a broad scan bypass.
+ */
+function isSuspiciousHighEntropyToken(token: string): boolean {
+  if (shannonEntropy(token) < 4.5) return false;
+  if (token.includes("/")) return false;
+  if (/^sha(?:256|512)-/i.test(token)) return false;
+  if (/^[a-f0-9]{40,}$/i.test(token)) return false;
+  return true;
+}
+
+function loadSessionCache(path: string | undefined): TurnSnapshotSessionCache | null {
+  if (path === undefined || !existsSync(path)) return null;
+  try {
+    return TurnSnapshotSessionCacheSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionCache(path: string | undefined, cache: TurnSnapshotSessionCache): void {
+  if (path === undefined) return;
+  writeFileSync(path, `${JSON.stringify(cache, null, 2)}\n`, "utf8");
+}
+
+/** Sidecar recordings store the session cache beside the ledger JSON. */
+export function turnSnapshotSessionCachePath(ledgerPath: string): string {
+  return ledgerPath.endsWith(".json")
+    ? `${ledgerPath.slice(0, -".json".length)}.turn-snapshot-cache.json`
+    : `${ledgerPath}.turn-snapshot-cache.json`;
+}
+
+function computePathDigests(
+  repositoryRoot: string,
+  candidates: readonly SnapshotCandidate[]
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const candidate of candidates) {
+    if (!candidate.exists) continue;
+    const absolutePath = join(repositoryRoot, ...candidate.relativePath.split("/"));
+    out[candidate.relativePath] = fileContentDigest(absolutePath, TURN_SNAPSHOT_SECRET_SCAN_BYTES);
+  }
+  return out;
+}
+
+function pathsNeedingSecretScan(
+  pathDigests: Readonly<Record<string, string>>,
+  previousPathDigests: Readonly<Record<string, string>> | undefined,
+  previousAllowlistDigest: string | undefined,
+  allowlistDigest: string
+): ReadonlySet<string> | "all" {
+  if (previousPathDigests === undefined || previousAllowlistDigest !== allowlistDigest) {
+    return "all";
+  }
+  const needing = new Set<string>();
+  for (const [path, digest] of Object.entries(pathDigests)) {
+    if (previousPathDigests[path] !== digest) needing.add(path);
+  }
+  return needing;
 }
 
 /**
@@ -370,13 +477,35 @@ export function planTurnSnapshotPaths(
     maxFileBytes?: number;
     maxTotalBytes?: number;
     maxFileCount?: number;
+    allowlist?: SecretAllowlist;
+    /** When omitted, load `.faultline-secret-allowlist.json` from the repository. */
+    previousPathDigests?: Readonly<Record<string, string>>;
+    previousAllowlistDigest?: string;
+    allowlistDigest?: string;
+    skipSecretScan?: boolean;
   } = {}
-): { paths: readonly string[]; warnings: readonly string[] } {
+): {
+  paths: readonly string[];
+  warnings: readonly string[];
+  pathDigests: Readonly<Record<string, string>>;
+  secretScanPathCount: number;
+} {
   const trackedFilesOnly = options.trackedFilesOnly === true;
   const maxFileBytes = options.maxFileBytes ?? TURN_SNAPSHOT_MAX_FILE_BYTES;
   const maxTotalBytes = options.maxTotalBytes ?? TURN_SNAPSHOT_MAX_TOTAL_BYTES;
   const maxFileCount = options.maxFileCount ?? TURN_SNAPSHOT_MAX_FILE_COUNT;
   const ignoreRules = loadFaultlineIgnoreRules(repositoryRoot);
+  let allowlist = options.allowlist;
+  if (allowlist === undefined) {
+    try {
+      allowlist = loadSecretAllowlist(repositoryRoot);
+    } catch (error) {
+      throw new TurnSnapshotError(
+        `Could not load secret allowlist: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+  const allowlistDigest = options.allowlistDigest ?? allowlistConfigDigest(allowlist);
 
   const tracked = new Set(splitNullPaths(runGit(repositoryRoot, ["ls-files", "-z"])));
   const untracked = trackedFilesOnly
@@ -443,18 +572,33 @@ export function planTurnSnapshotPaths(
     }
   }
 
-  for (const candidate of candidates) {
-    if (!candidate.exists) continue;
-    assertNoSnapshotSecrets(
-      candidate.relativePath,
-      join(repositoryRoot, ...candidate.relativePath.split("/")),
-      candidate.bytes
+  const pathDigests = computePathDigests(repositoryRoot, candidates);
+  let secretScanPathCount = 0;
+  if (!options.skipSecretScan) {
+    const needing = pathsNeedingSecretScan(
+      pathDigests,
+      options.previousPathDigests,
+      options.previousAllowlistDigest,
+      allowlistDigest
     );
+    for (const candidate of candidates) {
+      if (!candidate.exists) continue;
+      if (needing !== "all" && !needing.has(candidate.relativePath)) continue;
+      secretScanPathCount += 1;
+      assertNoSnapshotSecrets(
+        candidate.relativePath,
+        join(repositoryRoot, ...candidate.relativePath.split("/")),
+        candidate.bytes,
+        allowlist
+      );
+    }
   }
 
   return {
     paths: candidates.map((candidate) => candidate.relativePath).sort((left, right) => left.localeCompare(right)),
-    warnings
+    warnings,
+    pathDigests,
+    secretScanPathCount
   };
 }
 
@@ -466,17 +610,36 @@ function chunkPaths(paths: readonly string[], size: number): string[][] {
   return chunks;
 }
 
+type WriteThrowawayResult = {
+  treeDigest: string;
+  warnings: readonly string[];
+  pathDigests: Readonly<Record<string, string>>;
+  secretScanPathCount: number;
+};
+
 function writeThrowawayTreeDigest(
   runGit: TurnSnapshotGitRunner,
   repositoryRoot: string,
-  options: CaptureTurnTreeSnapshotOptions
-): { treeDigest: string; warnings: readonly string[] } {
+  options: CaptureTurnTreeSnapshotOptions,
+  scanContext: {
+    allowlist: SecretAllowlist;
+    allowlistDigest: string;
+    previousPathDigests?: Readonly<Record<string, string>>;
+    previousAllowlistDigest?: string;
+  }
+): WriteThrowawayResult {
   // Gates 1–4 run here — before any temporary-index `git add` can write blobs.
   const plan = planTurnSnapshotPaths(repositoryRoot, runGit, {
     ...(options.trackedFilesOnly === undefined ? {} : { trackedFilesOnly: options.trackedFilesOnly }),
     ...(options.maxFileBytes === undefined ? {} : { maxFileBytes: options.maxFileBytes }),
     ...(options.maxTotalBytes === undefined ? {} : { maxTotalBytes: options.maxTotalBytes }),
-    ...(options.maxFileCount === undefined ? {} : { maxFileCount: options.maxFileCount })
+    ...(options.maxFileCount === undefined ? {} : { maxFileCount: options.maxFileCount }),
+    allowlist: scanContext.allowlist,
+    allowlistDigest: scanContext.allowlistDigest,
+    ...(scanContext.previousPathDigests === undefined ? {} : { previousPathDigests: scanContext.previousPathDigests }),
+    ...(scanContext.previousAllowlistDigest === undefined
+      ? {}
+      : { previousAllowlistDigest: scanContext.previousAllowlistDigest })
   });
 
   const temporaryIndexPath = join(tmpdir(), `faultline-turn-tree-${randomUUID()}.index`);
@@ -489,7 +652,12 @@ function writeThrowawayTreeDigest(
     if (!GitObjectIdSchema.safeParse(treeDigest).success) {
       throw new TurnSnapshotError("Git did not return a valid tree object id for this turn tree snapshot.");
     }
-    return { treeDigest, warnings: plan.warnings };
+    return {
+      treeDigest,
+      warnings: plan.warnings,
+      pathDigests: plan.pathDigests,
+      secretScanPathCount: plan.secretScanPathCount
+    };
   } finally {
     rmSync(temporaryIndexPath, { force: true });
   }
@@ -504,11 +672,14 @@ function writeThrowawayTreeDigest(
  * 1. Mode filter (`trackedFilesOnly`)
  * 2. Path filter (defaults + `.faultlineignore`)
  * 3. Caps filter (count / per-file / total size via lstat)
- * 4. Secret scan (regex + entropy on eligible buffers)
+ * 4. Secret scan (regex + entropy on eligible buffers; incremental when a
+ *    session cache is supplied)
  * Only then: temporary-index `git add` + `write-tree`.
  *
  * Quiescence is proven by dual tree capture with status brackets and bounded
  * retries; exhaustion fails closed rather than returning a torn snapshot.
+ * When `sessionCachePath` matches HEAD + statusDigest + allowlistDigest, the
+ * previous tree digest is reused after a status re-check (no dual write-tree).
  */
 export function captureTurnTreeSnapshot(
   repository: string,
@@ -533,10 +704,22 @@ export function captureTurnTreeSnapshot(
   const repositoryRoot = resolve(runGit(requestedRoot, ["rev-parse", "--show-toplevel"]).trim());
   const sampleStatus = (): string => runGit(repositoryRoot, [...STATUS_ARGS]);
 
+  let allowlist: SecretAllowlist;
+  try {
+    allowlist = loadSecretAllowlist(repositoryRoot);
+  } catch (error) {
+    throw new TurnSnapshotError(
+      `Could not load secret allowlist: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  const allowlistDigest = allowlistConfigDigest(allowlist);
+  const previousCache = loadSessionCache(options.sessionCachePath);
+
   let acceptedTree: string | null = null;
   let acceptedStatus: string | null = null;
   let acceptedHead: string | null = null;
   let acceptedWarnings: readonly string[] = [];
+  let acceptedPathDigests: Readonly<Record<string, string>> = {};
 
   for (let attempt = 1; attempt <= maxQuiescenceAttempts; attempt += 1) {
     const headBefore = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();
@@ -544,7 +727,37 @@ export function captureTurnTreeSnapshot(
       throw new TurnSnapshotError("Git did not return a resolvable HEAD commit for this turn tree snapshot.");
     }
     const statusBeforeA = sampleStatus();
-    const first = writeThrowawayTreeDigest(runGit, repositoryRoot, options);
+    const statusDigestCandidate = `sha256:${sha256(statusBeforeA)}`;
+
+    if (
+      previousCache !== null
+      && previousCache.headCommit === headBefore
+      && previousCache.statusDigest === statusDigestCandidate
+      && previousCache.allowlistDigest === allowlistDigest
+    ) {
+      sleep(quiescenceDelayMs);
+      const statusAfterCache = sampleStatus();
+      const headAfterCache = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();
+      if (statusAfterCache === statusBeforeA && headAfterCache === headBefore) {
+        acceptedTree = previousCache.treeDigest;
+        acceptedStatus = statusAfterCache;
+        acceptedHead = headAfterCache;
+        acceptedWarnings = [];
+        acceptedPathDigests = previousCache.pathDigests;
+        break;
+      }
+    }
+
+    const first = writeThrowawayTreeDigest(runGit, repositoryRoot, options, {
+      allowlist,
+      allowlistDigest,
+      ...(previousCache === null
+        ? {}
+        : {
+          previousPathDigests: previousCache.pathDigests,
+          previousAllowlistDigest: previousCache.allowlistDigest
+        })
+    });
     const statusAfterA = sampleStatus();
     if (statusBeforeA !== statusAfterA) {
       continue;
@@ -553,7 +766,12 @@ export function captureTurnTreeSnapshot(
     sleep(quiescenceDelayMs);
 
     const statusBeforeB = sampleStatus();
-    const second = writeThrowawayTreeDigest(runGit, repositoryRoot, options);
+    const second = writeThrowawayTreeDigest(runGit, repositoryRoot, options, {
+      allowlist,
+      allowlistDigest,
+      previousPathDigests: first.pathDigests,
+      previousAllowlistDigest: allowlistDigest
+    });
     const statusAfterB = sampleStatus();
     const headAfter = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();
     if (statusBeforeB !== statusAfterB) {
@@ -573,6 +791,7 @@ export function captureTurnTreeSnapshot(
     acceptedStatus = statusAfterB;
     acceptedHead = headAfter;
     acceptedWarnings = second.warnings;
+    acceptedPathDigests = second.pathDigests;
     break;
   }
 
@@ -586,12 +805,23 @@ export function captureTurnTreeSnapshot(
     options.onWarning?.(warning);
   }
 
+  const capturedAt = now().toISOString();
+  writeSessionCache(options.sessionCachePath, {
+    schemaVersion: "faultline.turn-snapshot-cache.v1",
+    headCommit: acceptedHead,
+    treeDigest: acceptedTree,
+    statusDigest: `sha256:${sha256(acceptedStatus)}`,
+    allowlistDigest,
+    pathDigests: { ...acceptedPathDigests },
+    capturedAt
+  });
+
   const snapshot = signTurnTreeSnapshot({
     schemaVersion: TURN_TREE_SNAPSHOT_VERSION,
     repositoryRoot,
     headCommit: acceptedHead,
     treeDigest: acceptedTree,
-    capturedAt: now().toISOString(),
+    capturedAt,
     dirty: acceptedStatus.length > 0,
     statusDigest: `sha256:${sha256(acceptedStatus)}`
   });
