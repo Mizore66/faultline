@@ -28,6 +28,7 @@ import {
   proposeWitness,
   type FrozenWitness
 } from "../src/witness-lock.js";
+import { formatWitnessResult } from "../src/witness-result.js";
 
 const pinnedImage = `registry.example/faultline-node@sha256:${"c".repeat(64)}`;
 
@@ -70,8 +71,8 @@ function deterministicDockerRunner() {
     async run(invocation: { cwd: string }) {
       const state = readFileSync(join(invocation.cwd, "state.txt"), "utf8").trim();
       return state === "bad"
-        ? { exitCode: 1, stdout: "FAIL\n", stderr: "bad" }
-        : { exitCode: 0, stdout: "PASS\n", stderr: "" };
+        ? { exitCode: 1, stdout: `${formatWitnessResult("PREDICATE_FAIL")}\n`, stderr: "bad" }
+        : { exitCode: 0, stdout: `${formatWitnessResult("PREDICATE_PASS")}\n`, stderr: "" };
     }
   };
 }

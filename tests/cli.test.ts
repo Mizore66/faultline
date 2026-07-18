@@ -939,12 +939,13 @@ describe("FaultLine CLI workflows", () => {
         "--bundle", proof.directory,
         "--expect-root", proof.rootDigest,
         "--repo", directory,
-        "--output", join(directory, "repair-out")
+        "--output", join(directory, "repair-out"),
+        "--instructions-only"
       ], { cwd: directory });
       expect(result.status).toBe(0);
       const payload = JSON.parse(result.stdout) as { status: string; note: string };
       expect(payload.status).toBe("REPAIR_INSTRUCTIONS_PREPARED");
-      expect(payload.note).toMatch(/not yet an isolated Git repair worktree/i);
+      expect(payload.note).toMatch(/not.*isolated Git repair worktree/i);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -966,7 +967,7 @@ describe("FaultLine CLI workflows", () => {
         type: "SESSION_STARTED",
         payload: { transport: "SIDE_CAR", workingDirectory: repository }
       });
-      const snap1 = captureTurnTreeSnapshot(repository);
+      const snap1 = captureTurnTreeSnapshot(repository).snapshot;
       ledger = appendLifecycleEvent(ledger, {
         type: "TURN_STARTED",
         payload: { turnId: "t1", turnOrdinal: 1, promptDigest: `sha256:${"a".repeat(64)}` }
@@ -980,7 +981,7 @@ describe("FaultLine CLI workflows", () => {
         payload: { turnId: "t1", turnOrdinal: 1, snapshot: snap1 }
       });
       writeFileSync(join(repository, "state.txt"), "bad\n", "utf8");
-      const snap2 = captureTurnTreeSnapshot(repository);
+      const snap2 = captureTurnTreeSnapshot(repository).snapshot;
       ledger = appendLifecycleEvent(ledger, {
         type: "TURN_STARTED",
         payload: { turnId: "t2", turnOrdinal: 2, promptDigest: `sha256:${"b".repeat(64)}` }

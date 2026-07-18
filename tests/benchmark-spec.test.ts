@@ -18,7 +18,7 @@ describe("benchmark incident specs", () => {
 describe("environment fingerprints", () => {
   it("hashes present lockfiles and detects heterogeneous digests", () => {
     const fingerprint = computeEnvironmentFingerprint(process.cwd());
-    expect(fingerprint.schemaVersion).toBe("faultline.environment-fingerprint.v1");
+    expect(fingerprint.schemaVersion).toBe("faultline.environment-fingerprint.v2");
     expect(fingerprint.digest.startsWith("sha256:")).toBe(true);
     expect(environmentHomogeneity([fingerprint])).toBe("HOMOGENEOUS");
     expect(environmentHomogeneity([
