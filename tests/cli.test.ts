@@ -1009,14 +1009,21 @@ describe("FaultLine CLI workflows", () => {
         "--image", pinnedImage,
         "--store", store
       ], { cwd: directory });
+      expect(result.status).toBe(1);
       const payload = JSON.parse(result.stdout) as {
-        status: string;
-        proof: { isProof: boolean; evidenceGrade: string };
-        states: unknown[];
+        investigation?: {
+          proof: { isProof: boolean; evidenceGrade: string };
+          states: unknown[];
+        };
+        proofBundle: null | unknown;
       };
-      expect(payload.states).toHaveLength(2);
-      expect(payload.proof.evidenceGrade === "EXPERIMENTAL_TURN" || payload.proof.evidenceGrade === "NONE").toBe(true);
-      expect(payload.proof.isProof).toBe(false);
+      expect(payload.proofBundle).toBeNull();
+      expect(payload.investigation?.states.length).toBeGreaterThanOrEqual(2);
+      expect(
+        payload.investigation?.proof.evidenceGrade === "EXPERIMENTAL_TURN"
+        || payload.investigation?.proof.evidenceGrade === "NONE"
+      ).toBe(true);
+      expect(payload.investigation?.proof.isProof).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

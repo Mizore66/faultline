@@ -427,11 +427,13 @@ export function attributeFailureIntroduction(
 
 function isDecisiveRun(run: TurnInvestigationRunFact): boolean {
   if (run.result.kind !== "DOCKER_ISOLATED") return false;
+  // Align with the Git path: only structured PREDICATE_* outcomes may establish
+  // stable PASS/FAIL. Legacy EXIT_ZERO / EXIT_NONZERO are never decisive.
   if (run.result.verdict === "PASS") {
-    return run.result.reason === "PREDICATE_PASS" || run.result.reason === "EXIT_ZERO";
+    return run.result.reason === "PREDICATE_PASS";
   }
   if (run.result.verdict === "FAIL") {
-    return run.result.reason === "PREDICATE_FAIL" || run.result.reason === "EXIT_NONZERO";
+    return run.result.reason === "PREDICATE_FAIL";
   }
   return false;
 }

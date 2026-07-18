@@ -187,6 +187,64 @@ export function selectRepairBaseCommit(investigation: GitInvestigationResult): s
   throw new Error("Verified investigation does not identify a repair base commit.");
 }
 
+export type RepairCandidateVerifier = (context: {
+  worktreePath: string;
+  baseCommit: string;
+  patchPath: string | null;
+  bundleDirectory: string;
+}) => Promise<{ ok: boolean; detail: string }>;
+
+/**
+ * Default CLI verifier for Codex repair drafts: materialize the frozen witness
+ * into the isolated worktree and require a structured PREDICATE_PASS under Docker.
+ * Fail closed when Docker/image/witness execution cannot prove the predicate.
+ */
+export function createFrozenWitnessRepairVerifier(options?: {
+  runner?: import("./sandbox.js").SandboxCommandRunner;
+}): RepairCandidateVerifier {
+  return async (context) => {
+    const { createSandboxPlan, executeSandboxPlan, auditSandboxPlan } = await import("./sandbox.js");
+    const { materializeFrozenOverlays } = await import("./safe-overlay.js");
+    const { FrozenWitnessSchema } = await import("./witness-lock.js");
+    const investigation = readInvestigationFromBundle(context.bundleDirectory);
+    const frozen = FrozenWitnessSchema.parse(
+      JSON.parse(readFileSync(join(resolve(context.bundleDirectory), "witness", "frozen.json"), "utf8"))
+    );
+    const image = investigation.runs
+      .map((run) => run.sandbox.runtime.image)
+      .find((value): value is string => typeof value === "string" && /@sha256:[a-f0-9]{64}$/.test(value));
+    if (!image) {
+      return {
+        ok: false,
+        detail: "Repair verification fail-closed: proof bundle runs do not record a digest-pinned Docker image."
+      };
+    }
+    try {
+      await materializeFrozenOverlays(context.worktreePath, frozen);
+      const plan = createSandboxPlan({
+        witness: { digest: frozen.frozenDigest, command: frozen.proposal.witness.command },
+        sourceDirectory: context.worktreePath,
+        mode: "DOCKER_ISOLATED",
+        image
+      });
+      auditSandboxPlan(plan);
+      const execution = await executeSandboxPlan(plan, options?.runner);
+      if (execution.verdict === "PASS" && execution.reason === "PREDICATE_PASS") {
+        return { ok: true, detail: `Frozen witness PREDICATE_PASS on repaired worktree (${execution.executor}).` };
+      }
+      return {
+        ok: false,
+        detail: `Frozen witness did not PREDICATE_PASS (verdict=${execution.verdict}, reason=${execution.reason}).`
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        detail: `Repair verification fail-closed: ${error instanceof Error ? error.message : String(error)}`
+      };
+    }
+  };
+}
+
 function writeRepairInstructions(options: {
   instructionPath: string;
   rootDigest: string;
