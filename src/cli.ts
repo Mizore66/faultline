@@ -92,6 +92,7 @@ import {
   verifyAuthenticatedWitnessApproval
 } from "./authenticated-witness-approval.js";
 import type { RunMode } from "./domain.js";
+import { ZodError } from "zod";
 
 const usage = `FaultLine — First Bad Turn evidence for agent-assisted code
 
@@ -1995,32 +1996,66 @@ async function main(): Promise<void> {
       await repairCommand(args);
       return;
     default:
-      throw new Error(`Unknown command: ${command}\n\n${usage}`);
+      throw new Error(`Unknown command: ${command}`);
   }
 }
 
 function formatCliFailure(error: unknown): string {
+  if (error instanceof ZodError) {
+    const firstIssue = error.issues[0];
+    const pathInfo = firstIssue?.path?.length ? ` at input.${firstIssue.path.join(".")}` : "";
+    const issueMsg = firstIssue ? `${firstIssue.message}${pathInfo}` : "Invalid schema layout";
+    return [
+      `FaultLine error: Invalid input shape (${issueMsg})`,
+      "Tip: Verify that the JSON payload or input file matches the expected structure."
+    ].join("\n");
+  }
+
+  const isPortInUse =
+    (error !== null && typeof error === "object" && "code" in error && error.code === "EADDRINUSE")
+    || (error instanceof Error && error.message.includes("EADDRINUSE"));
+  if (isPortInUse) {
+    return [
+      "FaultLine error: Port already in use (EADDRINUSE).",
+      "Tip: Another instance of FaultLine or another process is running on this port.",
+      "     Please stop the conflicting process or pass a different port using the '--port' flag."
+    ].join("\n");
+  }
+
   const message = error instanceof Error ? error.message : String(error);
+
+  // Intercept missing required options/flags
+  if (
+    /^Missing required option:/i.test(message)
+    || /missing required argument/i.test(message)
+    || /required option/i.test(message)
+  ) {
+    const flagMatch = message.match(/(--\w+)/);
+    const flagTip = flagMatch
+      ? `     Make sure to provide the ${flagMatch[0]} flag.`
+      : "     Make sure to provide all required flags.";
+    return [
+      `FaultLine error: ${message}`,
+      "Tip: You are missing a mandatory flag for this command.",
+      flagTip,
+      "     Run 'pnpm fl help' to view valid options and usage instructions."
+    ].join("\n");
+  }
+
   const windowsHint = [
     "",
-    "Windows tip: if PowerShell blocked pnpm (ExecutionPolicy / scripts disabled), use:",
-    "  pnpm.cmd fl <command>",
-    "or for this terminal session only:",
+    "Windows tip: If PowerShell blocked pnpm due to ExecutionPolicy restrictions, run:",
     "  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process",
-    "Then retry without markdown backticks, e.g.:",
-    "  pnpm.cmd fl judge-demo"
+    "Or invoke the command proxy directly:",
+    "  pnpm.cmd fl <command> (e.g., pnpm.cmd fl judge-demo)"
   ].join("\n");
 
   if (/^Unknown command:\s*--\b/.test(message) || message.startsWith("Unknown command: --")) {
-    return [
-      "FaultLine error: the first argument was `--`, which is not a command.",
-      "Do not insert `--` between `fl` and the subcommand.",
-      "Try:",
-      "  pnpm fl judge-demo",
-      "On Windows PowerShell, prefer:",
-      "  pnpm.cmd fl judge-demo",
-      windowsHint
-    ].join("\n");
+    return `FaultLine error: ${message}\nNote: Do not place '--' between 'fl' and your subcommand. Use 'pnpm fl <command>'.`;
+  }
+
+  if (message.startsWith("Unknown command:")) {
+    return `FaultLine error: ${message}\nRun 'pnpm fl help' or check the documentation for valid options.`;
   }
 
   if (/ExecutionPolicy|running scripts is disabled|PSSecurityException|UnauthorizedAccess/i.test(message)) {
