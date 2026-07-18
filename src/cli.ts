@@ -123,7 +123,8 @@ Usage:
   fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>] [--unsafe-local]
   fl investigate --ci-log <file> --repo <directory> [--command <failing-command>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--id <safe-id>] [--unsafe-local]
   fl investigate --resume <incident-id> --repo <directory> [--expect-digest <sha256:...>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--unsafe-local]
-  fl investigate turns --repo <directory> --ledger <ledger.json> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--runtime-mapping <mapping.json>] [--output <managed-bundle-directory>]
+  fl investigate turns --repo <directory> --ledger <ledger.json> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--runtime-mapping <mapping.json>] [--output <managed-bundle-directory>] [--minimize] [--transition <index>] [--max-executions <count>]
+  fl prove transition <turn-proof-bundle-directory> --repo <directory> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--transition <index>] [--max-executions <count>] [--output <managed-result.json>]
   fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]
   fl runtime resolve <node|python|go>
   fl runtime prepare <node|python|go> --yes
@@ -1610,6 +1611,22 @@ async function investigateCommand(args: string[]): Promise<void> {
     if (!bundleVerification.valid) {
       throw new Error(`Generated turn proof bundle failed verification: ${bundleVerification.errors.join("; ")}`);
     }
+    let minimization: unknown = null;
+    if (hasFlag(args, "--minimize")) {
+      const transitionOpt = option(args, "--transition");
+      const maxExecOpt = option(args, "--max-executions");
+      const minOutOpt = option(args, "--minimization-output");
+      minimization = await minimizeFromTurnInvestigation({
+        repository,
+        result,
+        frozenWitness,
+        expectedFrozenDigest: requiredOption(args, "--expect-digest"),
+        image: requiredOption(args, "--image"),
+        ...(transitionOpt === undefined ? {} : { transitionIndex: transitionOpt }),
+        ...(maxExecOpt === undefined ? {} : { maxExecutions: maxExecOpt }),
+        ...(minOutOpt === undefined ? {} : { output: minOutOpt })
+      });
+    }
     process.stdout.write(`${JSON.stringify({
       investigation: result,
       proofBundle: {
@@ -1619,7 +1636,8 @@ async function investigateCommand(args: string[]): Promise<void> {
         evidenceLabel: result.proof.evidenceLabel,
         externalRootStatus: bundleVerification.externalRootStatus,
         note: "Turn package is experimentally graded (EXPERIMENTAL_TURN), not COMMIT_PROOF."
-      }
+      },
+      minimization
     }, null, 2)}\n`);
     process.exitCode = 0;
     return;
@@ -1681,6 +1699,109 @@ async function investigateCommand(args: string[]): Promise<void> {
     ...(ledgerBinding === undefined ? {} : { ledgerBinding })
   }, null, 2)}\n`);
   process.exitCode = result.proof.isProof ? 0 : 1;
+}
+
+async function minimizeFromTurnInvestigation(options: {
+  repository: string;
+  result: { transitions: import("./turn-investigation.js").TurnInvestigationResult["transitions"] };
+  frozenWitness: import("./witness-lock.js").FrozenWitness;
+  expectedFrozenDigest: string;
+  image: string;
+  transitionIndex?: string;
+  maxExecutions?: string;
+  output?: string;
+}): Promise<Record<string, unknown>> {
+  const { bridgeTurnTransitionToMinimizationCommits } = await import("./turn-minimization-bridge.js");
+  const transitionIndex = options.transitionIndex === undefined ? 0 : Number(options.transitionIndex);
+  if (!Number.isInteger(transitionIndex) || transitionIndex < 0) {
+    throw new Error("--transition must be a non-negative integer.");
+  }
+  const bridge = bridgeTurnTransitionToMinimizationCommits(
+    options.repository,
+    options.result,
+    transitionIndex
+  );
+  const minimization = await minimizeGitDiff({
+    repository: options.repository,
+    before: bridge.beforeCommit,
+    after: bridge.afterCommit,
+    frozenWitness: options.frozenWitness,
+    expectedFrozenDigest: options.expectedFrozenDigest,
+    sandbox: { mode: "DOCKER_ISOLATED", image: options.image },
+    ...(options.maxExecutions === undefined ? {} : { budget: { maxExecutions: Number(options.maxExecutions) } })
+  });
+  const output = resolve(
+    options.output
+      ?? join(".faultline", "minimizations", `turn-transition-${String(transitionIndex).padStart(4, "0")}-${Date.now()}.json`)
+  );
+  const written = await writeGitMinimizationResult(output, minimization);
+  return {
+    bridge: {
+      transitionIndex: bridge.transitionIndex,
+      beforeTree: bridge.beforeTree,
+      afterTree: bridge.afterTree,
+      beforeCommit: bridge.beforeCommit,
+      afterCommit: bridge.afterCommit,
+      note: bridge.note
+    },
+    result: minimization,
+    path: written.path,
+    resultDigest: written.resultDigest,
+    evidenceGradeNote:
+      "Counterfactual minimization from a turn boundary reuses Git-path machinery on synthetic commits. The parent turn package remains EXPERIMENTAL_TURN until TURN_PROOF promotion criteria are met."
+  };
+}
+
+/**
+ * Run Git-path counterfactual minimization against a selected transition from a
+ * verified turn package, using tree digests still present in the host repo.
+ */
+async function proveTransitionCommand(args: string[]): Promise<void> {
+  const bundleDirectory = args[0];
+  if (!bundleDirectory) {
+    throw new Error(
+      "Usage: fl prove transition <turn-proof-bundle-directory> --repo <directory> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--transition <index>] [--max-executions <count>] [--output <managed-result.json>]"
+    );
+  }
+  if (args[1] !== undefined && args[1] !== "--repo" && !args[1].startsWith("--")) {
+    // allow `fl prove transition <dir> ...` only
+  }
+  const { verifyTurnInvestigationProofBundle } = await import("./turn-proof-bundle.js");
+  const { TurnInvestigationResultSchema } = await import("./turn-investigation.js");
+  const directory = resolve(bundleDirectory);
+  const expectedRoot = option(args, "--expect-root");
+  const verification = await verifyTurnInvestigationProofBundle(directory, expectedRoot);
+  if (!verification.valid) {
+    throw new Error(`Turn proof bundle failed verification: ${verification.errors.join("; ") || "unknown error"}`);
+  }
+  const investigation = TurnInvestigationResultSchema.parse(
+    JSON.parse(readFileSync(join(directory, "investigation.json"), "utf8"))
+  );
+  const store = witnessStore(args);
+  const frozenWitness = readFrozenWitness(store, requiredOption(args, "--proposal"));
+  const transitionOpt = option(args, "--transition");
+  const maxExecOpt = option(args, "--max-executions");
+  const outOpt = option(args, "--output");
+  const minimization = await minimizeFromTurnInvestigation({
+    repository: resolve(requiredOption(args, "--repo")),
+    result: investigation,
+    frozenWitness,
+    expectedFrozenDigest: requiredOption(args, "--expect-digest"),
+    image: requiredOption(args, "--image"),
+    ...(transitionOpt === undefined ? {} : { transitionIndex: transitionOpt }),
+    ...(maxExecOpt === undefined ? {} : { maxExecutions: maxExecOpt }),
+    ...(outOpt === undefined ? {} : { output: outOpt })
+  });
+  process.stdout.write(`${JSON.stringify({
+    command: "prove transition",
+    turnBundle: {
+      directory,
+      rootDigest: verification.rootDigest,
+      externalRootStatus: verification.externalRootStatus,
+      evidenceGrade: investigation.proof.evidenceGrade
+    },
+    minimization
+  }, null, 2)}\n`);
 }
 
 async function minimizeCommand(args: string[]): Promise<void> {
@@ -2175,6 +2296,14 @@ async function main(): Promise<void> {
       return;
     case "investigate":
       await investigateCommand(args);
+      return;
+    case "prove":
+      if (args[0] !== "transition") {
+        throw new Error(
+          "Usage: fl prove transition <turn-proof-bundle-directory> --repo <directory> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--transition <index>] [--max-executions <count>] [--output <managed-result.json>]"
+        );
+      }
+      await proveTransitionCommand(args.slice(1));
       return;
     case "minimize":
       await minimizeCommand(args);
