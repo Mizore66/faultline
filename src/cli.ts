@@ -19,8 +19,6 @@ import {
 } from "./github-provenance.js";
 import { createDemoAnalysis } from "./engine.js";
 import { doctorCliExitCode, runFaultLineDoctor, type FaultLineDoctorReport } from "./doctor.js";
-import { guidedInvestigateFromCiLog } from "./guided-investigate.js";
-import { assertIncidentFrozenWitnessBinding, runFrozenIncidentContinuation } from "./incident-continue.js";
 import { createIncidentDraft, type IncidentDraft } from "./incident.js";
 import { suggestIncidentRanges } from "./incident-intake.js";
 import { defaultIncidentDraftStore, readIncidentDraft, writeIncidentDraft } from "./incident-store.js";
@@ -85,7 +83,8 @@ import {
   freezeApprovedWitness,
   proposeWitness,
   readFrozenWitness,
-  verifyFrozenWitness
+  verifyFrozenWitness,
+  type FrozenWitness
 } from "./witness-lock.js";
 import {
   signAuthenticatedWitnessApproval,
@@ -104,8 +103,7 @@ Usage:
   fl incident start --repo <directory> (--command <failing-command> | --command-file <utf8-file>) [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--store <directory>]
   fl incident status <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--expect-digest <sha256:...>]
   fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>] [--unsafe-local]
-  fl investigate --ci-log <file> --repo <directory> [--command <failing-command>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--id <safe-id>] [--unsafe-local]
-  fl investigate --resume <incident-id> --repo <directory> [--expect-digest <sha256:...>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--unsafe-local]
+  fl investigate --ci-log <file> [--repo <directory>] [--command <failing-command>] [--from <commit> --to <commit>] [--id <safe-id>]
   fl investigate turns --repo <directory> --ledger <ledger.json> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image>
   fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]
   fl runtime resolve <node|python|go>
@@ -130,7 +128,7 @@ Usage:
   fl attest verify <receipt-id> [--expect-digest <sha256:...>] [--store <directory>]
   fl provenance create --bundle <git-proof-bundle-directory> [--output <managed-receipt.json>]
   fl provenance verify --bundle <git-proof-bundle-directory> --receipt <ci-receipt.json> --attestation-bundle <sigstore-bundle.json> --trust <trust.json>
-  fl repair --bundle <git-proof-bundle-directory> --expect-root <sha256:...> [--repo <directory>] [--output <directory>] [--with-codex] [--instructions-only] [--keep-worktree]
+  fl repair --bundle <git-proof-bundle-directory> --expect-root <sha256:...> [--repo <directory>] [--output <directory>] [--with-codex]
   fl repair brief (--bundle <git-proof-bundle-directory> | --investigation <verified-bundle>/investigation.json) (--live | --input <repair-brief.json>) [--expect-root <sha256:...>] [--model <model>] [--output <managed-directory>]
   fl repair verify <repair-brief-directory> [--expect-digest <sha256:...>]
   fl witness propose --input <proposal.json> [--store <directory>]
@@ -399,6 +397,26 @@ function loadIncidentCommandContext(args: string[], incidentId: string): Inciden
   };
 }
 
+/** The frozen witness must be the exact proposal, command, and packet bound by intake. */
+function assertIncidentFrozenWitnessBinding(draft: IncidentDraft, frozenWitness: FrozenWitness): void {
+  if (draft.review.witnessState !== "PROPOSED") {
+    throw new Error("Incident draft has no proposal binding and cannot continue to investigation.");
+  }
+  const binding = draft.review.proposal;
+  const proposal = frozenWitness.proposal;
+  const errors: string[] = [];
+  if (proposal.proposalId !== draft.draftId || binding.proposalId !== proposal.proposalId) errors.push("proposal identifier");
+  if (binding.proposalDigest !== proposal.proposalDigest) errors.push("proposal digest");
+  if (binding.incidentPacketDigest !== proposal.incidentPacketDigest) errors.push("blinded incident-packet digest");
+  if (binding.commandDigest !== proposal.witness.commandDigest || draft.commandDigest !== proposal.witness.commandDigest) {
+    errors.push("exact command digest");
+  }
+  if (draft.command !== proposal.witness.command) errors.push("exact command bytes");
+  if (errors.length > 0) {
+    throw new Error(`Frozen witness does not match the immutable incident draft binding: ${errors.join(", ")}.`);
+  }
+}
+
 function incidentStatusCommand(args: string[]): void {
   const incidentId = args[1];
   if (!incidentId) {
@@ -464,32 +482,97 @@ async function continueIncidentCommand(args: string[]): Promise<void> {
   }
   const context = loadIncidentCommandContext(args, incidentId);
   const expectedFrozenDigest = option(args, "--expect-digest");
-  const image = option(args, "--image");
+  const witnessVerification = verifyFrozenWitness(context.witnessStore, incidentId, expectedFrozenDigest);
+  if (!witnessVerification.valid) {
+    throw new Error(`Incident cannot continue until its witness is human-approved and frozen intact: ${witnessVerification.errors.join("; ")}`);
+  }
+  const frozenWitness = readFrozenWitness(context.witnessStore, incidentId);
+  assertIncidentFrozenWitnessBinding(context.draft, frozenWitness);
+
+  const unsafeLocal = hasFlag(args, "--unsafe-local");
+  if (!unsafeLocal && expectedFrozenDigest === undefined) {
+    throw new Error("Proof-grade incident continuation requires --expect-digest <retained-frozen-digest>. FaultLine will not treat the digest stored beside the witness as an external retention record.");
+  }
+  const requestedImage = option(args, "--image");
+  if (context.draft.runtime !== undefined && requestedImage !== undefined && requestedImage !== context.draft.runtime.image) {
+    throw new Error("--image must match the digest-pinned runtime recorded in the immutable incident draft.");
+  }
+  const image = requestedImage ?? context.draft.runtime?.image;
+  if (!unsafeLocal && image === undefined) {
+    throw new Error("This incident has no selected runtime. Resolve a reviewed local runtime before intake, or supply --image <digest-pinned-image> for proof-grade replay.");
+  }
+
   const ledgerFile = option(args, "--ledger");
+  const lifecycleLedger = ledgerFile === undefined ? undefined : readVerifiedCodexLifecycleLedger(resolve(ledgerFile));
   const maxStates = option(args, "--max-states");
-  const outputDirectory = option(args, "--output");
-  const result = await runFrozenIncidentContinuation({
-    draft: context.draft,
+  const investigation = await investigateGitRange({
     repository: context.repository,
-    witnessStore: context.witnessStore,
-    ...(expectedFrozenDigest === undefined ? {} : { expectedFrozenDigest }),
-    ...(image === undefined ? {} : { image }),
-    ...(hasFlag(args, "--unsafe-local") ? { unsafeLocal: true } : {}),
-    ...(ledgerFile === undefined ? {} : { ledgerFile }),
-    ...(maxStates === undefined ? {} : { maxStates: Number(maxStates) }),
-    ...(outputDirectory === undefined ? {} : { outputDirectory })
+    range: { ancestor: context.draft.range.ancestor, descendant: context.draft.range.descendant },
+    frozenWitness,
+    // investigateGitRange requires a digest-shaped comparison input even for
+    // unsafe-local diagnostics. The fallback is reachable only in that
+    // INAPPLICABLE/non-proof mode; proof-grade continuation above requires a
+    // separately retained external digest.
+    expectedFrozenDigest: expectedFrozenDigest ?? frozenWitness.frozenDigest,
+    sandbox: unsafeLocal
+      ? { mode: "UNSAFE_LOCAL", allowUnsafeLocal: true }
+      : { mode: "DOCKER_ISOLATED", image: image as string },
+    ...(maxStates === undefined ? {} : { maxStates: Number(maxStates) })
   });
-  if (result.status === "INVESTIGATION_NOT_PROOF") {
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+
+  const incident = {
+    id: context.draft.draftId,
+    draftDigest: context.draft.draftDigest,
+    range: context.draft.range,
+    runtime: context.draft.runtime ?? (image === undefined ? null : { requested: "explicit", image }),
+    frozenDigest: frozenWitness.frozenDigest,
+    frozenDigestExternalStatus: witnessVerification.externalDigestStatus
+  };
+  if (!investigation.proof.isProof) {
+    process.stdout.write(`${JSON.stringify({
+      status: "INVESTIGATION_NOT_PROOF",
+      incident,
+      investigation,
+      proofBundle: null,
+      next: [
+        "Fix the recorded environment or witness condition, then create a new reviewed incident draft rather than altering this frozen witness.",
+        "Unsafe-local results are intentionally INAPPLICABLE and cannot publish a portable proof bundle."
+      ]
+    }, null, 2)}\n`);
     process.exitCode = 1;
     return;
   }
+
+  const proofRoot = resolve(context.repository, ".faultline", "git-proof-bundles");
+  const descendant = investigation.resolvedRange?.descendant.commit.slice(0, 12) ?? "unknown";
+  const output = resolve(option(args, "--output") ?? join(proofRoot, `incident-${incidentId}-${descendant}-${Date.now()}`));
+  const bundle = writeGitInvestigationProofBundle(output, investigation, frozenWitness, {
+    proofRoot,
+    ...(lifecycleLedger === undefined ? {} : { lifecycleLedger })
+  });
+  const bundleVerification = verifyGitInvestigationProofBundle(bundle.directory, bundle.rootDigest);
+  if (!bundleVerification.valid) {
+    throw new Error(`Generated incident proof bundle failed verification: ${bundleVerification.errors.join("; ")}`);
+  }
   process.stdout.write(`${JSON.stringify({
-    status: result.status,
-    incident: result.incident,
-    proofBundle: result.proofBundle,
-    next: result.next,
-    limitations: result.limitations
+    status: "PROOF_BUNDLE_READY",
+    incident,
+    proofBundle: {
+      directory: bundle.directory,
+      rootDigest: bundle.rootDigest,
+      externalRootStatus: bundleVerification.externalRootStatus,
+      lifecycle: bundle.manifest.lifecycle
+    },
+    next: [
+      `fl serve --bundle ${bundle.directory} --expect-root ${bundle.rootDigest}`,
+      "Retain the bundle root outside the package before relying on rewrite detection or sharing the incident."
+    ],
+    limitations: [
+      "FaultLine executed only the human-frozen witness. It did not infer a remote base, modify the draft, approve a witness, or alter the frozen record.",
+      expectedFrozenDigest === undefined
+        ? "No external frozen-witness digest was supplied; this continuation verified the write-once local witness chain."
+        : "The supplied external frozen-witness digest matched the immutable review chain."
+    ]
   }, null, 2)}\n`);
 }
 
@@ -879,10 +962,11 @@ async function witnessCommand(args: string[]): Promise<void> {
         ...(hasFlag(args, "--with-codex")
           ? {
               runner: {
-                async run(codexArgs: readonly string[], options: { cwd: string; input?: string }) {
+                async run(codexArgs, options) {
                   if (!hasFlag(args, "--allow-codex-full-auto")) {
                     throw new Error("Codex drafting requires explicit --allow-codex-full-auto in addition to --with-codex.");
                   }
+                  const { spawnSync } = await import("node:child_process");
                   const executed = spawnSync("codex", [...codexArgs], {
                     cwd: options.cwd,
                     encoding: "utf8",
@@ -1392,69 +1476,22 @@ async function codexSidecarCommand(args: string[]): Promise<void> {
 }
 
 async function investigateCommand(args: string[]): Promise<void> {
-  const ciLog = option(args, "--ci-log");
-  const resumeId = option(args, "--resume");
-  if (ciLog !== undefined || resumeId !== undefined) {
-    if (args[0] === "git" || args[0] === "turns") {
-      throw new Error("Guided investigate (--ci-log / --resume) cannot be combined with `fl investigate git` or `fl investigate turns`.");
-    }
-    if (ciLog !== undefined && resumeId !== undefined) {
-      throw new Error("Guided investigate accepts either --ci-log <file> or --resume <incident-id>, not both.");
-    }
-    const repository = resolve(option(args, "--repo") ?? process.cwd());
+  if (hasFlag(args, "--ci-log") || args[0] === "--ci-log") {
+    const { guidedInvestigateFromCiLog } = await import("./guided-investigate.js");
+    const ciLog = requiredOption(args, "--ci-log");
+    const command = option(args, "--command");
     const from = option(args, "--from");
     const to = option(args, "--to");
-    if ((from === undefined) !== (to === undefined)) {
-      throw new Error("Guided investigate accepts --from and --to together, or neither for the conservative local HEAD-parent fallback.");
-    }
-    const command = option(args, "--command");
     const incidentId = option(args, "--id");
-    const runtime = option(args, "--runtime");
-    const image = option(args, "--image");
-    const expectDigest = option(args, "--expect-digest");
-    const ledgerFile = option(args, "--ledger");
-    const maxStates = option(args, "--max-states");
-    const outputDirectory = option(args, "--output");
-    const reviewPortRaw = option(args, "--port");
-    const witnessStoreOption = option(args, "--store");
-    const draftStoreOption = option(args, "--draft-store");
-    const abort = new AbortController();
-    const onSigint = (): void => abort.abort();
-    process.once("SIGINT", onSigint);
-    try {
-      const result = await guidedInvestigateFromCiLog({
-        repository,
-        ...(ciLog === undefined ? {} : { ciLogPath: ciLog }),
-        ...(resumeId === undefined ? {} : { resumeId }),
-        ...(command === undefined ? {} : { command }),
-        ...(from === undefined ? {} : { from }),
-        ...(to === undefined ? {} : { to }),
-        ...(incidentId === undefined ? {} : { incidentId }),
-        ...(runtime === undefined ? {} : { runtime }),
-        ...(image === undefined ? {} : { image }),
-        ...(expectDigest === undefined ? {} : { expectDigest }),
-        ...(hasFlag(args, "--unsafe-local") ? { unsafeLocal: true } : {}),
-        ...(ledgerFile === undefined ? {} : { ledgerFile }),
-        ...(maxStates === undefined ? {} : { maxStates: Number(maxStates) }),
-        ...(outputDirectory === undefined ? {} : { outputDirectory }),
-        ...(reviewPortRaw === undefined ? {} : { reviewPort: Number(reviewPortRaw) }),
-        ...(witnessStoreOption === undefined ? {} : { witnessStore: resolve(witnessStoreOption) }),
-        ...(draftStoreOption === undefined ? {} : { draftStore: resolve(draftStoreOption) }),
-        onPhase: (phase, detail) => {
-          process.stderr.write(`FaultLine guided investigate: ${phase}${detail === undefined ? "" : ` (${detail})`}\n`);
-        },
-        onReviewReady: (url) => {
-          process.stderr.write(
-            `FaultLine local witness review: ${url}\nApprove, then Freeze (separate clicks). This command continues automatically after freeze. Press Ctrl+C to cancel and resume later with --resume <id>.\n`
-          );
-        },
-        signal: abort.signal
-      });
-      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-      process.exitCode = result.status === "GUIDED_PROOF_BUNDLE_READY" ? 0 : 1;
-    } finally {
-      process.removeListener("SIGINT", onSigint);
-    }
+    const result = await guidedInvestigateFromCiLog({
+      repository: resolve(option(args, "--repo") ?? process.cwd()),
+      ciLogPath: ciLog,
+      ...(command === undefined ? {} : { command }),
+      ...(from !== undefined && to !== undefined ? { from, to } : {}),
+      ...(incidentId === undefined ? {} : { incidentId })
+    });
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.exitCode = result.status === "GUIDED_DRAFT_READY" ? 0 : 1;
     return;
   }
   if (args[0] === "turns") {
@@ -1473,7 +1510,7 @@ async function investigateCommand(args: string[]): Promise<void> {
     return;
   }
   if (args[0] !== "git") {
-    throw new Error("Usage: fl investigate --ci-log <file> --repo <directory> [...] | fl investigate --resume <id> --repo <directory> [...] | fl investigate turns --repo ... --ledger ... --proposal ... --expect-digest ... --image ... | fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <bundle-directory>]");
+    throw new Error("Usage: fl investigate --ci-log <file> | fl investigate turns --repo ... --ledger ... --proposal ... --expect-digest ... --image ... | fl investigate git ...");
   }
   const store = witnessStore(args);
   const proposalId = requiredOption(args, "--proposal");
@@ -1517,8 +1554,6 @@ async function investigateCommand(args: string[]): Promise<void> {
     ledgerBinding = { path, bindingDigest: binding.bindingDigest };
   }
   process.stdout.write(`${JSON.stringify({
-    evidenceGrade: result.proof.evidenceGrade,
-    evidenceLabel: result.proof.evidenceLabel,
     investigation: result,
     proofBundle: {
       directory: bundle.directory,
@@ -1733,8 +1768,6 @@ async function repairCommand(args: string[]): Promise<void> {
       repository: resolve(option(args, "--repo") ?? process.cwd()),
       outputDirectory: resolve(option(args, "--output") ?? join(".faultline", "repairs", `repair-${Date.now()}`)),
       withCodex: hasFlag(args, "--with-codex"),
-      instructionsOnly: hasFlag(args, "--instructions-only"),
-      keepWorktree: hasFlag(args, "--keep-worktree"),
       verifyBundle: (directory, expectRoot) => {
         const verification = verifyGitInvestigationProofBundle(directory, expectRoot);
         return {
@@ -1746,10 +1779,11 @@ async function repairCommand(args: string[]): Promise<void> {
       ...(hasFlag(args, "--with-codex")
         ? {
             runner: {
-              async run(codexArgs: readonly string[], options: { cwd: string; input?: string }) {
+              async run(codexArgs, options) {
                 if (!hasFlag(args, "--allow-codex-full-auto")) {
                   throw new Error("Codex repair drafting requires explicit --allow-codex-full-auto in addition to --with-codex.");
                 }
+                const { spawnSync } = await import("node:child_process");
                 const executed = spawnSync("codex", [...codexArgs], {
                   cwd: options.cwd,
                   encoding: "utf8",
@@ -1768,10 +1802,7 @@ async function repairCommand(args: string[]): Promise<void> {
         : {})
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    process.exitCode = result.status === "BUNDLE_INVALID" || result.status === "REPAIR_SETUP_FAILED"
-      || result.status === "REPAIR_VERIFICATION_FAILED" || result.status === "WORKTREE_CLEANUP_FAILED"
-      ? 1
-      : 0;
+    process.exitCode = result.status === "BUNDLE_INVALID" ? 1 : 0;
     return;
   }
   if (args[0] !== "brief") {

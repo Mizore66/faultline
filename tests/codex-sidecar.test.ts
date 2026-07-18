@@ -76,27 +76,6 @@ function quoteFsmonitorCommandPart(value: string): string {
 }
 
 describe("Codex observed hook sidecar", () => {
-  it("records SESSION_BASELINE_SNAPSHOT at SessionStart even when the worktree is already dirty", () => {
-    const repository = repositoryFixture();
-    try {
-      writeFileSync(join(repository, "preexisting-dirty.txt"), "dirty-before-session\n", "utf8");
-      const started = recordObservedCodexHook(sessionStart(repository, "codex-session-baseline-dirty"));
-      expect(started).toMatchObject({ status: "SESSION_STARTED", idempotent: false });
-      const ledger = readVerifiedCodexLifecycleLedger(started.ledgerPath);
-      expect(ledger.events.map((event) => event.event.type)).toEqual([
-        "SESSION_STARTED",
-        "SESSION_BASELINE_SNAPSHOT"
-      ]);
-      expect(ledger.events[1]?.event).toMatchObject({
-        type: "SESSION_BASELINE_SNAPSHOT",
-        payload: { snapshot: { dirty: true } }
-      });
-      expect(ledger.events[1]?.eventId).toBe(sidecarEventId("codex-session-baseline-dirty", null, "session-baseline"));
-    } finally {
-      rmSync(repository, { recursive: true, force: true });
-    }
-  });
-
   it("records public lifecycle facts, a clean Git checkpoint, and no prompt/output/transcript text", () => {
     const repository = repositoryFixture();
     const prompt = "Fix the issue with secret marker SIDE_CAR_PROMPT_DO_NOT_PERSIST";
@@ -115,12 +94,11 @@ describe("Codex observed hook sidecar", () => {
       const ledgerPath = codexSidecarLedgerPath(repository, "codex-session-1");
       expect(ledgerPath).toBe(started.ledgerPath);
       expect(existsSync(ledgerPath)).toBe(true);
-      expect(verifyCodexLifecycleLedgerFile(ledgerPath)).toMatchObject({ valid: true, eventCount: 6 });
+      expect(verifyCodexLifecycleLedgerFile(ledgerPath)).toMatchObject({ valid: true, eventCount: 5 });
       const ledger = readVerifiedCodexLifecycleLedger(ledgerPath);
       expect(ledger.sessionId).toBe("codex-session-1");
       expect(ledger.events.map((event) => event.event.type)).toEqual([
         "SESSION_STARTED",
-        "SESSION_BASELINE_SNAPSHOT",
         "TURN_STARTED",
         "TURN_COMPLETED",
         "TURN_TREE_SNAPSHOT",
@@ -131,18 +109,14 @@ describe("Codex observed hook sidecar", () => {
         payload: { transport: "SIDE_CAR", workingDirectory: repository, model: "gpt-5.6" }
       });
       expect(ledger.events[1]?.event).toMatchObject({
-        type: "SESSION_BASELINE_SNAPSHOT",
-        payload: { snapshot: { dirty: false } }
-      });
-      expect(ledger.events[2]?.event).toMatchObject({
         type: "TURN_STARTED",
         payload: { turnId: "codex-turn-1", turnOrdinal: 1, promptDigest: `sha256:${sha256(prompt)}` }
       });
-      expect(ledger.events[4]?.event).toMatchObject({
+      expect(ledger.events[3]?.event).toMatchObject({
         type: "TURN_TREE_SNAPSHOT",
         payload: { turnId: "codex-turn-1", turnOrdinal: 1, snapshot: { dirty: false } }
       });
-      expect(ledger.events[5]?.event).toMatchObject({
+      expect(ledger.events[4]?.event).toMatchObject({
         type: "WORKTREE_CHECKPOINT",
         payload: { afterTurnOrdinal: 1, checkpoint: { clean: true } }
       });
@@ -182,7 +156,7 @@ describe("Codex observed hook sidecar", () => {
         checkpointDigest: initialStop.checkpointDigest,
         turnSnapshot: { digest: initialStop.turnSnapshot?.digest }
       });
-      expect(readVerifiedCodexLifecycleLedger(initialStart.ledgerPath).events).toHaveLength(6);
+      expect(readVerifiedCodexLifecycleLedger(initialStart.ledgerPath).events).toHaveLength(5);
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
@@ -215,16 +189,15 @@ describe("Codex observed hook sidecar", () => {
       const ledger = readVerifiedCodexLifecycleLedger(started.ledgerPath);
       expect(ledger.events.map((event) => event.event.type)).toEqual([
         "SESSION_STARTED",
-        "SESSION_BASELINE_SNAPSHOT",
         "TURN_STARTED",
         "TURN_COMPLETED",
         "TURN_TREE_SNAPSHOT"
       ]);
-      expect(ledger.events[4]?.event).toMatchObject({
+      expect(ledger.events[3]?.event).toMatchObject({
         type: "TURN_TREE_SNAPSHOT",
         payload: { turnId: "codex-turn-dirty", turnOrdinal: 1, snapshot: { dirty: true } }
       });
-      expect(verifyCodexLifecycleLedgerFile(started.ledgerPath)).toMatchObject({ valid: true, eventCount: 5 });
+      expect(verifyCodexLifecycleLedgerFile(started.ledgerPath)).toMatchObject({ valid: true, eventCount: 4 });
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
@@ -274,7 +247,7 @@ describe("Codex observed hook sidecar", () => {
         checkpointDigest: initial.checkpointDigest,
         turnSnapshot: { digest: initial.turnSnapshot?.digest }
       });
-      expect(readVerifiedCodexLifecycleLedger(ledgerPath).events).toHaveLength(6);
+      expect(readVerifiedCodexLifecycleLedger(ledgerPath).events).toHaveLength(5);
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
@@ -299,7 +272,7 @@ describe("Codex observed hook sidecar", () => {
         reason: "CHECKPOINT_UNAVAILABLE",
         idempotent: true
       });
-      expect(readVerifiedCodexLifecycleLedger(ledgerPath).events).toHaveLength(4);
+      expect(readVerifiedCodexLifecycleLedger(ledgerPath).events).toHaveLength(3);
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
@@ -311,7 +284,7 @@ describe("Codex observed hook sidecar", () => {
       recordObservedCodexHook(sessionStart(repository, "codex-session-snapshot-only"));
       recordObservedCodexHook(promptEvent(repository, "Prepare a snapshot-only interrupted stop.", "codex-session-snapshot-only", "codex-turn-snapshot-only"));
       const ledgerPath = codexSidecarLedgerPath(repository, "codex-session-snapshot-only");
-      const snapshot = captureTurnTreeSnapshot(repository).snapshot;
+      const snapshot = captureTurnTreeSnapshot(repository);
 
       let ledger = readVerifiedCodexLifecycleLedger(ledgerPath);
       ledger = appendLifecycleEvent(ledger, {
@@ -335,7 +308,6 @@ describe("Codex observed hook sidecar", () => {
       // manually-simulated events, with no additional WORKTREE_CHECKPOINT.
       expect(readVerifiedCodexLifecycleLedger(ledgerPath).events.map((event) => event.event.type)).toEqual([
         "SESSION_STARTED",
-        "SESSION_BASELINE_SNAPSHOT",
         "TURN_STARTED",
         "TURN_COMPLETED",
         "TURN_TREE_SNAPSHOT"

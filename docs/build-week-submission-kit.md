@@ -14,21 +14,6 @@ pnpm fl -- verify .faultline/bundles/judge-demo
 
 It demonstrates the frozen witness, evidence labels, stable-boundary rules, counterfactual result, and offline verification of the included sample. It does **not** demonstrate a real incident, a production deployment, or native Docker proof. Label it accurately in the recording, then use the separate live-Git path when Docker evidence is available.
 
-### Live guided incident path (after Docker is ready)
-
-For the end-to-end operator story, prefer the resumable guided command rather than narrating five separate subcommands:
-
-```powershell
-pnpm fl -- doctor --repo .
-pnpm fl -- investigate --ci-log .\ci.log --repo . --command "<failing predicate>" --runtime node
-# Browser: Approve, then Freeze (separate clicks). The CLI continues automatically.
-# Resume if interrupted:
-pnpm fl -- investigate --resume <id> --repo . --expect-digest <frozen-digest> --runtime node
-pnpm fl -- serve --bundle <proof> --expect-root <retained-root>
-```
-
-Say on camera that FaultLine did not auto-approve or auto-freeze; the one command only orchestrates modular primitives after explicit human freeze.
-
 ## Three-minute demo run of show
 
 | Time | Screen | Narration point |

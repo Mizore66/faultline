@@ -146,11 +146,7 @@ function nativeDockerFixture(observed: GitInvestigationResult): GitInvestigation
       executionTrust: "NATIVE_DOCKER",
       proofTransitions: transitions.length,
       isProof: transitions.length > 0,
-      reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.",
-      evidenceGrade: transitions.length > 0 ? "COMMIT_PROOF" : "NONE",
-      evidenceLabel: transitions.length > 0
-        ? "Commit-path localization — portable proof"
-        : "Commit-path localization — not certified as portable proof"
+      reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states."
     }
   });
 }
@@ -561,14 +557,6 @@ describe("FaultLine CLI workflows", () => {
     }
   });
 
-  it("documents the guided investigate --ci-log / --resume entrypoints in usage", () => {
-    const help = runFl(["investigate"]);
-    expect(help.status).toBe(1);
-    expect(help.stderr).toMatch(/--ci-log/);
-    expect(help.stderr).toMatch(/--resume/);
-    expect(help.stderr).toMatch(/investigate git/);
-  });
-
   it("continues one immutable incident after a human freeze without retyping its range or witness digest", () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-cli-incident-continue-"));
     try {
@@ -939,13 +927,12 @@ describe("FaultLine CLI workflows", () => {
         "--bundle", proof.directory,
         "--expect-root", proof.rootDigest,
         "--repo", directory,
-        "--output", join(directory, "repair-out"),
-        "--instructions-only"
+        "--output", join(directory, "repair-out")
       ], { cwd: directory });
       expect(result.status).toBe(0);
       const payload = JSON.parse(result.stdout) as { status: string; note: string };
       expect(payload.status).toBe("REPAIR_INSTRUCTIONS_PREPARED");
-      expect(payload.note).toMatch(/not.*isolated Git repair worktree/i);
+      expect(payload.note).toMatch(/not yet an isolated Git repair worktree/i);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -967,7 +954,7 @@ describe("FaultLine CLI workflows", () => {
         type: "SESSION_STARTED",
         payload: { transport: "SIDE_CAR", workingDirectory: repository }
       });
-      const snap1 = captureTurnTreeSnapshot(repository).snapshot;
+      const snap1 = captureTurnTreeSnapshot(repository);
       ledger = appendLifecycleEvent(ledger, {
         type: "TURN_STARTED",
         payload: { turnId: "t1", turnOrdinal: 1, promptDigest: `sha256:${"a".repeat(64)}` }
@@ -981,7 +968,7 @@ describe("FaultLine CLI workflows", () => {
         payload: { turnId: "t1", turnOrdinal: 1, snapshot: snap1 }
       });
       writeFileSync(join(repository, "state.txt"), "bad\n", "utf8");
-      const snap2 = captureTurnTreeSnapshot(repository).snapshot;
+      const snap2 = captureTurnTreeSnapshot(repository);
       ledger = appendLifecycleEvent(ledger, {
         type: "TURN_STARTED",
         payload: { turnId: "t2", turnOrdinal: 2, promptDigest: `sha256:${"b".repeat(64)}` }

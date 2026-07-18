@@ -6,7 +6,6 @@ import {
   freezeApprovedWitness,
   proposeWitness
 } from "../dist/witness-lock.js";
-import { formatWitnessResult } from "../dist/witness-result.js";
 
 const workspace = resolve(process.env.GITHUB_WORKSPACE ?? process.cwd());
 const outputFile = process.env.GITHUB_OUTPUT;
@@ -51,18 +50,10 @@ git(["add", "value.txt"]);
 git(["commit", "-m", "known bad"]);
 const head = git(["rev-parse", "HEAD"]);
 
-const passLine = formatWitnessResult("PREDICATE_PASS");
-const failLine = formatWitnessResult("PREDICATE_FAIL");
 const witnessScript = [
   'import { readFileSync } from "node:fs";',
   'const value = readFileSync("value.txt", "utf8").trim();',
-  'if (value === "good") {',
-  `  console.log(${JSON.stringify(passLine)});`,
-  "  process.exit(0);",
-  "} else {",
-  `  console.log(${JSON.stringify(failLine)});`,
-  "  process.exit(1);",
-  "}",
+  'process.exit(value === "good" ? 0 : 1);',
   ""
 ].join("\n");
 proposeWitness(store, {

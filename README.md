@@ -15,12 +15,10 @@ FaultLine proves where a frozen witness changed from pass to fail — without cl
 
 ### Evidence grades (honest)
 
-Successful Docker-isolated `fl investigate git` results carry evidence grade `COMMIT_PROOF` — the highest portable proof tier. Turn-tree localization (Codex sidecar snapshots) is graded `EXPERIMENTAL_TURN` / “Turn localization — experimental evidence” until it meets the same write-once portable proof contract. Do not equate turn results with `COMMIT_PROOF`.
-
 | Path | Grade today | Notes |
 | --- | --- | --- |
-| `fl investigate turns` | **Experimental turn evidence** (`EXPERIMENTAL_TURN`) | Localizes across captured turn trees; portable turn proof bundle parity with Git is still tracked (#21) |
-| `fl investigate git` / live self-incident | **Mature Git proof** (`COMMIT_PROOF`) | Portable, independently verifiable proof packages |
+| `fl investigate turns` | **Experimental turn evidence** | Localizes across captured turn trees; portable turn proof bundle parity with Git is still tracked (#21) |
+| `fl investigate git` / live self-incident | **Mature Git proof** | Portable, independently verifiable proof packages |
 
 **Hero demo for judges (prefer this in the video):**
 
@@ -145,30 +143,6 @@ Before making a real claim, let FaultLine surface local prerequisites:
 pnpm fl -- doctor --repo .
 ```
 
-### One-command guided path (`fl investigate --ci-log`)
-
-For a CI log plus a failing command, use the resumable guided workflow. It creates the review-only draft, opens the local witness review workbench, pauses until you Approve and then Freeze (separate clicks), retains the freeze digest in-process, selects the runtime, localizes, and exports the proof package — without forcing you to retype subcommands:
-
-```powershell
-docker pull node:22-alpine
-pnpm fl -- runtime resolve node
-pnpm fl -- investigate --ci-log .\ci.log `
-  --repo . `
-  --command "pnpm test -- checkout" `
-  --runtime node
-```
-
-If you cancel during review, resume the same durable incident:
-
-```powershell
-pnpm fl -- investigate --resume <incident-id> `
-  --repo . `
-  --expect-digest <retained-frozen-digest> `
-  --runtime node
-```
-
-FaultLine never auto-approves or auto-freezes. Internal steps still reuse `incident` / `witness` / `investigate git` primitives; you see one coherent CLI sequence. Use `--unsafe-local` only for non-proof diagnosis when Docker is unavailable.
-
 If you do not know the Git bracket, ask FaultLine for **local-only suggestions** first. It may show a locally cached upstream merge-base and/or the immediate parent, but it never fetches, contacts a remote, parses CI, or chooses one for you:
 
 ```powershell
@@ -222,7 +196,7 @@ The draft and human-origin proposal are write-once local records. Run `pnpm fl -
 
 ## Real Git investigation
 
-The preferred operator path is `fl investigate --ci-log` (or the modular `fl incident start` → `fl witness review` → `fl incident continue`). The lower-level commands below remain available for automation or a pre-existing witness store. First create and freeze a reviewed witness. The proposal input is a blinded incident packet plus the exact overlay bytes to execute.
+The guided path is `fl incident start` → `fl witness review` → `fl incident continue`. The lower-level commands below remain available for automation or a pre-existing witness store. First create and freeze a reviewed witness. The proposal input is a blinded incident packet plus the exact overlay bytes to execute.
 
 ```powershell
 pnpm fl -- witness propose --input .\proposal.json
@@ -534,28 +508,6 @@ pnpm fl -- serve `
 
 The page re-verifies each attachment against its retained digest. A minimization must match the proof's frozen witness and stable pass-to-fail transition; a repair artifact must match the exact investigation and frozen witness. The shareable page renders only certification status, counts, and evidence IDs—free-form repair text stays in the private repair artifact. Attachments remain outside the original Git proof root.
 
-## How Codex and GPT-5.6 are used
-
-Codex accelerated FaultLine's implementation, adversarial testing, and product hardening. At runtime, `fl record` accepts a strictly ordered, hash-chained Codex-compatible NDJSON lifecycle stream and records clean Git checkpoints; it labels the supplied transport as `CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR` rather than claiming private event interception. Start a recording with `pnpm fl -- codex record init --session <id> --repo . --transport CODEX_CLI`, pipe observed events through `fl codex record stdin`, and capture checkpoints with `fl codex record checkpoint`.
-
-### Turn-tree snapshot storage warning
-
-Turn-tree capture supports experimental turn localization (`EXPERIMENTAL_TURN`). It is not commit-path portable proof (`COMMIT_PROOF`).
-
-Codex sidecar SessionStart/Stop turn-tree snapshots use a **temporary Git index**, but they are **not storage-neutral**: staging still writes blob objects into this repository's object database. Eligible **untracked** files may be included unless you opt out.
-
-Mitigations:
-
-- Add a repository-root `.faultlineignore` (gitignore syntax) for project-specific exclusions.
-- Built-in defaults already skip common build/cache trees (`dist/`, `build/`, `.next/`, `coverage/`, …), dependency dirs, and secret-shaped paths.
-- Hard caps reject oversized snapshots (per-file, total bytes, and file count) before any blob write.
-- Secret scanning (regex + entropy) rejects high-confidence credential material before acceptance.
-- Set `FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY=1` to stage tracked files only.
-
-The sidecar prints this warning when it primes the SessionStart baseline snapshot.
-
-GPT-5.6 is used only through the Responses API for a blinded witness proposal or an evidence-cited repair brief. It never decides a pass/fail verdict, identifies a culprit, replaces the frozen witness, or creates proof evidence.
-
 ## Evidence vocabulary
 
 | Label | Meaning |
@@ -565,15 +517,7 @@ GPT-5.6 is used only through the Responses API for a blinded witness proposal or
 | `INFERRED` | A model or human interpretation that must cite evidence. |
 | `UNKNOWN` | A material question the evidence does not answer. |
 
-### Evidence grades (commit path vs turn path)
-
-| Grade | Path | Meaning |
-| --- | --- | --- |
-| `COMMIT_PROOF` | Git commit-range investigation | Highest portable proof tier: Docker-isolated replay over immutable commits, write-once Git proof bundle, offline verifier. Shown on `fl investigate git` output and `fl serve --bundle`. |
-| `EXPERIMENTAL_TURN` | Turn-tree localization | Explicitly lower tier. May record transitions and (library) packages, but is **not** interchangeable with commit-path portable proof until turn/Git parity lands. Label: “Turn localization — experimental evidence”. |
-| `NONE` | Either path | No certified transitions / not proof-eligible. |
-
-Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. On the **commit path**, a `PASS -> FAIL` boundary becomes `COMMIT_PROOF` only when each side has three distinct, matching Docker-isolated executions. Turn-path transitions stay experimental even when three-run stability is observed.
+Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. A `PASS -> FAIL` boundary becomes proof only when each side has three distinct, matching Docker-isolated executions.
 
 ## Judge path
 

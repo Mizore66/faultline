@@ -54,10 +54,6 @@ This produces and verifies the deterministic judge bundle. For the live Git/Dock
 
     fl demo live-git --export-only
 
-For a real CI log (resumable guided flow; human Approve then Freeze in the local review UI):
-
-    pnpm fl -- investigate --ci-log .\ci.log --repo . --command "<failing predicate>" --runtime node
-
 The submitter should record the exact commit, platform, command output, and any external proof root shown in the demo:
 
 - Commit or release: [INSERT COMMIT SHA OR RELEASE]

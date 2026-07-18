@@ -1,19 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { lstatSync, readFileSync } from "node:fs";
-import { link, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { z } from "zod";
 import { canonicalJson, digestJson, sha256 } from "./canonical.js";
-import {
-  assertSafeGitMaterialization,
-  hardenedGitText,
-  materializeGitTree,
-  runHardenedGit,
-  type HardenedGitResult,
-  type MaterializedGitTree
-} from "./git-materialization.js";
-import { materializeFrozenOverlays } from "./safe-overlay.js";
 import { redactText } from "./redaction.js";
 import {
   auditSandboxPlan,
@@ -45,8 +37,11 @@ export const MINIMIZATION_CERTIFICATION_EXECUTIONS = 3 as const;
 const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/;
 const GIT_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const SAFE_GIT_REVISION = /^(?!-)[^\0\r\n]{1,512}$/;
+const SAFE_OVERLAY_PATH = /^[^\\/\0]+(?:\/[^\\/\0]+)*$/;
+const MAX_GIT_OUTPUT_BYTES = 64 * 1024 * 1024;
 const EVIDENCE_LOG_PREVIEW_BYTES = 16 * 1024;
 const MAX_MINIMIZATION_RESULT_BYTES = 128 * 1024 * 1024;
+const DANGEROUS_GIT_ATTRIBUTE = /(?:^|\s)filter=[^\s]+/m;
 
 const DigestSchema = z.string().regex(SHA256_DIGEST, "expected sha256:<64 lowercase hex characters>");
 const GitObjectIdSchema = z.string().regex(GIT_OBJECT_ID, "expected a 40- or 64-character lowercase Git object id");
@@ -354,7 +349,12 @@ export interface WrittenGitMinimizationResult {
   readonly resultDigest: string;
 }
 
-type ProcessResult = HardenedGitResult;
+type ProcessResult = {
+  exitCode: number | null;
+  stdout: Buffer;
+  stderr: Buffer;
+  error?: string;
+};
 
 type PatchUnitInternal = GitPatchUnit & { readonly bytes: Buffer };
 type Direction = GitPatchApplication["direction"];
@@ -367,6 +367,58 @@ type Probe = {
   readonly run: GitMinimizationRunFact | null;
   readonly note: string;
 };
+
+/** Keep host-side Git inspection and worktree materialization non-interactive and configuration-isolated. */
+function hardenedGitEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH ?? "",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: join(tmpdir(), `faultline-empty-git-config-${randomUUID()}`),
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_LFS_SKIP_SMUDGE: "1",
+    // FaultLine never fetches/clones while preparing a counterfactual. Leave
+    // no usable transport protocol for repository-local configuration.
+    GIT_ALLOW_PROTOCOL: "none"
+  };
+  if (process.platform === "win32") {
+    if (process.env.SystemRoot) environment.SystemRoot = process.env.SystemRoot;
+    if (process.env.ComSpec) environment.ComSpec = process.env.ComSpec;
+    if (process.env.PATHEXT) environment.PATHEXT = process.env.PATHEXT;
+  }
+  return environment;
+}
+
+function hardenedGitArguments(repository: string, args: readonly string[]): string[] {
+  return [
+    "-c", "core.hooksPath=/nonexistent/faultline-hooks",
+    "-c", "core.autocrlf=false",
+    // Do not let a repository's cached file-system watcher/index state affect
+    // a counterfactual materialization or the Git facts we persist.
+    "-c", "core.fsmonitor=false",
+    "-c", "core.useBuiltinFSMonitor=false",
+    "-c", "core.untrackedCache=false",
+    "-c", "core.preloadIndex=false",
+    "-c", "filter.lfs.process=",
+    "-c", "filter.lfs.smudge=",
+    "-c", "filter.lfs.required=false",
+    "-c", "diff.external=",
+    // Git submodules and transports are outside this offline replay contract;
+    // do not inherit repository-local recursion or protocol preferences.
+    "-c", "submodule.recurse=false",
+    "-c", "fetch.recurseSubmodules=false",
+    "-c", "protocol.allow=never",
+    "-c", "protocol.file.allow=never",
+    "-c", "protocol.ext.allow=never",
+    "-c", "protocol.git.allow=never",
+    "-c", "protocol.ssh.allow=never",
+    "-c", "protocol.http.allow=never",
+    "-c", "protocol.https.allow=never",
+    "-C", repository,
+    ...args
+  ];
+}
 
 function sha256Digest(value: string | Buffer): string {
   return `sha256:${sha256(value)}`;
@@ -409,12 +461,81 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function boundedAppend(current: Buffer, next: Buffer): Buffer {
+  if (current.length >= MAX_GIT_OUTPUT_BYTES) return current;
+  const room = MAX_GIT_OUTPUT_BYTES - current.length;
+  return Buffer.concat([current, next.subarray(0, room)]);
+}
+
+/** Run a command as argv, optionally writing exact bytes to stdin. No shell is involved. */
+async function runProcess(executable: string, argumentsList: readonly string[], stdin?: Buffer): Promise<ProcessResult> {
+  return new Promise((resolveResult) => {
+    let stdout: Buffer = Buffer.alloc(0);
+    let stderr: Buffer = Buffer.alloc(0);
+    let outputExceeded = false;
+    let settled = false;
+
+    const settle = (result: ProcessResult): void => {
+      if (settled) return;
+      settled = true;
+      resolveResult(result);
+    };
+
+    let child;
+    try {
+      child = spawn(executable, [...argumentsList], {
+        shell: false,
+        windowsHide: true,
+        stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        env: hardenedGitEnvironment()
+      });
+    } catch (error) {
+      settle({ exitCode: null, stdout, stderr, error: errorMessage(error) });
+      return;
+    }
+
+    const capture = (chunk: Buffer, stream: "stdout" | "stderr"): void => {
+      const bytes = Buffer.from(chunk);
+      if (stream === "stdout") stdout = boundedAppend(stdout, bytes);
+      else stderr = boundedAppend(stderr, bytes);
+      if (stdout.length + stderr.length >= MAX_GIT_OUTPUT_BYTES && !outputExceeded) {
+        outputExceeded = true;
+        child.kill();
+      }
+    };
+
+    child.stdout?.on("data", (chunk: Buffer) => capture(chunk, "stdout"));
+    child.stderr?.on("data", (chunk: Buffer) => capture(chunk, "stderr"));
+    child.once("error", (error) => settle({ exitCode: null, stdout, stderr, error: errorMessage(error) }));
+    child.once("close", (exitCode) => settle({
+      exitCode,
+      stdout,
+      stderr: outputExceeded
+        ? Buffer.concat([stderr, Buffer.from("\nFaultLine stopped Git after its bounded output limit.", "utf8")])
+        : stderr,
+      ...(outputExceeded ? { error: "Git command exceeded bounded output limit" } : {})
+    }));
+    if (stdin !== undefined) {
+      child.stdin?.once("error", () => {
+        // `git apply` can close stdin after identifying a malformed patch.
+        // The exit status/stderr remains the authoritative failure fact.
+      });
+      child.stdin?.end(stdin);
+    }
+  });
+}
+
 async function runGit(repository: string, args: readonly string[], stdin?: Buffer): Promise<ProcessResult> {
-  return runHardenedGit(repository, args, stdin === undefined ? {} : { stdin });
+  return runProcess("git", hardenedGitArguments(repository, args), stdin);
 }
 
 async function gitText(repository: string, args: readonly string[]): Promise<string> {
-  return hardenedGitText(repository, args);
+  const result = await runGit(repository, args);
+  if (result.exitCode !== 0 || result.error !== undefined) {
+    const detail = [result.stderr.toString("utf8").trim(), result.error].filter((value): value is string => Boolean(value)).join("; ");
+    throw new Error(`Git ${args.join(" ")} failed: ${detail || `exit ${result.exitCode ?? "unknown"}`}`);
+  }
+  return result.stdout.toString("utf8").trim();
 }
 
 async function resolveRepositoryRoot(repository: string): Promise<string> {
@@ -435,6 +556,20 @@ async function resolveState(repository: string, revision: string): Promise<GitCo
   const tree = await gitText(repository, ["rev-parse", "--verify", "--end-of-options", `${commit}^{tree}`]);
   if (!GIT_OBJECT_ID.test(tree)) throw new Error(`Git returned an invalid tree object id for revision ${revision}.`);
   return { commit, tree };
+}
+
+/** Reject checkout filters before a revision is materialized on the host. */
+async function assertSafeGitMaterialization(repository: string, states: readonly GitCounterfactualState[]): Promise<void> {
+  const localFilters = await runGit(repository, ["config", "--local", "--get-regexp", "^filter\\."]);
+  if (localFilters.exitCode === 0 && localFilters.stdout.toString("utf8").trim()) {
+    throw new Error("Refusing host worktree materialization: repository local Git filter configuration is present.");
+  }
+  for (const state of states) {
+    const attributes = await runGit(repository, ["show", "--no-textconv", "--end-of-options", `${state.commit}:.gitattributes`]);
+    if (attributes.exitCode === 0 && DANGEROUS_GIT_ATTRIBUTE.test(attributes.stdout.toString("utf8"))) {
+      throw new Error(`Refusing host worktree materialization: ${state.commit} declares a Git filter attribute.`);
+    }
+  }
 }
 
 function nulParts(value: Buffer): Buffer[] {
@@ -535,6 +670,15 @@ async function derivePatchUnits(repository: string, before: GitCounterfactualSta
   return output;
 }
 
+function safeOverlayParts(value: string): string[] {
+  if (!SAFE_OVERLAY_PATH.test(value) || value.startsWith("/") || value.includes("\\")) {
+    throw new Error(`Frozen overlay path is unsafe: ${value}`);
+  }
+  const parts = value.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) throw new Error(`Frozen overlay path is unsafe: ${value}`);
+  return parts;
+}
+
 async function lstatIfPresent(path: string): Promise<Awaited<ReturnType<typeof lstat>> | null> {
   try {
     return await lstat(path);
@@ -543,6 +687,56 @@ async function lstatIfPresent(path: string): Promise<Awaited<ReturnType<typeof l
     if (code === "ENOENT") return null;
     throw error;
   }
+}
+
+/** Construct only non-symlink ancestors below this exact temporary worktree. */
+async function safeOverlayTarget(worktree: string, overlayPath: string): Promise<string> {
+  const parts = safeOverlayParts(overlayPath);
+  const target = resolve(worktree, ...parts);
+  const containment = relative(worktree, target);
+  if (!containment || containment === ".." || containment.startsWith("..\\") || containment.startsWith("../") || isAbsolute(containment)) {
+    throw new Error(`Frozen overlay path escaped its worktree: ${overlayPath}`);
+  }
+  let current = worktree;
+  for (const part of parts.slice(0, -1)) {
+    current = join(current, part);
+    const entry = await lstatIfPresent(current);
+    if (entry === null) {
+      await mkdir(current, { mode: 0o755 });
+      const created = await lstat(current);
+      if (!created.isDirectory() || created.isSymbolicLink()) throw new Error(`Could not safely create overlay directory: ${overlayPath}`);
+    } else if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      throw new Error(`Frozen overlay parent is not a safe directory: ${overlayPath}`);
+    }
+  }
+  const existing = await lstatIfPresent(target);
+  if (existing?.isSymbolicLink()) throw new Error(`Frozen overlay target is a symbolic link: ${overlayPath}`);
+  return target;
+}
+
+/** Materialize and reread the exact approved bytes; no overlay may traverse a link. */
+async function materializeFrozenOverlays(worktree: string, frozenWitness: FrozenWitness): Promise<MaterializedFrozenOverlay[]> {
+  const facts: MaterializedFrozenOverlay[] = [];
+  for (const overlay of frozenWitness.proposal.witness.overlays) {
+    const bytes = Buffer.from(overlay.bytesBase64, "base64");
+    if (sha256Digest(bytes) !== overlay.bytesDigest) {
+      throw new Error(`Frozen overlay digest does not match its bytes: ${overlay.path}`);
+    }
+    const target = await safeOverlayTarget(worktree, overlay.path);
+    const staged = join(dirname(target), `.faultline-overlay-${randomUUID()}`);
+    try {
+      await writeFile(staged, bytes, { encoding: undefined, flag: "wx", mode: 0o644 });
+      await rename(staged, target);
+    } finally {
+      await rm(staged, { force: true });
+    }
+    const reread = await readFile(target);
+    if (!reread.equals(bytes) || sha256Digest(reread) !== overlay.bytesDigest) {
+      throw new Error(`FaultLine could not verify exact materialized overlay bytes: ${overlay.path}`);
+    }
+    facts.push({ path: overlay.path, bytesDigest: overlay.bytesDigest, bytesLength: bytes.length });
+  }
+  return facts;
 }
 
 function planRequestForWorktree(sandbox: GitMinimizationSandbox, worktree: string, witness: FrozenWitness): SandboxPlanRequest {
@@ -624,6 +818,18 @@ function outcomeNote(result: SandboxExecutionResult): string {
   return `Docker witness returned ${result.verdict}.`;
 }
 
+async function removeWorktree(repository: string, worktree: string): Promise<string | null> {
+  const removal = await runGit(repository, ["worktree", "remove", "--force", worktree]);
+  if (removal.exitCode === 0) return null;
+  try {
+    await rm(worktree, { recursive: true, force: true });
+    await runGit(repository, ["worktree", "prune"]);
+  } catch (error) {
+    return `Could not remove temporary worktree: ${errorMessage(error)}`;
+  }
+  return `Git could not deregister a temporary worktree: ${removal.stderr.toString("utf8").trim() || removal.error || "unknown error"}`;
+}
+
 function chunk<T>(values: readonly T[], count: number): T[][] {
   const size = Math.ceil(values.length / count);
   const output: T[][] = [];
@@ -644,11 +850,11 @@ function selectedPatch(units: readonly PatchUnitInternal[], candidateIds: readon
  * counterfactual, so inspect the detached index before the witness runs.
  */
 async function verifyAppliedPatchScope(
-  materialized: MaterializedGitTree,
+  worktree: string,
   base: GitCounterfactualState,
   selectedPaths: readonly string[]
 ): Promise<string | null> {
-  const changed = await materialized.runGit(["diff", "--cached", "--name-only", "-z", "--no-renames", base.commit]);
+  const changed = await runGit(worktree, ["diff", "--cached", "--name-only", "-z", "--no-renames", base.commit]);
   if (changed.exitCode !== 0 || changed.error !== undefined) {
     return `Could not verify applied patch scope: ${changed.stderr.toString("utf8").trim() || changed.error || "Git failed."}`;
   }
@@ -787,7 +993,7 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
     repository = await resolveRepositoryRoot(input.repository);
     before = await resolveState(repository, input.before);
     after = await resolveState(repository, input.after);
-    await assertSafeGitMaterialization(repository, [before.commit, after.commit]);
+    await assertSafeGitMaterialization(repository, [before, after]);
   } catch (error) {
     return baseResult("RANGE_ERROR", input.sandbox.mode, input.budget.maxExecutions, [errorMessage(error)], {
       repository: null,
@@ -842,10 +1048,9 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
     const startedEpoch = Date.now();
     const startedAt = new Date(startedEpoch).toISOString();
     const tempRoot = await mkdtemp(join(tmpdir(), "faultline-git-minimization-"));
-    const materializationName = `worktree-${randomUUID()}`;
-    const worktree = join(tempRoot, "worktrees", materializationName);
+    const worktree = join(tempRoot, `worktree-${randomUUID()}`);
     const worktreeDigest = sha256Digest(worktree);
-    let materialized: MaterializedGitTree | null = null;
+    let created = false;
     let overlays: MaterializedFrozenOverlay[] = [];
     let application: GitPatchApplication | undefined;
     let sandbox: SandboxPlanAudit | null = null;
@@ -853,56 +1058,58 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
     let outcome: Extract<ProbeOutcome, "PASS" | "FAIL" | "UNRESOLVED"> = "UNRESOLVED";
     let note = "";
     try {
-      materialized = await materializeGitTree({
-        repository,
-        commit: base.commit,
-        tempRoot,
-        name: materializationName
-      });
-      if (patch.bytes.length === 0) {
-        application = applicationFact(direction, base, [], patch.bytes, "NO_PATCHES");
+      const added = await runGit(repository, ["worktree", "add", "--detach", worktree, base.commit]);
+      if (added.exitCode !== 0 || added.error !== undefined) {
+        const detail = added.stderr.toString("utf8").trim() || added.error || "Git failed.";
+        application = applicationFact(direction, base, patch.units.map((unit) => unit.id), patch.bytes, "ERROR", added, `Could not create detached worktree: ${detail}`);
+        note = application.error ?? "Could not create detached worktree.";
       } else {
-        const applied = await materialized.runGit([
-          "apply",
-          ...(direction === "REVERSE_FROM_AFTER" ? ["--reverse"] : []),
-          "--binary",
-          // The external temporary index starts at the exact base commit.
-          // Requiring index application prevents Git from silently resolving
-          // a selected path's file/directory obstruction outside the subset.
-          "--index",
-          "--whitespace=nowarn",
-          "--"
-        ], patch.bytes);
-        if (applied.exitCode !== 0 || applied.error !== undefined) {
-          const detail = applied.stderr.toString("utf8").trim() || applied.error || "Git apply failed.";
-          application = applicationFact(direction, base, patch.units.map((unit) => unit.id), patch.bytes, "CONFLICT", applied, detail);
-          note = `Patch application is unresolved: ${detail}`;
+        created = true;
+        if (patch.bytes.length === 0) {
+          application = applicationFact(direction, base, [], patch.bytes, "NO_PATCHES");
         } else {
-          const scopeError = await verifyAppliedPatchScope(materialized, base, patch.units.map((unit) => unit.path));
-          if (scopeError) {
-            application = applicationFact(direction, base, patch.units.map((unit) => unit.id), patch.bytes, "CONFLICT", applied, scopeError);
-            note = `Patch application is unresolved: ${scopeError}`;
+          const applied = await runGit(worktree, [
+            "apply",
+            ...(direction === "REVERSE_FROM_AFTER" ? ["--reverse"] : []),
+            "--binary",
+            // The detached worktree index starts at the exact base commit.
+            // Requiring index application prevents Git from silently resolving
+            // a selected path's file/directory obstruction outside the subset.
+            "--index",
+            "--whitespace=nowarn",
+            "--"
+          ], patch.bytes);
+          if (applied.exitCode !== 0 || applied.error !== undefined) {
+            const detail = applied.stderr.toString("utf8").trim() || applied.error || "Git apply failed.";
+            application = applicationFact(direction, base, patch.units.map((unit) => unit.id), patch.bytes, "CONFLICT", applied, detail);
+            note = `Patch application is unresolved: ${detail}`;
           } else {
-            application = applicationFact(direction, base, patch.units.map((unit) => unit.id), patch.bytes, "APPLIED", applied);
+            const scopeError = await verifyAppliedPatchScope(worktree, base, patch.units.map((unit) => unit.path));
+            if (scopeError) {
+              application = applicationFact(direction, base, patch.units.map((unit) => unit.id), patch.bytes, "CONFLICT", applied, scopeError);
+              note = `Patch application is unresolved: ${scopeError}`;
+            } else {
+              application = applicationFact(direction, base, patch.units.map((unit) => unit.id), patch.bytes, "APPLIED", applied);
+            }
           }
         }
-      }
 
-      if (application.status === "APPLIED" || application.status === "NO_PATCHES") {
-        overlays = await materializeFrozenOverlays(worktree, input.frozenWitness, materialized);
-        let plan;
-        try {
-          plan = createSandboxPlan(planRequestForWorktree(input.sandbox, worktree, input.frozenWitness));
-        } catch (error) {
-          note = `Sandbox plan could not be created: ${errorMessage(error)}`;
-        }
-        if (plan !== undefined) {
-          sandbox = auditSandboxPlan(plan);
-          usedExecutions += 1;
-          const execution = await executeSandboxPlan(plan, request.runner);
-          result = persistedResult(execution);
-          outcome = outcomeForSandbox(execution);
-          note = outcomeNote(execution);
+        if (application.status === "APPLIED" || application.status === "NO_PATCHES") {
+          overlays = await materializeFrozenOverlays(worktree, input.frozenWitness);
+          let plan;
+          try {
+            plan = createSandboxPlan(planRequestForWorktree(input.sandbox, worktree, input.frozenWitness));
+          } catch (error) {
+            note = `Sandbox plan could not be created: ${errorMessage(error)}`;
+          }
+          if (plan !== undefined) {
+            sandbox = auditSandboxPlan(plan);
+            usedExecutions += 1;
+            const execution = await executeSandboxPlan(plan, request.runner);
+            result = persistedResult(execution);
+            outcome = outcomeForSandbox(execution);
+            note = outcomeNote(execution);
+          }
         }
       }
     } catch (error) {
@@ -910,8 +1117,8 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
       application = application ?? applicationFact(direction, base, patch.units.map((unit) => unit.id), patch.bytes, "ERROR", undefined, message);
       note = message;
     } finally {
-      if (materialized) {
-        const cleanupError = await materialized.cleanup();
+      if (created) {
+        const cleanupError = await removeWorktree(repository, worktree);
         if (cleanupError) errors.push(cleanupError);
       }
       await rm(tempRoot, { recursive: true, force: true });

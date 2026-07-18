@@ -156,20 +156,16 @@ describe("FaultLine deterministic sample", () => {
 
   it("renders the five-beat incident page from executable analysis data", () => {
     const page = renderIncidentPage(createDemoAnalysis("REPLAY"));
-    // Russell-style walkthrough chrome (post-master UI copy)
-    expect(page).toContain("DEMO MODE");
-    expect(page).toContain("A STEP-BY-STEP BUG INVESTIGATION");
-    expect(page).toContain("Pick one simple test");
-    expect(page).toContain("Find when it first broke");
-    expect(page).toContain("Check which changes matter");
-    expect(page).toContain("Write a clear handoff");
-    expect(page).toContain("Confirm the fix and save the proof");
-    // Analysis payload still drives the page (REPLAY stays non-evidentiary)
-    expect(page).toContain("work sessions checked");
-    expect(page).toContain("Result grade D");
-    expect(page).toContain("This demo replay did not fully prove a working-to-broken change.");
-    expect(page).toContain("uses the safe built-in example");
+    expect(page).toContain("BREAK");
+    expect(page).toContain("FIND");
+    expect(page).toContain("PROVE");
+    expect(page).toContain("FIX");
+    expect(page).toContain("PREVENT");
+    expect(page).toContain("DETERMINISTIC SAMPLE");
+    expect(page).toContain("Re-run fixture evidence");
+    expect(page).toContain("Not executed - cached replay only");
+    expect(page).toContain("SAMPLE ONLY - cached replay is not evidence");
+    expect(page).not.toContain("Bidirectionally validated");
     expect(page).not.toContain("VERIFIED PREVENTION");
-    expect(page).not.toContain("<<<<<<");
   });
 });

@@ -142,11 +142,7 @@ function nativeDockerFixture(observed: GitInvestigationResult): GitInvestigation
       executionTrust: "NATIVE_DOCKER",
       proofTransitions: transitions.length,
       isProof: transitions.length > 0,
-      reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.",
-      evidenceGrade: transitions.length > 0 ? "COMMIT_PROOF" : "NONE",
-      evidenceLabel: transitions.length > 0
-        ? "Commit-path localization — portable proof"
-        : "Commit-path localization — not certified as portable proof"
+      reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states."
     }
   });
 }
