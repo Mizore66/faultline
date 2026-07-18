@@ -39,8 +39,8 @@ The resulting incident page is the same read-only product surface used for any r
 Use a clone that contains the historical commits. FaultLine's guided runtime setup shows the exact Docker mutation before it makes it; only the explicit confirmation pulls the reviewed catalog image and resolves its local immutable digest.
 
 ```powershell
-pnpm fl -- runtime prepare node
-pnpm fl -- runtime prepare node --yes
+pnpm fl runtime prepare node
+pnpm fl runtime prepare node --yes
 ```
 
 Create a review-only draft. The witness returns nonzero only when the `tee` command exists and is missing a preceding `mkdir -p .faultline` command. Store this nested-quote command in a UTF-8-without-BOM command file so PowerShell does not reinterpret it before FaultLine freezes its exact bytes:
@@ -54,7 +54,7 @@ node -e "const fs=require('node:fs'); const y=fs.readFileSync('.github/workflows
 '@.Trim()
 [System.IO.File]::WriteAllText($WitnessFile, $Witness, [System.Text.UTF8Encoding]::new($false))
 
-pnpm fl -- incident start `
+pnpm fl incident start `
   --repo . `
   --id <new-incident-id> `
   --from e8e3064 `
@@ -66,7 +66,7 @@ pnpm fl -- incident start `
 The command above **only records a draft**. `--command-file` reads the regular UTF-8 file once and stores the command bytes—not a live file reference—inside the immutable proposal. It does not execute the witness, contact GitHub, approve anything, or freeze anything. Start the review workbench, inspect the exact command, and make the separate human approval and freeze actions:
 
 ```powershell
-pnpm fl -- witness review <new-incident-id>
+pnpm fl witness review <new-incident-id>
 ```
 
 Retain the frozen digest shown by the review screen outside `.faultline`.
@@ -76,9 +76,9 @@ Retain the frozen digest shown by the review screen outside `.faultline`.
 After the human freeze, check durable state and use the same draft—do not retype the range or substitute a witness:
 
 ```powershell
-pnpm fl -- incident status <new-incident-id> `
+pnpm fl incident status <new-incident-id> `
   --expect-digest <retained-frozen-digest>
-pnpm fl -- incident continue <new-incident-id> `
+pnpm fl incident continue <new-incident-id> `
   --expect-digest <retained-frozen-digest>
 ```
 
@@ -87,7 +87,7 @@ The expected recorded sequence is a stable `PASS -> FAIL` transition for the int
 On success, retain the emitted bundle root outside the bundle and open the same incident page used for every real investigation:
 
 ```powershell
-pnpm fl -- serve `
+pnpm fl serve `
   --bundle .faultline\git-proof-bundles\<generated-bundle> `
   --expect-root <retained-root-digest>
 ```

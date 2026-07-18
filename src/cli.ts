@@ -795,10 +795,9 @@ async function judgeDemo(args: string[]): Promise<void> {
   if (hasFlag(args, "--export-only")) return;
   const port = Number(option(args, "--port") ?? "4173");
   const server = await startFaultLineServer({ analysis, outputDirectory: bundle.directory, port });
-  const demoUrl = `http://localhost:${new URL(server.url).port}`;
-  process.stdout.write(`🚀 Launching FaultLine Judge Demo at ${demoUrl}...\n`);
+  process.stdout.write(`🚀 Launching FaultLine Judge Demo at ${server.url}...\n`);
   process.stdout.write(`Press Ctrl+C to stop.\n`);
-  openLocalDemoUrl(demoUrl);
+  openLocalDemoUrl(server.url);
   await new Promise<void>((resolveExit) => {
     process.once("SIGINT", () => {
       void server.close().finally(resolveExit);

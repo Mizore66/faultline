@@ -1,10 +1,19 @@
 # FaultLine
 
-> **First Bad Turn**, powered by FaultLine: observe public Codex lifecycle hooks, capture immutable turn-boundary Git trees, and execute a frozen witness across those states. FaultLine does **not** inspect private Codex reasoning.
+> Freeze one reviewed executable witness. Replay it across recorded source states. Package only what those executions support — not model intent.
 
-## See it in one command
+**Track fit:** Developer Tools (CI / DevOps / agentic debugging evidence).
 
-Clone, install, and launch the local judge demo — it starts a server and opens your browser:
+## Judge sandbox (start here)
+
+**Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux. No API key for the sandbox. Docker is optional (needed only for live commit proof).
+
+| Goal | Command / path | What you get |
+| --- | --- | --- |
+| Zero install | Open [`docs/judge-preview.html`](docs/judge-preview.html) | Static protocol sample of the incident UI |
+| One-command local UI | `pnpm fl judge-demo` | Browser opens on `127.0.0.1`; fixture evidence model |
+| Offline verify | `pnpm fl judge-demo --export-only` then `pnpm fl verify .faultline/bundles/judge-demo` | Write + verify the sample bundle |
+| Real `COMMIT_PROOF` | [`docs/faultline-self-incident.md`](docs/faultline-self-incident.md) or `pnpm fl demo live-git --export-only` | Portable Git proof (Docker for live path) |
 
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
@@ -14,49 +23,43 @@ pnpm install --frozen-lockfile
 pnpm fl judge-demo
 ```
 
-**Windows (PowerShell):** if `pnpm` fails with *“running scripts is disabled”* / ExecutionPolicy, use `pnpm.cmd` instead of `pnpm`:
+**Windows (PowerShell):** if `pnpm` fails with ExecutionPolicy, use `pnpm.cmd` (or `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process`). Do not paste markdown backticks. Do not insert `--` between `fl` and the subcommand.
 
-```powershell
-pnpm.cmd install --frozen-lockfile
-pnpm.cmd fl judge-demo
-```
-
-Or allow scripts for this terminal session only:
-
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
-pnpm fl judge-demo
-```
-
-Do not paste markdown backticks around the command. Do not insert `--` between `fl` and `judge-demo`.
-
-No Docker or API key required. Press Ctrl+C in the terminal when you are done. Use `--export-only` if you only want the proof bundle written without serving or opening a browser.
-
-Zero-install static preview (no install): open [`docs/judge-preview.html`](docs/judge-preview.html).
+`judge-demo` is the **protocol / UI sandbox** (no Docker, no network, no API key). It is not a real incident. For Build Week video, open with the self-incident or live-Git proof, then use `judge-demo` only if you need a fast UI close-up.
 
 ## What it is
 
-FaultLine is a **CLI evidence tool** for regressions after agent-assisted coding. It freezes one human-reviewed executable witness, replays it across immutable source states, and proves only what those executions support — not model intent or a unique semantic root cause.
+FaultLine is a **CLI evidence tool** for regressions after agent-assisted coding. A human freezes the predicate; FaultLine replays it and proves only what those executions support.
 
 **Break → Find → Prove → Fix → Prevent**
 
 | Proves | Never claims |
 | --- | --- |
-| Earliest stable PASS→FAIL under a frozen witness (turn trees or Git range) | Model intent / “the agent meant to…” |
-| Turn-boundary localization from Codex Stop snapshots (including dirty worktrees) | Private Codex interception or hidden model state |
-| Bidirectional edit necessity/sufficiency when certified (Git path) | Unique semantic root cause |
+| Earliest stable PASS→FAIL under a frozen witness (Git range; turn trees experimental) | Model intent / “the agent meant to…” |
+| Portable offline-verifiable proof packages (`COMMIT_PROOF`) | Unique semantic root cause |
+| Bidirectional edit necessity/sufficiency when certified (Git path) | Private Codex interception or hidden model state |
 | Structured `PREDICATE_*` outcomes (compile ≠ FAIL) | That one Docker image fits every lockfile era |
 
-| Path | Grade | Notes |
+| Path | Grade | Role |
 | --- | --- | --- |
-| `fl investigate git` / live self-incident | **`COMMIT_PROOF`** | Mature, portable Git proof packages |
-| `fl investigate turns` | **`EXPERIMENTAL_TURN`** | Useful localization; not interchangeable with commit-path proof yet |
+| `fl investigate git` / self-incident / `demo live-git` | **`COMMIT_PROOF`** | Shippable product path — lead demos here |
+| `fl investigate turns` | **`EXPERIMENTAL_TURN`** | Codex-native localization preview — not interchangeable with commit proof yet |
+| `fl judge-demo` | Sample | Evidence-model UI for judges who cannot run Docker |
+
+## Demo hierarchy (one story)
+
+1. **Product claim:** offline-verifiable evidence package for “where does this frozen predicate first go bad?”
+2. **Show real proof:** self-incident root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` (`PASS→FAIL` at `97c3290`) — see [docs/faultline-self-incident.md](docs/faultline-self-incident.md).
+3. **Optional smoke:** `pnpm fl demo live-git --export-only` (Docker).
+4. **Sandbox UI:** `pnpm fl judge-demo` or static preview — label as fixture.
+
+Build Week must also show **GPT-5.6** (`fl witness propose --live` and/or `fl repair brief --live`) and **Codex** (build acceleration + optional sidecar hooks) on camera — see [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md).
 
 ## What to do next
 
-1. **Real incident** — [docs/first-incident.md](docs/first-incident.md) (`fl doctor`, then guided `fl investigate --ci-log` when you have a failing command).
-2. **Docker proof smoke** — `pnpm fl demo live-git --export-only` (digest-pinned native Docker path).
-3. **Judges / recorded self-incident** — [docs/faultline-self-incident.md](docs/faultline-self-incident.md) (real `PASS→FAIL` at `97c3290`). Treat `judge-demo` as the protocol sample, not the center of a submission video.
+1. **Real incident** — [docs/first-incident.md](docs/first-incident.md) (`fl doctor`, then `fl investigate --ci-log`).
+2. **Docker proof smoke** — `pnpm fl demo live-git --export-only`.
+3. **Submission kit** — [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md) (video run-of-show, Devpost fields, `/feedback` ID).
 
 Everything below is reference material: install boundaries, expert flows, vocabulary, and handoff checklists.
 
@@ -66,7 +69,7 @@ Everything below is reference material: install boundaries, expert flows, vocabu
 
 ### Install and package boundary
 
-**Supported install today:** clone `main` (MIT) and run via pnpm (see [See it in one command](#see-it-in-one-command)).
+**Supported install today:** clone `main` (MIT) and run via pnpm (see [Judge sandbox](#judge-sandbox-start-here)).
 
 ```powershell
 pnpm fl doctor --repo .
@@ -146,7 +149,7 @@ The command pulls `node:22-alpine` only to resolve a concrete immutable image di
 Before making a real claim, let FaultLine surface local prerequisites:
 
 ```powershell
-pnpm fl -- doctor --repo .
+pnpm fl doctor --repo .
 ```
 
 #### One-command guided path (`fl investigate --ci-log`)
@@ -155,8 +158,8 @@ For a CI log plus a failing command, use the resumable guided workflow. It creat
 
 ```powershell
 docker pull node:22-alpine
-pnpm fl -- runtime resolve node
-pnpm fl -- investigate --ci-log .\ci.log `
+pnpm fl runtime resolve node
+pnpm fl investigate --ci-log .\ci.log `
   --repo . `
   --command "pnpm test -- checkout" `
   --runtime node
@@ -165,7 +168,7 @@ pnpm fl -- investigate --ci-log .\ci.log `
 If you cancel during review, resume the same durable incident:
 
 ```powershell
-pnpm fl -- investigate --resume <incident-id> `
+pnpm fl investigate --resume <incident-id> `
   --repo . `
   --expect-digest <retained-frozen-digest> `
   --runtime node
@@ -176,13 +179,13 @@ FaultLine never auto-approves or auto-freezes. Internal steps still reuse `incid
 If you do not know the Git bracket, ask FaultLine for **local-only suggestions** first. It may show a locally cached upstream merge-base and/or the immediate parent, but it never fetches, contacts a remote, parses CI, or chooses one for you:
 
 ```powershell
-pnpm fl -- incident suggest --repo .
+pnpm fl incident suggest --repo .
 ```
 
 Then record a review-only draft from the command that is failing. It never runs the command, auto-selects a suggested or remote base, approves a witness, or freezes it. Pass a reviewed suggestion as `--from` / `--to`; with no explicit range, FaultLine uses only an unambiguous locally observed one-parent `HEAD~1 -> HEAD` bracket:
 
 ```powershell
-pnpm fl -- incident start `
+pnpm fl incident start `
   --repo . `
   --command "pnpm test -- checkout"
 ```
@@ -190,23 +193,23 @@ pnpm fl -- incident start `
 For a common Node/Python/Go base image, use the guided setup command to review the exact Docker mutation first. Its first invocation does not touch Docker; only the explicit `--yes` invocation pulls the reviewed catalog tag, resolves the local immutable digest, and leaves a concrete next command. Add `--runtime node` (or `python` / `go`) to intake to bind that digest:
 
 ```powershell
-pnpm fl -- runtime prepare node
+pnpm fl runtime prepare node
 # Review the displayed Docker pull effect, then explicitly confirm it:
-pnpm fl -- runtime prepare node --yes
-pnpm fl -- incident start --repo . --command "pnpm test -- checkout" --runtime node
+pnpm fl runtime prepare node --yes
+pnpm fl incident start --repo . --command "pnpm test -- checkout" --runtime node
 ```
 
 For an ordinary project whose dependencies do not exist in a base image, prepare an explicit **setup-only** dependency image. FaultLine fingerprints the Dockerfile and every regular context file, previews the output tag/network policy/Docker mutation, and requires the printed `plan.review.planDigest` again at build time. The default build network is `none`, which disables Dockerfile `RUN` networking but does not certify daemon or base-image networking; choose `default` explicitly only when the reviewed Dockerfile needs networked `RUN` steps. The proof runner mounts Git source at `/workspace/src`, leaving an image-baked parent `/workspace/node_modules` available to common Node package resolution.
 
 ```powershell
-pnpm fl -- runtime project plan `
+pnpm fl runtime project plan `
   --context . `
   --dockerfile Dockerfile.faultline `
   --tag registry.example/acme/my-app:faultline-deps-20260717 `
   --network default
 
 # After reviewing the complete plan, copy its plan.review.planDigest:
-pnpm fl -- runtime project build `
+pnpm fl runtime project build `
   --context . `
   --dockerfile Dockerfile.faultline `
   --tag registry.example/acme/my-app:faultline-deps-20260717 `
@@ -218,21 +221,21 @@ pnpm fl -- runtime project build `
 This build is never a proof and FaultLine never pushes credentials or images. If Docker reports only a local image ID, push and pull the reviewed tag through your own registry, then resolve its immutable digest without rebuilding. If you only need to validate the workflow locally after human witness freeze, `fl incident continue <id> --unsafe-local` is the explicitly non-proof route; it neither uses that local image ID nor exports a portable bundle.
 
 ```powershell
-pnpm fl -- runtime project resolve --tag registry.example/acme/my-app:faultline-deps-20260717
-pnpm fl -- incident start --repo . --command "pnpm test -- checkout" --image <resolved-image@sha256:...>
+pnpm fl runtime project resolve --tag registry.example/acme/my-app:faultline-deps-20260717
+pnpm fl incident start --repo . --command "pnpm test -- checkout" --image <resolved-image@sha256:...>
 ```
 
-The draft and human-origin proposal are write-once local records. Run `pnpm fl -- witness review <id>` to review the exact command, overlay bytes, and policy in a local browser workbench; it requires separate human approval and freeze clicks. Retain the freeze digest outside the witness store, then use `pnpm fl -- incident status <id>` and `pnpm fl -- incident continue <id> --expect-digest <retained-frozen-digest>` to carry that same immutable incident into proof-grade replay without retyping its range or witness identifier. The full happy path, support boundary, CI handoff, and failure modes are in [docs/first-incident.md](docs/first-incident.md) and [docs/github-action.md](docs/github-action.md).
+The draft and human-origin proposal are write-once local records. Run `pnpm fl witness review <id>` to review the exact command, overlay bytes, and policy in a local browser workbench; it requires separate human approval and freeze clicks. Retain the freeze digest outside the witness store, then use `pnpm fl incident status <id>` and `pnpm fl incident continue <id> --expect-digest <retained-frozen-digest>` to carry that same immutable incident into proof-grade replay without retyping its range or witness identifier. The full happy path, support boundary, CI handoff, and failure modes are in [docs/first-incident.md](docs/first-incident.md) and [docs/github-action.md](docs/github-action.md).
 
 ### Real Git investigation
 
 The preferred operator path is `fl investigate --ci-log` (or the modular `fl incident start` → `fl witness review` → `fl incident continue`). The lower-level commands below remain available for automation or a pre-existing witness store. First create and freeze a reviewed witness. The proposal input is a blinded incident packet plus the exact overlay bytes to execute.
 
 ```powershell
-pnpm fl -- witness propose --input .\proposal.json
-pnpm fl -- witness review <proposal-id>
+pnpm fl witness propose --input .\proposal.json
+pnpm fl witness review <proposal-id>
 # Review the local page, then make separate Approve and Freeze clicks.
-pnpm fl -- witness verify <proposal-id> --expect-digest <frozen-digest>
+pnpm fl witness verify <proposal-id> --expect-digest <frozen-digest>
 ```
 
 #### Optional authenticated reviewer approval
@@ -240,10 +243,10 @@ pnpm fl -- witness verify <proposal-id> --expect-digest <frozen-digest>
 `fl witness approve` records a reviewed approval but is intentionally not an identity assertion. When a reviewer needs to authenticate the approval, sign the already-frozen witness with an Ed25519 private key and verify it against a separately retained reviewer keyring:
 
 ```powershell
-pnpm fl -- witness sign <proposal-id> `
+pnpm fl witness sign <proposal-id> `
   --private-key .\reviewer-ed25519.pem `
   --keyring .\reviewers.json
-pnpm fl -- witness verify <proposal-id> `
+pnpm fl witness verify <proposal-id> `
   --expect-digest sha256:<frozen-digest> `
   --keyring .\reviewers.json `
   --require-signature
@@ -270,7 +273,7 @@ The signed record binds the proposal, ordinary approval, exact frozen-witness di
 Then replay it across a Git range in a digest-pinned Docker image:
 
 ```powershell
-pnpm fl -- investigate git `
+pnpm fl investigate git `
   --repo . `
   --from <known-good-commit> `
   --to <known-bad-commit> `
@@ -284,7 +287,7 @@ On a completed proof-grade result, FaultLine creates a fresh write-once package 
 Review a completed portable Git package without rerunning its witness or executing repository code:
 
 ```powershell
-pnpm fl -- serve `
+pnpm fl serve `
   --bundle .faultline\git-proof-bundles\<investigation> `
   --expect-root sha256:<recorded-root>
 ```
@@ -294,7 +297,7 @@ FaultLine verifies the complete package before opening this read-only page. It r
 To counterfactually minimize the selected adjacent good/bad diff, use the same frozen witness and Docker policy:
 
 ```powershell
-pnpm fl -- minimize git `
+pnpm fl minimize git `
   --repo . `
   --before <last-good-commit> `
   --after <first-bad-commit> `
@@ -306,7 +309,7 @@ pnpm fl -- minimize git `
 The minimizer derives binary-safe Git patch units, keeps patch conflicts and execution failures `UNRESOLVED`, enforces an execution budget, and needs three distinct Docker executions in each counterfactual direction before it calls sufficiency and necessity certified. It writes every result under `.faultline/minimizations/`; an unsafe local run remains explicitly non-proof. The write result prints a canonical `resultDigest`; retain it outside the JSON, then verify the stored record without running Git, Docker, or repository code:
 
 ```powershell
-pnpm fl -- minimize verify .faultline\minimizations\<result>.json `
+pnpm fl minimize verify .faultline\minimizations\<result>.json `
   --expect-digest sha256:<recorded-result-digest>
 ```
 
@@ -350,8 +353,8 @@ The sidecar captures a checkpoint only when `Stop` sees a clean Git worktree. It
 For manually supplied observed events, record lifecycle facts and clean checkpoints directly:
 
 ```powershell
-pnpm fl -- record init --session <session-id> --repo . --transport SIDE_CAR --actor you@example.com
-pnpm fl -- record attach `
+pnpm fl record init --session <session-id> --repo . --transport SIDE_CAR --actor you@example.com
+pnpm fl record attach `
   --ledger .faultline\recordings\<session-id>.json `
   --repo . `
   --turn turn-1 `
@@ -365,11 +368,11 @@ pnpm fl -- record attach `
 Pass the chosen `--ledger` path to `fl investigate git` or `fl incident continue` to embed and validate matching lifecycle checkpoints in the Git package. A rendered package labels its real coverage as `FULLY_BOUND`, `PARTIALLY_BOUND`, or conservative **LEGACY BOUND** for old packages; it never treats a descendant-only checkpoint as coverage of every replayed state. If every state should be bound to an ordered checkpoint, create a strict sidecar record:
 
 ```powershell
-pnpm fl -- ledger bind `
+pnpm fl ledger bind `
   --ledger .faultline\recordings\<session-id>.json `
   --investigation <proof-bundle>\investigation.json `
   --output .faultline\bindings\<investigation>.json
-pnpm fl -- ledger verify .faultline\bindings\<investigation>.json
+pnpm fl ledger verify .faultline\bindings\<investigation>.json
 ```
 
 `record attach` is a convenience path for sidecar session attribution: it appends a started/completed turn pair and, when requested, a clean Git checkpoint for the completed turn. The attribution fields are reviewer-supplied context, not identity proof, private Codex interception, model intent, or turn-level blame. The ledger is observed evidence, not a claim that FaultLine reads private model reasoning.
@@ -379,18 +382,18 @@ pnpm fl -- ledger verify .faultline\bindings\<investigation>.json
 Offline verification never executes repository code:
 
 ```powershell
-pnpm fl -- verify <proof-bundle-directory> --expect-root sha256:<recorded-root>
+pnpm fl verify <proof-bundle-directory> --expect-root sha256:<recorded-root>
 ```
 
 Retain the root outside the package. FaultLine can write a separate, write-once receipt for that purpose:
 
 ```powershell
-pnpm fl -- attest create `
+pnpm fl attest create `
   --bundle <proof-bundle-directory> `
   --receipt <receipt-id> `
   --subject "FaultLine incident" `
   --issuer "CI or release system"
-pnpm fl -- attest verify <receipt-id> --expect-digest sha256:<recorded-receipt-digest>
+pnpm fl attest verify <receipt-id> --expect-digest sha256:<recorded-receipt-digest>
 ```
 
 `fl attest` is an **integrity-only** receipt. An external digest detects an editor who rewrites both local content and local checksums. It is not a cryptographic signature, an identity check, proof of authorship, or a provenance guarantee.
@@ -400,7 +403,7 @@ pnpm fl -- attest verify <receipt-id> --expect-digest sha256:<recorded-receipt-d
 For a CI identity assertion, create a provenance subject from a fully verified Git proof bundle inside GitHub Actions:
 
 ```powershell
-pnpm fl -- provenance create `
+pnpm fl provenance create `
   --bundle <git-proof-bundle-directory> `
   --output .faultline\provenance\ci-receipt.json
 ```
@@ -410,7 +413,7 @@ This command refuses to run outside GitHub Actions. Its output is deliberately *
 Verify the retained receipt, signature bundle, and proof package together without executing repository code:
 
 ```powershell
-pnpm fl -- provenance verify `
+pnpm fl provenance verify `
   --bundle <git-proof-bundle-directory> `
   --receipt .faultline\provenance\ci-receipt.json `
   --attestation-bundle .\sigstore-bundle.json `
@@ -508,7 +511,7 @@ After a completed deterministic investigation, FaultLine also has a typed repair
 The CLI accepts only a fully verified portable Git proof package—not an arbitrary investigation JSON—and stores the result as a write-once `INFERRED` artifact:
 
 ```powershell
-pnpm fl -- repair brief `
+pnpm fl repair brief `
   --bundle .faultline\git-proof-bundles\<investigation> `
   --expect-root sha256:<recorded-root> `
   --live
@@ -519,7 +522,7 @@ For a reviewed offline response, replace `--live` with `--input .\repair-brief.j
 Verify an existing inferred repair artifact without re-running a model or any repository code:
 
 ```powershell
-pnpm fl -- repair verify .faultline\repair-briefs\<repair-id>
+pnpm fl repair verify .faultline\repair-briefs\<repair-id>
 ```
 
 `fl repair brief` prints an `artifactDigest`; retain it outside the directory and pass it to `fl repair verify --expect-digest ...` or `fl serve --expect-repair ...`.
@@ -527,7 +530,7 @@ pnpm fl -- repair verify .faultline\repair-briefs\<repair-id>
 After retaining the minimization result digest and generating a repair brief, bring those separately verified records into the **same read-only incident page**:
 
 ```powershell
-pnpm fl -- serve `
+pnpm fl serve `
   --bundle .faultline\git-proof-bundles\<investigation> `
   --expect-root sha256:<recorded-root> `
   --minimization .faultline\minimizations\<result>.json `
@@ -540,7 +543,7 @@ The page re-verifies each attachment against its retained digest. A minimization
 
 ### How Codex and GPT-5.6 are used
 
-Codex accelerated FaultLine's implementation, adversarial testing, and product hardening. At runtime, `fl record` accepts a strictly ordered, hash-chained Codex-compatible NDJSON lifecycle stream and records clean Git checkpoints; it labels the supplied transport as `CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR` rather than claiming private event interception. Start a recording with `pnpm fl -- codex record init --session <id> --repo . --transport CODEX_CLI`, pipe observed events through `fl codex record stdin`, and capture checkpoints with `fl codex record checkpoint`.
+Codex accelerated FaultLine's implementation, adversarial testing, and product hardening. At runtime, `fl record` accepts a strictly ordered, hash-chained Codex-compatible NDJSON lifecycle stream and records clean Git checkpoints; it labels the supplied transport as `CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR` rather than claiming private event interception. Start a recording with `pnpm fl codex record init --session <id> --repo . --transport CODEX_CLI`, pipe observed events through `fl codex record stdin`, and capture checkpoints with `fl codex record checkpoint`.
 
 #### Turn-tree snapshot storage warning
 
@@ -581,11 +584,11 @@ Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. On th
 
 ### Judge path
 
-1. Start with [See it in one command](#see-it-in-one-command) (or the [export-only judge check](#export-only-judge-check)).
+1. Start with the [Judge sandbox](#judge-sandbox-start-here) (or the [export-only judge check](#export-only-judge-check)).
 2. Inspect the reviewed frozen witness before the sample exposes a suspect state.
 3. Watch the timeline keep non-monotonic history visible rather than assuming once-failing means always-failing.
 4. Inspect the two-direction counterfactual and the explicit unresolved partial-patch result.
-5. Verify the exported bundle with `pnpm fl -- verify .faultline/bundles/judge-demo` (or `fl verify` after a global install).
+5. Verify the exported bundle with `pnpm fl verify .faultline/bundles/judge-demo` (or `fl verify` after a global install).
 6. For a live, publishable incident, use the Git workflow above with a working Docker daemon and a digest-pinned image — or open the recorded [self-incident](docs/faultline-self-incident.md).
 
 The deterministic path proves only its included sample workflow. A real incident claim needs a recorded live Git/Docker run, the exact retained proof root, and an accurate description of what the replay did and did not establish.

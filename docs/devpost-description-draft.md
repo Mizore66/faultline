@@ -1,10 +1,14 @@
 # FaultLine Devpost description draft
 
-> This is a human-editable submission draft, not a record that FaultLine has been submitted, tested by users, or accepted into an event. Replace every bracketed field, delete any unsupported statement, and have the submitter review the final wording before publishing.
+> Paste into Devpost after a final human pass. Do not invent a video URL — leave that field empty on Devpost until the YouTube link exists.
 
 ## Project name
 
 FaultLine
+
+## Category
+
+**Developer Tools**
 
 ## One-line summary
 
@@ -26,7 +30,11 @@ FaultLine is a runnable TypeScript CLI and read-only proof view. Its implemented
 4. It writes a portable proof package that another engineer can inspect and verify without rerunning repository code.
 5. It can retain bounded, explicitly inferred GPT-5.6 repair guidance that cites verified evidence rather than changing the verdict.
 
-The included `fl judge-demo` is deterministic and intentionally limited: it lets a reviewer inspect the evidence model without Docker, a network call, an API key, or a pre-existing incident. The separate `fl demo live-git` path is the actual Docker-backed Git replay demonstration. FaultLine has also completed a bounded self-incident: a human-frozen witness measured `PASS -> FAIL` at `97c3290` and `FAIL -> PASS` at `07ee7f1` in its historical provenance workflow; the recorded package root is `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`. This is evidence for that exact workflow predicate, not an attribution of model intent or a universal diagnosis claim. The README explains the boundary between those paths.
+**Demo hierarchy for judges:**
+
+- **Product path (`COMMIT_PROOF`):** recorded self-incident — human-frozen witness measured `PASS -> FAIL` at `97c3290` and `FAIL -> PASS` at `07ee7f1`; package root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`. Details: [faultline-self-incident.md](faultline-self-incident.md). Optional live smoke: `pnpm fl demo live-git --export-only` (Docker).
+- **Sandbox (no Docker / no API key):** `pnpm fl judge-demo` opens the incident UI on a fixture bundle; or open [`judge-preview.html`](judge-preview.html) with zero install. Label these as protocol samples, not real incidents.
+- **Codex-native preview:** turn-boundary localization is `EXPERIMENTAL_TURN` and is not interchangeable with commit-path proof yet.
 
 ## How Codex and GPT-5.6 are used
 
@@ -38,32 +46,42 @@ GPT-5.6 is used through the Responses API only at two bounded points: proposing 
 
 ## Fast judge path
 
-Install from npm (after publish) or clone `main`:
+**Supported install today:** clone `main` (MIT). Global `npm install -g @mizore66/faultline` is **not** supported yet (name reserved; no published release).
 
-    npm install -g @mizore66/faultline
-    fl judge-demo --rerun-all --export-only
-    fl verify .faultline/bundles/judge-demo
+```powershell
+git clone https://github.com/Mizore66/faultline.git
+cd faultline
+git checkout main
+pnpm install --frozen-lockfile
+pnpm fl judge-demo
+```
 
-From a checkout with Node.js 22+ and pnpm 10.32.1:
+Offline verify of the fixture (no browser):
 
-    pnpm install --frozen-lockfile
-    pnpm fl -- judge-demo --rerun-all --export-only
-    pnpm fl -- verify .faultline/bundles/judge-demo
+```powershell
+pnpm fl judge-demo --rerun-all --export-only
+pnpm fl verify .faultline/bundles/judge-demo
+```
 
-This produces and verifies the deterministic judge bundle. For the live Git/Docker path, run:
+Live Git/Docker smoke:
 
-    fl demo live-git --export-only
+```powershell
+pnpm fl demo live-git --export-only
+```
 
-For a real CI log (resumable guided flow; human Approve then Freeze in the local review UI):
+Guided real CI log (human Approve then Freeze in the local review UI; never auto-approves):
 
-    pnpm fl -- investigate --ci-log .\ci.log --repo . --command "<failing predicate>" --runtime node
+```powershell
+pnpm fl investigate --ci-log .\ci.log --repo . --command "<failing predicate>" --runtime node
+```
 
-The submitter should record the exact commit, platform, command output, and any external proof root shown in the demo:
+**Recorded demo evidence (fill at recording time):**
 
-- Commit or release: [INSERT COMMIT SHA OR RELEASE]
-- Platform and runtime: [INSERT OS, NODE VERSION, AND DOCKER VERSION IF USED]
-- Recorded live-demo / self-incident root: `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` (self-incident; replace if demoing a fresh live-git root)
-- CI run URL and status: [INSERT URL, OR OMIT]
+- Repository: https://github.com/Mizore66/faultline (MIT, branch `main`)
+- Self-incident root (already recorded): `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`
+- Commit shown in video: _(record at demo time)_
+- Platform / Node / Docker: _(record at demo time)_
+- CI run URL: _(optional; omit if not shown)_
 
 ## Why it matters
 
@@ -71,23 +89,19 @@ FaultLine is intended for engineers responsible for diagnosing an agent-assisted
 
 **Validated so far (dogfood only):** FaultLine's first completed proof package is this repository's own provenance-workflow regression (`PASS -> FAIL` at `97c3290`, recovery at `07ee7f1`). That supports the frozen workflow predicate only—not agent intent, unique semantic cause, or third-party adoption. Do not add time-saved, customer, or accuracy claims unless supported by a consented record in [the impact-validation template](impact-validation-template.md).
 
-Current validated evidence:
-
-- Self-incident runbook and recorded root: [faultline-self-incident.md](faultline-self-incident.md)
-- Third-party / time-saved metrics: NOT YET COLLECTED (intentionally omitted)
-
 ## How FaultLine differs
 
-FaultLine composes a reviewed executable witness, repeated isolated Git-state replays, a portable offline-verifiable proof package, and explicit evidence boundaries. It is not a replacement for Git bisect, CI artifacts, a normal repro case, or provenance tooling; it uses or complements them. See [the concise scope comparison](differentiation.md) for the exact distinction and the claims that still need validation.
+FaultLine composes a reviewed executable witness, repeated isolated Git-state replays, a portable offline-verifiable proof package, and explicit evidence boundaries. It is not a replacement for Git bisect, CI artifacts, a normal repro case, or provenance tooling; it uses or complements them. See [the concise scope comparison](differentiation.md).
 
-## Submission evidence to complete before publishing
+## Submission fields
 
-- Track: Developer Tools
-- Public narrated demo video URL: [INSERT URL]
-- Qualifying Codex feedback session ID: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
-- Repository URL and license: https://github.com/Mizore66/faultline (MIT, branch `main`)
-- npm package: `@mizore66/faultline` (publish before claiming global install in the video if not yet on the registry)
-- Human-reviewed final project description: [CONFIRM COMPLETED]
-- Optional signed-CI evidence, if shown: [INSERT ATTESTATION BUNDLE AND TRUST-CONFIGURATION REFERENCE, OR OMIT]
+| Field | Value |
+| --- | --- |
+| Track | Developer Tools |
+| Public narrated demo video (<3 min, shows product + spoken Codex **and** GPT-5.6) | **REQUIRED — insert YouTube URL when recorded** |
+| `/feedback` Codex session ID | `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` |
+| Repository | https://github.com/Mizore66/faultline (MIT, `main`) |
+| Install for judges | Clone + `pnpm install --frozen-lockfile` + `pnpm fl judge-demo` (or open `docs/judge-preview.html`) |
+| npm global install | Not claimed (unpublished) |
 
-The submitter must verify the current event rules, required fields, access requirements, and deadlines immediately before submission. This draft deliberately does not invent missing video links, metrics, user quotes, or submission status.
+Recheck https://openai.devpost.com/ rules, deadline (Jul 21, 2026 @ 5:00pm PDT), and required form fields immediately before submit.
