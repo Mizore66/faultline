@@ -25,6 +25,13 @@ import { createIncidentDraft, type IncidentDraft } from "./incident.js";
 import { suggestIncidentRanges } from "./incident-intake.js";
 import { defaultIncidentDraftStore, readIncidentDraft, writeIncidentDraft } from "./incident-store.js";
 import { defaultJudgePreviewPath, writeJudgePreview } from "./judge-preview.js";
+import {
+  RECORDED_SELF_INCIDENT_ROOT,
+  defaultCommitProofPreviewPath,
+  defaultSelfIncidentSampleDirectory,
+  loadSelfIncidentProofView,
+  writeCommitProofPreview
+} from "./judge-proof.js";
 import { captureCleanGitSnapshot, writeGitSidecarSnapshot } from "./git-snapshot.js";
 import { codexSidecarLedgerPath, inspectObservedCodexSidecar, recordObservedCodexHook } from "./codex-sidecar.js";
 import { GitInvestigationResultSchema, investigateGitRange } from "./git-investigation.js";
@@ -98,6 +105,8 @@ const usage = `FaultLine — First Bad Turn evidence for agent-assisted code
 
 Usage:
   fl judge-demo [--replay | --rerun-all] [--output <managed-bundle-directory>] [--export-only]
+  fl judge-proof [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--export-only] [--port <number>]
+  fl commit-proof-preview [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--output <static-preview.html>]
   fl --version
   fl judge-preview [--output <static-preview.html>]
   fl doctor [--repo <directory>] [--json] [--proof-ready]
@@ -829,6 +838,57 @@ function judgePreviewCommand(args: string[]): void {
   process.stdout.write(`Preview: ${preview.path}\n`);
   process.stdout.write(`Bytes: ${preview.bytes}\n`);
   process.stdout.write("Limitation: this read-only replay snapshot is not a live Docker proof, a verified proof bundle, or a record of a fresh execution.\n");
+}
+
+async function judgeProofCommand(args: string[]): Promise<void> {
+  const bundleDirectory = option(args, "--bundle") === undefined
+    ? defaultSelfIncidentSampleDirectory()
+    : resolve(requiredOption(args, "--bundle"));
+  const expectRoot = option(args, "--expect-root");
+  const proof = loadSelfIncidentProofView({
+    directory: bundleDirectory,
+    ...(expectRoot === undefined ? {} : { expectedRoot: expectRoot })
+  });
+  process.stdout.write(`FaultLine COMMIT_PROOF sample verified.\n`);
+  process.stdout.write(`Bundle: ${describeBundlePath(bundleDirectory)}\n`);
+  process.stdout.write(`Root: ${proof.rootDigest}\n`);
+  process.stdout.write(`External root: ${proof.externalRootStatus}\n`);
+  process.stdout.write("This is the product Idea path (portable predicate proof), not the judge-demo fixture.\n");
+  if (proof.rootDigest === RECORDED_SELF_INCIDENT_ROOT) {
+    process.stdout.write("Matched historical self-incident root.\n");
+  } else {
+    process.stdout.write(`Note: historical self-incident root is ${RECORDED_SELF_INCIDENT_ROOT} (see docs/faultline-self-incident.md).\n`);
+  }
+  if (hasFlag(args, "--export-only")) return;
+  const port = Number(option(args, "--port") ?? "4174");
+  const server = await startGitProofServer({ proof, port });
+  process.stdout.write(`FaultLine COMMIT_PROOF page: ${server.url}\nPress Ctrl+C to stop.\n`);
+  openLocalDemoUrl(server.url);
+  await new Promise<void>((resolveExit) => {
+    process.once("SIGINT", () => {
+      void server.close().finally(resolveExit);
+    });
+  });
+}
+
+function commitProofPreviewCommand(args: string[]): void {
+  const bundleDirectory = option(args, "--bundle") === undefined
+    ? defaultSelfIncidentSampleDirectory()
+    : resolve(requiredOption(args, "--bundle"));
+  const expectRoot = option(args, "--expect-root");
+  const output = option(args, "--output") === undefined
+    ? defaultCommitProofPreviewPath()
+    : resolve(requiredOption(args, "--output"));
+  const preview = writeCommitProofPreview({
+    directory: bundleDirectory,
+    ...(expectRoot === undefined ? {} : { expectedRoot: expectRoot }),
+    outputFile: output
+  });
+  process.stdout.write(`FaultLine static COMMIT_PROOF preview written.\n`);
+  process.stdout.write(`Preview: ${preview.path}\n`);
+  process.stdout.write(`Bytes: ${preview.bytes}\n`);
+  process.stdout.write(`Root: ${preview.rootDigest}\n`);
+  process.stdout.write("Limitation: static snapshot of a verified package — not a live Docker rerun.\n");
 }
 
 /** Run the real Git/Docker product path against a disposable built-in incident. */
@@ -1877,6 +1937,12 @@ async function main(): Promise<void> {
       return;
     case "judge-demo":
       await judgeDemo(args);
+      return;
+    case "judge-proof":
+      await judgeProofCommand(args);
+      return;
+    case "commit-proof-preview":
+      commitProofPreviewCommand(args);
       return;
     case "judge-preview":
       judgePreviewCommand(args);

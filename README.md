@@ -1,31 +1,37 @@
 # FaultLine
 
-> Freeze one reviewed executable witness. Replay it across recorded source states. Package only what those executions support — not model intent.
+> **Idea claim:** a portable, offline-verifiable evidence package for one human-frozen predicate — another engineer can verify “where does *this* reviewed witness first go bad?” **without re-running repository code**, and without trusting model intent.
 
-**Track fit:** Developer Tools (CI / DevOps / agentic debugging evidence).
+**Track fit:** Developer Tools (CI / DevOps / agentic debugging evidence). Complements Git bisect, CI logs, and repro cases — does not replace them.
 
-## Judge sandbox (start here)
+## Start here (Idea first)
 
-**Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux. No API key for the sandbox. Docker is optional (needed only for live commit proof).
+**Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux.
 
-| Goal | Command / path | What you get |
-| --- | --- | --- |
-| Zero install | Open [`docs/judge-preview.html`](docs/judge-preview.html) | Static protocol sample of the incident UI |
-| One-command local UI | `pnpm fl judge-demo` | Browser opens on `127.0.0.1`; fixture evidence model |
-| Offline verify | `pnpm fl judge-demo --export-only` then `pnpm fl verify .faultline/bundles/judge-demo` | Write + verify the sample bundle |
-| Real `COMMIT_PROOF` | [`docs/faultline-self-incident.md`](docs/faultline-self-incident.md) or `pnpm fl demo live-git --export-only` | Portable Git proof (Docker for live path) |
+| Priority | Goal | Command / path | What you get |
+| --- | --- | --- | --- |
+| 1 | Product Idea (`COMMIT_PROOF`) | Install sample → `pnpm fl judge-proof` | Verifies + opens the recorded predicate proof page |
+| 1b | Zero-install Idea snapshot | Open [`docs/self-incident-proof-preview.html`](docs/self-incident-proof-preview.html) after `pnpm fl commit-proof-preview` | Static HTML of the same proof surface |
+| 2 | Fixture sandbox | `pnpm fl judge-demo` or [`docs/judge-preview.html`](docs/judge-preview.html) | Evidence-model UI only — **not** a real incident |
+| 3 | Live Docker smoke | `pnpm fl demo live-git --export-only` | Fresh portable Git proof (daemon required) |
+
+**COMMIT_PROOF sample** (see [`docs/samples/COMMIT_PROOF_SAMPLE.md`](docs/samples/COMMIT_PROOF_SAMPLE.md)):
 
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
 git checkout main
 pnpm install --frozen-lockfile
+pnpm fl judge-proof
+```
+
+Default sample root is the live-git package `sha256:f85c446d…`. The historical self-incident root `sha256:f6a391b3…` is separate — see [docs/faultline-self-incident.md](docs/faultline-self-incident.md). Fixture fallback:
+
+```powershell
 pnpm fl judge-demo
 ```
 
-**Windows (PowerShell):** if `pnpm` fails with ExecutionPolicy, use `pnpm.cmd` (or `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process`). Do not paste markdown backticks. Do not insert `--` between `fl` and the subcommand.
-
-`judge-demo` is the **protocol / UI sandbox** (no Docker, no network, no API key). It is not a real incident. For Build Week video, open with the self-incident or live-Git proof, then use `judge-demo` only if you need a fast UI close-up.
+**Windows (PowerShell):** if `pnpm` fails with ExecutionPolicy, use `pnpm.cmd`. Do not paste markdown backticks. Do not insert `--` between `fl` and the subcommand.
 
 ## What it is
 
@@ -48,10 +54,11 @@ FaultLine is a **CLI evidence tool** for regressions after agent-assisted coding
 
 ## Demo hierarchy (one story)
 
-1. **Product claim:** offline-verifiable evidence package for “where does this frozen predicate first go bad?”
-2. **Show real proof:** self-incident root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` (`PASS→FAIL` at `97c3290`) — see [docs/faultline-self-incident.md](docs/faultline-self-incident.md).
+1. **Lead with the Idea claim** — portable offline-verifiable predicate proof (not “better bisect,” not the fixture UI, not experimental turns).
+2. **Show real proof:** open the self-incident package with the recorded root (see [docs/faultline-self-incident.md](docs/faultline-self-incident.md)); cite `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` and `PASS→FAIL` at `97c3290`.
 3. **Optional smoke:** `pnpm fl demo live-git --export-only` (Docker).
-4. **Sandbox UI:** `pnpm fl judge-demo` or static preview — label as fixture.
+4. **Sandbox UI last:** `pnpm fl judge-demo` or static preview — label as fixture only.
+5. **Never headline:** `fl investigate turns` (`EXPERIMENTAL_TURN`).
 
 Build Week must also show **GPT-5.6** (`fl witness propose --live` and/or `fl repair brief --live`) and **Codex** (build acceleration + optional sidecar hooks) on camera — see [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md).
 

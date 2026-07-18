@@ -1,5 +1,7 @@
 # FaultLine’s first self-incident — completed evidence and reproducible runbook
 
+**Product Idea (lead with this):** FaultLine produced a portable, offline-verifiable evidence package for one human-frozen workflow predicate — another engineer can verify the recorded facts **without re-running repository code**. This is not a Git-bisect replacement, not model attribution, and not the `judge-demo` fixture.
+
 On 2026-07-17, FaultLine completed a human-reviewed, Docker-isolated replay of its own historical provenance-workflow regression. The portable package verified when given its recorded root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`. This document records exactly what that replay supports and keeps a reproducible path for a fresh incident; it does not turn the result into model attribution, a unique semantic cause, or a claim about unrecorded CI behavior.
 
 ## The observed incident
@@ -33,6 +35,31 @@ The completed investigation replayed every selected immutable Git state three ti
 - Lifecycle binding: `UNBOUND`. No caller-supplied Codex lifecycle ledger was attached, so this package makes no turn-level Codex observation claim.
 
 The resulting incident page is the same read-only product surface used for any real proof package. Its root must remain retained outside the bundle to detect later rewrites.
+
+## Judge-openable proof view (Idea artifact)
+
+**Preferred one-command path:** copy a verified package into [`docs/samples/self-incident-commit-proof/`](samples/self-incident-commit-proof/README.md) (so `manifest.json` lives there), then:
+
+```powershell
+pnpm fl judge-proof
+pnpm fl commit-proof-preview
+```
+
+`judge-proof` verifies against the recorded root and opens the proof page. `commit-proof-preview` writes [`docs/self-incident-proof-preview.html`](self-incident-proof-preview.html) for zero-install judges.
+
+Or open any retained bundle under `.faultline/git-proof-bundles/<bundle-name>` with the **recorded** root — do not invent a different digest:
+
+```powershell
+pnpm fl verify .faultline\git-proof-bundles\<bundle-name> `
+  --expect-root sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75
+pnpm fl serve `
+  --bundle .faultline\git-proof-bundles\<bundle-name> `
+  --expect-root sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75
+```
+
+If verify rejects the root, you do not have the recorded package — re-run [Produce the real proof bundle](#produce-the-real-proof-bundle) and retain the new root separately; only claim `sha256:f6a391b3…` when that exact package is present.
+
+For Build Week video cold open: show `judge-proof` / this proof page (or the verify output with the root), not `judge-demo`.
 
 ## Prepare the reviewed witness
 
@@ -84,7 +111,7 @@ pnpm fl incident continue <new-incident-id> `
 
 The expected recorded sequence is a stable `PASS -> FAIL` transition for the introduced workflow contract violation and a later stable `FAIL -> PASS` transition at the directory-creation fix. FaultLine executes the frozen predicate three times per Git state in Docker. If Docker is unavailable, noisy, or the range cannot be replayed, it must return a non-proof result; do not replace this with a fixture claim.
 
-On success, retain the emitted bundle root outside the bundle and open the same incident page used for every real investigation:
+On success, retain the emitted bundle root outside the bundle. For the **recorded** 2026-07-17 package, open with the fixed root in [Judge-openable proof view](#judge-openable-proof-view-idea-artifact). For a **fresh** replay, use the newly printed root instead:
 
 ```powershell
 pnpm fl serve `
@@ -96,4 +123,4 @@ The page proves only the frozen workflow predicate and its recorded Git transiti
 
 ## Demo wording
 
-Say: “FaultLine’s first recorded self-incident localized a workflow-contract predicate: it measured a stable `PASS -> FAIL` transition at `97c3290` and a stable `FAIL -> PASS` transition at `07ee7f1`, from a human-frozen witness.” Keep the scope explicit: this is not an attribution of model intent, a claim that FaultLine found a unique semantic root cause, or a replacement for the historical CI record.
+Say: “FaultLine packages a portable, offline-verifiable answer: where does this human-frozen predicate first go bad? Another engineer verifies the package without re-running the repo. Our first recorded self-incident measured a stable `PASS -> FAIL` at `97c3290` and `FAIL -> PASS` at `07ee7f1`.” One complement line only: it complements Git bisect / CI logs / repro — it does not replace them. Do not lead with model intent, unique semantic root cause, `judge-demo`, or experimental turn localization.

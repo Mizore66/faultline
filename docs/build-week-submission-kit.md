@@ -2,12 +2,22 @@
 
 This is a recording and submission checklist, not evidence that a submission has already been made. Recheck the official Build Week page before submitting.
 
-## Demo hierarchy (say this once, then follow it)
+## Idea claim (say this once, then follow it)
 
-1. **Lead with product proof** — self-incident / live-Git `COMMIT_PROOF` (real predicate, offline-verifiable root).
+**Locked claim:** FaultLine produces a portable, offline-verifiable evidence package for one human-frozen predicate — another engineer verifies “where does *this* reviewed witness first go bad?” **without re-running repository code**, without trusting model intent.
+
+1. **Lead with that claim + self-incident `COMMIT_PROOF`** — install sample under `docs/samples/self-incident-commit-proof/`, then:
+
+```powershell
+pnpm fl judge-proof
+```
+
+Or `fl serve --bundle … --expect-root sha256:f6a391b3…`. See [faultline-self-incident.md](faultline-self-incident.md). One complement line only: complements Git bisect / CI logs / repro — does not replace them.
+
 2. **Show GPT-5.6 live** — `fl witness propose --live` and/or `fl repair brief --live` (needs `OPENAI_API_KEY`).
 3. **Show Codex** — build acceleration (`/feedback` session) and/or sidecar hook install / ledger path.
-4. **Optional UI close-up** — `pnpm fl judge-demo` or `docs/judge-preview.html` as a **fixture sandbox**, not the center of the claim.
+4. **Optional UI close-up** — `pnpm fl judge-demo` or `docs/judge-preview.html` as a **fixture sandbox**, not the Idea headline.
+5. **Never headline** — `fl investigate turns` (`EXPERIMENTAL_TURN`).
 
 Do not insert `--` between `fl` and the subcommand (`pnpm fl judge-demo`, never `pnpm fl -- judge-demo`).
 
@@ -38,18 +48,25 @@ Say on camera that FaultLine did not auto-approve or auto-freeze; the one comman
 
 ## Three-minute demo run of show
 
+### Cold open script (0:00–0:20) — Idea beat (you record)
+
+**On screen:** self-incident proof page from `fl serve --bundle … --expect-root sha256:f6a391b3…` (or verify output showing that root). **Do not** open with `judge-demo` or “we built a better bisect.”
+
+**Speak (approx.):**  
+“When an agent-assisted change turns CI red, FaultLine answers a narrower question: where does *this* human-frozen witness first go bad? It packages that answer so another engineer can verify the evidence offline — without re-running the repo, and without trusting model intent. Here’s our recorded self-incident: root `sha256:f6a391…`, first `PASS` to `FAIL` at `97c3290`. Complements bisect and CI logs — doesn’t replace them.”
+
 | Time | Screen | Narration point |
 | --- | --- | --- |
-| 0:00–0:20 | Self-incident proof view / root digest | "When an agent-assisted change turns CI red, FaultLine answers: where does a reviewed executable witness first become bad?" Cite [self-incident](faultline-self-incident.md) root and `PASS -> FAIL` at `97c3290`. |
+| 0:00–0:20 | Self-incident `fl serve` proof view / root digest | Cold open script above. Cite [self-incident](faultline-self-incident.md). |
 | 0:20–0:40 | `fl witness propose --live` → Approve → Freeze | "GPT-5.6 may propose a blinded witness; a human freezes the exact predicate. The model never decides the verdict." |
 | 0:40–1:10 | `fl demo live-git --export-only` + verified Docker policy | "FaultLine replays that immutable witness over real Git states, three times per state, in constrained Docker. Boundaries only when executions support them." |
 | 1:10–1:35 | `fl minimize git` results | "Sufficiency/necessity of the selected diff — conflicts and unknowns preserved, not guessed." |
 | 1:35–2:05 | `fl repair brief --bundle … --live` | "GPT-5.6 returns cited, explicitly inferred repair guidance from verified facts only." |
-| 2:05–2:25 | `fl serve --bundle … --expect-root …` | "A teammate verifies the package offline against the retained root." |
+| 2:05–2:25 | Offline `fl verify` / proof page | "A teammate verifies the package against the retained root without re-executing repository code." |
 | 2:25–2:45 | Codex `/feedback` ID + tests/CI | "Codex accelerated implementation and hardening. Session `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`." |
-| 2:45–3:00 | Optional `judge-demo` UI close-up | "Fixture sandbox for judges without Docker — not the product proof." |
+| 2:45–3:00 | Optional `judge-demo` UI close-up | "Fixture sandbox for judges without Docker — not the Idea claim." |
 
-Use a public video with spoken narration. The voiceover should explicitly cover both Codex and GPT-5.6, and the recording should show the product actually running rather than slides alone.
+Use a public video with spoken narration. The voiceover should explicitly cover both Codex and GPT-5.6, and the recording should show the product actually running rather than slides alone. **You still must record and upload the YouTube video** — this kit only supplies the Idea cold-open script.
 
 ### Signed-evidence insert (replace, do not extend, the 2:20–2:45 segment)
 
