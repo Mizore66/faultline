@@ -773,7 +773,18 @@ async function runtimeCommand(args: string[]): Promise<void> {
   }, null, 2)}\n`);
 }
 
+function shouldAutoOpenBrowser(): boolean {
+  if (process.env.FAULTLINE_NO_BROWSER === "1") return false;
+  if (process.env.CI === "true" || process.env.CI === "1") return false;
+  if (process.env.GITHUB_ACTIONS === "true") return false;
+  return true;
+}
+
 function openLocalDemoUrl(url: string): void {
+  if (!shouldAutoOpenBrowser()) {
+    process.stdout.write(`Browser auto-open skipped in CI. Open ${url} manually if needed.\n`);
+    return;
+  }
   const command = process.platform === "win32"
     ? `cmd /c start "" "${url}"`
     : process.platform === "darwin"

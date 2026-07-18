@@ -205,7 +205,9 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
       const view = loadVerifiedGitProofView(written.directory, written.rootDigest);
       const page = renderGitProofIncidentPage(view);
       expect(view.investigation.proof).toMatchObject({ executionTrust: "NATIVE_DOCKER", isProof: true });
-      expect(page).toContain("Verified <em>evidence</em>");
+      expect(page).toContain("Where this frozen");
+      expect(page).toContain("first failed.");
+      expect(page).toContain("FAULTLINE · COMMIT_PROOF");
       expect(page).toContain("NATIVE DOCKER");
       expect(page).toContain("Stable transitions");
       expect(page).not.toContain(repository);

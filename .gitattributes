@@ -1,0 +1,3 @@
+# Content-addressed COMMIT_PROOF sample must keep exact bytes on every OS.
+# Windows core.autocrlf otherwise rewrites JSON/patch text and breaks verify.
+docs/samples/self-incident-commit-proof/** -text

@@ -2,6 +2,8 @@
 
 The directory [`self-incident-commit-proof/`](self-incident-commit-proof/) holds a **verified Git proof bundle** (must contain `manifest.json` and **no** extra files such as a README — undeclared files fail verify).
 
+Byte stability: `.gitattributes` marks this tree as `-text` so Windows `core.autocrlf` cannot rewrite JSON/patch files and break `fl verify`.
+
 ## Current sample
 
 Installed from `pnpm fl demo live-git --export-only`:
