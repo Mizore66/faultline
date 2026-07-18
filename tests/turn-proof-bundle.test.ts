@@ -276,6 +276,32 @@ describe("portable turn investigation proof bundles", () => {
     }
   });
 
+  it("rejects decisive PASS/FAIL runs that use legacy EXIT_ZERO / EXIT_NONZERO reasons", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-turn-proof-exit-legacy-"));
+    try {
+      const { frozen, observed } = await investigateBaselinePassFail(root);
+      const result = nativeDockerFixture(observed);
+      const mutated = structuredClone(result) as TurnInvestigationResult;
+      const target = mutated.runs.find((run) => run.result.verdict === "PASS");
+      if (!target) throw new Error("expected a PASS run in the fixture");
+      target.result = { ...target.result, reason: "EXIT_ZERO", exitCode: 0, signal: null };
+      const { runId: _ignored, ...unsigned } = target;
+      target.runId = digestJson(unsigned);
+      const errors = validateTurnInvestigationProofSemantics(mutated, frozen);
+      expect(errors.some((error) => /PREDICATE_PASS|EXIT_ZERO/i.test(error))).toBe(true);
+
+      const failTarget = mutated.runs.find((run) => run.result.verdict === "FAIL");
+      if (!failTarget) throw new Error("expected a FAIL run in the fixture");
+      failTarget.result = { ...failTarget.result, reason: "EXIT_NONZERO", exitCode: 1, signal: null };
+      const { runId: _ignoredFail, ...unsignedFail } = failTarget;
+      failTarget.runId = digestJson(unsignedFail);
+      const failErrors = validateTurnInvestigationProofSemantics(mutated, frozen);
+      expect(failErrors.some((error) => /PREDICATE_FAIL|EXIT_NONZERO/i.test(error))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a rehashed semantic contradiction instead of trusting the catalog or rewritten root", async () => {
     const root = mkdtempSync(join(tmpdir(), "faultline-turn-proof-tamper-"));
     try {

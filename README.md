@@ -57,8 +57,8 @@ FaultLine is a **CLI evidence tool** for regressions after agent-assisted coding
 1. **Lead with the Idea claim** — portable offline-verifiable predicate proof.
 2. **Show runnable proof:** `pnpm fl judge-proof` (installed sample root `sha256:f85c446d…` — see [docs/samples/COMMIT_PROOF_SAMPLE.md](docs/samples/COMMIT_PROOF_SAMPLE.md)).
 3. **Cite historical dogfood separately:** provenance-workflow self-incident — [docs/faultline-self-incident.md](docs/faultline-self-incident.md). That package is **not** what `judge-proof` opens unless you replace the sample.
-4. **Sandbox UI last:** `pnpm fl judge-demo` or static preview — fixture only.
-5. **Never headline:** `fl investigate turns` (`EXPERIMENTAL_TURN`).
+4. **Optional Codex beat (experimental):** later-turn First Bad Turn — baseline PASS → Turns 1–2 PASS → Turn 3 FAIL — [docs/later-turn-incident.md](docs/later-turn-incident.md) (`EXPERIMENTAL_TURN`; not interchangeable with `COMMIT_PROOF`).
+5. **Sandbox UI last:** `pnpm fl judge-demo` or static preview — fixture only. Do not equate turn packages with commit proof.
 
 ## Real incident dogfood
 
@@ -96,6 +96,7 @@ Build Week must show **GPT-5.6** (`fl witness propose --live` and/or `fl repair 
 | [docs/github-action.md](docs/github-action.md) | Incident intake + proof replay Actions |
 | [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md) | Submission kit / run of show |
 | [docs/turn-snapshot-overhead.md](docs/turn-snapshot-overhead.md) | Turn-snapshot storage overhead measurements |
+| [docs/later-turn-incident.md](docs/later-turn-incident.md) | Later-turn First Bad Turn fixture narrative (`EXPERIMENTAL_TURN`) |
 | [docs/differentiation.md](docs/differentiation.md) | Scope comparison vs bisect / CI / repro / provenance |
 
 ## Development

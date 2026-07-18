@@ -621,11 +621,13 @@ export function validateTurnInvestigationProofSemantics(
     if (run.result.kind !== "DOCKER_ISOLATED") errors.push(`non-Docker run cannot support this proof bundle: ${run.runId}`);
     if (run.result.executor !== "NATIVE_DOCKER") errors.push(`non-native Docker executor cannot support this proof bundle: ${run.runId}`);
     if (run.result.verdict !== "PASS" && run.result.verdict !== "FAIL") errors.push(`non-decisive run cannot support this proof bundle: ${run.runId}`);
-    if (run.result.verdict === "PASS" && run.result.reason !== "PREDICATE_PASS" && run.result.reason !== "EXIT_ZERO") {
-      errors.push(`PASS run has inconsistent execution result: ${run.runId}`);
+    // Match investigation isDecisiveRun: only structured PREDICATE_* outcomes
+    // may establish decisive PASS/FAIL. Legacy EXIT_ZERO / EXIT_NONZERO are rejected.
+    if (run.result.verdict === "PASS" && run.result.reason !== "PREDICATE_PASS") {
+      errors.push(`PASS run must use PREDICATE_PASS (legacy EXIT_ZERO is not decisive): ${run.runId}`);
     }
-    if (run.result.verdict === "FAIL" && run.result.reason !== "PREDICATE_FAIL" && run.result.reason !== "EXIT_NONZERO") {
-      errors.push(`FAIL run has inconsistent execution result: ${run.runId}`);
+    if (run.result.verdict === "FAIL" && run.result.reason !== "PREDICATE_FAIL") {
+      errors.push(`FAIL run must use PREDICATE_FAIL (legacy EXIT_NONZERO is not decisive): ${run.runId}`);
     }
     const attempts = attemptsByState.get(run.stateIndex) ?? new Set<number>();
     if (attempts.has(run.executionAttempt)) errors.push(`duplicate execution attempt for state ${run.stateIndex}`);

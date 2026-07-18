@@ -358,12 +358,13 @@ describe("turn-tree localization", () => {
         turnOrdinal: 1,
         turnId: "turn-1"
       });
+      expect(result.introduction.reason).toMatch(/Earliest recorded stable PASS→FAIL occurred at turn 1/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("does not attribute introduction when the first PASS→FAIL is after Turn 1 even with a baseline", () => {
+  it("attributes introduction to a later turn when the baseline is a stable PASS (need not be adjacent)", () => {
     const baseline = turnState({
       index: 0,
       turnId: SESSION_BASELINE_TURN_ID,
@@ -389,32 +390,181 @@ describe("turn-tree localization", () => {
       role: "TURN",
       treeDigest: "e".repeat(40),
       snapshotDigest: `sha256:${"f".repeat(64)}`,
+      dirty: false
+    });
+    const turn3 = turnState({
+      index: 3,
+      turnId: "turn-3",
+      turnOrdinal: 3,
+      role: "TURN",
+      treeDigest: "1".repeat(40),
+      snapshotDigest: `sha256:${"2".repeat(64)}`,
+      dirty: true
+    });
+    const stable: StableTurnState[] = [
+      stableTurnState({
+        stateIndex: 0,
+        turnId: SESSION_BASELINE_TURN_ID,
+        turnOrdinal: 0,
+        role: "SESSION_BASELINE",
+        treeDigest: "a".repeat(40),
+        snapshotDigest: `sha256:${"b".repeat(64)}`,
+        verdict: "PASS"
+      }),
+      stableTurnState({
+        stateIndex: 1,
+        turnId: "turn-1",
+        turnOrdinal: 1,
+        role: "TURN",
+        treeDigest: "c".repeat(40),
+        snapshotDigest: `sha256:${"d".repeat(64)}`,
+        verdict: "PASS"
+      }),
+      stableTurnState({
+        stateIndex: 2,
+        turnId: "turn-2",
+        turnOrdinal: 2,
+        role: "TURN",
+        treeDigest: "e".repeat(40),
+        snapshotDigest: `sha256:${"f".repeat(64)}`,
+        verdict: "PASS"
+      }),
+      stableTurnState({
+        stateIndex: 3,
+        turnId: "turn-3",
+        turnOrdinal: 3,
+        role: "TURN",
+        treeDigest: "1".repeat(40),
+        snapshotDigest: `sha256:${"2".repeat(64)}`,
+        verdict: "FAIL"
+      })
+    ];
+    const before = stable[2]!;
+    const after = stable[3]!;
+    const transitions: StableTurnTransition[] = [{ kind: "PASS_TO_FAIL", before, after }];
+    expect(attributeFailureIntroduction([baseline, turn1, turn2, turn3], transitions, stable)).toMatchObject({
+      status: "ATTRIBUTED",
+      turnOrdinal: 3,
+      turnId: "turn-3"
+    });
+    expect(attributeFailureIntroduction([baseline, turn1, turn2, turn3], transitions, stable).reason)
+      .toMatch(/Earliest recorded stable PASS→FAIL occurred at turn 3/);
+  });
+
+  it("does not attribute when the session baseline is not a stable PASS", () => {
+    const baseline = turnState({
+      index: 0,
+      turnId: SESSION_BASELINE_TURN_ID,
+      turnOrdinal: 0,
+      role: "SESSION_BASELINE",
+      treeDigest: "a".repeat(40),
+      snapshotDigest: `sha256:${"b".repeat(64)}`,
+      dirty: false
+    });
+    const turn1 = turnState({
+      index: 1,
+      turnId: "turn-1",
+      turnOrdinal: 1,
+      role: "TURN",
+      treeDigest: "c".repeat(40),
+      snapshotDigest: `sha256:${"d".repeat(64)}`,
       dirty: true
     });
     const before = stableTurnState({
+      stateIndex: 0,
+      turnId: SESSION_BASELINE_TURN_ID,
+      turnOrdinal: 0,
+      role: "SESSION_BASELINE",
+      treeDigest: "a".repeat(40),
+      snapshotDigest: `sha256:${"b".repeat(64)}`,
+      verdict: "FAIL"
+    });
+    const after = stableTurnState({
       stateIndex: 1,
       turnId: "turn-1",
       turnOrdinal: 1,
       role: "TURN",
       treeDigest: "c".repeat(40),
       snapshotDigest: `sha256:${"d".repeat(64)}`,
-      verdict: "PASS"
+      verdict: "FAIL"
     });
-    const after = stableTurnState({
-      stateIndex: 2,
-      turnId: "turn-2",
-      turnOrdinal: 2,
+    // No PASS→FAIL — NOT_APPLICABLE. Force a synthetic PASS→FAIL that skips a non-PASS baseline.
+    const passBefore = stableTurnState({
+      stateIndex: 0,
+      turnId: "ghost-pass",
+      turnOrdinal: 1,
       role: "TURN",
       treeDigest: "e".repeat(40),
       snapshotDigest: `sha256:${"f".repeat(64)}`,
+      verdict: "PASS"
+    });
+    const failAfter = stableTurnState({
+      stateIndex: 1,
+      turnId: "turn-1",
+      turnOrdinal: 1,
+      role: "TURN",
+      treeDigest: "c".repeat(40),
+      snapshotDigest: `sha256:${"d".repeat(64)}`,
       verdict: "FAIL"
     });
-    const transitions: StableTurnTransition[] = [{ kind: "PASS_TO_FAIL", before, after }];
-    expect(attributeFailureIntroduction([baseline, turn1, turn2], transitions)).toMatchObject({
+    expect(attributeFailureIntroduction(
+      [baseline, turn1],
+      [{ kind: "PASS_TO_FAIL", before: passBefore, after: failAfter }],
+      [before, after]
+    )).toMatchObject({
       status: "UNATTRIBUTED",
       turnOrdinal: null,
       turnId: null
     });
+  });
+
+  it("attributes Turn 3 when baseline and Turns 1–2 pass then Turn 3 fails (end-to-end)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-turn-later-attr-"));
+    try {
+      const repository = join(root, "repo");
+      git(root, ["init", "repo"]);
+      git(repository, ["config", "user.email", "faultline@example.test"]);
+      git(repository, ["config", "user.name", "FaultLine"]);
+      writeFileSync(join(repository, "state.txt"), "good\n", "utf8");
+      git(repository, ["add", "state.txt"]);
+      git(repository, ["commit", "-m", "good"]);
+
+      let ledger = createCodexLifecycleLedger({ sessionId: "turn-later-attr" });
+      ledger = appendLifecycleEvent(ledger, {
+        type: "SESSION_STARTED",
+        payload: { transport: "SIDE_CAR", workingDirectory: repository }
+      });
+      ledger = appendBaselineSnapshot(ledger, repository);
+      ledger = appendTurnSnapshot(ledger, repository, 1, "turn-1");
+      ledger = appendTurnSnapshot(ledger, repository, 2, "turn-2");
+      writeFileSync(join(repository, "state.txt"), "bad\n", "utf8");
+      ledger = appendTurnSnapshot(ledger, repository, 3, "turn-3");
+      const ledgerPath = join(root, "ledger.json");
+      writeCodexLifecycleLedgerAtomic(ledgerPath, ledger);
+
+      const frozen = createFrozenWitness(join(root, "witnesses"), "turn-later-attr");
+      const result = await investigateTurnTrees({
+        repository,
+        ledgerPath,
+        frozenWitness: frozen,
+        expectedFrozenDigest: frozen.frozenDigest,
+        image: pinnedImage,
+        runner: stateReadingRunner()
+      });
+
+      expect(result.status).toBe("COMPLETED");
+      expect(result.states).toHaveLength(4);
+      expect(result.transitions).toHaveLength(1);
+      expect(result.transitions[0]).toMatchObject({ kind: "PASS_TO_FAIL" });
+      expect(result.introduction).toMatchObject({
+        status: "ATTRIBUTED",
+        turnOrdinal: 3,
+        turnId: "turn-3"
+      });
+      expect(result.introduction.reason).toMatch(/Earliest recorded stable PASS→FAIL occurred at turn 3/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("skips incompatible turn boundaries and does not invent a PASS→FAIL across them", async () => {

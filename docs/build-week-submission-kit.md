@@ -65,7 +65,7 @@ Say on camera that FaultLine did not auto-approve or auto-freeze; the one comman
 | 1:10–1:35 | `fl minimize git` results | "Sufficiency/necessity of the selected diff — conflicts and unknowns preserved, not guessed." |
 | 1:35–2:05 | `fl repair brief --bundle … --live` | "GPT-5.6 returns cited, explicitly inferred repair guidance from verified facts only." |
 | 2:05–2:25 | Offline `fl verify` / proof page | "A teammate verifies the package against the retained root without re-executing repository code." |
-| 2:25–2:45 | Codex `/feedback` ID + tests/CI | "Codex accelerated implementation and hardening. Session `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`." |
+| 2:25–2:45 | Codex `/feedback` ID + optional later-turn beat | "Codex accelerated implementation and hardening. Session `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`. Optional: [later-turn-incident.md](later-turn-incident.md) — earliest recorded stable failure at Turn 3 (`EXPERIMENTAL_TURN`, not `COMMIT_PROOF`)." |
 | 2:45–3:00 | Optional `judge-demo` UI close-up | "Fixture sandbox for judges without Docker — not the Idea claim." |
 
 Use a public video with spoken narration. The voiceover should explicitly cover both Codex and GPT-5.6, and the recording should show the product actually running rather than slides alone. **You still must record and upload the YouTube video** — this kit only supplies the Idea cold-open script.

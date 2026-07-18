@@ -384,14 +384,17 @@ export function duplicateTurnOrdinalError(states: readonly TurnState[]): string 
 }
 
 /**
- * Attribute "introduced the failure" only when a session baseline proves the
- * repository passed before the first failing turn.
+ * Attribute the earliest recorded stable failure-introducing turn when a
+ * session baseline proves the session began PASS. The baseline need not be
+ * adjacent to the failure — intermediate stable PASS turns are allowed.
+ *
+ * This is not a unique semantic root-cause claim.
  */
 export function attributeFailureIntroduction(
   states: readonly TurnState[],
-  transitions: readonly StableTurnTransition[]
+  transitions: readonly StableTurnTransition[],
+  stableStates: readonly StableTurnState[] = []
 ): TurnIntroduction {
-  const hasBaseline = states.some((state) => state.role === "SESSION_BASELINE" && state.turnOrdinal === 0);
   const firstPassToFail = transitions.find((transition) => transition.kind === "PASS_TO_FAIL");
   if (!firstPassToFail) {
     return {
@@ -401,7 +404,9 @@ export function attributeFailureIntroduction(
       reason: "No PASS→FAIL transition is available to attribute."
     };
   }
-  if (!hasBaseline) {
+
+  const baselineState = states.find((state) => state.role === "SESSION_BASELINE" && state.turnOrdinal === 0);
+  if (!baselineState) {
     return {
       status: "UNATTRIBUTED",
       turnOrdinal: null,
@@ -409,19 +414,40 @@ export function attributeFailureIntroduction(
       reason: "No SESSION_BASELINE_SNAPSHOT; cannot claim a turn introduced the failure."
     };
   }
-  if (firstPassToFail.before.role !== "SESSION_BASELINE" || firstPassToFail.before.turnOrdinal !== 0) {
+
+  const baselineStable = stableStates.find(
+    (state) => state.role === "SESSION_BASELINE" && state.turnOrdinal === 0 && state.stateIndex === baselineState.index
+  );
+  // When callers omit stableStates (unit tests of transition adjacency alone),
+  // require only that a baseline state exists; full investigation always passes
+  // reconstructed stable states and enforces a stable PASS baseline.
+  if (stableStates.length > 0 && (baselineStable === undefined || baselineStable.verdict !== "PASS")) {
     return {
       status: "UNATTRIBUTED",
       turnOrdinal: null,
       turnId: null,
-      reason: "The first PASS→FAIL transition is not anchored at the session baseline."
+      reason: "No stable passing session baseline; cannot claim a turn introduced the failure."
     };
   }
+
+  if (
+    firstPassToFail.before.verdict !== "PASS"
+    || firstPassToFail.after.verdict !== "FAIL"
+    || firstPassToFail.after.stateIndex !== firstPassToFail.before.stateIndex + 1
+  ) {
+    return {
+      status: "UNATTRIBUTED",
+      turnOrdinal: null,
+      turnId: null,
+      reason: "The earliest PASS→FAIL transition crosses an observation gap or is not a stable adjacent pair."
+    };
+  }
+
   return {
     status: "ATTRIBUTED",
     turnOrdinal: firstPassToFail.after.turnOrdinal,
     turnId: firstPassToFail.after.turnId,
-    reason: `Failure introduced at turn ${firstPassToFail.after.turnOrdinal}.`
+    reason: `Earliest recorded stable PASS→FAIL occurred at turn ${firstPassToFail.after.turnOrdinal}.`
   };
 }
 
@@ -789,7 +815,7 @@ export async function investigateTurnTrees(options: {
   const stableStates = reconstructStableTurnStates(states, runs);
   const transitions = findStableTurnTransitions(stableStates);
   const status = classifyStatus(runs, errors);
-  const introduction = attributeFailureIntroduction(states, transitions);
+  const introduction = attributeFailureIntroduction(states, transitions, stableStates);
   const dockerIsolated = executionTrust === "NATIVE_DOCKER";
   const isProof = dockerIsolated && status === "COMPLETED" && errors.length === 0 && transitions.length > 0;
   const proofReason = executionTrust === "INJECTED_RUNNER"
