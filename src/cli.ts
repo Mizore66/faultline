@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+import { exec, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -763,6 +763,19 @@ async function runtimeCommand(args: string[]): Promise<void> {
   }, null, 2)}\n`);
 }
 
+function openLocalDemoUrl(url: string): void {
+  const command = process.platform === "win32"
+    ? `cmd /c start "" "${url}"`
+    : process.platform === "darwin"
+      ? `open "${url}"`
+      : `xdg-open "${url}"`;
+  exec(command, (error) => {
+    if (error) {
+      process.stderr.write(`FaultLine could not open a browser automatically. Open ${url} manually.\n`);
+    }
+  });
+}
+
 async function judgeDemo(args: string[]): Promise<void> {
   const mode: RunMode = hasFlag(args, "--rerun-all") ? "RERUN" : "REPLAY";
   const outputDirectory = resolve(option(args, "--output") ?? ".faultline/bundles/judge-demo");
@@ -779,8 +792,12 @@ async function judgeDemo(args: string[]): Promise<void> {
   process.stdout.write(`Bundle root: ${bundle.rootDigest}\n`);
   process.stdout.write(`Proof bundle: ${describeBundlePath(bundle.directory)}\n`);
   if (hasFlag(args, "--export-only")) return;
-  const server = await startFaultLineServer({ analysis, outputDirectory: bundle.directory, port: Number(option(args, "--port") ?? "4173") });
-  process.stdout.write(`Open ${server.url} to inspect the incident page. Press Ctrl+C to stop.\n`);
+  const port = Number(option(args, "--port") ?? "4173");
+  const server = await startFaultLineServer({ analysis, outputDirectory: bundle.directory, port });
+  const demoUrl = `http://localhost:${new URL(server.url).port}`;
+  process.stdout.write(`🚀 Launching FaultLine Judge Demo at ${demoUrl}...\n`);
+  process.stdout.write(`Press Ctrl+C to stop.\n`);
+  openLocalDemoUrl(demoUrl);
   await new Promise<void>((resolveExit) => {
     process.once("SIGINT", () => {
       void server.close().finally(resolveExit);
@@ -1982,7 +1999,38 @@ async function main(): Promise<void> {
   }
 }
 
+function formatCliFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const windowsHint = [
+    "",
+    "Windows tip: if PowerShell blocked pnpm (ExecutionPolicy / scripts disabled), use:",
+    "  pnpm.cmd fl <command>",
+    "or for this terminal session only:",
+    "  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process",
+    "Then retry without markdown backticks, e.g.:",
+    "  pnpm.cmd fl judge-demo"
+  ].join("\n");
+
+  if (/^Unknown command:\s*--\b/.test(message) || message.startsWith("Unknown command: --")) {
+    return [
+      "FaultLine error: the first argument was `--`, which is not a command.",
+      "Do not insert `--` between `fl` and the subcommand.",
+      "Try:",
+      "  pnpm fl judge-demo",
+      "On Windows PowerShell, prefer:",
+      "  pnpm.cmd fl judge-demo",
+      windowsHint
+    ].join("\n");
+  }
+
+  if (/ExecutionPolicy|running scripts is disabled|PSSecurityException|UnauthorizedAccess/i.test(message)) {
+    return [`FaultLine error: ${message}`, windowsHint].join("\n");
+  }
+
+  return `FaultLine error: ${message}`;
+}
+
 main().catch((error: unknown) => {
-  process.stderr.write(`FaultLine error: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(`${formatCliFailure(error)}\n`);
   process.exitCode = 1;
 });

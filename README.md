@@ -2,6 +2,36 @@
 
 > **First Bad Turn**, powered by FaultLine: observe public Codex lifecycle hooks, capture immutable turn-boundary Git trees, and execute a frozen witness across those states. FaultLine does **not** inspect private Codex reasoning.
 
+## See it in one command
+
+Clone, install, and launch the local judge demo — it starts a server and opens your browser:
+
+```powershell
+git clone https://github.com/Mizore66/faultline.git
+cd faultline
+git checkout main
+pnpm install --frozen-lockfile
+pnpm fl judge-demo
+```
+
+**Windows (PowerShell):** if `pnpm` fails with *“running scripts is disabled”* / ExecutionPolicy, use `pnpm.cmd` instead of `pnpm`:
+
+```powershell
+pnpm.cmd install --frozen-lockfile
+pnpm.cmd fl judge-demo
+```
+
+Or allow scripts for this terminal session only:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
+pnpm fl judge-demo
+```
+
+Do not paste markdown backticks around the command. Do not insert `--` between `fl` and `judge-demo`.
+
+No Docker or API key required. Press Ctrl+C in the terminal when you are done. Use `--export-only` if you only want the proof bundle written without serving or opening a browser.
+
 FaultLine proves where a frozen witness changed from pass to fail — without claiming agent intent or a unique semantic root cause.
 
 **Break → Find → Prove → Fix → Prevent**
