@@ -300,8 +300,13 @@ function preventionGuidancePanel(view: VerifiedGitProofView): string {
   const verifiedPrevention = view.attachments.prevention;
   if (verifiedPrevention !== null) {
     const body = verifiedPrevention.prevention;
-    return `<article class="card panel"><h3>Prevention evidence summary</h3>
-      <p><span class="pill">PREVENTION_EVIDENCE_SUMMARY</span> Offline-checked three-state package bound to this proof root and frozen witness. Fields are not yet reconstructed from original proof-bundle run records.</p>
+    const verified = verifiedPrevention.manifest.classification === "PREVENTION_VERIFIED";
+    return `<article class="card panel"><h3>${verified ? "Prevention verified" : "Prevention evidence summary"}</h3>
+      <p><span class="pill">${verified ? "Prevention verified" : "PREVENTION_EVIDENCE_SUMMARY"}</span> ${
+        verified
+          ? "Grounded three-state package: last-good / first-bad run IDs from this proof root plus repaired-state NATIVE_DOCKER bindings under the same frozen witness."
+          : "Offline-checked three-state package bound to this proof root and frozen witness. Prefer a grounded package from <code>fl prevention write --from-bundle</code>."
+      }</p>
       <div class="proof"><span>Last good</span><code title="${escapeHtml(body.lastGood.commit)}">${escapeHtml(shortCommit(body.lastGood.commit))}</code> ${verdictBadge(body.lastGood.verdict)}</div>
       <div class="proof"><span>First bad</span><code title="${escapeHtml(body.firstBad.commit)}">${escapeHtml(shortCommit(body.firstBad.commit))}</code> ${verdictBadge(body.firstBad.verdict)}</div>
       <div class="proof"><span>Repaired</span><code title="${escapeHtml(body.repaired.commit)}">${escapeHtml(shortCommit(body.repaired.commit))}</code> ${verdictBadge(body.repaired.verdict)}</div>
@@ -311,7 +316,7 @@ function preventionGuidancePanel(view: VerifiedGitProofView): string {
   }
   const attachment = view.attachments.repair;
   if (attachment === null) {
-    return `<article class="card panel"><h3>Prevention guidance</h3><p class="empty-state"><strong>Not attached</strong><br>No evidence-cited prevention guidance or prevention-proof package was supplied.</p><small>Recovery evidence and a stable boundary do not establish prevention. Attach a <code>faultline.prevention-proof.v1</code> package (currently labeled Prevention evidence summary until run facts are grounded).</small></article>`;
+    return `<article class="card panel"><h3>Prevention guidance</h3><p class="empty-state"><strong>Not attached</strong><br>No evidence-cited prevention guidance or prevention-proof package was supplied.</p><small>Recovery evidence and a stable boundary do not establish prevention. Attach a grounded <code>faultline.prevention-proof.v1</code> package via <code>fl prevention write --from-bundle</code>.</small></article>`;
   }
   const prevention = attachment.brief.prevention;
   const items = [...prevention.hardEnforcement, ...prevention.softGuidance];
@@ -320,7 +325,7 @@ function preventionGuidancePanel(view: VerifiedGitProofView): string {
     <div class="proof"><span>Hard enforcement directions</span><strong>${prevention.hardEnforcement.length}</strong></div>
     <div class="proof"><span>Soft guidance directions</span><strong>${prevention.softGuidance.length}</strong></div>
     ${citationSummary(items)}
-    <small>Free-form prevention text remains in the private repair artifact. A repaired state must still be executed under the same frozen witness and packaged as <code>faultline.prevention-proof.v1</code>. Today that package is a Prevention evidence summary until creation binds verified run artifacts.</small>
+    <small>Free-form prevention text remains in the private repair artifact. A repaired state must still be executed under the same frozen witness and packaged via <code>fl prevention write --from-bundle</code> for Prevention verified.</small>
   </article>`;
 }
 

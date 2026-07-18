@@ -53,6 +53,14 @@ export type RepairWithCodexStatus =
   | "CODEX_UNAVAILABLE"
   | "WORKTREE_CLEANUP_FAILED";
 
+export type RepairPreventionExport = {
+  readonly ok: boolean;
+  readonly directory?: string;
+  readonly rootDigest?: string;
+  readonly classification?: "PREVENTION_VERIFIED" | "PREVENTION_EVIDENCE_SUMMARY";
+  readonly reasons?: readonly string[];
+};
+
 export type RepairWithCodexResult = {
   schemaVersion: typeof CODEX_LOOP_SCHEMA_VERSION;
   status: RepairWithCodexStatus;
@@ -67,6 +75,7 @@ export type RepairWithCodexResult = {
   note: string;
   limitation: string;
   cleanupErrors: readonly string[];
+  preventionExport?: RepairPreventionExport;
 };
 
 function defaultOverlayTemplate(behavior: string): string {
@@ -493,24 +502,101 @@ export async function repairWithCodex(options: {
       limitation,
       cleanupErrors
     });
-  } finally {
-    if (session && options.keepWorktree !== true) {
-      const cleanup = await removeRepairWorktree({
-        repository: session.repository,
+  }
+
+  let preventionExport: RepairPreventionExport | undefined;
+  if (
+    status === "REPAIR_CANDIDATE_VERIFIED"
+    && session
+    && patchPath
+    && options.verifyCandidate
+  ) {
+    try {
+      const {
+        collectRepairedPreventionRuns,
+        commitRepairedWorktreeState,
+        digestRepairPatchFile,
+        writePreventionProofFromVerifiedArtifacts
+      } = await import("./prevention-from-artifacts.js");
+      const { defaultPreventionProofRoot } = await import("./prevention-proof.js");
+      const repairedState = commitRepairedWorktreeState(session.worktreePath, baseCommit);
+      const collected = await collectRepairedPreventionRuns({
         worktreePath: session.worktreePath,
-        managedRoot: session.managedRoot,
-        keepManagedRoot: true
+        bundleDirectory: options.bundleDirectory,
+        repairedCommit: repairedState.commit,
+        repairedTree: repairedState.tree,
+        verifyOnce: async () => options.verifyCandidate!({
+          worktreePath: session!.worktreePath,
+          baseCommit,
+          patchPath,
+          bundleDirectory: options.bundleDirectory
+        })
       });
-      cleanupErrors.push(...cleanup.errors);
-      if (!cleanup.cleaned) {
-        if (
-          status === "REPAIR_WORKTREE_READY"
-          || status === "CODEX_DRAFT_RECORDED"
-          || status === "REPAIR_CANDIDATE_VERIFIED"
-        ) {
-          status = "WORKTREE_CLEANUP_FAILED";
-          note = `${note} Worktree cleanup reported errors: ${cleanup.errors.join("; ")}`;
+      if (!collected.ok) {
+        preventionExport = { ok: false, reasons: collected.reasons };
+        note = `${note} Prevention export fail-closed: ${collected.reasons.join("; ")}`;
+      } else {
+        const preventionOut = join(
+          defaultPreventionProofRoot(),
+          `from-repair-${Date.now()}`
+        );
+        const repairBaseTree = introductionTreeOrUndefined(investigation);
+        const exported = writePreventionProofFromVerifiedArtifacts({
+          bundleDirectory: options.bundleDirectory,
+          expectRoot: options.expectRoot,
+          outputDirectory: preventionOut,
+          repaired: {
+            commit: repairedState.commit,
+            tree: repairedState.tree,
+            runs: collected.runs
+          },
+          repairPatchDigest: digestRepairPatchFile(patchPath),
+          ...(repairBaseTree === undefined ? {} : { repairBaseTree }),
+          ...(codexThreadId === null ? {} : { codexThreadId })
+        });
+        if (!exported.ok) {
+          preventionExport = { ok: false, reasons: exported.reasons };
+          note = `${note} Prevention export fail-closed: ${exported.reasons.join("; ")}`;
+        } else {
+          preventionExport = {
+            ok: true,
+            directory: exported.written.directory,
+            rootDigest: exported.written.rootDigest,
+            classification: exported.written.manifest.classification
+          };
+          writeFileSync(
+            join(session.artifactsPath, "prevention-export.json"),
+            `${JSON.stringify(preventionExport, null, 2)}\n`,
+            "utf8"
+          );
+          note = `${note} Prevention verified package written to ${exported.written.directory}.`;
         }
+      }
+    } catch (error) {
+      preventionExport = {
+        ok: false,
+        reasons: [error instanceof Error ? error.message : String(error)]
+      };
+      note = `${note} Prevention export fail-closed: ${preventionExport.reasons!.join("; ")}`;
+    }
+  }
+
+  if (session && options.keepWorktree !== true) {
+    const cleanup = await removeRepairWorktree({
+      repository: session.repository,
+      worktreePath: session.worktreePath,
+      managedRoot: session.managedRoot,
+      keepManagedRoot: true
+    });
+    cleanupErrors.push(...cleanup.errors);
+    if (!cleanup.cleaned) {
+      if (
+        status === "REPAIR_WORKTREE_READY"
+        || status === "CODEX_DRAFT_RECORDED"
+        || status === "REPAIR_CANDIDATE_VERIFIED"
+      ) {
+        status = "WORKTREE_CLEANUP_FAILED";
+        note = `${note} Worktree cleanup reported errors: ${cleanup.errors.join("; ")}`;
       }
     }
   }
@@ -528,12 +614,22 @@ export async function repairWithCodex(options: {
       ...(instructionPath ? [`Review ${instructionPath}`] : []),
       ...(patchPath ? [`Inspect ${patchPath}`] : []),
       "Human-review any Codex draft before merge",
-      "Collect NATIVE_DOCKER last-good PASS / first-bad FAIL / repaired PASS facts, then: fl prevention write --input <prevention-input.json>",
-      "After three-state facts exist: fl prevention write --input <prevention-input.json>",
-      "fl prevention verify currently yields a Prevention evidence summary (not fully grounded Prevention verified)"
+      ...(preventionExport?.ok
+        ? [
+          `Prevention verified: fl prevention verify ${preventionExport.directory} --expect-root ${preventionExport.rootDigest}`
+        ]
+        : [
+          "If automatic prevention export failed, collect three repaired NATIVE_DOCKER runs then: fl prevention write --from-bundle <bundle> --expect-root <digest> --patch <repair.patch> --repaired-commit <id> --repaired-tree <id> --repaired-runs <runs.json>"
+        ])
     ],
     note,
     limitation,
-    cleanupErrors
+    cleanupErrors,
+    ...(preventionExport === undefined ? {} : { preventionExport })
   });
+}
+
+function introductionTreeOrUndefined(investigation: GitInvestigationResult): string | undefined {
+  const introduction = investigation.transitions.find((transition) => transition.kind === "PASS_TO_FAIL");
+  return introduction?.after.tree;
 }

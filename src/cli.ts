@@ -160,6 +160,7 @@ Usage:
   fl repair brief (--bundle <git-proof-bundle-directory> | --investigation <verified-bundle>/investigation.json) (--live | --input <repair-brief.json>) [--expect-root <sha256:...>] [--model <model>] [--output <managed-directory>]
   fl repair verify <repair-brief-directory> [--expect-digest <sha256:...>]
   fl prevention write --input <prevention-input.json> [--output <managed-directory>]
+  fl prevention write --from-bundle <git-proof-bundle> --expect-root <sha256:...> --patch <repair.patch> --repaired-commit <id> --repaired-tree <id> --repaired-runs <runs.json> [--output <managed-directory>] [--codex-thread-id <id>]
   fl prevention verify <prevention-proof-directory> [--expect-root <sha256:...>]
   fl witness propose --input <proposal.json> [--store <directory>]
   fl witness propose --live --incident <incident.json> --proposal-id <id> --overlay-root <directory> [--model <model>] [--store <directory>]
@@ -2075,32 +2076,94 @@ async function preventionCommand(args: string[]): Promise<void> {
   if (action === "verify") {
     if (!target) throw new Error("Usage: fl prevention verify <prevention-proof-directory> [--expect-root <sha256:...>]");
     const verification = verifyPreventionProof(resolve(target), option(args, "--expect-root"));
+    const classification = verification.manifest?.classification ?? null;
     process.stdout.write(`${JSON.stringify({
       valid: verification.valid,
       schemaVersion: PREVENTION_PROOF_SCHEMA_VERSION,
-      classification: verification.manifest?.classification ?? null,
+      classification,
+      claim: verification.valid && classification === "PREVENTION_VERIFIED"
+        ? "Prevention verified"
+        : verification.valid
+          ? "Prevention evidence summary"
+          : "Invalid",
       rootDigest: verification.rootDigest,
       externalRootStatus: verification.externalRootStatus,
       errors: verification.errors
     }, null, 2)}\n`);
+    if (verification.valid && classification === "PREVENTION_VERIFIED") {
+      process.stdout.write("Prevention verified\n");
+    } else if (verification.valid) {
+      process.stdout.write("Prevention evidence summary\n");
+    }
     process.exitCode = verification.valid ? 0 : 1;
     return;
   }
   if (action === "write") {
-    const inputPath = requiredOption(args, "--input");
+    const fromBundle = option(args, "--from-bundle");
+    const inputPath = option(args, "--input");
+    if ((fromBundle === undefined) === (inputPath === undefined)) {
+      throw new Error("fl prevention write requires exactly one of --input <json> or --from-bundle <git-proof-bundle>.");
+    }
     const output = resolve(option(args, "--output") ?? join(defaultPreventionProofRoot(), `prevention-${Date.now()}`));
-    const input = JSON.parse(readFileSync(resolve(inputPath), "utf8")) as PreventionProofWriteInput;
+    if (fromBundle !== undefined) {
+      const { writePreventionProofFromVerifiedArtifacts, digestRepairPatchFile } = await import("./prevention-from-artifacts.js");
+      const repairedRunsPath = requiredOption(args, "--repaired-runs");
+      const repairedRuns = JSON.parse(readFileSync(resolve(repairedRunsPath), "utf8")) as {
+        runs?: unknown;
+      };
+      if (!Array.isArray(repairedRuns.runs)) {
+        throw new Error("--repaired-runs must be a JSON object with a runs array of three repaired NATIVE_DOCKER bindings.");
+      }
+      const exportResult = writePreventionProofFromVerifiedArtifacts({
+        bundleDirectory: resolve(fromBundle),
+        expectRoot: requiredOption(args, "--expect-root"),
+        outputDirectory: output,
+        repaired: {
+          commit: requiredOption(args, "--repaired-commit"),
+          tree: requiredOption(args, "--repaired-tree"),
+          runs: repairedRuns.runs as never
+        },
+        repairPatchDigest: digestRepairPatchFile(resolve(requiredOption(args, "--patch"))),
+        ...(option(args, "--codex-thread-id") === undefined
+          ? {}
+          : { codexThreadId: requiredOption(args, "--codex-thread-id") })
+      });
+      if (!exportResult.ok) {
+        process.stdout.write(`${JSON.stringify({
+          status: "PREVENTION_EXPORT_FAILED",
+          reasons: exportResult.reasons
+        }, null, 2)}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      process.stdout.write(`${JSON.stringify({
+        status: "PREVENTION_VERIFIED",
+        claim: "Prevention verified",
+        directory: exportResult.written.directory,
+        rootDigest: exportResult.written.rootDigest,
+        originalProofRoot: exportResult.written.prevention.originalProofRoot,
+        frozenWitnessDigest: exportResult.written.prevention.frozenWitnessDigest,
+        classification: exportResult.written.manifest.classification
+      }, null, 2)}\n`);
+      process.stdout.write("Prevention verified\n");
+      return;
+    }
+    const input = JSON.parse(readFileSync(resolve(inputPath!), "utf8")) as PreventionProofWriteInput;
     const written = writePreventionProof(output, input);
+    const status = written.manifest.classification;
     process.stdout.write(`${JSON.stringify({
-      status: "PREVENTION_EVIDENCE_SUMMARY",
+      status,
+      claim: status === "PREVENTION_VERIFIED" ? "Prevention verified" : "Prevention evidence summary",
       directory: written.directory,
       rootDigest: written.rootDigest,
       originalProofRoot: written.prevention.originalProofRoot,
       frozenWitnessDigest: written.prevention.frozenWitnessDigest
     }, null, 2)}\n`);
+    if (status === "PREVENTION_VERIFIED") process.stdout.write("Prevention verified\n");
+    else process.stdout.write("Prevention evidence summary\n");
     return;
   }
-  throw new Error("Usage: fl prevention write --input <prevention-input.json> [--output <managed-directory>] | fl prevention verify <directory> [--expect-root <sha256:...>]");
+  throw new Error("Usage: fl prevention write --input <prevention-input.json> | fl prevention write --from-bundle ... | fl prevention verify <directory> [--expect-root <sha256:...>]");
 }
 
 /**
@@ -2295,7 +2358,11 @@ async function main(): Promise<void> {
         const result = verifyPreventionProof(root, option(args, "--expect-root"));
         process.stdout.write(`${result.externalRootStatus === "NOT_PROVIDED" ? "Prevention proof self-consistency" : "Integrity"}: ${result.valid ? "VALID" : "INVALID"}\n`);
         process.stdout.write(`Classification: ${result.manifest?.classification ?? "unavailable"}\nBundle root: ${result.rootDigest ?? "unavailable"}\nExternal root: ${result.externalRootStatus}\n`);
-        if (result.valid) process.stdout.write("Prevention evidence summary\n");
+        if (result.valid && result.manifest?.classification === "PREVENTION_VERIFIED") {
+          process.stdout.write("Prevention verified\n");
+        } else if (result.valid) {
+          process.stdout.write("Prevention evidence summary\n");
+        }
         if (!result.valid) process.stdout.write(`${result.errors.map((error) => `- ${error}`).join("\n")}\n`);
         process.exitCode = result.valid ? 0 : 1;
         return;

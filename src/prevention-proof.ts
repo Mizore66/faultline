@@ -24,7 +24,8 @@ import { relativeTrustedSystemPath, resolveSafeDirectorySegment } from "./safe-d
 export const PREVENTION_PROOF_SCHEMA_VERSION = "faultline.prevention-proof.v1" as const;
 
 const DigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
-const CommitSchema = z.string().regex(/^[a-f0-9]{40}$/);
+const CommitSchema = z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/);
+const RunIdListSchema = z.array(DigestSchema).length(3);
 
 const PreventionExecutedStateSchema = z.object({
   role: z.enum(["LAST_GOOD", "FIRST_BAD", "REPAIRED"]),
@@ -35,7 +36,20 @@ const PreventionExecutedStateSchema = z.object({
   environmentDigest: DigestSchema,
   executionTrust: z.literal("NATIVE_DOCKER"),
   executionKind: z.literal("EXECUTED"),
-  distinctExecutionCount: z.number().int().min(3)
+  distinctExecutionCount: z.number().int().min(3),
+  runIds: RunIdListSchema
+}).strict();
+
+const PreventionRepairedRunBindingSchema = z.object({
+  runId: DigestSchema,
+  executionId: DigestSchema,
+  commit: CommitSchema,
+  tree: CommitSchema,
+  verdict: z.literal("PASS"),
+  witnessDigest: DigestSchema,
+  environmentDigest: DigestSchema,
+  executionTrust: z.literal("NATIVE_DOCKER"),
+  executionKind: z.literal("EXECUTED")
 }).strict();
 
 export const PreventionProofBodySchema = z.object({
@@ -55,20 +69,26 @@ export const PreventionProofBodySchema = z.object({
     role: z.literal("REPAIRED"),
     verdict: z.literal("PASS")
   }),
+  repairBaseTree: CommitSchema.optional(),
   repairPatchDigest: DigestSchema.optional(),
   codexThreadId: z.string().min(1).max(256).optional(),
+  hardGuardArtifactDigests: z.array(DigestSchema).max(64).optional(),
   verified: z.literal(true),
   limitations: z.array(z.string().min(1)).min(1).max(16)
 }).strict();
 
+export const PreventionProofClassificationSchema = z.enum([
+  "PREVENTION_EVIDENCE_SUMMARY",
+  "PREVENTION_VERIFIED"
+]);
+
 export const PreventionProofManifestSchema = z.object({
   schemaVersion: z.literal(PREVENTION_PROOF_SCHEMA_VERSION),
   /**
-   * Interim honest label: package checks self-consistency of supplied fields.
-   * It does not yet reconstruct three-state verdicts from original proof-bundle
-   * run facts + repaired-state records. Do not treat as fully grounded proof.
+   * PREVENTION_VERIFIED: grounded at write time from a verified Git proof bundle
+   * plus repaired run bindings. PREVENTION_EVIDENCE_SUMMARY: caller-supplied only.
    */
-  classification: z.literal("PREVENTION_EVIDENCE_SUMMARY"),
+  classification: PreventionProofClassificationSchema,
   prevention: z.object({
     path: z.literal("prevention.json"),
     digest: DigestSchema
@@ -77,9 +97,16 @@ export const PreventionProofManifestSchema = z.object({
   rootDigest: DigestSchema
 }).strict();
 
+export const PreventionRepairedRunsArtifactSchema = z.object({
+  schemaVersion: z.literal("faultline.prevention-repaired-runs.v1"),
+  runs: z.array(PreventionRepairedRunBindingSchema).length(3)
+}).strict();
+
 export type PreventionProofBody = z.infer<typeof PreventionProofBodySchema>;
 export type PreventionProofManifest = z.infer<typeof PreventionProofManifestSchema>;
+export type PreventionProofClassification = z.infer<typeof PreventionProofClassificationSchema>;
 export type PreventionProofExternalRootStatus = "NOT_PROVIDED" | "MATCH" | "MISMATCH";
+export type PreventionRepairedRunBinding = z.infer<typeof PreventionRepairedRunBindingSchema>;
 
 export type PreventionProofVerification = {
   readonly valid: boolean;
@@ -97,7 +124,7 @@ export type WrittenPreventionProof = {
   readonly rootDigest: string;
 };
 
-const EXPECTED_ARTIFACTS = new Set(["README.md", "prevention.json", "manifest.json"]);
+const BASE_ARTIFACTS = ["README.md", "prevention.json", "manifest.json"] as const;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -230,6 +257,38 @@ export function validatePreventionProofSemantics(body: PreventionProofBody): str
   if (new Set(states.map((state) => state.commit)).size !== 3) {
     errors.push("last-good, first-bad, and repaired commits must be distinct");
   }
+  for (const state of states) {
+    if (state.runIds.length !== 3 || new Set(state.runIds).size !== 3) {
+      errors.push(`${state.role} requires three distinct runIds`);
+    }
+    if (state.distinctExecutionCount !== state.runIds.length) {
+      errors.push(`${state.role} distinctExecutionCount must equal runIds length`);
+    }
+  }
+  if (body.repairBaseTree !== undefined && body.firstBad.tree !== undefined && body.repairBaseTree !== body.firstBad.tree) {
+    errors.push("repairBaseTree must match first-bad tree when both are present");
+  }
+  return errors;
+}
+
+function validateRepairedRunsArtifact(
+  body: PreventionProofBody,
+  artifact: z.infer<typeof PreventionRepairedRunsArtifactSchema> | null
+): string[] {
+  if (artifact === null) return [];
+  const errors: string[] = [];
+  const ids = artifact.runs.map((run) => run.runId);
+  if (ids.join("\0") !== body.repaired.runIds.join("\0")) {
+    errors.push("repaired-runs.json runIds must match prevention.repaired.runIds in order");
+  }
+  for (const run of artifact.runs) {
+    if (run.commit !== body.repaired.commit || run.tree !== body.repaired.tree) {
+      errors.push(`repaired run ${run.runId} commit/tree does not match repaired state`);
+    }
+    if (run.witnessDigest !== body.frozenWitnessDigest) {
+      errors.push(`repaired run ${run.runId} witness digest mismatch`);
+    }
+  }
   return errors;
 }
 
@@ -250,11 +309,16 @@ export function verifyPreventionProof(
     }
     assertNoLinksOrSpecialFiles(root);
     const physical = new Set(readdirSync(root, { withFileTypes: true }).map((entry) => entry.name));
-    for (const expected of EXPECTED_ARTIFACTS) {
+    for (const expected of BASE_ARTIFACTS) {
       if (!physical.has(expected)) errors.push(`Prevention proof package is missing ${expected}`);
     }
     for (const actual of physical) {
-      if (!EXPECTED_ARTIFACTS.has(actual)) errors.push(`Prevention proof package contains an unexpected artifact: ${actual}`);
+      if (
+        actual !== "repaired-runs.json"
+        && !(BASE_ARTIFACTS as readonly string[]).includes(actual)
+      ) {
+        errors.push(`Prevention proof package contains an unexpected artifact: ${actual}`);
+      }
       const path = join(root, actual);
       const stat = lstatSync(path);
       if (!stat.isFile() || stat.isSymbolicLink()) errors.push(`Prevention proof artifact must be a regular non-symlink file: ${actual}`);
@@ -286,6 +350,24 @@ export function verifyPreventionProof(
       if (manifest && manifest.prevention.digest !== digestJson(prevention)) {
         errors.push("Prevention proof manifest digest does not match prevention.json.");
       }
+      if (manifest?.classification === "PREVENTION_VERIFIED") {
+        if (!prevention.repairPatchDigest) errors.push("PREVENTION_VERIFIED requires repairPatchDigest");
+        if (!prevention.repairBaseTree) errors.push("PREVENTION_VERIFIED requires repairBaseTree");
+        if (!physical.has("repaired-runs.json")) {
+          errors.push("PREVENTION_VERIFIED package must include repaired-runs.json");
+        }
+      }
+    }
+
+    if (physical.has("repaired-runs.json") && prevention) {
+      const repairedParsed = PreventionRepairedRunsArtifactSchema.safeParse(
+        readJson(join(root, "repaired-runs.json"), "repaired runs artifact", errors)
+      );
+      if (!repairedParsed.success) {
+        errors.push(`repaired-runs.json schema validation failed: ${repairedParsed.error.message}`);
+      } else {
+        errors.push(...validateRepairedRunsArtifact(prevention, repairedParsed.data));
+      }
     }
   } catch (error) {
     errors.push(`Prevention proof verification failed safely: ${errorMessage(error)}`);
@@ -300,8 +382,13 @@ export type PreventionProofWriteInput = {
   readonly lastGood: Omit<PreventionProofBody["lastGood"], "role" | "verdict"> & { verdict?: "PASS" };
   readonly firstBad: Omit<PreventionProofBody["firstBad"], "role" | "verdict"> & { verdict?: "FAIL" };
   readonly repaired: Omit<PreventionProofBody["repaired"], "role" | "verdict"> & { verdict?: "PASS" };
+  readonly repairBaseTree?: string;
   readonly repairPatchDigest?: string;
   readonly codexThreadId?: string;
+  readonly hardGuardArtifactDigests?: readonly string[];
+  /** VERIFIED requires repairPatchDigest, repairBaseTree, and repairedRunBindings. */
+  readonly grounding?: "SUMMARY" | "VERIFIED";
+  readonly repairedRunBindings?: readonly PreventionRepairedRunBinding[];
 };
 
 /**
@@ -312,6 +399,27 @@ export function writePreventionProof(
   outputDirectory: string,
   input: PreventionProofWriteInput
 ): WrittenPreventionProof {
+  const grounding = input.grounding === "VERIFIED" ? "PREVENTION_VERIFIED" : "PREVENTION_EVIDENCE_SUMMARY";
+  if (grounding === "PREVENTION_VERIFIED") {
+    if (!input.repairPatchDigest) throw new Error("Grounded prevention write requires repairPatchDigest.");
+    if (!input.repairBaseTree) throw new Error("Grounded prevention write requires repairBaseTree.");
+    if (!input.repairedRunBindings || input.repairedRunBindings.length !== 3) {
+      throw new Error("Grounded prevention write requires three repairedRunBindings.");
+    }
+  }
+
+  const limitations = grounding === "PREVENTION_VERIFIED"
+    ? [
+      "PREVENTION_VERIFIED binds last-good and first-bad run IDs from a verified Git proof bundle plus three repaired-state NATIVE_DOCKER run bindings under one frozen witness digest.",
+      "Offline verify checks package integrity, run-ID self-consistency, and repaired-runs.json; it does not re-execute Docker.",
+      "This package does not claim model intent, a unique semantic root cause, or host/Docker-daemon attestation beyond the recorded execution trust."
+    ]
+    : [
+      "PREVENTION_EVIDENCE_SUMMARY records caller-supplied last-good PASS, first-bad FAIL, and repaired PASS fields under one frozen witness digest.",
+      "Offline verify checks package integrity and internal field consistency; use fl prevention write --from-bundle for PREVENTION_VERIFIED grounding.",
+      "This package does not claim model intent, a unique semantic root cause, or host/Docker-daemon attestation beyond the recorded execution trust."
+    ];
+
   const body = PreventionProofBodySchema.parse({
     schemaVersion: PREVENTION_PROOF_SCHEMA_VERSION,
     originalProofRoot: input.originalProofRoot,
@@ -332,25 +440,38 @@ export function writePreventionProof(
       role: "REPAIRED",
       verdict: "PASS"
     },
+    ...(input.repairBaseTree === undefined ? {} : { repairBaseTree: input.repairBaseTree }),
     ...(input.repairPatchDigest === undefined ? {} : { repairPatchDigest: input.repairPatchDigest }),
     ...(input.codexThreadId === undefined ? {} : { codexThreadId: input.codexThreadId }),
+    ...(input.hardGuardArtifactDigests === undefined
+      ? {}
+      : { hardGuardArtifactDigests: [...input.hardGuardArtifactDigests] }),
     verified: true,
-    limitations: [
-      "PREVENTION_EVIDENCE_SUMMARY records caller-supplied last-good PASS, first-bad FAIL, and repaired PASS fields under one frozen witness digest.",
-      "Offline verify checks package integrity and internal field consistency; it does not yet reconstruct those verdicts from original proof-bundle run IDs and repaired-state run records.",
-      "This package does not claim model intent, a unique semantic root cause, or host/Docker-daemon attestation beyond the recorded execution trust."
-    ]
+    limitations
   });
   const semanticErrors = validatePreventionProofSemantics(body);
   if (semanticErrors.length > 0) {
     throw new Error(`Refusing to store an invalid prevention proof: ${semanticErrors.join("; ")}`);
   }
 
+  const repairedArtifact = input.repairedRunBindings === undefined
+    ? null
+    : PreventionRepairedRunsArtifactSchema.parse({
+      schemaVersion: "faultline.prevention-repaired-runs.v1",
+      runs: input.repairedRunBindings
+    });
+  if (repairedArtifact) {
+    const bindingErrors = validateRepairedRunsArtifact(body, repairedArtifact);
+    if (bindingErrors.length > 0) {
+      throw new Error(`Refusing to store inconsistent repaired run bindings: ${bindingErrors.join("; ")}`);
+    }
+  }
+
   const output = preparePreventionProofOutput(outputDirectory);
   const stage = join(dirname(output), `.${output.split(/[\\/]/).at(-1) ?? "prevention"}.${randomUUID()}.tmp`);
   const unsigned = {
     schemaVersion: PREVENTION_PROOF_SCHEMA_VERSION,
-    classification: "PREVENTION_EVIDENCE_SUMMARY" as const,
+    classification: grounding,
     prevention: { path: "prevention.json" as const, digest: digestJson(body) },
     limitations: body.limitations
   };
@@ -361,20 +482,25 @@ export function writePreventionProof(
 
   try {
     mkdirSync(stage, { mode: 0o700 });
+    const statusLine = grounding === "PREVENTION_VERIFIED"
+      ? "Status: **Prevention verified** (grounded in verified proof-bundle run IDs + repaired run bindings)"
+      : "Status: **PREVENTION_EVIDENCE_SUMMARY** (not fully grounded Prevention verified)";
     const readme = [
       "# FaultLine prevention proof",
       "",
-      "Status: **PREVENTION_EVIDENCE_SUMMARY** (not fully grounded Prevention verified)",
+      statusLine,
       "",
-      "This package binds an original Git proof root, a frozen witness digest, and three caller-supplied NATIVE_DOCKER state summaries (PASS → FAIL → PASS).",
+      "This package binds an original Git proof root, a frozen witness digest, and three NATIVE_DOCKER state summaries (PASS → FAIL → PASS) with per-state run IDs.",
       "",
       "Verify offline with `fl verify <this-directory> --expect-root <retained-root>` (or `fl prevention verify`).",
-      "Verification does not reconstruct run facts from the original proof bundle yet.",
       "It does not claim model intent or a unique semantic root cause."
     ].join("\n");
     writePrivateFile(join(stage, "README.md"), `${readme}\n`);
     writePrivateFile(join(stage, "prevention.json"), `${canonicalJson(body)}\n`);
     writePrivateFile(join(stage, "manifest.json"), `${canonicalJson(manifest)}\n`);
+    if (repairedArtifact) {
+      writePrivateFile(join(stage, "repaired-runs.json"), `${canonicalJson(repairedArtifact)}\n`);
+    }
     syncDirectory(stage);
 
     const verification = verifyPreventionProof(stage);

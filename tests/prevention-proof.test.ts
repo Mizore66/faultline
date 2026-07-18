@@ -14,6 +14,10 @@ import {
 const digest = (label: string) => `sha256:${sha256(label)}`;
 const commit = (n: number) => `${n.toString(16).padStart(40, "0")}`;
 
+function runIds(prefix: string): [string, string, string] {
+  return [digest(`${prefix}-1`), digest(`${prefix}-2`), digest(`${prefix}-3`)];
+}
+
 function sampleInput(overrides: Partial<PreventionProofWriteInput> = {}): PreventionProofWriteInput {
   const witness = digest("witness");
   const environment = digest("environment");
@@ -28,7 +32,8 @@ function sampleInput(overrides: Partial<PreventionProofWriteInput> = {}): Preven
       environmentDigest: environment,
       executionTrust: "NATIVE_DOCKER",
       executionKind: "EXECUTED",
-      distinctExecutionCount: 3
+      distinctExecutionCount: 3,
+      runIds: runIds("lg")
     },
     firstBad: {
       commit: commit(2),
@@ -37,7 +42,8 @@ function sampleInput(overrides: Partial<PreventionProofWriteInput> = {}): Preven
       environmentDigest: environment,
       executionTrust: "NATIVE_DOCKER",
       executionKind: "EXECUTED",
-      distinctExecutionCount: 3
+      distinctExecutionCount: 3,
+      runIds: runIds("fb")
     },
     repaired: {
       commit: commit(3),
@@ -46,7 +52,8 @@ function sampleInput(overrides: Partial<PreventionProofWriteInput> = {}): Preven
       environmentDigest: environment,
       executionTrust: "NATIVE_DOCKER",
       executionKind: "EXECUTED",
-      distinctExecutionCount: 3
+      distinctExecutionCount: 3,
+      runIds: runIds("rp")
     },
     repairPatchDigest: digest("patch"),
     codexThreadId: "thread_prevention_test",
@@ -73,12 +80,57 @@ describe("faultline.prevention-proof.v1", () => {
       expect(written.rootDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(written.prevention.schemaVersion).toBe(PREVENTION_PROOF_SCHEMA_VERSION);
       expect(written.manifest.classification).toBe("PREVENTION_EVIDENCE_SUMMARY");
+      expect(written.prevention.lastGood.runIds).toHaveLength(3);
 
       const verified = verifyPreventionProof(written.directory, written.rootDigest);
       expect(verified.valid).toBe(true);
       expect(verified.externalRootStatus).toBe("MATCH");
       expect(verified.prevention?.codexThreadId).toBe("thread_prevention_test");
       expect(verified.prevention?.repairPatchDigest).toBe(digest("patch"));
+    } finally {
+      process.chdir(previous);
+    }
+  });
+
+  it("writes PREVENTION_VERIFIED when grounded with repaired run bindings", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "faultline-prevention-verified-"));
+    tempRoots.push(workspace);
+    const previous = process.cwd();
+    process.chdir(workspace);
+    try {
+      const ids = runIds("rp");
+      const witness = digest("witness");
+      const environment = digest("environment");
+      const written = writePreventionProof(join(defaultPreventionProofRoot(), "grounded"), sampleInput({
+        grounding: "VERIFIED",
+        repairBaseTree: commit(22),
+        repaired: {
+          commit: commit(3),
+          tree: commit(33),
+          witnessDigest: witness,
+          environmentDigest: environment,
+          executionTrust: "NATIVE_DOCKER",
+          executionKind: "EXECUTED",
+          distinctExecutionCount: 3,
+          runIds: ids
+        },
+        repairedRunBindings: ids.map((runId, index) => ({
+          runId,
+          executionId: digest(`exec-${index}`),
+          commit: commit(3),
+          tree: commit(33),
+          verdict: "PASS" as const,
+          witnessDigest: witness,
+          environmentDigest: environment,
+          executionTrust: "NATIVE_DOCKER" as const,
+          executionKind: "EXECUTED" as const
+        }))
+      }));
+      expect(written.manifest.classification).toBe("PREVENTION_VERIFIED");
+      expect(readFileSync(join(written.directory, "repaired-runs.json"), "utf8")).toContain(ids[0]);
+      const verified = verifyPreventionProof(written.directory, written.rootDigest);
+      expect(verified.valid).toBe(true);
+      expect(verified.manifest?.classification).toBe("PREVENTION_VERIFIED");
     } finally {
       process.chdir(previous);
     }
@@ -100,8 +152,6 @@ describe("faultline.prevention-proof.v1", () => {
       expect(tampered.valid).toBe(false);
       expect(tampered.errors.join("\n")).toMatch(/digest|PASS|schema|verdict/i);
 
-      const mismatch = verifyPreventionProof(written.directory, digest("wrong-root"));
-      // restore would be needed for mismatch-only; rewrite clean package
       rmSync(written.directory, { recursive: true, force: true });
       const clean = writePreventionProof(join(defaultPreventionProofRoot(), "case-2b"), sampleInput());
       const external = verifyPreventionProof(clean.directory, digest("wrong-root"));
@@ -119,19 +169,36 @@ describe("faultline.prevention-proof.v1", () => {
     const previous = process.cwd();
     process.chdir(workspace);
     try {
-      expect(() => writePreventionProof(join(defaultPreventionProofRoot(), "bad"), sampleInput({
-        repaired: {
-          ...sampleInput().repaired,
-          distinctExecutionCount: 2
-        }
-      }))).toThrow(/greater than or equal to 3|three distinct executions|Refusing|Invalid/i);
-
-      expect(() => writePreventionProof(join(defaultPreventionProofRoot(), "bad2"), sampleInput({
+      expect(() => writePreventionProof(join(defaultPreventionProofRoot(), "bad-count"), sampleInput({
         lastGood: {
           ...sampleInput().lastGood,
-          executionTrust: "UNSAFE_LOCAL" as "NATIVE_DOCKER"
+          distinctExecutionCount: 2,
+          runIds: [digest("a"), digest("b"), digest("c")]
         }
-      }))).toThrow(/NATIVE_DOCKER|Invalid|Refusing/i);
+      }))).toThrow(/Refusing|distinctExecutionCount|runIds/i);
+
+      expect(() => writePreventionProof(join(defaultPreventionProofRoot(), "bad-trust"), sampleInput({
+        repaired: {
+          ...sampleInput().repaired,
+          // @ts-expect-error intentional invalid trust for refuse-closed test
+          executionTrust: "UNSAFE_LOCAL"
+        }
+      }))).toThrow(/Refusing|Invalid|NATIVE_DOCKER|three distinct/i);
+    } finally {
+      process.chdir(previous);
+    }
+  });
+
+  it("fail-closes grounded write without repaired bindings", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "faultline-prevention-ground-fail-"));
+    tempRoots.push(workspace);
+    const previous = process.cwd();
+    process.chdir(workspace);
+    try {
+      expect(() => writePreventionProof(join(defaultPreventionProofRoot(), "noground"), sampleInput({
+        grounding: "VERIFIED",
+        repairBaseTree: commit(22)
+      }))).toThrow(/repairedRunBindings|Grounded/i);
     } finally {
       process.chdir(previous);
     }
