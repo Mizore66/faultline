@@ -51,8 +51,9 @@ import {
 
 /**
  * A turn-tree investigation package with Git-inspired integrity checks.
- * User-facing maturity remains experimental (`EXPERIMENTAL_TURN`) until the
- * turn path meets the commit-path portable proof contract.
+ * User-facing maturity remains `EXPERIMENTAL_TURN` until the named TURN_PROOF
+ * promotion criteria in `evidence-grade.ts` are met — not merely because a
+ * write-once portable package exists.
  */
 export const TURN_PROOF_BUNDLE_SCHEMA_VERSION = "faultline.turn-proof-bundle.v1" as const;
 export const TURN_PROOF_SOURCE_SCHEMA_VERSION = "faultline.turn-proof-source.v1" as const;
@@ -348,7 +349,7 @@ function verificationReadme(): Buffer {
     "",
     `${TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL} (\`${TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL}\`).`,
     "This is not the same maturity tier as commit-path portable proof (`COMMIT_PROOF`).",
-    "Do not treat a turn package as interchangeable with a Git proof bundle until turn investigation meets that contract.",
+    "Do not treat a turn package as TURN_PROOF / COMMIT_PROOF. See evidence-grade.ts promotion criteria (external validation, turn-boundary counterfactuals, prevention integration, platform soak).",
     "",
     "## Handling warning",
     "",
@@ -660,7 +661,7 @@ export function validateTurnInvestigationProofSemantics(
   }
   if (result.proof.evidenceGrade === TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED) {
     errors.push(
-      "TURN_PROOF evidence grade is reserved until turn investigation meets the Git-path portable proof contract; use EXPERIMENTAL_TURN"
+      "TURN_PROOF is reserved until external validation, turn-boundary counterfactuals, prevention integration, and platform soak are met; use EXPERIMENTAL_TURN"
     );
   }
   if (expectedProof && result.proof.evidenceGrade !== TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL) {

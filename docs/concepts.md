@@ -15,9 +15,21 @@ Evidence vocabulary, grades, claim boundaries, and capability scope. For judge i
 
 | Grade | Path | Meaning |
 | --- | --- | --- |
-| `COMMIT_PROOF` | Git commit-range investigation | Highest portable proof tier: Docker-isolated replay over immutable commits, write-once Git proof bundle, offline verifier. Shown on `fl investigate git` output and `fl serve --bundle`. |
-| `EXPERIMENTAL_TURN` | Turn-tree localization | Explicitly lower tier. May record transitions and (library) packages, but is **not** interchangeable with commit-path portable proof until turn/Git parity lands. Label: “Turn localization — experimental evidence”. |
+| `COMMIT_PROOF` | Git commit-range investigation | Highest portable proof tier: Docker-isolated replay over immutable commits, write-once Git proof bundle, offline verifier. |
+| `EXPERIMENTAL_TURN` | Turn-tree localization | Codex-native turn packages (write-once bundle, ledger, tree pack, root verify, PREDICATE_* runs). **Not** promoted to `TURN_PROOF` yet. |
+| `TURN_PROOF` | Reserved | Do not assign until promotion criteria below are met. |
 | `NONE` | Either path | No certified transitions / not proof-eligible. |
+
+### Why turn stays `EXPERIMENTAL_TURN` (not “missing a portable package”)
+
+Turn investigation already ships write-once packages with lifecycle binding, tree packs, external root verification, run reconstruction, and structured outcomes. The remaining **maturity policy** before `TURN_PROOF` is:
+
+1. External repository validation (permissioned case study beyond dogfood)
+2. Counterfactual edit isolation from a selected turn boundary (`fl investigate turns --minimize` / `fl prove transition`)
+3. Prevention-proof integration on the turn→repair arc
+4. Operational soak across supported platforms
+
+Do not promote the grade for marketing. Promote only when those criteria are met.
 
 Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. On the **commit path**, a `PASS -> FAIL` boundary becomes `COMMIT_PROOF` only when each side has three distinct, matching Docker-isolated executions. Turn-path transitions stay experimental even when three-run stability is observed.
 
@@ -39,8 +51,8 @@ Verdicts are only `PASS`, `FAIL`, `UNSTABLE`, `ERROR`, and `INAPPLICABLE`. On th
 ## Important boundaries
 
 - FaultLine's included demo is deterministic; it is not a claim of a general arbitrary-code runner.
-- **Turn path:** observes public Codex lifecycle hooks, captures immutable turn-boundary Git trees (including dirty Stops), and executes a frozen witness across those states. It does not inspect private Codex reasoning. Evidence grade is experimental until portable turn proof bundles match the Git path (#21).
-- **Git path:** mature commit-range replay with portable, independently verifiable proof packages. Prefer this for publishable A-grade claims today.
+- **Turn path:** observes public Codex lifecycle hooks, captures immutable turn-boundary Git trees (including dirty Stops), and executes a frozen witness across those states. It does not inspect private Codex reasoning. Grade stays `EXPERIMENTAL_TURN` until the TURN_PROOF promotion criteria above are met (not merely until a bundle exists).
+- **Git path:** mature commit-range replay with portable, independently verifiable proof packages. Prefer this for publishable `COMMIT_PROOF` claims today.
 - The sandbox plans are fail-closed. The CLI labels injected runners `INJECTED_RUNNER` and refuses to certify or publish them as Docker proof. The Ubuntu CI gate exercises the native Docker boundary; a local development environment still needs a Docker daemon to create real proof evidence.
 - `NATIVE_DOCKER` means FaultLine's direct Docker runner on the host that produced the record. Offline verification reconstructs the recorded policy and data, but it is not cryptographic attestation that a host, Docker client, or daemon enforced that policy. A signed GitHub CI receipt binds bytes and the configured GitHub Actions identity; it does not change this host/Docker-enforcement limitation.
 - A proof is predicate-specific. It does not prove intent, semantic causality, or that one edit is the unique cause.
@@ -50,7 +62,7 @@ Host/Docker attestation limits, signature caveats, turn-tree storage, and packag
 
 ## Impact, models, and capability summary
 
-Dogfood only: FaultLine’s first completed proof is **this repository’s provenance-workflow regression** (`PASS→FAIL` at `97c3290`, recovery at `07ee7f1`). Record: [impact-validation-self-incident.md](impact-validation-self-incident.md). No third-party adoption metrics.
+**Validation status:** internal dogfood is published ([faultline-self-incident.md](faultline-self-incident.md)); an **external repository test is underway** (see [external-case-study-template.md](external-case-study-template.md) / [partners/mumbcs-faultline-guide.md](partners/mumbcs-faultline-guide.md)). Until a permissioned case study lands, do not claim third-party adoption metrics.
 
 **Qualifying `/feedback`:** `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 

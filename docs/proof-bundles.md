@@ -83,9 +83,22 @@ The page re-verifies each attachment against its retained digest. A minimization
 
 Optional: `fl repair --bundle …` prepares instructions (`REPAIR_INSTRUCTIONS_PREPARED`); `--with-codex` is opt-in and never auto-merges.
 
+## Turn boundary → counterfactual (experimental chain)
+
+After a verified turn package, chain the selected PASS→FAIL trees into Git-path minimization without manually copying digests:
+
+```powershell
+pnpm fl investigate turns ... --minimize --transition 0
+# or later:
+pnpm fl prove transition .faultline\turn-proof-bundles\<dir> `
+  --repo . --proposal <id> --expect-digest sha256:… --image <digest-pinned> --transition 0
+```
+
+This creates synthetic orphan commits from turn `treeDigest`s so existing `minimizeGitDiff` can run. It does **not** promote `EXPERIMENTAL_TURN` to `TURN_PROOF` / `COMMIT_PROOF`.
+
 ## Prevention proof
 
-Recovery evidence and a stable boundary do not establish prevention. FaultLine packages prevention as `faultline.prevention-proof.v1`. The shareable page and CLI say **Prevention verified** only when that package verifies.
+Recovery evidence and a stable boundary do not establish prevention. FaultLine packages prevention as `faultline.prevention-proof.v1`. The shareable page and CLI say **Prevention verified** only when that package verifies. After `fl repair`, collect three-state NATIVE_DOCKER facts and run `fl prevention write` — do not claim prevention from repair instructions alone.
 
 ```powershell
 pnpm fl prevention write --input .\prevention-input.json
