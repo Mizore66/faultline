@@ -97,6 +97,7 @@ Build Week must show **GPT-5.6** (`fl witness propose --live` and/or `fl repair 
 | [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md) | Submission kit / run of show |
 | [docs/turn-snapshot-overhead.md](docs/turn-snapshot-overhead.md) | Turn-snapshot storage overhead measurements |
 | [docs/later-turn-incident.md](docs/later-turn-incident.md) | Later-turn First Bad Turn fixture narrative (`EXPERIMENTAL_TURN`) |
+| [docs/partners/moni-alpha-faultline-guide.md](docs/partners/moni-alpha-faultline-guide.md) | Partner runbook: Moni-Alpha real later-turn capture + starter CI |
 | [docs/differentiation.md](docs/differentiation.md) | Scope comparison vs bisect / CI / repro / provenance |
 
 ## Development

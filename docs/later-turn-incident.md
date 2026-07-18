@@ -4,6 +4,8 @@ Optional **Codex / turn-level** demo beat: show an earliest recorded stable fail
 
 Evidence grade remains `EXPERIMENTAL_TURN` (not `COMMIT_PROOF`). Lead the submission video with the Idea / `COMMIT_PROOF` path (`pnpm fl judge-proof`); use this doc as the experimental First Bad Turn follow-up. Mature Git dogfood: [faultline-self-incident.md](faultline-self-incident.md).
 
+**External partner runbook (Moni-Alpha):** for a real Codex ledger + verified digests on [Kaiz404/Moni-Alpha](https://github.com/Kaiz404/Moni-Alpha), follow [partners/moni-alpha-faultline-guide.md](partners/moni-alpha-faultline-guide.md).
+
 ## What this incident demonstrates
 
 ```text
