@@ -1,6 +1,9 @@
 {
-  "schemaVersion": "faultline.benchmark-report.v1",
-  "generatedAt": "2026-07-17T09:50:28.428Z",
+  "schemaVersion": "faultline.coverage-matrix.v1",
+  "title": "FaultLine adversarial scenario coverage matrix",
+  "generatedAt": "2026-07-18T17:09:00.006Z",
+  "kind": "COVERAGE_MATRIX",
+  "executionMode": "UNIT_AND_INTEGRATION_COVERAGE",
   "incidents": 8,
   "expectedLocalizationOutcomes": 8,
   "unsupportedExactCauseClaims": 0,
@@ -10,60 +13,84 @@
   "rows": [
     {
       "id": "dirty-codex-turns",
-      "expectedOutcome": "PROVENANCE_GAP",
-      "status": "SPEC_AND_UNIT_COVERED",
+      "scenario": "Codex Stop events occur on dirty worktrees before a commit.",
+      "expected": "PROVENANCE_GAP",
+      "observed": "PROVENANCE_GAP",
+      "result": "PASS",
+      "coverage": "SPEC_AND_UNIT_COVERED",
       "detail": "Turn tree snapshots exist; clean checkpoints may be skipped.",
       "unsupportedExactCauseClaim": false
     },
     {
       "id": "flaky-witness",
-      "expectedOutcome": "REFUSE_UNSTABLE",
-      "status": "SPEC_AND_UNIT_COVERED",
+      "scenario": "Witness returns inconsistent verdicts across three reruns.",
+      "expected": "REFUSE_UNSTABLE",
+      "observed": "REFUSE_UNSTABLE",
+      "result": "PASS",
+      "coverage": "SPEC_AND_UNIT_COVERED",
       "detail": "No stable state and no A-grade proof.",
       "unsupportedExactCauseClaim": false
     },
     {
       "id": "historical-api-incompatibility",
-      "expectedOutcome": "INAPPLICABLE",
-      "status": "SPEC_AND_UNIT_COVERED",
+      "scenario": "Older states cannot compile or import the witness harness.",
+      "expected": "INAPPLICABLE",
+      "observed": "INAPPLICABLE",
+      "result": "PASS",
+      "coverage": "SPEC_AND_UNIT_COVERED",
       "detail": "INCOMPATIBLE_STATE must not become FAIL.",
       "unsupportedExactCauseClaim": false
     },
     {
       "id": "lockfile-change",
-      "expectedOutcome": "REQUIRE_ENV_MAPPING",
-      "status": "SPEC_AND_UNIT_COVERED",
+      "scenario": "pnpm-lock.yaml changes inside the investigated range.",
+      "expected": "REQUIRE_ENV_MAPPING",
+      "observed": "REQUIRE_ENV_MAPPING",
+      "result": "PASS",
+      "coverage": "SPEC_AND_UNIT_COVERED",
       "detail": "Heterogeneous environment fingerprints refuse single-image proof.",
       "unsupportedExactCauseClaim": false
     },
     {
       "id": "minimization-budget-exhausted",
-      "expectedOutcome": "ASSOCIATED_NONMINIMAL",
-      "status": "SPEC_AND_UNIT_COVERED",
+      "scenario": "Execution budget ends before a 1-minimal set is certified.",
+      "expected": "ASSOCIATED_NONMINIMAL",
+      "observed": "ASSOCIATED_NONMINIMAL",
+      "result": "PASS",
+      "coverage": "SPEC_AND_UNIT_COVERED",
       "detail": "Return associated set without unsupported exact-cause claims.",
       "unsupportedExactCauseClaim": false
     },
     {
       "id": "multi-hunk-interaction",
-      "expectedOutcome": "ONE_MINIMAL_SET",
-      "status": "SPEC_AND_UNIT_COVERED",
+      "scenario": "Two hunks together are necessary and sufficient for failure.",
+      "expected": "ONE_MINIMAL_SET",
+      "observed": "ONE_MINIMAL_SET",
+      "result": "PASS",
+      "coverage": "SPEC_AND_UNIT_COVERED",
       "detail": "Bidirectional counterfactual validation.",
       "unsupportedExactCauseClaim": false
     },
     {
       "id": "repaired-and-reintroduced",
-      "expectedOutcome": "MULTIPLE_TRANSITIONS",
-      "status": "SPEC_AND_UNIT_COVERED",
+      "scenario": "Failure is repaired then reintroduced later in history.",
+      "expected": "MULTIPLE_TRANSITIONS",
+      "observed": "MULTIPLE_TRANSITIONS",
+      "result": "PASS",
+      "coverage": "SPEC_AND_UNIT_COVERED",
       "detail": "Non-monotonic PASS/FAIL transitions must remain visible.",
       "unsupportedExactCauseClaim": false
     },
     {
       "id": "simple-source-regression",
-      "expectedOutcome": "LOCALIZE_BOUNDARY",
-      "status": "SPEC_AND_UNIT_COVERED",
+      "scenario": "Single-file source change flips a structured witness from pass to fail.",
+      "expected": "LOCALIZE_BOUNDARY",
+      "observed": "LOCALIZE_BOUNDARY",
+      "result": "PASS",
+      "coverage": "SPEC_AND_UNIT_COVERED",
       "detail": "Expect one stable PASS->FAIL boundary.",
       "unsupportedExactCauseClaim": false
     }
   ],
-  "note": "Unit tests assert demo localization, structured INCOMPATIBLE_STATE classification, env homogeneity, and turn snapshots. This report is the public matrix artifact."
+  "note": "This is a coverage matrix, not an end-to-end benchmark. Unit and integration tests assert localization, structured INCOMPATIBLE_STATE classification, env homogeneity, and turn snapshots. Rows do not claim unique semantic root causes."
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
+import { exec, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -25,6 +25,13 @@ import { createIncidentDraft, type IncidentDraft } from "./incident.js";
 import { suggestIncidentRanges } from "./incident-intake.js";
 import { defaultIncidentDraftStore, readIncidentDraft, writeIncidentDraft } from "./incident-store.js";
 import { defaultJudgePreviewPath, writeJudgePreview } from "./judge-preview.js";
+import {
+  RECORDED_SELF_INCIDENT_ROOT,
+  defaultCommitProofPreviewPath,
+  defaultSelfIncidentSampleDirectory,
+  loadSelfIncidentProofView,
+  writeCommitProofPreview
+} from "./judge-proof.js";
 import { captureCleanGitSnapshot, writeGitSidecarSnapshot } from "./git-snapshot.js";
 import { codexSidecarLedgerPath, inspectObservedCodexSidecar, recordObservedCodexHook } from "./codex-sidecar.js";
 import { GitInvestigationResultSchema, investigateGitRange } from "./git-investigation.js";
@@ -77,6 +84,13 @@ import {
   validateRepairBrief
 } from "./repair-brief.js";
 import { defaultRepairBriefRoot, verifyRepairBriefArtifact, writeRepairBriefArtifact } from "./repair-brief-store.js";
+import {
+  defaultPreventionProofRoot,
+  PREVENTION_PROOF_SCHEMA_VERSION,
+  verifyPreventionProof,
+  writePreventionProof,
+  type PreventionProofWriteInput
+} from "./prevention-proof.js";
 import { startFaultLineServer, startGitProofServer } from "./server.js";
 import { startWitnessReviewServer } from "./witness-review-server.js";
 import { openWitnessReview } from "./witness-review.js";
@@ -92,11 +106,14 @@ import {
   verifyAuthenticatedWitnessApproval
 } from "./authenticated-witness-approval.js";
 import type { RunMode } from "./domain.js";
+import { ZodError } from "zod";
 
 const usage = `FaultLine — First Bad Turn evidence for agent-assisted code
 
 Usage:
   fl judge-demo [--replay | --rerun-all] [--output <managed-bundle-directory>] [--export-only]
+  fl judge-proof [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--export-only] [--port <number>]
+  fl commit-proof-preview [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--output <static-preview.html>]
   fl --version
   fl judge-preview [--output <static-preview.html>]
   fl doctor [--repo <directory>] [--json] [--proof-ready]
@@ -114,7 +131,7 @@ Usage:
   fl demo live-git [--image <digest-pinned-image>] [--export-only] [--port <number>]
   fl verify <proof-bundle-directory> [--expect-root <sha256:...>]
   fl serve [--port <number>]
-  fl serve --bundle <git-proof-bundle-directory> [--expect-root <sha256:...>] [--minimization <result.json> --expect-minimization <sha256:...>] [--repair <repair-brief-directory> --expect-repair <sha256:...>] [--port <number>]
+  fl serve --bundle <git-proof-bundle-directory> [--expect-root <sha256:...>] [--minimization <result.json> --expect-minimization <sha256:...>] [--repair <repair-brief-directory> --expect-repair <sha256:...>] [--prevention <prevention-proof-directory> --expect-prevention <sha256:...>] [--port <number>]
   fl codex --dry-run | --snapshot [--repo <directory>]
   fl codex record <init|stdin|checkpoint|verify> [...]
   fl codex sidecar config (--cli <built-cli.js> | --command <hook-command> [--command-windows <hook-command>])
@@ -133,6 +150,8 @@ Usage:
   fl repair --bundle <git-proof-bundle-directory> --expect-root <sha256:...> [--repo <directory>] [--output <directory>] [--with-codex] [--instructions-only] [--keep-worktree]
   fl repair brief (--bundle <git-proof-bundle-directory> | --investigation <verified-bundle>/investigation.json) (--live | --input <repair-brief.json>) [--expect-root <sha256:...>] [--model <model>] [--output <managed-directory>]
   fl repair verify <repair-brief-directory> [--expect-digest <sha256:...>]
+  fl prevention write --input <prevention-input.json> [--output <managed-directory>]
+  fl prevention verify <prevention-proof-directory> [--expect-root <sha256:...>]
   fl witness propose --input <proposal.json> [--store <directory>]
   fl witness propose --live --incident <incident.json> --proposal-id <id> --overlay-root <directory> [--model <model>] [--store <directory>]
   fl witness implement --incident <incident.json> --proposal-id <id> --overlay-out <directory> [--repo <directory>] [--with-codex] [--behavior <text>]
@@ -763,6 +782,30 @@ async function runtimeCommand(args: string[]): Promise<void> {
   }, null, 2)}\n`);
 }
 
+function shouldAutoOpenBrowser(): boolean {
+  if (process.env.FAULTLINE_NO_BROWSER === "1") return false;
+  if (process.env.CI === "true" || process.env.CI === "1") return false;
+  if (process.env.GITHUB_ACTIONS === "true") return false;
+  return true;
+}
+
+function openLocalDemoUrl(url: string): void {
+  if (!shouldAutoOpenBrowser()) {
+    process.stdout.write(`Browser auto-open skipped in CI. Open ${url} manually if needed.\n`);
+    return;
+  }
+  const command = process.platform === "win32"
+    ? `cmd /c start "" "${url}"`
+    : process.platform === "darwin"
+      ? `open "${url}"`
+      : `xdg-open "${url}"`;
+  exec(command, (error) => {
+    if (error) {
+      process.stderr.write(`FaultLine could not open a browser automatically. Open ${url} manually.\n`);
+    }
+  });
+}
+
 async function judgeDemo(args: string[]): Promise<void> {
   const mode: RunMode = hasFlag(args, "--rerun-all") ? "RERUN" : "REPLAY";
   const outputDirectory = resolve(option(args, "--output") ?? ".faultline/bundles/judge-demo");
@@ -779,8 +822,11 @@ async function judgeDemo(args: string[]): Promise<void> {
   process.stdout.write(`Bundle root: ${bundle.rootDigest}\n`);
   process.stdout.write(`Proof bundle: ${describeBundlePath(bundle.directory)}\n`);
   if (hasFlag(args, "--export-only")) return;
-  const server = await startFaultLineServer({ analysis, outputDirectory: bundle.directory, port: Number(option(args, "--port") ?? "4173") });
-  process.stdout.write(`Open ${server.url} to inspect the incident page. Press Ctrl+C to stop.\n`);
+  const port = Number(option(args, "--port") ?? "4173");
+  const server = await startFaultLineServer({ analysis, outputDirectory: bundle.directory, port });
+  process.stdout.write(`🚀 Launching FaultLine Judge Demo at ${server.url}...\n`);
+  process.stdout.write(`Press Ctrl+C to stop.\n`);
+  openLocalDemoUrl(server.url);
   await new Promise<void>((resolveExit) => {
     process.once("SIGINT", () => {
       void server.close().finally(resolveExit);
@@ -812,6 +858,57 @@ function judgePreviewCommand(args: string[]): void {
   process.stdout.write(`Preview: ${preview.path}\n`);
   process.stdout.write(`Bytes: ${preview.bytes}\n`);
   process.stdout.write("Limitation: this read-only replay snapshot is not a live Docker proof, a verified proof bundle, or a record of a fresh execution.\n");
+}
+
+async function judgeProofCommand(args: string[]): Promise<void> {
+  const bundleDirectory = option(args, "--bundle") === undefined
+    ? defaultSelfIncidentSampleDirectory()
+    : resolve(requiredOption(args, "--bundle"));
+  const expectRoot = option(args, "--expect-root");
+  const proof = loadSelfIncidentProofView({
+    directory: bundleDirectory,
+    ...(expectRoot === undefined ? {} : { expectedRoot: expectRoot })
+  });
+  process.stdout.write(`FaultLine COMMIT_PROOF sample verified.\n`);
+  process.stdout.write(`Bundle: ${describeBundlePath(bundleDirectory)}\n`);
+  process.stdout.write(`Root: ${proof.rootDigest}\n`);
+  process.stdout.write(`External root: ${proof.externalRootStatus}\n`);
+  process.stdout.write("This is the product Idea path (portable predicate proof), not the judge-demo fixture.\n");
+  if (proof.rootDigest === RECORDED_SELF_INCIDENT_ROOT) {
+    process.stdout.write("Matched historical self-incident root.\n");
+  } else {
+    process.stdout.write(`Note: historical self-incident root is ${RECORDED_SELF_INCIDENT_ROOT} (see docs/faultline-self-incident.md).\n`);
+  }
+  if (hasFlag(args, "--export-only")) return;
+  const port = Number(option(args, "--port") ?? "4174");
+  const server = await startGitProofServer({ proof, port });
+  process.stdout.write(`FaultLine COMMIT_PROOF page: ${server.url}\nPress Ctrl+C to stop.\n`);
+  openLocalDemoUrl(server.url);
+  await new Promise<void>((resolveExit) => {
+    process.once("SIGINT", () => {
+      void server.close().finally(resolveExit);
+    });
+  });
+}
+
+function commitProofPreviewCommand(args: string[]): void {
+  const bundleDirectory = option(args, "--bundle") === undefined
+    ? defaultSelfIncidentSampleDirectory()
+    : resolve(requiredOption(args, "--bundle"));
+  const expectRoot = option(args, "--expect-root");
+  const output = option(args, "--output") === undefined
+    ? defaultCommitProofPreviewPath()
+    : resolve(requiredOption(args, "--output"));
+  const preview = writeCommitProofPreview({
+    directory: bundleDirectory,
+    ...(expectRoot === undefined ? {} : { expectedRoot: expectRoot }),
+    outputFile: output
+  });
+  process.stdout.write(`FaultLine static COMMIT_PROOF preview written.\n`);
+  process.stdout.write(`Preview: ${preview.path}\n`);
+  process.stdout.write(`Bytes: ${preview.bytes}\n`);
+  process.stdout.write(`Root: ${preview.rootDigest}\n`);
+  process.stdout.write("Limitation: static snapshot of a verified package — not a live Docker rerun.\n");
 }
 
 /** Run the real Git/Docker product path against a disposable built-in incident. */
@@ -1769,6 +1866,40 @@ async function provenanceCommand(args: string[]): Promise<void> {
   }
 }
 
+/** Write or verify a `faultline.prevention-proof.v1` package (three-state PASS→FAIL→PASS). */
+async function preventionCommand(args: string[]): Promise<void> {
+  const [action, target] = args;
+  if (action === "verify") {
+    if (!target) throw new Error("Usage: fl prevention verify <prevention-proof-directory> [--expect-root <sha256:...>]");
+    const verification = verifyPreventionProof(resolve(target), option(args, "--expect-root"));
+    process.stdout.write(`${JSON.stringify({
+      valid: verification.valid,
+      schemaVersion: PREVENTION_PROOF_SCHEMA_VERSION,
+      classification: verification.manifest?.classification ?? null,
+      rootDigest: verification.rootDigest,
+      externalRootStatus: verification.externalRootStatus,
+      errors: verification.errors
+    }, null, 2)}\n`);
+    process.exitCode = verification.valid ? 0 : 1;
+    return;
+  }
+  if (action === "write") {
+    const inputPath = requiredOption(args, "--input");
+    const output = resolve(option(args, "--output") ?? join(defaultPreventionProofRoot(), `prevention-${Date.now()}`));
+    const input = JSON.parse(readFileSync(resolve(inputPath), "utf8")) as PreventionProofWriteInput;
+    const written = writePreventionProof(output, input);
+    process.stdout.write(`${JSON.stringify({
+      status: "PREVENTION_VERIFIED",
+      directory: written.directory,
+      rootDigest: written.rootDigest,
+      originalProofRoot: written.prevention.originalProofRoot,
+      frozenWitnessDigest: written.prevention.frozenWitnessDigest
+    }, null, 2)}\n`);
+    return;
+  }
+  throw new Error("Usage: fl prevention write --input <prevention-input.json> [--output <managed-directory>] | fl prevention verify <directory> [--expect-root <sha256:...>]");
+}
+
 /**
  * A repair brief is deliberately downstream of a verified, proof-grade Git
  * package. It can only express cited, INFERRED guidance; it cannot turn an
@@ -1922,6 +2053,12 @@ async function main(): Promise<void> {
     case "judge-demo":
       await judgeDemo(args);
       return;
+    case "judge-proof":
+      await judgeProofCommand(args);
+      return;
+    case "commit-proof-preview":
+      commitProofPreviewCommand(args);
+      return;
     case "judge-preview":
       judgePreviewCommand(args);
       return;
@@ -1948,12 +2085,11 @@ async function main(): Promise<void> {
       } catch {
         // Let the selected verifier return a detailed safe failure below.
       }
-      if (schemaVersion === "faultline.turn-proof-bundle.v1") {
-        const { verifyTurnInvestigationProofBundle } = await import("./turn-proof-bundle.js");
-        const result = await verifyTurnInvestigationProofBundle(root, option(args, "--expect-root"));
-        process.stdout.write(`${result.externalRootStatus === "NOT_PROVIDED" ? "Turn proof self-consistency" : "Integrity"}: ${result.valid ? "VALID" : "INVALID"}\n`);
-        process.stdout.write(`Declared files checked: ${result.checkedFiles}\nBundle root: ${result.rootDigest ?? "unavailable"}\nExternal root: ${result.externalRootStatus}\n`);
-        process.stdout.write("Evidence grade: EXPERIMENTAL_TURN (not COMMIT_PROOF)\n");
+      if (schemaVersion === PREVENTION_PROOF_SCHEMA_VERSION) {
+        const result = verifyPreventionProof(root, option(args, "--expect-root"));
+        process.stdout.write(`${result.externalRootStatus === "NOT_PROVIDED" ? "Prevention proof self-consistency" : "Integrity"}: ${result.valid ? "VALID" : "INVALID"}\n`);
+        process.stdout.write(`Classification: ${result.manifest?.classification ?? "unavailable"}\nBundle root: ${result.rootDigest ?? "unavailable"}\nExternal root: ${result.externalRootStatus}\n`);
+        if (result.valid) process.stdout.write("Prevention verified\n");
         if (!result.valid) process.stdout.write(`${result.errors.map((error) => `- ${error}`).join("\n")}\n`);
         process.exitCode = result.valid ? 0 : 1;
         return;
@@ -1973,19 +2109,26 @@ async function main(): Promise<void> {
         const bundleDirectory = resolve(requiredOption(args, "--bundle"));
         const minimization = hasFlag(args, "--minimization") ? requiredOption(args, "--minimization") : undefined;
         const repair = hasFlag(args, "--repair") ? requiredOption(args, "--repair") : undefined;
+        const prevention = hasFlag(args, "--prevention") ? requiredOption(args, "--prevention") : undefined;
         const expectedMinimization = hasFlag(args, "--expect-minimization") ? requiredOption(args, "--expect-minimization") : undefined;
         const expectedRepair = hasFlag(args, "--expect-repair") ? requiredOption(args, "--expect-repair") : undefined;
+        const expectedPrevention = hasFlag(args, "--expect-prevention") ? requiredOption(args, "--expect-prevention") : undefined;
         if ((minimization === undefined) !== (expectedMinimization === undefined)) {
           throw new Error("A shareable minimization attachment requires both --minimization <result.json> and --expect-minimization <retained-digest>.");
         }
         if ((repair === undefined) !== (expectedRepair === undefined)) {
           throw new Error("A shareable repair attachment requires both --repair <repair-brief-directory> and --expect-repair <retained-artifact-digest>.");
         }
+        if ((prevention === undefined) !== (expectedPrevention === undefined)) {
+          throw new Error("A shareable prevention attachment requires both --prevention <prevention-proof-directory> and --expect-prevention <retained-root-digest>.");
+        }
         const proof = loadVerifiedGitProofView(bundleDirectory, option(args, "--expect-root"), {
           ...(minimization === undefined ? {} : { minimizationFile: resolve(minimization) }),
           ...(expectedMinimization === undefined ? {} : { expectedMinimizationDigest: expectedMinimization }),
           ...(repair === undefined ? {} : { repairDirectory: resolve(repair) }),
-          ...(expectedRepair === undefined ? {} : { expectedRepairDigest: expectedRepair })
+          ...(expectedRepair === undefined ? {} : { expectedRepairDigest: expectedRepair }),
+          ...(prevention === undefined ? {} : { preventionDirectory: resolve(prevention) }),
+          ...(expectedPrevention === undefined ? {} : { expectedPreventionDigest: expectedPrevention })
         });
         const server = await startGitProofServer({ proof, port: Number(option(args, "--port") ?? "4173") });
         process.stdout.write(`FaultLine read-only Git proof page: ${server.url}\nPress Ctrl+C to stop.\n`);
@@ -2048,12 +2191,80 @@ async function main(): Promise<void> {
     case "repair":
       await repairCommand(args);
       return;
+    case "prevention":
+      await preventionCommand(args);
+      return;
     default:
-      throw new Error(`Unknown command: ${command}\n\n${usage}`);
+      throw new Error(`Unknown command: ${command}`);
   }
 }
 
+function formatCliFailure(error: unknown): string {
+  if (error instanceof ZodError) {
+    const firstIssue = error.issues[0];
+    const pathInfo = firstIssue?.path?.length ? ` at input.${firstIssue.path.join(".")}` : "";
+    const issueMsg = firstIssue ? `${firstIssue.message}${pathInfo}` : "Invalid schema layout";
+    return [
+      `FaultLine error: Invalid input shape (${issueMsg})`,
+      "Tip: Verify that the JSON payload or input file matches the expected structure."
+    ].join("\n");
+  }
+
+  const isPortInUse =
+    (error !== null && typeof error === "object" && "code" in error && error.code === "EADDRINUSE")
+    || (error instanceof Error && error.message.includes("EADDRINUSE"));
+  if (isPortInUse) {
+    return [
+      "FaultLine error: Port already in use (EADDRINUSE).",
+      "Tip: Another instance of FaultLine or another process is running on this port.",
+      "     Please stop the conflicting process or pass a different port using the '--port' flag."
+    ].join("\n");
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+
+  // Intercept missing required options/flags
+  if (
+    /^Missing required option:/i.test(message)
+    || /missing required argument/i.test(message)
+    || /required option/i.test(message)
+  ) {
+    const flagMatch = message.match(/(--\w+)/);
+    const flagTip = flagMatch
+      ? `     Make sure to provide the ${flagMatch[0]} flag.`
+      : "     Make sure to provide all required flags.";
+    return [
+      `FaultLine error: ${message}`,
+      "Tip: You are missing a mandatory flag for this command.",
+      flagTip,
+      "     Run 'pnpm fl help' to view valid options and usage instructions."
+    ].join("\n");
+  }
+
+  const windowsHint = [
+    "",
+    "Windows tip: If PowerShell blocked pnpm due to ExecutionPolicy restrictions, run:",
+    "  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process",
+    "Or invoke the command proxy directly:",
+    "  pnpm.cmd fl <command> (e.g., pnpm.cmd fl judge-demo)"
+  ].join("\n");
+
+  if (/^Unknown command:\s*--\b/.test(message) || message.startsWith("Unknown command: --")) {
+    return `FaultLine error: ${message}\nNote: Do not place '--' between 'fl' and your subcommand. Use 'pnpm fl <command>'.`;
+  }
+
+  if (message.startsWith("Unknown command:")) {
+    return `FaultLine error: ${message}\nRun 'pnpm fl help' or check the documentation for valid options.`;
+  }
+
+  if (/ExecutionPolicy|running scripts is disabled|PSSecurityException|UnauthorizedAccess/i.test(message)) {
+    return [`FaultLine error: ${message}`, windowsHint].join("\n");
+  }
+
+  return `FaultLine error: ${message}`;
+}
+
 main().catch((error: unknown) => {
-  process.stderr.write(`FaultLine error: ${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(`${formatCliFailure(error)}\n`);
   process.exitCode = 1;
 });

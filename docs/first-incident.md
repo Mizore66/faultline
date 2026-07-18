@@ -93,7 +93,7 @@ These are starting environments, not universal build environments. The preparati
 When you have a CI log, use the resumable Option B workflow. FaultLine still keeps intake, witness lock, runtime selection, localization, and proof export modular internally, but you drive one coherent command:
 
 ```powershell
-pnpm fl -- investigate --ci-log .\ci.log `
+pnpm fl investigate --ci-log .\ci.log `
   --repo . `
   --command "pnpm test -- checkout" `
   --runtime node
@@ -110,7 +110,7 @@ State transitions the operator sees:
 If you interrupt during review, resume without redoing intake:
 
 ```powershell
-pnpm fl -- investigate --resume <id> `
+pnpm fl investigate --resume <id> `
   --repo . `
   --expect-digest <frozen-digest> `
   --runtime node

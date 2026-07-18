@@ -22,6 +22,12 @@ import {
   type RepairBriefArtifactManifest,
   type RepairBriefArtifactExternalDigestStatus
 } from "./repair-brief-store.js";
+import {
+  verifyPreventionProof,
+  type PreventionProofBody,
+  type PreventionProofExternalRootStatus,
+  type PreventionProofManifest
+} from "./prevention-proof.js";
 import type { FrozenWitness } from "./witness-lock.js";
 
 /**
@@ -35,6 +41,8 @@ export type IncidentAttachmentOptions = {
   readonly expectedMinimizationDigest?: string;
   readonly repairDirectory?: string;
   readonly expectedRepairDigest?: string;
+  readonly preventionDirectory?: string;
+  readonly expectedPreventionDigest?: string;
 };
 
 export type VerifiedMinimizationAttachment = {
@@ -50,9 +58,17 @@ export type VerifiedRepairAttachment = {
   readonly externalDigestStatus: RepairBriefArtifactExternalDigestStatus;
 };
 
+export type VerifiedPreventionAttachment = {
+  readonly manifest: PreventionProofManifest;
+  readonly prevention: PreventionProofBody;
+  readonly rootDigest: string;
+  readonly externalDigestStatus: PreventionProofExternalRootStatus;
+};
+
 export type VerifiedIncidentAttachments = {
   readonly minimization: VerifiedMinimizationAttachment | null;
   readonly repair: VerifiedRepairAttachment | null;
+  readonly prevention: VerifiedPreventionAttachment | null;
 };
 
 function readJson(path: string, label: string): unknown {
@@ -202,11 +218,49 @@ function loadRepair(
   };
 }
 
+function loadPrevention(
+  directory: string,
+  expectedRootDigest: string | undefined,
+  investigation: GitInvestigationResult,
+  frozenWitness: FrozenWitness,
+  proofRootDigest: string
+): VerifiedPreventionAttachment {
+  const root = resolve(directory);
+  const first = verifyPreventionProof(root, expectedRootDigest);
+  if (!first.valid || first.manifest === null || first.prevention === null || first.rootDigest === null) {
+    throw new Error(`Refusing to attach an invalid prevention proof: ${first.errors.join("; ")}`);
+  }
+  if (first.prevention.originalProofRoot !== proofRootDigest) {
+    throw new Error("Refusing to attach a prevention proof bound to a different Git proof root.");
+  }
+  if (first.prevention.frozenWitnessDigest !== frozenWitness.witnessDigest) {
+    throw new Error("Refusing to attach a prevention proof for a different frozen witness.");
+  }
+  if (first.prevention.investigationDigest !== undefined
+    && first.prevention.investigationDigest !== digestJson(investigation)) {
+    throw new Error("Refusing to attach a prevention proof from a different Git investigation.");
+  }
+
+  const recheck = verifyPreventionProof(root, expectedRootDigest);
+  if (!recheck.valid || recheck.manifest === null || recheck.prevention === null || recheck.rootDigest === null
+    || recheck.rootDigest !== first.rootDigest
+    || canonicalJson(recheck.prevention) !== canonicalJson(first.prevention)) {
+    throw new Error(`Refusing to attach a prevention proof that changed during verification: ${recheck.errors.join("; ") || "digest changed"}`);
+  }
+  return {
+    manifest: recheck.manifest,
+    prevention: recheck.prevention,
+    rootDigest: recheck.rootDigest,
+    externalDigestStatus: recheck.externalRootStatus
+  };
+}
+
 /** Verify and bind optional downstream artifacts to this exact proof view. */
 export function loadVerifiedIncidentAttachments(
   options: IncidentAttachmentOptions,
   investigation: GitInvestigationResult,
-  frozenWitness: FrozenWitness
+  frozenWitness: FrozenWitness,
+  proofRootDigest?: string
 ): VerifiedIncidentAttachments {
   return {
     minimization: options.minimizationFile === undefined
@@ -214,6 +268,17 @@ export function loadVerifiedIncidentAttachments(
       : loadMinimization(options.minimizationFile, options.expectedMinimizationDigest, investigation, frozenWitness),
     repair: options.repairDirectory === undefined
       ? null
-      : loadRepair(options.repairDirectory, options.expectedRepairDigest, investigation, frozenWitness)
+      : loadRepair(options.repairDirectory, options.expectedRepairDigest, investigation, frozenWitness),
+    prevention: options.preventionDirectory === undefined
+      ? null
+      : loadPrevention(
+        options.preventionDirectory,
+        options.expectedPreventionDigest,
+        investigation,
+        frozenWitness,
+        proofRootDigest ?? (() => {
+          throw new Error("Prevention attachment requires the verified Git proof root digest.");
+        })()
+      )
   };
 }

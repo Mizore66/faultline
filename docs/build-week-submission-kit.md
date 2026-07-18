@@ -2,47 +2,73 @@
 
 This is a recording and submission checklist, not evidence that a submission has already been made. Recheck the official Build Week page before submitting.
 
-## Fastest judge check
+**Finish path (video + external N=1 + Devpost):** start at [submission-finish-runbook.md](submission-finish-runbook.md) — teleprompter, invite, external impact form, and paste-ready Devpost text.
 
-Show this deterministic, no-Docker, no-API-key path before asking a reviewer to evaluate a live environment:
+## Idea claim (say this once, then follow it)
+
+**Locked claim:** FaultLine produces a portable, offline-verifiable evidence package for one human-frozen predicate — another engineer verifies “where does *this* reviewed witness first go bad?” **without re-running repository code**, without trusting model intent.
+
+1. **Lead with that claim + runnable `COMMIT_PROOF` sample:**
+
+```powershell
+pnpm fl judge-proof
+```
+
+Sample root: `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9` ([COMMIT_PROOF_SAMPLE.md](samples/COMMIT_PROOF_SAMPLE.md)). Historical dogfood (`f6a391…` / `97c3290`) is separate — [faultline-self-incident.md](faultline-self-incident.md). One complement line only: complements Git bisect / CI logs / repro — does not replace them.
+
+2. **Show GPT-5.6 live** — `fl witness propose --live` and/or `fl repair brief --live` (needs `OPENAI_API_KEY`).
+3. **Show Codex** — build acceleration (`/feedback` session) and/or sidecar hook install / ledger path.
+4. **Optional UI close-up** — `pnpm fl judge-demo` or `docs/judge-preview.html` as a **fixture sandbox**, not the Idea headline.
+5. **Never headline** — `fl investigate turns` (`EXPERIMENTAL_TURN`).
+
+Do not insert `--` between `fl` and the subcommand (`pnpm fl judge-demo`, never `pnpm fl -- judge-demo`).
+
+## Fastest judge check (sandbox only)
+
+Deterministic, no-Docker, no-API-key path for reviewers who cannot run a live environment:
 
 ```powershell
 pnpm install --frozen-lockfile
-pnpm fl -- judge-demo --rerun-all --export-only
-pnpm fl -- verify .faultline/bundles/judge-demo
+pnpm fl judge-demo --rerun-all --export-only
+pnpm fl verify .faultline/bundles/judge-demo
 ```
 
-It demonstrates the frozen witness, evidence labels, stable-boundary rules, counterfactual result, and offline verification of the included sample. It does **not** demonstrate a real incident, a production deployment, or native Docker proof. Label it accurately in the recording, then use the separate live-Git path when Docker evidence is available.
+Or open [`judge-preview.html`](judge-preview.html) with zero install. Label accurately: frozen witness / evidence labels / sample boundary — **not** a real incident or native Docker proof.
 
 ### Live guided incident path (after Docker is ready)
 
-For the end-to-end operator story, prefer the resumable guided command rather than narrating five separate subcommands:
-
 ```powershell
-pnpm fl -- doctor --repo .
-pnpm fl -- investigate --ci-log .\ci.log --repo . --command "<failing predicate>" --runtime node
+pnpm fl doctor --repo .
+pnpm fl investigate --ci-log .\ci.log --repo . --command "<failing predicate>" --runtime node
 # Browser: Approve, then Freeze (separate clicks). The CLI continues automatically.
 # Resume if interrupted:
-pnpm fl -- investigate --resume <id> --repo . --expect-digest <frozen-digest> --runtime node
-pnpm fl -- serve --bundle <proof> --expect-root <retained-root>
+pnpm fl investigate --resume <id> --repo . --expect-digest <frozen-digest> --runtime node
+pnpm fl serve --bundle <proof> --expect-root <retained-root>
 ```
 
 Say on camera that FaultLine did not auto-approve or auto-freeze; the one command only orchestrates modular primitives after explicit human freeze.
 
 ## Three-minute demo run of show
 
+### Cold open script (0:00–0:20) — Idea beat (you record)
+
+**On screen:** `pnpm fl judge-proof` proof page (sample root `sha256:f85c446d…`) or `docs/self-incident-proof-preview.html`. **Do not** open with `judge-demo` or “we built a better bisect.”
+
+**Speak (approx.):**  
+“When an agent-assisted change turns CI red, FaultLine answers a narrower question: where does *this* human-frozen witness first go bad? It packages that answer so another engineer can verify the evidence offline — without re-running the repo, and without trusting model intent. Here’s a real COMMIT_PROOF package open in the product UI — root `sha256:f85c446d…`. Separately, we dogfooded the same protocol on our own provenance regression at `97c3290`. Complements bisect and CI logs — doesn’t replace them.”
+
 | Time | Screen | Narration point |
 | --- | --- | --- |
-| 0:00–0:18 | The recorded FaultLine self-incident and its incident screen | "When an agent-assisted change turns CI red, FaultLine answers a narrower, useful question: where does a reviewed executable witness first become bad?" The [self-incident evidence](faultline-self-incident.md) records the proof root, the first measured `PASS -> FAIL` transition, and the later recovery; state its bounded predicate and limits on camera. |
-| 0:18–0:40 | `fl witness propose`, approval, and freeze output | "A human freezes the exact predicate before localization. The model may suggest it, but never decides the verdict." |
-| 0:40–1:10 | `fl demo live-git --export-only` plus the Docker policy in the verified proof view | "FaultLine replays that immutable witness over real Git states, three times per state, in a constrained Docker environment. It only calls a boundary when the executions support it." |
-| 1:10–1:35 | `fl minimize git` results | "It then asks whether the selected diff is actually sufficient and necessary, preserving conflicts and unknowns instead of guessing." |
-| 1:35–2:05 | `fl repair brief --bundle … --live` and `fl repair verify …` | "GPT-5.6 receives a privacy-minimized packet of verified facts and returns only cited, explicitly inferred repair guidance. It cannot manufacture a proof or blame a model." |
-| 2:05–2:20 | `fl serve --bundle … --expect-root … --minimization … --expect-minimization … --repair … --expect-repair …` | "A teammate sees the verified boundary, certified minimization, and citation summary in one read-only incident page. The downstream records are independently checked against retained digests and explicitly not claimed as part of the original Git root." |
-| 2:20–2:45 | `pnpm test`, proof verification, and GitHub Actions | "Codex accelerated the implementation, tests, adversarial review, and product hardening. The live Docker boundary is exercised in CI; local systems without Docker fail closed." |
-| 2:45–3:00 | FaultLine proof view and repository README | "FaultLine makes agent-assisted debugging auditable: freeze, replay, prove, fix, and prevent — without pretending the evidence says more than it does." |
+| 0:00–0:20 | `fl judge-proof` / sample proof view | Cold open script above. Sample: [COMMIT_PROOF_SAMPLE.md](samples/COMMIT_PROOF_SAMPLE.md). Dogfood cite: [self-incident](faultline-self-incident.md). |
+| 0:20–0:40 | `fl witness propose --live` → Approve → Freeze | "GPT-5.6 may propose a blinded witness; a human freezes the exact predicate. The model never decides the verdict." |
+| 0:40–1:10 | `fl demo live-git --export-only` + verified Docker policy | "FaultLine replays that immutable witness over real Git states, three times per state, in constrained Docker. Boundaries only when executions support them." |
+| 1:10–1:35 | `fl minimize git` results | "Sufficiency/necessity of the selected diff — conflicts and unknowns preserved, not guessed." |
+| 1:35–2:05 | `fl repair brief --bundle … --live` | "GPT-5.6 returns cited, explicitly inferred repair guidance from verified facts only." |
+| 2:05–2:25 | Offline `fl verify` / proof page | "A teammate verifies the package against the retained root without re-executing repository code." |
+| 2:25–2:45 | Codex `/feedback` ID + tests/CI | "Codex accelerated implementation and hardening. Session `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`." |
+| 2:45–3:00 | Optional `judge-demo` UI close-up | "Fixture sandbox for judges without Docker — not the Idea claim." |
 
-Use a public video with spoken narration. The voiceover should explicitly cover both Codex and GPT-5.6, and the recording should show the product actually running rather than slides alone.
+Use a public video with spoken narration. The voiceover should explicitly cover both Codex and GPT-5.6, and the recording should show the product actually running rather than slides alone. **You still must record and upload the YouTube video** — this kit only supplies the Idea cold-open script.
 
 ### Signed-evidence insert (replace, do not extend, the 2:20–2:45 segment)
 
@@ -78,10 +104,10 @@ Never imply that a locally generated `fl provenance create` file is signed: the 
 ```powershell
 pnpm install --frozen-lockfile
 pnpm test
-pnpm fl -- judge-demo --rerun-all --export-only
-pnpm fl -- verify .faultline/bundles/judge-demo
-pnpm fl -- demo live-git --export-only
-pnpm fl -- provenance verify `
+pnpm fl judge-demo --rerun-all --export-only
+pnpm fl verify .faultline/bundles/judge-demo
+pnpm fl demo live-git --export-only
+pnpm fl provenance verify `
   --bundle <git-proof-bundle-directory> `
   --receipt .faultline\provenance\ci-receipt.json `
   --attestation-bundle .\sigstore-bundle.json `
@@ -99,7 +125,7 @@ These are separate facts to gather; none is created merely by copying this kit i
 | FaultLine runs as shown | Commit/release, platform/runtime, exact commands, and recorded output | [RECORD AT DEMO TIME] |
 | The live Git/Docker path produced evidence | Verified FaultLine self-incident bundle with recorded root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` | [RECORDED] |
 | Codex and GPT-5.6 were used as described | Qualifying `/feedback` `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`; README documents build vs runtime boundaries | [RECORDED SESSION ID] |
-| The project addressed a real audience problem | Self-incident dogfood (provenance workflow predicate); no third-party adoption metrics claimed | [SCOPED / SELF-VALIDATED] |
+| The project addressed a real audience problem | Dogfood record: [impact-validation-self-incident.md](impact-validation-self-incident.md); no third-party adoption metrics claimed | [SCOPED / SELF-VALIDATED] |
 | The Devpost entry is complete | Selected track, public narrated-video URL, feedback session ID, repository URL/license, and required fields | [VIDEO + FORM STILL OPEN] |
 | Signed CI provenance is shown | CI receipt, matching Sigstore bundle, trust file, trusted root, and exact verification result | [OPTIONAL / NOT YET RECORDED] |
 

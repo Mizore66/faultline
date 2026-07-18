@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "faultline.turn-snapshot-overhead.v1",
+  "generatedAt": "2026-07-18T16:28:47.094Z",
+  "trialsDefault": 3,
+  "note": "Wall-clock captureTurnTreeSnapshot including quiescence. Blob/byte deltas from git count-objects before/after each trial.",
+  "rows": [
+    {
+      "repository": "FaultLine",
+      "filesEligible": 172,
+      "filesOnDiskEstimate": 172,
+      "bytesOnDiskEstimate": 1821654,
+      "trials": 0,
+      "snapshotP50Ms": null,
+      "snapshotP95Ms": null,
+      "blobsAddedTotal": 0,
+      "bytesStoredTotal": 0,
+      "secretScanRejections": 1,
+      "quiescenceRetryHints": 0,
+      "planWarnings": 0,
+      "note": "Refusing turn-tree snapshot: high-entropy secret-like token detected in actions/proof/action.yml."
+    },
+    {
+      "repository": "Medium fixture (1,000)",
+      "filesEligible": 1000,
+      "filesOnDiskEstimate": 1000,
+      "bytesOnDiskEstimate": 65000,
+      "trials": 3,
+      "snapshotP50Ms": 7079.5761,
+      "snapshotP95Ms": 8025.7348,
+      "blobsAddedTotal": 0,
+      "bytesStoredTotal": 0,
+      "secretScanRejections": 0,
+      "quiescenceRetryHints": 3,
+      "planWarnings": 0
+    },
+    {
+      "repository": "Large fixture (1,800 under cap)",
+      "filesEligible": 1800,
+      "filesOnDiskEstimate": 1800,
+      "bytesOnDiskEstimate": 59400,
+      "trials": 3,
+      "snapshotP50Ms": 11006.4787,
+      "snapshotP95Ms": 14079.8515,
+      "blobsAddedTotal": 0,
+      "bytesStoredTotal": 0,
+      "secretScanRejections": 0,
+      "quiescenceRetryHints": 3,
+      "planWarnings": 0
+    }
+  ]
+}

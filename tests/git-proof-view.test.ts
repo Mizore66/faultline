@@ -241,12 +241,15 @@ describe("read-only Git proof view", () => {
         manifest: { lifecycle: { status: "BOUND", transport: "CODEX_APP" } }
       });
       const page = renderGitProofIncidentPage(view);
-      expect(page).toContain("Verified <em>evidence</em>");
+      expect(page).toContain("Where this frozen");
+      expect(page).toContain("first failed.");
+      expect(page).toContain('href="#break"');
       expect(page).toContain("BREAK");
       expect(page).toContain("FIND");
       expect(page).toContain("PROVE");
       expect(page).toContain("FIX");
       expect(page).toContain("PREVENT");
+      expect(page).toContain("Portable offline-verifiable evidence");
       expect(page).toContain("COMMIT_PROOF");
       expect(page).toContain("Commit-path localization — portable proof");
       expect(page).toContain("EXPERIMENTAL_TURN");
@@ -295,7 +298,8 @@ describe("read-only Git proof view", () => {
               }
             } as never,
             externalDigestStatus: "MATCH"
-          }
+          },
+          prevention: null
         }
       });
       expect(attachedPage).toContain("BIDIRECTIONALLY CERTIFIED");
@@ -312,7 +316,7 @@ describe("read-only Git proof view", () => {
         expect(pageResponse.status).toBe(200);
         expect(pageResponse.headers.get("content-security-policy")).toContain("default-src 'none'");
         const pageText = await pageResponse.text();
-        expect(pageText).toContain("COMMIT-PATH PORTABLE PROOF");
+        expect(pageText).toContain("FAULTLINE · COMMIT_PROOF");
         expect(pageText).toContain("COMMIT_PROOF");
         expect(pageText).toContain("Commit-path localization — portable proof");
         expect(pageText).toContain("EXPERIMENTAL_TURN");
