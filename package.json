@@ -30,7 +30,14 @@
     "README.md",
     "docs/faultline-self-incident.md",
     "docs/first-incident.md",
-    "docs/github-action.md"
+    "docs/github-action.md",
+    "docs/concepts.md",
+    "docs/security-model.md",
+    "docs/witness-protocol.md",
+    "docs/runtime-preparation.md",
+    "docs/proof-bundles.md",
+    "docs/codex-sidecar.md",
+    "docs/turn-snapshot-overhead.md"
   ],
   "packageManager": "pnpm@10.32.1",
   "bin": {
@@ -44,7 +51,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:package": "node scripts/package-smoke.mjs",
-    "benchmark": "node scripts/run-benchmark.mjs",
+    "benchmark": "node scripts/run-coverage-matrix.mjs",
+    "coverage-matrix": "node scripts/run-coverage-matrix.mjs",
+    "measure:turn-snapshot": "pnpm build && node --import tsx scripts/measure-turn-snapshot.mjs",
     "dev": "tsx src/server.ts",
     "fl": "tsx src/cli.ts",
     "prepack": "pnpm build",

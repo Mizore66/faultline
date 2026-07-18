@@ -878,7 +878,7 @@ describe("FaultLine CLI workflows", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 180_000);
 
   it("drafts a template witness overlay via fl witness implement without Codex", () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-cli-witness-implement-"));

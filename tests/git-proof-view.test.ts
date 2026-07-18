@@ -298,7 +298,8 @@ describe("read-only Git proof view", () => {
               }
             } as never,
             externalDigestStatus: "MATCH"
-          }
+          },
+          prevention: null
         }
       });
       expect(attachedPage).toContain("BIDIRECTIONALLY CERTIFIED");

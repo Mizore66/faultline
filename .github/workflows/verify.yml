@@ -26,6 +26,14 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - run: pnpm coverage-matrix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: faultline-coverage-matrix-${{ matrix.os }}-node${{ matrix.node }}
+          if-no-files-found: error
+          path: |
+            benchmarks/REPORT.md
+            benchmarks/report.json
       - run: pnpm pack --dry-run
       - run: pnpm test:package
       - run: node dist/cli.js judge-demo --rerun-all --export-only
