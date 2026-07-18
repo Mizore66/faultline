@@ -81,10 +81,11 @@ function stateReadingRunner(options?: {
         return { exitCode: 2, stdout: "", stderr: "frozen overlay bytes changed" };
       }
       if (options?.incompatibleAt === state) {
+        // Avoid WITNESS_SETUP_ERROR stderr signatures so structured INCOMPATIBLE_STATE wins.
         return {
           exitCode: 1,
           stdout: `${formatWitnessResult("INCOMPATIBLE_STATE", "api missing")}\n`,
-          stderr: "Cannot find module"
+          stderr: "api surface unavailable in this turn state"
         };
       }
       if (options?.unstableAt === state) {

@@ -16,8 +16,12 @@ function verdictBadge(verdict: Verdict): string {
 }
 
 function friendlyReason(reasonCode: string): string {
-  if (reasonCode === "WITNESS_SATISFIED") return "Passed the approved test";
-  if (reasonCode === "WITNESS_ASSERTION_FAILED") return "Failed the approved test";
+  if (reasonCode === "WITNESS_SATISFIED" || reasonCode === "PREDICATE_PASS") {
+    return "Passed the approved test";
+  }
+  if (reasonCode === "WITNESS_ASSERTION_FAILED" || reasonCode === "PREDICATE_FAIL") {
+    return "Failed the approved test";
+  }
   return "Could not finish this check";
 }
 

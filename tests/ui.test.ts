@@ -14,7 +14,14 @@ describe("deterministic sample page", () => {
     expect(page).toContain("Pick one simple test");
     expect(page).toContain("Which versions pass or fail?");
     expect(page).toContain("Atlas version");
+    expect(page).toContain("This version still passes");
+    expect(page).toContain("This version fails the test");
+    expect(page).toContain("WORKING");
+    expect(page).toContain("BROKEN");
     expect(page).toContain("Passed the approved test");
+    expect(page).toContain("Failed the approved test");
+    expect(page).toContain("Result grade A");
+    expect(page).toContain("Strong: the important checks all passed.");
     expect(page).toContain("claims-scroll");
     expect(page).toContain("Find when it first broke");
     expect(page).toContain("Check which changes matter");
