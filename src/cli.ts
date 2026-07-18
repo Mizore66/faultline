@@ -106,7 +106,7 @@ Usage:
   fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>] [--unsafe-local]
   fl investigate --ci-log <file> --repo <directory> [--command <failing-command>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--id <safe-id>] [--unsafe-local]
   fl investigate --resume <incident-id> --repo <directory> [--expect-digest <sha256:...>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--unsafe-local]
-  fl investigate turns --repo <directory> --ledger <ledger.json> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image>
+  fl investigate turns --repo <directory> --ledger <ledger.json> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--runtime-mapping <mapping.json>] [--output <managed-bundle-directory>]
   fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]
   fl runtime resolve <node|python|go>
   fl runtime prepare <node|python|go> --yes
@@ -1459,21 +1459,76 @@ async function investigateCommand(args: string[]): Promise<void> {
   }
   if (args[0] === "turns") {
     const { investigateTurnTrees } = await import("./turn-investigation.js");
+    const {
+      defaultTurnProofRoot,
+      verifyTurnInvestigationProofBundle,
+      writeTurnInvestigationProofBundle
+    } = await import("./turn-proof-bundle.js");
     const store = witnessStore(args);
     const proposalId = requiredOption(args, "--proposal");
+    const repository = resolve(requiredOption(args, "--repo"));
+    const ledgerPath = resolve(requiredOption(args, "--ledger"));
+    const frozenWitness = readFrozenWitness(store, proposalId);
+    const runtimeMappingPath = option(args, "--runtime-mapping");
+    let runtimeMapping: Record<string, string> | undefined;
+    if (runtimeMappingPath !== undefined) {
+      const parsed = JSON.parse(readFileSync(resolve(runtimeMappingPath), "utf8")) as unknown;
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("--runtime-mapping must be a JSON object of fingerprintDigest → digest-pinned image.");
+      }
+      runtimeMapping = Object.fromEntries(
+        Object.entries(parsed as Record<string, unknown>).map(([digest, image]) => {
+          if (typeof image !== "string") {
+            throw new Error(`--runtime-mapping entry for ${digest} must be a digest-pinned image string.`);
+          }
+          return [digest, image];
+        })
+      );
+    }
     const result = await investigateTurnTrees({
-      repository: resolve(requiredOption(args, "--repo")),
-      ledgerPath: resolve(requiredOption(args, "--ledger")),
-      frozenWitness: readFrozenWitness(store, proposalId),
+      repository,
+      ledgerPath,
+      frozenWitness,
       expectedFrozenDigest: requiredOption(args, "--expect-digest"),
-      image: requiredOption(args, "--image")
+      image: requiredOption(args, "--image"),
+      ...(runtimeMapping === undefined ? {} : { runtimeMapping })
     });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    process.exitCode = result.proof.isProof ? 0 : 1;
+    if (!result.proof.isProof) {
+      process.stdout.write(`${JSON.stringify({
+        investigation: result,
+        proofBundle: null,
+        note: "No portable turn proof bundle was written because the investigation did not establish Docker-isolated turn proof eligibility. Evidence grade remains experimental even when transitions are present."
+      }, null, 2)}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    const proofRoot = defaultTurnProofRoot();
+    const output = resolve(option(args, "--output") ?? join(proofRoot, `turns-${Date.now()}`));
+    const bundle = await writeTurnInvestigationProofBundle(output, result, frozenWitness, {
+      proofRoot,
+      lifecycleLedger: readVerifiedCodexLifecycleLedger(ledgerPath),
+      repository
+    });
+    const bundleVerification = await verifyTurnInvestigationProofBundle(bundle.directory, bundle.rootDigest);
+    if (!bundleVerification.valid) {
+      throw new Error(`Generated turn proof bundle failed verification: ${bundleVerification.errors.join("; ")}`);
+    }
+    process.stdout.write(`${JSON.stringify({
+      investigation: result,
+      proofBundle: {
+        directory: bundle.directory,
+        rootDigest: bundle.rootDigest,
+        evidenceGrade: result.proof.evidenceGrade,
+        evidenceLabel: result.proof.evidenceLabel,
+        externalRootStatus: bundleVerification.externalRootStatus,
+        note: "Turn package is experimentally graded (EXPERIMENTAL_TURN), not COMMIT_PROOF."
+      }
+    }, null, 2)}\n`);
+    process.exitCode = 0;
     return;
   }
   if (args[0] !== "git") {
-    throw new Error("Usage: fl investigate --ci-log <file> --repo <directory> [...] | fl investigate --resume <id> --repo <directory> [...] | fl investigate turns --repo ... --ledger ... --proposal ... --expect-digest ... --image ... | fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <bundle-directory>]");
+    throw new Error("Usage: fl investigate --ci-log <file> --repo <directory> [...] | fl investigate --resume <id> --repo <directory> [...] | fl investigate turns --repo ... --ledger ... --proposal ... --expect-digest ... --image ... [--runtime-mapping <mapping.json>] [--output <dir>] | fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]");
   }
   const store = witnessStore(args);
   const proposalId = requiredOption(args, "--proposal");
@@ -1626,6 +1681,9 @@ function proofBundleSummary(directory: string): { rootDigest: string; witnessDig
       ...(verification.manifest?.witnessDigest === undefined ? {} : { witnessDigest: verification.manifest.witnessDigest })
     };
   }
+  if (schemaVersion === "faultline.turn-proof-bundle.v1") {
+    throw new Error("Attestation create currently supports Git proof bundles only. Verify turn packages with `fl verify` (EXPERIMENTAL_TURN).");
+  }
   const verification = verifyProofBundle(root);
   if (!verification.valid || !verification.rootDigest) throw new Error(`Proof bundle is invalid: ${verification.errors.join("; ")}`);
   return {
@@ -1726,13 +1784,14 @@ async function repairCommand(args: string[]): Promise<void> {
     return;
   }
   if (hasFlag(args, "--bundle") && args[0] !== "brief") {
-    const { repairWithCodex } = await import("./codex-loop.js");
+    const { createFrozenWitnessRepairVerifier, repairWithCodex } = await import("./codex-loop.js");
+    const withCodex = hasFlag(args, "--with-codex");
     const result = await repairWithCodex({
       bundleDirectory: resolve(requiredOption(args, "--bundle")),
       expectRoot: requiredOption(args, "--expect-root"),
       repository: resolve(option(args, "--repo") ?? process.cwd()),
       outputDirectory: resolve(option(args, "--output") ?? join(".faultline", "repairs", `repair-${Date.now()}`)),
-      withCodex: hasFlag(args, "--with-codex"),
+      withCodex,
       instructionsOnly: hasFlag(args, "--instructions-only"),
       keepWorktree: hasFlag(args, "--keep-worktree"),
       verifyBundle: (directory, expectRoot) => {
@@ -1743,7 +1802,9 @@ async function repairCommand(args: string[]): Promise<void> {
           rootDigest: verification.rootDigest
         };
       },
-      ...(hasFlag(args, "--with-codex")
+      // When Codex drafts a repair, always verify the frozen witness fail-closed.
+      ...(withCodex ? { verifyCandidate: createFrozenWitnessRepairVerifier() } : {}),
+      ...(withCodex
         ? {
             runner: {
               async run(codexArgs: readonly string[], options: { cwd: string; input?: string }) {
@@ -1886,6 +1947,16 @@ async function main(): Promise<void> {
         schemaVersion = typeof manifest.schemaVersion === "string" ? manifest.schemaVersion : undefined;
       } catch {
         // Let the selected verifier return a detailed safe failure below.
+      }
+      if (schemaVersion === "faultline.turn-proof-bundle.v1") {
+        const { verifyTurnInvestigationProofBundle } = await import("./turn-proof-bundle.js");
+        const result = await verifyTurnInvestigationProofBundle(root, option(args, "--expect-root"));
+        process.stdout.write(`${result.externalRootStatus === "NOT_PROVIDED" ? "Turn proof self-consistency" : "Integrity"}: ${result.valid ? "VALID" : "INVALID"}\n`);
+        process.stdout.write(`Declared files checked: ${result.checkedFiles}\nBundle root: ${result.rootDigest ?? "unavailable"}\nExternal root: ${result.externalRootStatus}\n`);
+        process.stdout.write("Evidence grade: EXPERIMENTAL_TURN (not COMMIT_PROOF)\n");
+        if (!result.valid) process.stdout.write(`${result.errors.map((error) => `- ${error}`).join("\n")}\n`);
+        process.exitCode = result.valid ? 0 : 1;
+        return;
       }
       const result = schemaVersion === "faultline.git-proof-bundle.v1"
         ? verifyGitInvestigationProofBundle(root, option(args, "--expect-root"))

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -259,6 +259,39 @@ describe("repair worktree isolation", () => {
           keepManagedRoot: true
         });
       }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fail-closes createFrozenWitnessRepairVerifier when the frozen witness does not PREDICATE_PASS", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-repair-verifier-"));
+    try {
+      const fixture = await createProofFixture(root);
+      const { createFrozenWitnessRepairVerifier } = await import("../src/codex-loop.js");
+      const { formatWitnessResult } = await import("../src/witness-result.js");
+      const verifier = createFrozenWitnessRepairVerifier({
+        runner: {
+          async run() {
+            return {
+              exitCode: 1,
+              stdout: `${formatWitnessResult("PREDICATE_FAIL")}\n`,
+              stderr: "still broken"
+            };
+          }
+        }
+      });
+      const worktree = join(root, "candidate-worktree");
+      mkdirSync(worktree, { recursive: true });
+      writeFileSync(join(worktree, "state.txt"), "bad\n", "utf8");
+      const verdict = await verifier({
+        worktreePath: worktree,
+        baseCommit: "deadbeef",
+        patchPath: null,
+        bundleDirectory: fixture.bundleDirectory
+      });
+      expect(verdict.ok).toBe(false);
+      expect(verdict.detail).toMatch(/PREDICATE_PASS|PREDICATE_FAIL|fail-closed/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

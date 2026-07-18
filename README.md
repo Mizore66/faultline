@@ -19,7 +19,7 @@ Successful Docker-isolated `fl investigate git` results carry evidence grade `CO
 
 | Path | Grade today | Notes |
 | --- | --- | --- |
-| `fl investigate turns` | **Experimental turn evidence** (`EXPERIMENTAL_TURN`) | Localizes across captured turn trees; portable turn proof bundle parity with Git is still tracked (#21) |
+| `fl investigate turns` | **Experimental turn evidence** (`EXPERIMENTAL_TURN`) | Localizes across captured turn trees; can export/verify a turn proof package via CLI, but grade stays experimental (not `COMMIT_PROOF`) |
 | `fl investigate git` / live self-incident | **Mature Git proof** (`COMMIT_PROOF`) | Portable, independently verifiable proof packages |
 
 **Hero demo for judges (prefer this in the video):**
@@ -64,6 +64,10 @@ The public package name `@mizore66/faultline` is reserved for a future registry 
 
 ```powershell
 pnpm fl -- investigate turns --repo . --ledger .faultline\ledgers\session.json --proposal <id> --expect-digest sha256:... --image <digest-pinned-image>
+# Optional when lockfiles/manifests diverge across turns:
+#   --runtime-mapping .\runtime-mapping.json
+# On success, writes an experimental turn proof package under .faultline\turn-proof-bundles\
+pnpm fl -- verify .faultline\turn-proof-bundles\<dir> --expect-root sha256:...
 ```
 
 **Guided intake from a CI log (draft + next steps; does not auto-approve):**
@@ -87,7 +91,7 @@ pnpm fl -- investigate git --repo . --from <good> --to <bad> --proposal <id> --e
 5. Optional: `fl witness implement` (Codex drafts overlay; human still freezes)
 6. Prefer `fl investigate turns` when a turn ledger exists; otherwise `fl investigate git` / `fl incident continue`
 7. `fl serve --bundle` / `fl verify --expect-root` (Git packages)
-8. Optional: `fl repair --bundle …` prepares instructions (`REPAIR_INSTRUCTIONS_PREPARED`); `--with-codex` is opt-in and never auto-merges
+8. Optional: `fl repair --bundle …` creates an isolated Git repair worktree (`REPAIR_WORKTREE_READY`); `--instructions-only` keeps the honest instruction-pack status; `--with-codex` drafts in the worktree and fail-closed re-runs the frozen witness
 
 Full guide: [docs/first-incident.md](docs/first-incident.md).
 
@@ -602,7 +606,7 @@ Use the [Devpost description draft](docs/devpost-description-draft.md), [impact-
 ## Important boundaries
 
 - FaultLine's included demo is deterministic; it is not a claim of a general arbitrary-code runner.
-- **Turn path:** observes public Codex lifecycle hooks, captures immutable turn-boundary Git trees (including dirty Stops), and executes a frozen witness across those states. It does not inspect private Codex reasoning. Evidence grade is experimental until portable turn proof bundles match the Git path (#21).
+- **Turn path:** observes public Codex lifecycle hooks, captures immutable turn-boundary Git trees (including dirty Stops), and executes a frozen witness across those states. It does not inspect private Codex reasoning. Turn packages can be exported/verified, but evidence grade remains `EXPERIMENTAL_TURN` until turn/Git product parity (`TURN_PROOF` reserved).
 - **Git path:** mature commit-range replay with portable, independently verifiable proof packages. Prefer this for publishable A-grade claims today.
 - The sandbox plans are fail-closed. The CLI labels injected runners `INJECTED_RUNNER` and refuses to certify or publish them as Docker proof. The Ubuntu CI gate exercises the native Docker boundary; a local development environment still needs a Docker daemon to create real proof evidence.
 - `NATIVE_DOCKER` means FaultLine's direct Docker runner on the host that produced the record. Offline verification reconstructs the recorded policy and data, but it is not cryptographic attestation that a host, Docker client, or daemon enforced that policy. A signed GitHub CI receipt binds bytes and the configured GitHub Actions identity; it does not change this host/Docker-enforcement limitation.
