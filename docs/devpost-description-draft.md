@@ -22,14 +22,17 @@ Git history, CI logs, and a reproduction case are useful inputs, but they do not
 
 ## What FaultLine demonstrates today
 
-**Lead with the product Idea (`COMMIT_PROOF`):** a recorded self-incident — human-frozen witness measured `PASS -> FAIL` at `97c3290` and `FAIL -> PASS` at `07ee7f1`; package root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`. After installing that package under `docs/samples/self-incident-commit-proof/`:
+**Runnable Idea path (`COMMIT_PROOF` sample for judges):**
 
 ```powershell
+pnpm install --frozen-lockfile
 pnpm fl judge-proof
 pnpm fl commit-proof-preview
 ```
 
-Full runbook: [faultline-self-incident.md](faultline-self-incident.md). Optional live smoke: `pnpm fl demo live-git --export-only` (Docker).
+Installed sample root: `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9` (from `fl demo live-git`; details: [COMMIT_PROOF_SAMPLE.md](samples/COMMIT_PROOF_SAMPLE.md)). Zero-install snapshot: [self-incident-proof-preview.html](self-incident-proof-preview.html).
+
+**Historical dogfood (separate package):** this repository’s provenance-workflow regression measured `PASS -> FAIL` at `97c3290` and `FAIL -> PASS` at `07ee7f1`; recorded root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`. Runbook: [faultline-self-incident.md](faultline-self-incident.md). That root is **not** what `judge-proof` opens unless the sample is replaced with that exact package.
 
 Implemented workflow:
 
@@ -54,60 +57,30 @@ GPT-5.6 is used through the Responses API only at two bounded points: proposing 
 
 ## Fast judge path
 
-**Supported install today:** clone `main` (MIT). Global `npm install -g @mizore66/faultline` is **not** supported yet (name reserved; no published release).
-
-Product proof (Idea artifact) — retain a self-incident bundle, then:
-
-```powershell
-pnpm fl verify .faultline\git-proof-bundles\<bundle-name> `
-  --expect-root sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75
-pnpm fl serve `
-  --bundle .faultline\git-proof-bundles\<bundle-name> `
-  --expect-root sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75
-```
-
-Fixture sandbox (not the product claim):
+**Supported install today:** clone `main` (MIT). Global `npm install -g @mizore66/faultline` is **not** supported yet.
 
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
 git checkout main
 pnpm install --frozen-lockfile
-pnpm fl judge-demo
+pnpm fl judge-proof
 ```
 
-Offline verify of the fixture (no browser):
-
-```powershell
-pnpm fl judge-demo --rerun-all --export-only
-pnpm fl verify .faultline/bundles/judge-demo
-```
-
-Live Git/Docker smoke:
-
-```powershell
-pnpm fl demo live-git --export-only
-```
-
-Guided real CI log (human Approve then Freeze in the local review UI; never auto-approves):
-
-```powershell
-pnpm fl investigate --ci-log .\ci.log --repo . --command "<failing predicate>" --runtime node
-```
+Fixture sandbox (not the product claim): `pnpm fl judge-demo` or open `docs/judge-preview.html`.
 
 **Recorded demo evidence (fill at recording time):**
 
 - Repository: https://github.com/Mizore66/faultline (MIT, branch `main`)
-- Self-incident root (already recorded): `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`
-- Commit shown in video: _(record at demo time)_
-- Platform / Node / Docker: _(record at demo time)_
-- CI run URL: _(optional; omit if not shown)_
+- Judge sample root: `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9`
+- Historical dogfood root: `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75`
+- Commit / platform shown in video: _(record at demo time)_
 
 ## Why it matters
 
 FaultLine is intended for engineers responsible for diagnosing an agent-assisted regression under review, incident, or audit pressure. Its value proposition is not that it diagnoses every bug: it narrows one high-friction handoff by preserving an executable question, the replay facts, the proof boundary, and the limits of those facts.
 
-**Validated so far (dogfood only):** FaultLine's first completed proof package is this repository's own provenance-workflow regression (`PASS -> FAIL` at `97c3290`, recovery at `07ee7f1`). That supports the frozen workflow predicate only—not agent intent, unique semantic cause, or third-party adoption. Do not add time-saved, customer, or accuracy claims unless supported by a consented record in [the impact-validation template](impact-validation-template.md).
+**Validated so far (dogfood only):** see [impact-validation-self-incident.md](impact-validation-self-incident.md) — FaultLine’s own provenance-workflow regression (`PASS -> FAIL` at `97c3290`, recovery at `07ee7f1`). No third-party adoption or time-saved metrics. Do not add customer claims without a consented new record in [impact-validation-template.md](impact-validation-template.md).
 
 ## How FaultLine differs
 
@@ -121,7 +94,7 @@ FaultLine combines four narrow pieces: (1) a human-reviewed immutable executable
 | Public narrated demo video (<3 min, shows product + spoken Codex **and** GPT-5.6) | **REQUIRED — insert YouTube URL when recorded** |
 | `/feedback` Codex session ID | `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` |
 | Repository | https://github.com/Mizore66/faultline (MIT, `main`) |
-| Install for judges | Clone + `pnpm install --frozen-lockfile`; Idea path = self-incident `fl serve` with recorded root; fixture = `pnpm fl judge-demo` or `docs/judge-preview.html` |
+| Install for judges | Clone + `pnpm fl judge-proof` (sample root `f85c446d…`) or open `docs/self-incident-proof-preview.html` |
 | npm global install | Not claimed (unpublished) |
 
 Recheck https://openai.devpost.com/ rules, deadline (Jul 21, 2026 @ 5:00pm PDT), and required form fields immediately before submit.

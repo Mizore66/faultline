@@ -10,8 +10,8 @@
 
 | Priority | Goal | Command / path | What you get |
 | --- | --- | --- | --- |
-| 1 | Product Idea (`COMMIT_PROOF`) | Install sample → `pnpm fl judge-proof` | Verifies + opens the recorded predicate proof page |
-| 1b | Zero-install Idea snapshot | Open [`docs/self-incident-proof-preview.html`](docs/self-incident-proof-preview.html) after `pnpm fl commit-proof-preview` | Static HTML of the same proof surface |
+| 1 | Product Idea (`COMMIT_PROOF`) | `pnpm fl judge-proof` | Opens the **installed judge sample** (live-git root `sha256:f85c446d…`) |
+| 1b | Zero-install Idea snapshot | [`docs/self-incident-proof-preview.html`](docs/self-incident-proof-preview.html) | Static HTML of that same sample (run `pnpm fl commit-proof-preview` to regenerate) |
 | 2 | Fixture sandbox | `pnpm fl judge-demo` or [`docs/judge-preview.html`](docs/judge-preview.html) | Evidence-model UI only — **not** a real incident |
 | 3 | Live Docker smoke | `pnpm fl demo live-git --export-only` | Fresh portable Git proof (daemon required) |
 
@@ -55,9 +55,9 @@ FaultLine is a **CLI evidence tool** for regressions after agent-assisted coding
 ## Demo hierarchy (one story)
 
 1. **Lead with the Idea claim** — portable offline-verifiable predicate proof (not “better bisect,” not the fixture UI, not experimental turns).
-2. **Show real proof:** open the self-incident package with the recorded root (see [docs/faultline-self-incident.md](docs/faultline-self-incident.md)); cite `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` and `PASS→FAIL` at `97c3290`.
-3. **Optional smoke:** `pnpm fl demo live-git --export-only` (Docker).
-4. **Sandbox UI last:** `pnpm fl judge-demo` or static preview — label as fixture only.
+2. **Show runnable proof:** `pnpm fl judge-proof` (installed sample root `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9` — see [docs/samples/COMMIT_PROOF_SAMPLE.md](docs/samples/COMMIT_PROOF_SAMPLE.md)).
+3. **Cite historical dogfood separately:** provenance-workflow self-incident `PASS→FAIL` at `97c3290`, root `sha256:f6a391b3…` — [docs/faultline-self-incident.md](docs/faultline-self-incident.md). That package is **not** what `judge-proof` opens unless you replace the sample.
+4. **Sandbox UI last:** `pnpm fl judge-demo` or static preview — fixture only.
 5. **Never headline:** `fl investigate turns` (`EXPERIMENTAL_TURN`).
 
 Build Week must also show **GPT-5.6** (`fl witness propose --live` and/or `fl repair brief --live`) and **Codex** (build acceleration + optional sidecar hooks) on camera — see [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md).
@@ -129,7 +129,7 @@ pnpm fl investigate git --repo . --from <good> --to <bad> --proposal <id> --expe
 
 ### Impact, models, and capability summary
 
-Dogfood only: FaultLine’s first completed proof is **this repository’s provenance-workflow regression** (`PASS→FAIL` at `97c3290`, recovery at `07ee7f1`). No third-party adoption metrics.
+Dogfood only: FaultLine’s first completed proof is **this repository’s provenance-workflow regression** (`PASS→FAIL` at `97c3290`, recovery at `07ee7f1`). Record: [docs/impact-validation-self-incident.md](docs/impact-validation-self-incident.md). No third-party adoption metrics.
 
 **Qualifying `/feedback`:** `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 

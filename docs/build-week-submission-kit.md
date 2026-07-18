@@ -6,13 +6,13 @@ This is a recording and submission checklist, not evidence that a submission has
 
 **Locked claim:** FaultLine produces a portable, offline-verifiable evidence package for one human-frozen predicate — another engineer verifies “where does *this* reviewed witness first go bad?” **without re-running repository code**, without trusting model intent.
 
-1. **Lead with that claim + self-incident `COMMIT_PROOF`** — install sample under `docs/samples/self-incident-commit-proof/`, then:
+1. **Lead with that claim + runnable `COMMIT_PROOF` sample:**
 
 ```powershell
 pnpm fl judge-proof
 ```
 
-Or `fl serve --bundle … --expect-root sha256:f6a391b3…`. See [faultline-self-incident.md](faultline-self-incident.md). One complement line only: complements Git bisect / CI logs / repro — does not replace them.
+Sample root: `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9` ([COMMIT_PROOF_SAMPLE.md](samples/COMMIT_PROOF_SAMPLE.md)). Historical dogfood (`f6a391…` / `97c3290`) is separate — [faultline-self-incident.md](faultline-self-incident.md). One complement line only: complements Git bisect / CI logs / repro — does not replace them.
 
 2. **Show GPT-5.6 live** — `fl witness propose --live` and/or `fl repair brief --live` (needs `OPENAI_API_KEY`).
 3. **Show Codex** — build acceleration (`/feedback` session) and/or sidecar hook install / ledger path.
@@ -50,14 +50,14 @@ Say on camera that FaultLine did not auto-approve or auto-freeze; the one comman
 
 ### Cold open script (0:00–0:20) — Idea beat (you record)
 
-**On screen:** self-incident proof page from `fl serve --bundle … --expect-root sha256:f6a391b3…` (or verify output showing that root). **Do not** open with `judge-demo` or “we built a better bisect.”
+**On screen:** `pnpm fl judge-proof` proof page (sample root `sha256:f85c446d…`) or `docs/self-incident-proof-preview.html`. **Do not** open with `judge-demo` or “we built a better bisect.”
 
 **Speak (approx.):**  
-“When an agent-assisted change turns CI red, FaultLine answers a narrower question: where does *this* human-frozen witness first go bad? It packages that answer so another engineer can verify the evidence offline — without re-running the repo, and without trusting model intent. Here’s our recorded self-incident: root `sha256:f6a391…`, first `PASS` to `FAIL` at `97c3290`. Complements bisect and CI logs — doesn’t replace them.”
+“When an agent-assisted change turns CI red, FaultLine answers a narrower question: where does *this* human-frozen witness first go bad? It packages that answer so another engineer can verify the evidence offline — without re-running the repo, and without trusting model intent. Here’s a real COMMIT_PROOF package open in the product UI — root `sha256:f85c446d…`. Separately, we dogfooded the same protocol on our own provenance regression at `97c3290`. Complements bisect and CI logs — doesn’t replace them.”
 
 | Time | Screen | Narration point |
 | --- | --- | --- |
-| 0:00–0:20 | Self-incident `fl serve` proof view / root digest | Cold open script above. Cite [self-incident](faultline-self-incident.md). |
+| 0:00–0:20 | `fl judge-proof` / sample proof view | Cold open script above. Sample: [COMMIT_PROOF_SAMPLE.md](samples/COMMIT_PROOF_SAMPLE.md). Dogfood cite: [self-incident](faultline-self-incident.md). |
 | 0:20–0:40 | `fl witness propose --live` → Approve → Freeze | "GPT-5.6 may propose a blinded witness; a human freezes the exact predicate. The model never decides the verdict." |
 | 0:40–1:10 | `fl demo live-git --export-only` + verified Docker policy | "FaultLine replays that immutable witness over real Git states, three times per state, in constrained Docker. Boundaries only when executions support them." |
 | 1:10–1:35 | `fl minimize git` results | "Sufficiency/necessity of the selected diff — conflicts and unknowns preserved, not guessed." |
@@ -123,7 +123,7 @@ These are separate facts to gather; none is created merely by copying this kit i
 | FaultLine runs as shown | Commit/release, platform/runtime, exact commands, and recorded output | [RECORD AT DEMO TIME] |
 | The live Git/Docker path produced evidence | Verified FaultLine self-incident bundle with recorded root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` | [RECORDED] |
 | Codex and GPT-5.6 were used as described | Qualifying `/feedback` `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`; README documents build vs runtime boundaries | [RECORDED SESSION ID] |
-| The project addressed a real audience problem | Self-incident dogfood (provenance workflow predicate); no third-party adoption metrics claimed | [SCOPED / SELF-VALIDATED] |
+| The project addressed a real audience problem | Dogfood record: [impact-validation-self-incident.md](impact-validation-self-incident.md); no third-party adoption metrics claimed | [SCOPED / SELF-VALIDATED] |
 | The Devpost entry is complete | Selected track, public narrated-video URL, feedback session ID, repository URL/license, and required fields | [VIDEO + FORM STILL OPEN] |
 | Signed CI provenance is shown | CI receipt, matching Sigstore bundle, trust file, trusted root, and exact verification result | [OPTIONAL / NOT YET RECORDED] |
 

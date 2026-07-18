@@ -36,20 +36,17 @@ The completed investigation replayed every selected immutable Git state three ti
 
 The resulting incident page is the same read-only product surface used for any real proof package. Its root must remain retained outside the bundle to detect later rewrites.
 
-## Judge-openable proof view (Idea artifact)
+## Judge-openable proof view
 
-**Preferred one-command path:** copy a verified package into [`docs/samples/self-incident-commit-proof/`](samples/self-incident-commit-proof/README.md) (so `manifest.json` lives there), then:
+**Two different roots — do not mix them:**
 
-```powershell
-pnpm fl judge-proof
-pnpm fl commit-proof-preview
-```
-
-`judge-proof` verifies against the recorded root and opens the proof page. `commit-proof-preview` writes [`docs/self-incident-proof-preview.html`](self-incident-proof-preview.html) for zero-install judges.
-
-Or open any retained bundle under `.faultline/git-proof-bundles/<bundle-name>` with the **recorded** root — do not invent a different digest:
+| Artifact | Root | How to open |
+| --- | --- | --- |
+| **Judge sample** (checked in under `docs/samples/self-incident-commit-proof/`) | `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9` | `pnpm fl judge-proof` / `pnpm fl commit-proof-preview` — see [COMMIT_PROOF_SAMPLE.md](samples/COMMIT_PROOF_SAMPLE.md) |
+| **This historical self-incident** (2026-07-17 provenance workflow) | `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` | Only if you retain that exact package locally, then `fl serve --bundle … --expect-root sha256:f6a391b3…` |
 
 ```powershell
+# Historical package only (not the default judge sample)
 pnpm fl verify .faultline\git-proof-bundles\<bundle-name> `
   --expect-root sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75
 pnpm fl serve `
@@ -57,9 +54,7 @@ pnpm fl serve `
   --expect-root sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75
 ```
 
-If verify rejects the root, you do not have the recorded package — re-run [Produce the real proof bundle](#produce-the-real-proof-bundle) and retain the new root separately; only claim `sha256:f6a391b3…` when that exact package is present.
-
-For Build Week video cold open: show `judge-proof` / this proof page (or the verify output with the root), not `judge-demo`.
+If verify rejects the root, you do not have this historical package — re-run [Produce the real proof bundle](#produce-the-real-proof-bundle). For Build Week cold open, prefer `pnpm fl judge-proof` (sample root `f85c446d…`) and cite this self-incident as separate dogfood evidence.
 
 ## Prepare the reviewed witness
 
