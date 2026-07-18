@@ -171,7 +171,9 @@ function syntheticInvestigation(frozen: FrozenWitness): GitInvestigationResult {
       executionTrust: "NATIVE_DOCKER",
       proofTransitions: 1,
       isProof: true,
-      reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states."
+      reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.",
+      evidenceGrade: "COMMIT_PROOF",
+      evidenceLabel: "Commit-path localization — portable proof"
     },
     errors: []
   });
@@ -245,6 +247,11 @@ describe("read-only Git proof view", () => {
       expect(page).toContain("PROVE");
       expect(page).toContain("FIX");
       expect(page).toContain("PREVENT");
+      expect(page).toContain("COMMIT_PROOF");
+      expect(page).toContain("Commit-path localization — portable proof");
+      expect(page).toContain("EXPERIMENTAL_TURN");
+      expect(page).toContain("Turn localization — experimental evidence");
+      expect(page).toContain("Turn-path contrast");
       expect(page).toContain("Stable Git states");
       expect(page).toContain("Stable transitions");
       expect(page).toContain("Recovery evidence");
@@ -304,7 +311,13 @@ describe("read-only Git proof view", () => {
         const pageResponse = await fetch(server.url);
         expect(pageResponse.status).toBe(200);
         expect(pageResponse.headers.get("content-security-policy")).toContain("default-src 'none'");
-        expect(await pageResponse.text()).toContain("PORTABLE GIT INVESTIGATION");
+        const pageText = await pageResponse.text();
+        expect(pageText).toContain("COMMIT-PATH PORTABLE PROOF");
+        expect(pageText).toContain("COMMIT_PROOF");
+        expect(pageText).toContain("Commit-path localization — portable proof");
+        expect(pageText).toContain("EXPERIMENTAL_TURN");
+        expect(pageText).toContain("Turn localization — experimental evidence");
+        expect(pageText).toContain("Turn-path contrast");
         expect((await fetch(`${server.url}/api/rerun`, { method: "POST" })).status).toBe(404);
         expect((await fetch(`${server.url}/api/analysis`)).status).toBe(404);
       } finally {

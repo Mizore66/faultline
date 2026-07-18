@@ -29,7 +29,28 @@ import {
   type GitCheckpoint,
   type LifecycleEventInput
 } from "./ledger.js";
-import { captureTurnTreeSnapshot, TurnSnapshotError, type TurnTreeSnapshot } from "./turn-snapshot.js";
+import {
+  captureTurnTreeSnapshot,
+  TurnSnapshotError,
+  type TurnTreeSnapshot
+} from "./turn-snapshot.js";
+
+const TURN_SNAPSHOT_OBJECT_DB_WARNING = [
+  "FaultLine: turn-tree snapshots write Git objects into this repository's object database",
+  "and may include eligible untracked files. Prefer .faultlineignore exclusions or set",
+  "FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY=1 for tracked-files-only capture."
+].join(" ");
+
+function captureSidecarTurnTreeSnapshot(cwd: string): TurnTreeSnapshot {
+  const trackedFilesOnly = process.env.FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY === "1";
+  const { snapshot } = captureTurnTreeSnapshot(cwd, {
+    trackedFilesOnly,
+    onWarning: (warning) => {
+      process.stderr.write(`FaultLine snapshot warning: ${warning}\n`);
+    }
+  });
+  return snapshot;
+}
 
 /**
  * This adapter deliberately consumes only the stable, documented Codex hook
@@ -296,7 +317,7 @@ function stopReceiptPath(directory: string, sessionId: string, turnId: string): 
   return join(directory, `codex-stop-${key}.json`);
 }
 
-export function sidecarEventId(sessionId: string, turnId: string | null, phase: "session-start" | "turn-start" | "turn-stop" | "checkpoint" | "turn-snapshot"): string {
+export function sidecarEventId(sessionId: string, turnId: string | null, phase: "session-start" | "session-baseline" | "turn-start" | "turn-stop" | "checkpoint" | "turn-snapshot"): string {
   const sessionKey = sha256(sessionId).slice(0, 24);
   const turnKey = turnId === null ? "session" : sha256(turnId).slice(0, 24);
   return `codex-sidecar-${sessionKey}-${turnKey}-${phase}`;
@@ -672,7 +693,23 @@ function writeReceipt(directory: string, input: z.infer<typeof StopHookSchema>, 
 
 function recordSessionStart(input: z.infer<typeof SessionStartHookSchema>, cwd: string, ledgerPath: string): CodexSidecarResult {
   if (!safeRegularFileExists(ledgerPath, "FaultLine sidecar ledger")) {
-    const ledger = createStartedLedger(input, cwd);
+    let ledger = createStartedLedger(input, cwd);
+    // Capture turn-zero with the same dirty-safe protocol later turns use at Stop.
+    // One SessionStart cost only; idempotent redeliveries do not recapture.
+    process.stderr.write(`${TURN_SNAPSHOT_OBJECT_DB_WARNING}\n`);
+    let baselineSnapshot: TurnTreeSnapshot;
+    try {
+      baselineSnapshot = captureSidecarTurnTreeSnapshot(cwd);
+    } catch (error) {
+      if (error instanceof TurnSnapshotError) {
+        throw new CodexSidecarError(`SessionStart baseline snapshot failed: ${error.message}`);
+      }
+      throw error;
+    }
+    ledger = appendLifecycleEvent(ledger, {
+      type: "SESSION_BASELINE_SNAPSHOT",
+      payload: { snapshot: baselineSnapshot }
+    }, { eventId: sidecarEventId(input.session_id, null, "session-baseline") });
     writeSidecarLedger(ledgerPath, ledger);
     return { status: "SESSION_STARTED", ledgerPath, sessionId: input.session_id, idempotent: false };
   }
@@ -782,7 +819,7 @@ function recordTurnStop(
   let turnSnapshot: TurnTreeSnapshot | undefined;
   let snapshotIdempotent = true;
   try {
-    turnSnapshot = captureTurnTreeSnapshot(cwd);
+    turnSnapshot = captureSidecarTurnTreeSnapshot(cwd);
   } catch (error) {
     if (!(error instanceof TurnSnapshotError)) throw error;
     turnSnapshot = undefined;
