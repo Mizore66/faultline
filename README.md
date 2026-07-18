@@ -66,7 +66,7 @@ Build Week must also show **GPT-5.6** (`fl witness propose --live` and/or `fl re
 
 1. **Real incident** — [docs/first-incident.md](docs/first-incident.md) (`fl doctor`, then `fl investigate --ci-log`).
 2. **Docker proof smoke** — `pnpm fl demo live-git --export-only`.
-3. **Submission kit** — [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md) (video run-of-show, Devpost fields, `/feedback` ID).
+3. **Submission finish** — [docs/submission-finish-runbook.md](docs/submission-finish-runbook.md) (video teleprompter, external N=1, Devpost paste). Full kit: [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md).
 
 Everything below is reference material: install boundaries, expert flows, vocabulary, and handoff checklists.
 

@@ -2,6 +2,8 @@
 
 This is a recording and submission checklist, not evidence that a submission has already been made. Recheck the official Build Week page before submitting.
 
+**Finish path (video + external N=1 + Devpost):** start at [submission-finish-runbook.md](submission-finish-runbook.md) — teleprompter, invite, external impact form, and paste-ready Devpost text.
+
 ## Idea claim (say this once, then follow it)
 
 **Locked claim:** FaultLine produces a portable, offline-verifiable evidence package for one human-frozen predicate — another engineer verifies “where does *this* reviewed witness first go bad?” **without re-running repository code**, without trusting model intent.
