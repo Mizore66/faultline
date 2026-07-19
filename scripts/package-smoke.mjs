@@ -58,12 +58,27 @@ function assertDocsLint() {
     throw new Error("docs/video-teleprompter.md must make the verified sample the default cold-open until external status is completed");
   }
 
-  const tagList = spawnSync("git", ["tag", "-l", pinnedRef], { cwd: repository, encoding: "utf8" });
-  if (tagList.status !== 0) {
-    throw new Error(`git tag -l ${pinnedRef} failed: ${tagList.stderr || tagList.error?.message || ""}`);
+  const localTags = spawnSync("git", ["tag", "-l", pinnedRef], { cwd: repository, encoding: "utf8" });
+  if (localTags.status !== 0) {
+    throw new Error(`git tag -l ${pinnedRef} failed: ${localTags.stderr || localTags.error?.message || ""}`);
   }
-  if (!(tagList.stdout ?? "").split(/\r?\n/).filter(Boolean).includes(pinnedRef)) {
-    throw new Error(`Pinned submission tag ${pinnedRef} must exist (cut after P0 lands)`);
+  const hasLocalTag = (localTags.stdout ?? "").split(/\r?\n/).filter(Boolean).includes(pinnedRef);
+  if (hasLocalTag) return;
+
+  // Shallow CI checkouts often omit tags; resolve against the configured remote.
+  const remoteTags = spawnSync(
+    "git",
+    ["ls-remote", "--tags", "--refs", "origin", `refs/tags/${pinnedRef}`],
+    { cwd: repository, encoding: "utf8" }
+  );
+  if (remoteTags.status !== 0) {
+    throw new Error(
+      `Pinned submission tag ${pinnedRef} missing locally and git ls-remote failed: ${remoteTags.stderr || remoteTags.error?.message || ""}`
+    );
+  }
+  const remoteLines = (remoteTags.stdout ?? "").split(/\r?\n/).filter(Boolean);
+  if (!remoteLines.some((line) => line.endsWith(`\trefs/tags/${pinnedRef}`))) {
+    throw new Error(`Pinned submission tag ${pinnedRef} must exist on origin (cut after P0 lands)`);
   }
 }
 
