@@ -18,7 +18,7 @@ scenarios from 4 spec-only adversarial scenarios — until then, do not call thi
 | `historical-api-incompatibility` | INAPPLICABLE | INAPPLICABLE | PASS | SPEC_AND_UNIT_COVERED |
 | `lockfile-change` | REQUIRE_ENV_MAPPING | REQUIRE_ENV_MAPPING | PASS | SPEC_AND_UNIT_COVERED |
 | `minimization-budget-exhausted` | ASSOCIATED_NONMINIMAL | ASSOCIATED_NONMINIMAL | PASS | SPEC_AND_UNIT_COVERED |
-| `multi-hunk-interaction` | ONE_MINIMAL_SET | ONE_MINIMAL_SET | PASS | SPEC_AND_UNIT_COVERED |
+| `multi-file-interaction` | ONE_MINIMAL_SET | ONE_MINIMAL_SET | PASS | SPEC_AND_UNIT_COVERED |
 | `repaired-and-reintroduced` | MULTIPLE_TRANSITIONS | MULTIPLE_TRANSITIONS | PASS | SPEC_AND_UNIT_COVERED |
 | `simple-source-regression` | LOCALIZE_BOUNDARY | LOCALIZE_BOUNDARY | PASS | SPEC_AND_UNIT_COVERED |
 
@@ -36,7 +36,7 @@ scenarios from 4 spec-only adversarial scenarios — until then, do not call thi
 - **historical-api-incompatibility** (INAPPLICABLE): INCOMPATIBLE_STATE must not become FAIL.
 - **lockfile-change** (REQUIRE_ENV_MAPPING): Heterogeneous environment fingerprints refuse single-image proof.
 - **minimization-budget-exhausted** (ASSOCIATED_NONMINIMAL): Return associated set without unsupported exact-cause claims.
-- **multi-hunk-interaction** (ONE_MINIMAL_SET): Bidirectional counterfactual validation.
+- **multi-file-interaction** (ONE_MINIMAL_SET): Bidirectional counterfactual validation at file-level Git patch units.
 - **repaired-and-reintroduced** (MULTIPLE_TRANSITIONS): Non-monotonic PASS/FAIL transitions must remain visible.
 - **simple-source-regression** (LOCALIZE_BOUNDARY): Expect one stable PASS->FAIL boundary.
 

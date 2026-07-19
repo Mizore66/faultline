@@ -1,17 +1,12 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { loadVerifiedGitProofView, renderGitProofIncidentPage } from "./git-proof-view.js";
+import {
+  JUDGE_COMMIT_PROOF_SAMPLE_ROOT,
+  RECORDED_SELF_INCIDENT_ROOT
+} from "./proof-roots.js";
 
-/** Recorded 2026-07-17 self-incident portable-bundle root (see docs/faultline-self-incident.md). */
-export const RECORDED_SELF_INCIDENT_ROOT =
-  "sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75";
-
-/**
- * Default root for the checked-in judge sample under docs/samples/self-incident-commit-proof.
- * This is the `fl demo live-git` package used for Design/judge open — not the historical self-incident root.
- */
-export const JUDGE_COMMIT_PROOF_SAMPLE_ROOT =
-  "sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9";
+export { JUDGE_COMMIT_PROOF_SAMPLE_ROOT, RECORDED_SELF_INCIDENT_ROOT };
 
 const sampleRelativeDirectory = join("docs", "samples", "self-incident-commit-proof");
 

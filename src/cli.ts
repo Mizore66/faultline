@@ -115,15 +115,44 @@ import {
 import type { RunMode } from "./domain.js";
 import { ZodError } from "zod";
 
-const usage = `FaultLine — First Bad Turn evidence for agent-assisted code
+const usage = `FaultLine — freeze one reviewed witness; prove only what executions support
+
+Quickstart (judges / first look):
+  fl doctor [--proof-ready]
+  fl judge-proof [--export-only]          # verified COMMIT_PROOF sample (no Docker / no API key)
+  fl quickstart                          # print the recommended next commands
+  fl --version
+
+Common product commands:
+  fl init [--yes]
+  fl investigate --ci-log <file> --repo <directory> [...]
+  fl investigate git ...
+  fl investigate turns ...
+  fl verify <proof-bundle-directory> [--expect-root <sha256:...>]
+  fl witness propose|review|approve|freeze ...
+  fl repair [--with-codex] | fl repair brief --live ...
+  fl prevention write|verify ...
+
+More:
+  fl advanced                            # full command reference
+  fl help advanced
+
+Notes:
+  fl doctor exits 0 for local CLI readiness; fl doctor --proof-ready exits nonzero unless Docker proof-grade preflight is READY.
+  Headless judges: FAULTLINE_NO_BROWSER=1 pnpm fl judge-proof --export-only
+  GPT-5.6 samples (no key): docs/samples/gpt-5.6/
+  The judge demo/fixture paths do not require an OpenAI API key.`;
+
+const advancedUsage = `FaultLine — full command reference
 
 Usage:
   fl judge-demo [--replay | --rerun-all] [--output <managed-bundle-directory>] [--export-only]
-  fl judge-proof [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--export-only] [--port <number>]
+  fl judge-proof [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--export-only] [--port <number>] [--serve-ms <ms>]
   fl commit-proof-preview [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--output <static-preview.html>]
   fl --version
   fl judge-preview [--output <static-preview.html>]
   fl doctor [--repo <directory>] [--json] [--proof-ready]
+  fl quickstart
   fl init [--repo <directory>] [--cli <built-cli.js>] [--runtime <node|python|go>] [--yes]
   fl incident suggest --repo <directory>
   fl incident start --repo <directory> (--command <failing-command> | --command-file <utf8-file>) [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--store <directory>]
@@ -816,6 +845,66 @@ function openLocalDemoUrl(url: string): void {
   });
 }
 
+/** Wait for Ctrl+C (or an optional timed stop), then close and exit 0 so pnpm does not print ELIFECYCLE. */
+async function awaitServeInterrupt(options: {
+  close: () => Promise<void> | void;
+  onStop?: () => void;
+  /** Test/headless helper: stop automatically after N milliseconds. */
+  serveMs?: number;
+}): Promise<void> {
+  await new Promise<void>((resolveExit) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      Promise.resolve(options.close())
+        .catch(() => undefined)
+        .finally(() => {
+          try {
+            options.onStop?.();
+          } catch {
+            // Keep the verified summary path fail-open on stop.
+          }
+          process.exitCode = 0;
+          resolveExit();
+          // Ensure wrappers (pnpm) see a clean exit even if SIGINT already marked the process.
+          process.exit(0);
+        });
+    };
+    process.once("SIGINT", finish);
+    process.once("SIGTERM", finish);
+    if (options.serveMs !== undefined && Number.isFinite(options.serveMs) && options.serveMs >= 0) {
+      timer = setTimeout(finish, options.serveMs);
+    }
+  });
+}
+
+function printQuickstart(): void {
+  process.stdout.write(`FaultLine quickstart
+
+1) Local readiness (Docker-less judges stay on the sample path):
+   fl doctor
+   fl doctor --proof-ready
+
+2) Verified COMMIT_PROOF sample (no Docker, no API key):
+   fl judge-proof --export-only
+   fl judge-proof
+
+3) Inspect GPT-5.6 response shapes without a key:
+   docs/samples/gpt-5.6/
+
+4) Live paths (optional):
+   OPENAI_API_KEY=… fl witness propose --live …
+   OPENAI_API_KEY=… fl repair brief --live …
+   Docker required: fl demo live-git --export-only
+
+Pinned submission checkout: git checkout v0.1.0-buildweek
+Full command list: fl advanced
+`);
+}
+
 async function judgeDemo(args: string[]): Promise<void> {
   const mode: RunMode = hasFlag(args, "--rerun-all") ? "RERUN" : "REPLAY";
   const outputDirectory = resolve(option(args, "--output") ?? ".faultline/bundles/judge-demo");
@@ -837,10 +926,11 @@ async function judgeDemo(args: string[]): Promise<void> {
   process.stdout.write(`🚀 Launching FaultLine Judge Demo at ${server.url}...\n`);
   process.stdout.write(`Press Ctrl+C to stop.\n`);
   openLocalDemoUrl(server.url);
-  await new Promise<void>((resolveExit) => {
-    process.once("SIGINT", () => {
-      void server.close().finally(resolveExit);
-    });
+  await awaitServeInterrupt({
+    close: () => server.close(),
+    onStop: () => {
+      process.stdout.write(`FaultLine judge-demo stopped. Bundle root: ${bundle.rootDigest}\n`);
+    }
   });
 }
 
@@ -889,15 +979,27 @@ async function judgeProofCommand(args: string[]): Promise<void> {
   } else {
     process.stdout.write(`Note: historical self-incident root is ${RECORDED_SELF_INCIDENT_ROOT} (see docs/faultline-self-incident.md).\n`);
   }
-  if (hasFlag(args, "--export-only")) return;
+  if (hasFlag(args, "--export-only")) {
+    process.stdout.write(`Verified root summary: ${proof.rootDigest} (${proof.externalRootStatus})\n`);
+    return;
+  }
   const port = Number(option(args, "--port") ?? "4174");
+  const serveMsRaw = option(args, "--serve-ms");
+  const serveMs = serveMsRaw === undefined ? undefined : Number(serveMsRaw);
+  if (serveMsRaw !== undefined && (!Number.isFinite(serveMs) || (serveMs as number) < 0)) {
+    throw new Error("--serve-ms must be a non-negative number of milliseconds");
+  }
   const server = await startGitProofServer({ proof, port });
   process.stdout.write(`FaultLine COMMIT_PROOF page: ${server.url}\nPress Ctrl+C to stop.\n`);
   openLocalDemoUrl(server.url);
-  await new Promise<void>((resolveExit) => {
-    process.once("SIGINT", () => {
-      void server.close().finally(resolveExit);
-    });
+  await awaitServeInterrupt({
+    close: () => server.close(),
+    ...(serveMs === undefined ? {} : { serveMs }),
+    onStop: () => {
+      process.stdout.write(
+        `FaultLine judge-proof stopped. Verified root: ${proof.rootDigest} · External root: ${proof.externalRootStatus}\n`
+      );
+    }
   });
 }
 
@@ -2310,7 +2412,17 @@ async function main(): Promise<void> {
     case "help":
     case "--help":
     case "-h":
+      if (args[0] === "advanced" || hasFlag(args, "--advanced")) {
+        process.stdout.write(`${advancedUsage}\n`);
+        return;
+      }
       process.stdout.write(`${usage}\n`);
+      return;
+    case "advanced":
+      process.stdout.write(`${advancedUsage}\n`);
+      return;
+    case "quickstart":
+      printQuickstart();
       return;
     case "--version":
     case "-V":

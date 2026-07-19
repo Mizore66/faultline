@@ -27,6 +27,7 @@ import {
   renderIncidentPageDocumentStart,
   renderIncidentPageProductChrome
 } from "./incident-page.js";
+import { commitProofPackageIdentityNotice } from "./proof-roots.js";
 import { FrozenWitnessSchema, type FrozenWitness } from "./witness-lock.js";
 
 /**
@@ -349,9 +350,11 @@ export function renderGitProofIncidentPage(view: VerifiedGitProofView): string {
   const ideaBoundary = firstRegression === undefined
     ? "No stable PASS→FAIL transition is recorded in this package."
     : `First stable PASS→FAIL at ${shortCommit(firstRegression.after.commit)} under a human-frozen witness; package root ${shortDigest(view.rootDigest)}.`;
+  const packageBanner = commitProofPackageIdentityNotice(view.rootDigest);
   return `${renderIncidentPageDocumentStart("verified Git proof")}
 ${renderIncidentPageProductChrome({
   command: "fl serve --bundle / fl judge-proof",
+  ...(packageBanner === undefined ? {} : { packageBanner }),
   ideaBeat: "Portable offline-verifiable evidence for one frozen predicate — another engineer verifies without re-running repository code.",
   notice: "Read-only verified bundle: FaultLine checked its complete declared file set before rendering. This page does not execute repository code or rerun the witness."
 })}

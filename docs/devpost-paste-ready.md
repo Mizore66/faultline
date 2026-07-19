@@ -32,12 +32,15 @@ Qualifying Codex `/feedback` session: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout main
+git checkout v0.1.0-buildweek
 pnpm install --frozen-lockfile
+pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
-Zero-install UI snapshot: open `docs/self-incident-proof-preview.html` after clone (or regenerate with `pnpm fl commit-proof-preview`).
+Pinned submission tag: `v0.1.0-buildweek` (replace with the exact SHA after cutting the release).  
+Zero-install UI snapshot: open `docs/self-incident-proof-preview.html` after clone (or regenerate with `pnpm fl commit-proof-preview`).  
+GPT-5.6 sample artifacts (no API key): `docs/samples/gpt-5.6/`.
 
 Judge sample root: `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9`  
 (Not the historical self-incident root `sha256:f6a391b3…` — that dogfood is documented separately.)

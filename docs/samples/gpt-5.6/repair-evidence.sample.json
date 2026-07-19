@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "faultline.repair-evidence.v2",
+  "investigationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "frozenWitnessDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "recorder": "git-commit-range-replay",
+  "nativeCodexInterception": false,
+  "facts": [
+    {
+      "id": "E1",
+      "kind": "EXECUTED",
+      "statement": "The frozen witness ran three Docker-isolated executions on the last-good commit."
+    },
+    {
+      "id": "E2",
+      "kind": "DERIVED",
+      "statement": "A stable PASS_TO_FAIL transition was derived between adjacent commits under the same frozen witness."
+    },
+    {
+      "id": "E3",
+      "kind": "DERIVED",
+      "statement": "The investigation retained a non-native Codex recorder boundary and did not attribute model intent."
+    }
+  ],
+  "limitations": [
+    "This packet establishes only predicate-specific Git commit-range transitions; it does not prove model intent, a unique semantic cause, or native Codex interception.",
+    "Redacted sample for judges: no source text, raw logs, overlay bytes, or credentials."
+  ],
+  "packetDigest": "sha256:2dd2aa0ca9287259f34114cd6502301ec7b11392de5a5bdc1553daaeb0d03308"
+}

@@ -8,10 +8,15 @@ describe("adversarial scenario coverage matrix specs", () => {
   it("publishes eight distinct expected outcomes for the coverage matrix", () => {
     const directory = join(process.cwd(), "benchmarks", "incidents");
     const specs = readdirSync(directory).filter((name) => name.endsWith(".json")).map((name) =>
-      JSON.parse(readFileSync(join(directory, name), "utf8")) as { id: string; expectedOutcome: string }
+      JSON.parse(readFileSync(join(directory, name), "utf8")) as { id: string; expectedOutcome: string; description?: string; notes?: string }
     );
     expect(specs).toHaveLength(8);
     expect(new Set(specs.map((spec) => spec.expectedOutcome)).size).toBe(8);
+    expect(specs.some((spec) => spec.id === "multi-hunk-interaction")).toBe(false);
+    const multiFile = specs.find((spec) => spec.id === "multi-file-interaction");
+    expect(multiFile).toBeDefined();
+    expect(multiFile?.description ?? "").toMatch(/file set|changed files/i);
+    expect(multiFile?.notes ?? "").toMatch(/file-level/i);
   });
 
   it("regenerates a coverage-matrix report (not an E2E benchmark)", async () => {

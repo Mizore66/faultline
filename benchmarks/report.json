@@ -1,7 +1,7 @@
 {
   "schemaVersion": "faultline.coverage-matrix.v1",
   "title": "FaultLine adversarial scenario coverage matrix",
-  "generatedAt": "2026-07-18T18:19:06.774Z",
+  "generatedAt": "2026-07-19T04:39:12.047Z",
   "kind": "COVERAGE_MATRIX",
   "executionMode": "UNIT_AND_INTEGRATION_COVERAGE",
   "incidents": 8,
@@ -62,13 +62,13 @@
       "unsupportedExactCauseClaim": false
     },
     {
-      "id": "multi-hunk-interaction",
-      "scenario": "Two hunks together are necessary and sufficient for failure.",
+      "id": "multi-file-interaction",
+      "scenario": "Two changed files together are necessary and sufficient for failure (minimal failure-inducing file set).",
       "expected": "ONE_MINIMAL_SET",
       "observed": "ONE_MINIMAL_SET",
       "result": "PASS",
       "coverage": "SPEC_AND_UNIT_COVERED",
-      "detail": "Bidirectional counterfactual validation.",
+      "detail": "Bidirectional counterfactual validation at file-level Git patch units.",
       "unsupportedExactCauseClaim": false
     },
     {

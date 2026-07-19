@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1157,4 +1157,55 @@ describe("FaultLine CLI workflows", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("prints a short help surface and fl advanced for the full reference", () => {
+    const shortHelp = runFl(["--help"]);
+    expect(shortHelp.status).toBe(0);
+    expect(shortHelp.stdout).toMatch(/Quickstart/);
+    expect(shortHelp.stdout).toMatch(/fl advanced/);
+    expect(shortHelp.stdout).not.toMatch(/fl provenance verify/);
+
+    const advanced = runFl(["advanced"]);
+    expect(advanced.status).toBe(0);
+    expect(advanced.stdout).toMatch(/fl provenance verify/);
+
+    const quickstart = runFl(["quickstart"]);
+    expect(quickstart.status).toBe(0);
+    expect(quickstart.stdout).toMatch(/v0\.1\.0-buildweek/);
+    expect(quickstart.stdout).toMatch(/judge-proof/);
+  });
+
+  it("exits 0 cleanly after a successful judge-proof serve stop", async () => {
+    // Windows cannot reliably deliver SIGINT to a child Node process from vitest;
+    // --serve-ms exercises the same clean-exit path used by the SIGINT/SIGTERM handlers.
+    const child = spawn(
+      process.execPath,
+      [tsxCli, faultLineCli, "judge-proof", "--port", "0", "--serve-ms", "250"],
+      {
+        cwd: workspace,
+        env: { ...process.env, FAULTLINE_NO_BROWSER: "1", CI: "1" },
+        stdio: ["ignore", "pipe", "pipe"]
+      }
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`judge-proof did not exit\n${stdout}\n${stderr}`)), 20_000);
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+    expect(exitCode).toBe(0);
+    expect(stdout).toMatch(/FaultLine COMMIT_PROOF sample verified/);
+    expect(stdout).toMatch(/Verified root: sha256:f85c446d/);
+    expect(stdout).not.toMatch(/ELIFECYCLE/);
+  }, 30_000);
 });

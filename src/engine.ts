@@ -154,7 +154,7 @@ export function createDemoAnalysis(mode: RunMode): DemoAnalysis {
       reasons: [
         "One approved witness digest is used for all comparable sample runs.",
         "The contribution and turn boundaries are stable across three reruns.",
-        "The two-hunk candidate is validated in both counterfactual directions.",
+        "The two-change-unit candidate is validated in both counterfactual directions.",
         mode === "RERUN"
           ? "The same witness passes on last-good, fails on first-bad, and passes on the repaired state."
           : "Cached replay is non-evidentiary and cannot establish stability, counterfactual proof, or prevention.",

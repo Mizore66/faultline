@@ -27,9 +27,51 @@ function runInstalledFl(args) {
   return run(executable, args, consumer);
 }
 
+function readUtf8(relativePath) {
+  return readFileSync(join(repository, relativePath), "utf8");
+}
+
+function assertDocsLint() {
+  const readme = readUtf8("README.md");
+  const teleprompter = readUtf8("docs/video-teleprompter.md");
+  const impact = readUtf8("docs/impact-validation-external-01.md");
+  const pinnedRef = "v0.1.0-buildweek";
+
+  if (!readme.includes(`git checkout ${pinnedRef}`)) {
+    throw new Error(`README.md must pin judges to git checkout ${pinnedRef}`);
+  }
+  if (readme.includes("git checkout main")) {
+    throw new Error("README.md must not tell judges to checkout main for the submission path");
+  }
+
+  const impactStatusMatch = impact.match(/^- Status:\s*(\S+)/m);
+  const impactStatus = impactStatusMatch?.[1] ?? "";
+  const prefersExternalColdOpen =
+    /## 0:00–0:20[^\n]*\n[\s\S]*?\*\*Preferred screen:\*\*[^\n]*external/i.test(teleprompter)
+    || /Cold open \(prefer external/i.test(teleprompter);
+  if (prefersExternalColdOpen && impactStatus !== "completed") {
+    throw new Error(
+      `docs/video-teleprompter.md prefers an external cold-open while docs/impact-validation-external-01.md status is '${impactStatus || "missing"}' (must be completed)`
+    );
+  }
+  if (!/Default screen \(required until external status is completed\)/i.test(teleprompter)) {
+    throw new Error("docs/video-teleprompter.md must make the verified sample the default cold-open until external status is completed");
+  }
+
+  const tagList = spawnSync("git", ["tag", "-l", pinnedRef], { cwd: repository, encoding: "utf8" });
+  if (tagList.status !== 0) {
+    throw new Error(`git tag -l ${pinnedRef} failed: ${tagList.stderr || tagList.error?.message || ""}`);
+  }
+  if (!(tagList.stdout ?? "").split(/\r?\n/).filter(Boolean).includes(pinnedRef)) {
+    throw new Error(`Pinned submission tag ${pinnedRef} must exist (cut after P0 lands)`);
+  }
+}
+
 try {
   mkdirSync(packDirectory);
   mkdirSync(consumer);
+
+  assertDocsLint();
 
   run(npm, ["pack", "--pack-destination", packDirectory], repository);
   const dryRun = JSON.parse(run(npm, ["pack", "--dry-run", "--json", "--ignore-scripts"], repository));

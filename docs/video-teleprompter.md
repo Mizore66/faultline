@@ -2,67 +2,63 @@
 
 Record with product on screen. Prefer PowerShell: `pnpm.cmd fl …` if ExecutionPolicy blocks `pnpm`.
 
-**Hard rules:** no cold-open on `judge-demo`; do not say `judge-proof` is root `f6a391…`; do not invent time-saved metrics.
+**Hard rules:** no cold-open on `judge-demo`; do not say `judge-proof` is root `f6a391…`; do not invent time-saved metrics; **do not claim an external case study until `docs/impact-validation-external-01.md` status is `completed`.**
+
+**Pinned checkout for the video:** `git checkout v0.1.0-buildweek`
 
 ---
 
-## 0:00–0:20 — Cold open (prefer external later-turn when ready)
+## 0:00–0:20 — Cold open (default: verified sample)
 
-**Preferred screen:** external / partner later-turn package or ledger story (Turn 3 earliest stable failure; say **`EXPERIMENTAL_TURN`**).
+**Default screen (required until external status is completed):** `pnpm fl judge-proof` sample root `sha256:f85c446d…`.
 
-**Fallback screen:** `pnpm fl judge-proof` sample root `sha256:f85c446d…`.
-
-**Say (with external case study):**
-
-> An independent developer used FaultLine on their repository to record a real Codex session. Under one human-frozen overlay witness, Turn 3 was the earliest stable PASS→FAIL. That’s experimental turn evidence — then we show mature portable COMMIT_PROOF for trust.
-
-**Say (fallback without external package):**
+**Say (default / fallback):**
 
 > When an agent-assisted change turns CI red, FaultLine answers: where does *this* human-frozen witness first go bad? Here’s a verified COMMIT_PROOF **sample** package — root sha256:f85c446d — not our historical self-incident unless we open that package. Complements bisect and CI logs — doesn’t replace them.
 
+**External later-turn open (only if `docs/impact-validation-external-01.md` status is `completed`):** partner package / ledger story (Turn 3 earliest stable failure; say **`EXPERIMENTAL_TURN`**, say **scripted protocol validation** unless organic).
+
+**Say (external only when status is completed):**
+
+> An independent developer used FaultLine on their repository to record a Codex session. Under one human-frozen overlay witness, Turn 3 was the earliest stable PASS→FAIL. That’s experimental turn evidence — then we show mature portable COMMIT_PROOF for trust.
+
 ---
 
-## 0:20–0:40 — GPT-5.6 propose → human freeze
+## 0:20–0:45 — GPT-5.6 propose → human freeze
 
-**Screen:** `pnpm fl witness propose --live …` (or prepared flow) → browser Approve → Freeze. Needs `OPENAI_API_KEY`.
+**Screen:** `pnpm fl witness propose --live …` → browser Approve → Freeze. Needs `OPENAI_API_KEY`.
+
+**Fallback footage (no key / flaky API):** open committed samples in `docs/samples/gpt-5.6/` (redacted response shapes) and say they match the live schema.
 
 **Say:**
 
-> GPT-5.6 may propose a blinded witness. A human freezes the exact predicate. The model never decides the PASS or FAIL verdict.
+> GPT-5.6 drafts the executable question from a blinded, redacted incident packet — it never sees candidates and never gets a vote on PASS or FAIL. A human freezes the exact bytes.
 
 ---
 
-## 0:40–1:10 — Docker replay
+## 0:45–1:20 — Docker replay
 
-**Screen:** `pnpm fl demo live-git --export-only` **or** stay on proof page and highlight Docker / 3× runs. Docker Desktop must be running for live-git.
+**Screen:** `pnpm fl demo live-git --export-only` **or** stay on proof page and highlight Docker / 3× runs. Docker Desktop must be running for live-git. Safe fallback: verified sample proof page.
 
 **Say:**
 
-> FaultLine replays that immutable witness over real Git states, three times per state, in constrained Docker. It only calls a boundary when the executions support it.
+> FaultLine replays that immutable witness over real Git states, three times per state, in constrained Docker. A compile error can never masquerade as a failure.
 
 ---
 
-## 1:10–1:35 — Minimize (optional; skip if short on time)
+## 1:20–1:50 — Fix + GPT-5.6 repair brief
 
-**Screen:** minimize results if available; else jump to repair.
+**Screen:** `pnpm fl repair --with-codex` (if time) then `pnpm fl repair brief --bundle … --live`.
+
+**Fallback:** `docs/samples/gpt-5.6/repair-brief.sample.json` — stronger GPT moment than proposal alone.
 
 **Say:**
 
-> It asks whether the selected diff is sufficient and necessary — conflicts and unknowns are preserved, not guessed.
+> Codex implements the fix in a throwaway worktree; GPT-5.6 writes a repair brief that cites only executed facts and is labeled inference.
 
 ---
 
-## 1:35–2:05 — GPT-5.6 repair brief
-
-**Screen:** `pnpm fl repair brief --bundle <sample-or-live-bundle> --expect-root <root> --live`
-
-**Say:**
-
-> GPT-5.6 returns cited, explicitly inferred repair guidance from verified facts only. It cannot manufacture a proof or blame a model.
-
----
-
-## 2:05–2:25 — Offline verify
+## 1:50–2:15 — Offline verify
 
 **Screen:**
 
@@ -72,34 +68,16 @@ pnpm fl verify .\docs\samples\self-incident-commit-proof --expect-root sha256:f8
 
 **Say:**
 
-> A teammate verifies the package against the retained root without re-executing repository code.
+> A teammate — or a judge — verifies this package offline without re-running our code. Judges: README three-command path, no Docker, no API key.
 
 ---
 
-## 2:25–2:45 — Codex
+## 2:15–2:45 — Codex build story + close
 
-**Screen:** terminal / README showing `/feedback`, or `pnpm test` briefly.
+**Screen:** `/feedback` ID `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` and `pnpm test`.
 
-**Say:**
+**Say (novelty):**
 
-> Codex accelerated FaultLine’s implementation, tests, and hardening. Our qualifying feedback session ID is zero-one-nine-f-six-six-b-d, dash zero-a-c-one, dash seven-eight-f-three, dash eight-d-c-one, dash five-nine-six-eight-e-four-f-two-f-a-zero-nine.
+> FaultLine freezes one human-reviewed executable check, replays those exact bytes across immutable Git and Codex-turn states in a locked-down sandbox, and emits a portable evidence package that a stranger can re-derive offline — it refuses every claim the executions don't support.
 
-Exact ID to show on screen: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
-
----
-
-## 2:45–3:00 — Optional fixture close-up
-
-**Screen:** `pnpm fl judge-demo` **only if needed**.
-
-**Say:**
-
-> This judge-demo is a fixture sandbox for judges without Docker — not the product proof.
-
----
-
-## After recording
-
-1. Upload to YouTube as **public**.
-2. Paste URL into [devpost-paste-ready.md](devpost-paste-ready.md) → `YOUTUBE_URL`.
-3. Grab one still of the `judge-proof` page for the Devpost gallery.
+**Claims to avoid:** “real production incident,” “root cause,” “prevention verified” for the turn arc, “invisible overhead,” any external-case sentence until the impact record is filled.

@@ -34,7 +34,7 @@ describe("FaultLine deterministic sample", () => {
     }
   });
 
-  it("finds the stable boundary and proves the two-hunk interaction", () => {
+  it("finds the stable boundary and proves the two-change-unit interaction", () => {
     const analysis = createDemoAnalysis("RERUN");
     const firstRegression = analysis.transitions.find((transition) => transition.kind === "PASS_TO_FAIL" && transition.stable);
     expect(firstRegression?.beforeStateId).toBe("cedar-turn-4");

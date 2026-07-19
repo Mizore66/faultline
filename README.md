@@ -20,22 +20,27 @@
 
 `EXPERIMENTAL_TURN` stays until: an external repository validates the full workflow, turn-boundary minimization is exercised end to end, prevention evidence is automatically bound from verified run artifacts, and the recorder completes platform soak testing. Details: [docs/concepts.md](docs/concepts.md#why-turn-stays-experimental_turn-not-missing-a-portable-package).
 
-## Judges: three commands
+## Judges: four commands
 
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout main
+git checkout v0.1.0-buildweek
 pnpm install --frozen-lockfile
+pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
-Opens a **verified `COMMIT_PROOF` sample** package (disposable live-git sample root `sha256:f85c446d…`) — not the historical self-incident unless you open that package separately.  
+`fl doctor --proof-ready` routes Docker-less machines deliberately: if it is not READY, stay on `judge-proof` / the static preview — do not chase `demo live-git`.  
+`judge-proof` opens a **verified `COMMIT_PROOF` sample** package (disposable live-git sample root `sha256:f85c446d…`) — not the historical self-incident unless you open that package separately.  
+Headless: `FAULTLINE_NO_BROWSER=1 pnpm fl judge-proof --export-only` (clean exit; verified root printed last).  
 Zero-install snapshot: [`docs/self-incident-proof-preview.html`](docs/self-incident-proof-preview.html).  
-Fixture sandbox (not a real incident): `pnpm fl judge-demo`.
+Fixture sandbox (not a real incident): `pnpm fl judge-demo`.  
+GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 
 **Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux. Docker required for live proof.  
-**Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand.
+**Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand.  
+**CI:** public Verify workflow includes the native Docker proof E2E gate on `ubuntu-latest` when `FAULTLINE_DOCKER_INTEGRATION=1` (see Actions on this tag).
 
 ## Validation
 
@@ -48,10 +53,12 @@ The scripted partner run validates interoperability/usability. It is **not** aut
 
 - **Codex (build):** implementation, adversarial tests, hardening. Qualifying `/feedback`: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 - **Codex (runtime):** opt-in sidecar records public hooks + dirty turn-tree snapshots
-- **GPT-5.6:** blinded witness proposal + evidence-cited repair brief only — never PASS/FAIL
+- **GPT-5.6:** blinded witness proposal + evidence-cited repair brief only — never PASS/FAIL. Inspect redacted samples in [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/) without an API key; use `--live` on camera when a key is available.
 
 Continuous product arc (turn path still experimental):  
-`investigate turns` → `--minimize` / `fl prove transition` → repair → `fl prevention verify` (today: Prevention evidence summary)
+`investigate turns` → `--minimize` / `fl prove transition` → repair → `fl prevention verify` (grounded path: Prevention verified; otherwise evidence summary)
+
+Help is tiered: `fl` / `fl quickstart` for the short surface; `fl advanced` for the full command list.
 
 ## Learn more
 

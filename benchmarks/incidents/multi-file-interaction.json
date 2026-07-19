@@ -1,0 +1,1 @@
+{"id":"multi-file-interaction","description":"Two changed files together are necessary and sufficient for failure (minimal failure-inducing file set).","expectedOutcome":"ONE_MINIMAL_SET","notes":"Bidirectional counterfactual validation at file-level Git patch units."}

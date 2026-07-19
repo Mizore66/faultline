@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "faultline.repair-brief.v1",
+  "evidencePacketDigest": "sha256:2dd2aa0ca9287259f34114cd6502301ec7b11392de5a5bdc1553daaeb0d03308",
+  "proposedInvariant": {
+    "statement": "Preserve the frozen witness predicate across adjacent Git states that previously formed a stable PASS→FAIL boundary.",
+    "evidenceIds": ["E1", "E2"]
+  },
+  "repairDirections": [
+    {
+      "statement": "Inspect the first stable failing commit for the production paths exercised by the frozen witness before changing unrelated modules.",
+      "evidenceIds": ["E2"]
+    },
+    {
+      "statement": "Keep the repaired tree under the same frozen witness until three Docker-isolated PREDICATE_PASS results are recorded.",
+      "evidenceIds": ["E1"]
+    }
+  ],
+  "prevention": {
+    "hardEnforcement": [
+      {
+        "statement": "Add a CI guard that re-runs the frozen witness on the implicated file set before merge.",
+        "evidenceIds": ["E1", "E2"]
+      }
+    ],
+    "softGuidance": [
+      {
+        "statement": "Prefer documenting the retained proof-root digest in the PR rather than summarizing the failure in prose alone.",
+        "evidenceIds": ["E3"]
+      }
+    ]
+  },
+  "uncertainties": [
+    "The evidence does not identify a unique semantic root cause or prove which authorial intent produced the failing edit.",
+    "This sample is a redacted illustration of GPT-5.6 repair-brief shape, not a live API transcript bound to a private incident."
+  ]
+}

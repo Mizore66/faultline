@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "faultline.gpt-witness-proposal-sample.v1",
+  "label": "REDACTED_SAMPLE",
+  "model": "gpt-5.6",
+  "note": "Illustrates the live proposeWitnessWithGpt JSON shape. overlayFiles lists names only; executable overlay bytes are supplied by a human-reviewed template or Codex drafting before freeze.",
+  "proposal": {
+    "behavior": "A completed refund preserves settlement currency even when the UI displays a different currency.",
+    "command": "node .faultline-witness/check-settlement-currency.mjs",
+    "overlayFiles": [
+      ".faultline-witness/check-settlement-currency.mjs"
+    ],
+    "expectedExitCode": 0,
+    "timeoutSeconds": 30,
+    "safetyNotes": [
+      "Network disabled in the proof sandbox",
+      "No credentials in the overlay",
+      "GPT-5.6 never receives candidate commits or PASS/FAIL votes"
+    ]
+  }
+}

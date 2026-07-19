@@ -35,13 +35,22 @@ export function renderIncidentPageDocumentStart(title: string): string {
 <main class="shell">`;
 }
 
-export function renderIncidentPageProductChrome(options: { command: string; notice?: string; ideaBeat?: string }): string {
+export function renderIncidentPageProductChrome(options: {
+  command: string;
+  notice?: string;
+  ideaBeat?: string;
+  packageBanner?: string;
+}): string {
+  const packageBanner = options.packageBanner === undefined
+    ? ""
+    : `<aside class="idea-beat" aria-label="Package identity"><strong>Package:</strong> ${escapeHtml(options.packageBanner)}</aside>`;
   const notice = options.notice === undefined ? "" : `<div class="notice">${escapeHtml(options.notice)}</div>`;
   const ideaBeat = options.ideaBeat === undefined
     ? ""
     : `<aside class="idea-beat" aria-label="Product idea"><strong>Idea:</strong> ${escapeHtml(options.ideaBeat)}</aside>`;
   return `<header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>FaultLine</span></div><div class="command">${escapeHtml(options.command)}</div></header>
 <nav class="beat-nav" aria-label="Investigation steps"><a href="#break">BREAK</a><a href="#find">FIND</a><a href="#prove">PROVE</a><a href="#fix">FIX</a><a href="#prevent">PREVENT</a></nav>
+${packageBanner}
 ${ideaBeat}
 ${notice}`;
 }
