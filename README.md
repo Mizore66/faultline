@@ -25,7 +25,7 @@
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.1-buildweek
+git checkout v0.1.2-buildweek
 pnpm install --frozen-lockfile
 pnpm fl doctor --proof-ready
 pnpm fl judge-proof
@@ -34,7 +34,7 @@ pnpm fl judge-proof
 ```bash
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.1-buildweek
+git checkout v0.1.2-buildweek
 pnpm install --frozen-lockfile
 pnpm fl doctor --proof-ready
 pnpm fl judge-proof
@@ -51,7 +51,7 @@ GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 **Install policy:** source-only for this phase — clone + `pnpm fl` (above). Global `npm install -g @mizore66/faultline` is **not** supported yet.  
 **Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux. Docker required for live proof.  
 **Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand.  
-**CI:** green Verify run on the W4 freeze tip ([run](https://github.com/Mizore66/faultline/actions/runs/29692659571)), including the **native Docker proof E2E gate**. Submission pin / Release: [`v0.1.1-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.1-buildweek).
+**CI:** green Verify run on the validated pre-tag commit [`8d38740e624e543da9d78238855807efbc468b04`](https://github.com/Mizore66/faultline/commit/8d38740e624e543da9d78238855807efbc468b04) ([run](https://github.com/Mizore66/faultline/actions/runs/29697916985)), including the **native Docker proof E2E gate** and its [hybrid Docker E2E coverage-matrix REPORT artifact](https://github.com/Mizore66/faultline/actions/runs/29697916985/artifacts/8445576494). Submission pin / Release: [`v0.1.2-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.2-buildweek).
 
 ## Validation
 
