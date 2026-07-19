@@ -216,6 +216,52 @@ function measureWarmAndModified(labelPrefix, fileCount, trials, captureTurnTreeS
   }
 }
 
+function measureColdCliInvocation(trials) {
+  const distCli = join(root, "dist", "cli.js");
+  const srcCli = join(root, "src", "cli.ts");
+  const targets = [
+    { label: "Cold CLI --help (node dist)", command: process.execPath, args: [distCli, "--help"] },
+    { label: "Cold CLI --help (tsx src)", command: process.execPath, args: ["--import", "tsx", srcCli, "--help"] },
+    {
+      label: "Cold CLI judge-proof --export-only (node dist)",
+      command: process.execPath,
+      args: [distCli, "judge-proof", "--export-only"],
+      env: { ...process.env, FAULTLINE_NO_BROWSER: "1" }
+    }
+  ];
+
+  const rows = [];
+  for (const target of targets) {
+    const samples = [];
+    for (let i = 0; i < trials; i += 1) {
+      const started = performance.now();
+      const result = spawnSync(target.command, target.args, {
+        cwd: root,
+        encoding: "utf8",
+        env: target.env ?? process.env
+      });
+      samples.push(performance.now() - started);
+      if (result.status !== 0 && result.status !== null) {
+        throw new Error(
+          `${target.label} failed (exit ${result.status}): ${result.stderr || result.stdout || "no output"}`
+        );
+      }
+    }
+    rows.push({
+      repository: target.label,
+      mode: "cold-cli-invocation",
+      filesEligible: null,
+      ...summarizeSamples(samples),
+      blobsAddedTotal: null,
+      bytesStoredTotal: null,
+      secretScanRejections: 0,
+      quiescenceRetryHints: null,
+      planWarnings: 0
+    });
+  }
+  return rows;
+}
+
 async function main() {
   const mod = await loadCapture();
   const { captureTurnTreeSnapshot, planTurnSnapshotPaths } = mod;
@@ -230,6 +276,7 @@ async function main() {
   });
   const trials = Number(process.env.FAULTLINE_SNAPSHOT_TRIALS ?? "6");
   const rows = [];
+  rows.push(...measureColdCliInvocation(Math.max(3, Math.floor(trials / 2))));
   try {
     rows.push(measureCold("FaultLine", root, trials, captureTurnTreeSnapshot, planTurnSnapshotPaths, runGit));
   } catch (error) {
@@ -278,7 +325,7 @@ async function main() {
     schemaVersion: "faultline.turn-snapshot-overhead.v2",
     generatedAt: new Date().toISOString(),
     trialsDefault: trials,
-    note: "Cold path has no session cache. Warm/modified paths use content-fingerprint session cache (v2). Cache is a performance hint only.",
+    note: "Cold path has no session cache. Warm/modified paths use content-fingerprint session cache (v2). Cache is a performance hint only. cold-cli-invocation rows measure process startup for node dist/cli.js vs tsx (not turn-tree capture).",
     rows
   };
 
@@ -292,9 +339,11 @@ async function main() {
     "",
     "**Does recording slow Codex?** Each Stop that captures a turn tree pays this cost once. Unchanged dirty trees can reuse a content-fingerprint session cache; porcelain status alone is never enough for reuse.",
     "",
+    "**CLI entrypoint:** production `pnpm fl` runs `node dist/cli.js` (compiled). `pnpm fl:dev` keeps `tsx` for local TypeScript. Judge blocks run `pnpm install` (prepare builds `dist`) then `pnpm fl`.",
+    "",
     `| Repository | Mode | Eligible files | Snapshot p50 (ms) | Snapshot p95 (ms) | Blobs added (sum) | Bytes stored (sum) | Secret rejections |`,
     `| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |`,
-    ...rows.map((row) => `| ${row.repository} | ${row.mode ?? "cold"} | ${row.filesEligible} | ${row.snapshotP50Ms?.toFixed(1) ?? "n/a"} | ${row.snapshotP95Ms?.toFixed(1) ?? "n/a"} | ${row.blobsAddedTotal ?? "n/a"} | ${row.bytesStoredTotal ?? "n/a"} | ${row.secretScanRejections} |`),
+    ...rows.map((row) => `| ${row.repository} | ${row.mode ?? "cold"} | ${row.filesEligible ?? "n/a"} | ${row.snapshotP50Ms?.toFixed(1) ?? "n/a"} | ${row.snapshotP95Ms?.toFixed(1) ?? "n/a"} | ${row.blobsAddedTotal ?? "n/a"} | ${row.bytesStoredTotal ?? "n/a"} | ${row.secretScanRejections} |`),
     "",
     "## Method",
     "",
@@ -304,8 +353,9 @@ async function main() {
     "- Object quarantine: snapshot blobs land in `.git/faultline/objects` via `GIT_OBJECT_DIRECTORY` + Git alternates (not primary `.git/objects`)",
     "- Cold: no `sessionCachePath`",
     "- Warm unchanged / one-file / 100-file modified: content-fingerprint cache (`faultline.turn-snapshot-cache.v2`)",
+    "- Cold CLI invocation: process wall time for `--help` / `judge-proof --export-only` via `node dist/cli.js` (and `tsx` baseline for `--help`)",
     "- FaultLine row uses this checkout with default ignore rules plus reviewed `.faultlineignore` (fixture paths only; lockfiles remain eligible)",
-    `- Generated at: ${report.generatedAt} (post object-quarantine measurement)`,
+    `- Generated at: ${report.generatedAt}`,
     "",
     "Regenerate: `pnpm measure:turn-snapshot`",
     ""

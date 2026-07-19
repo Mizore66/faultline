@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "faultline.cursor-observed-transport-sample.v1",
+  "transport": "OBSERVED_EXTERNAL_TRANSPORT",
+  "editor": "cursor",
+  "notCodexHooks": true,
+  "notSideCar": true,
+  "claimBoundary": "Cursor agent turns observed via fl record / sample generator. Transport remains OBSERVED_EXTERNAL_TRANSPORT. Do not cite as Codex SIDE_CAR.",
+  "headHash": "sha256:4ac9b46f6803ca36cd49472385bce8f2425f6ecc2bb1dce91171137c2d8645a1",
+  "eventCount": 8,
+  "generatedAt": "2026-07-19T16:28:47.019Z"
+}

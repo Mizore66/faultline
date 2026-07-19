@@ -10,7 +10,7 @@ Allowed Codex-native depth paths only:
 
 1. Real Codex sessions (credits / teammate / free tier) with genuine hook capture
 2. Partner redacted MUMBCS (or other) ledgers from real Codex
-3. Honestly labeled `fl record` observed-transport checkpoints with transport `OBSERVED_EXTERNAL_TRANSPORT` (sample: [samples/observed-external-transport/](samples/observed-external-transport/)) that explicitly say they are **not** Codex hook events
+3. Honestly labeled `fl record` observed-transport checkpoints with transport `OBSERVED_EXTERNAL_TRANSPORT` (samples: [samples/observed-external-transport/](samples/observed-external-transport/), Cursor-shaped: [samples/cursor-observed-transport/](samples/cursor-observed-transport/)) that explicitly say they are **not** Codex hook events
 
 Package-smoke continues to block claiming an external case study until `docs/impact-validation-external-01.md` status is `completed`. See META #108.
 

@@ -40,6 +40,7 @@ pnpm fl judge-proof
 ```
 
 Pinned submission tag / Release: [`v0.1.1-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.1-buildweek) · pin SHA: `git rev-parse v0.1.1-buildweek` (also on the GitHub Release).  
+`pnpm install` builds `dist` via `prepare`; `pnpm fl` runs `node dist/cli.js` (compiled entry).  
 Green CI on pre-pin freeze tip `82a5fee` (incl. native Docker E2E): https://github.com/Mizore66/faultline/actions/runs/29692659571  
 Zero-install UI snapshot: open `docs/self-incident-proof-preview.html` after clone (or regenerate with `pnpm fl commit-proof-preview`).  
 GPT-5.6 sample artifacts (no API key): `docs/samples/gpt-5.6/`.  

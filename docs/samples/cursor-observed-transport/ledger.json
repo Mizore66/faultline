@@ -1,0 +1,169 @@
+{
+  "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+  "ledgerId": "ledger-cursor-observed-sample",
+  "sessionId": "cursor-observed-sample-session",
+  "createdAt": "2026-07-19T16:20:00.000Z",
+  "events": [
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-cursor-observed-sample",
+      "sessionId": "cursor-observed-sample-session",
+      "sequence": 1,
+      "eventId": "cursor-session-start",
+      "occurredAt": "2026-07-19T16:20:00.000Z",
+      "event": {
+        "type": "SESSION_STARTED",
+        "payload": {
+          "transport": "OBSERVED_EXTERNAL_TRANSPORT",
+          "workingDirectory": "/redacted/cursor-observed-workspace",
+          "actor": "cursor-agent@faultline.example"
+        }
+      },
+      "previousHash": "sha256:3f55ce59daa76b455c818980efc10d2c7968cd28d4227d3bb23be4b74e9303a1",
+      "hash": "sha256:d1654a4f38cee69fb01fc547336781b99cb6f266b5bf358c9ec861b05207fc8b"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-cursor-observed-sample",
+      "sessionId": "cursor-observed-sample-session",
+      "sequence": 2,
+      "eventId": "cursor-t1-start",
+      "occurredAt": "2026-07-19T16:20:10.000Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "cursor-turn-1",
+          "turnOrdinal": 1,
+          "promptDigest": "sha256:1f0f3cde72e8cd2d0f127a16a1a99033106f1b0e4c1117bf067a6d3995d779cc"
+        }
+      },
+      "previousHash": "sha256:d1654a4f38cee69fb01fc547336781b99cb6f266b5bf358c9ec861b05207fc8b",
+      "hash": "sha256:22b58fe4a283acd9c83788ab23cae54f56aec4fa7d78fd53491e54b69767722e"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-cursor-observed-sample",
+      "sessionId": "cursor-observed-sample-session",
+      "sequence": 3,
+      "eventId": "cursor-t1-end",
+      "occurredAt": "2026-07-19T16:20:11.000Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "cursor-turn-1",
+          "turnOrdinal": 1,
+          "outcome": "COMPLETED",
+          "outputDigest": "sha256:cd40694bb3ea4790cd5fa22a84a05765cb22687d6fa2c95a6be415d293a4e728",
+          "contribution": "Cursor-observed stop (OBSERVED_EXTERNAL_TRANSPORT; not Codex SIDE_CAR hooks)"
+        }
+      },
+      "previousHash": "sha256:22b58fe4a283acd9c83788ab23cae54f56aec4fa7d78fd53491e54b69767722e",
+      "hash": "sha256:c18d66607b263471ccb1290c046baa862d5387898672bb230df3434e1ded79b6"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-cursor-observed-sample",
+      "sessionId": "cursor-observed-sample-session",
+      "sequence": 4,
+      "eventId": "cursor-t1-checkpoint",
+      "occurredAt": "2026-07-19T16:20:12.000Z",
+      "event": {
+        "type": "WORKTREE_CHECKPOINT",
+        "payload": {
+          "checkpoint": {
+            "schemaVersion": "faultline.git-checkpoint.v1",
+            "repositoryRoot": "/redacted/cursor-observed-workspace",
+            "headCommit": "d9b00d44764ccf23ffb5cdb1dcced06647e53dac",
+            "treeDigest": "9255af72f18aa6b074eb7c5fd6235f34300cec06",
+            "capturedAt": "2026-07-19T16:20:11.500Z",
+            "clean": true,
+            "digest": "sha256:83431f1db722a23ed3bf80421664e83bfb3bcd0bb586451608efff806a3fe0b0"
+          },
+          "afterTurnOrdinal": 1
+        }
+      },
+      "previousHash": "sha256:c18d66607b263471ccb1290c046baa862d5387898672bb230df3434e1ded79b6",
+      "hash": "sha256:4c7583077ecb5f4e2758a4ed5e8cc95e52c54fbc2b8b99f0fd0e1dd6067db497"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-cursor-observed-sample",
+      "sessionId": "cursor-observed-sample-session",
+      "sequence": 5,
+      "eventId": "cursor-t2-start",
+      "occurredAt": "2026-07-19T16:21:00.000Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "cursor-turn-2",
+          "turnOrdinal": 2,
+          "promptDigest": "sha256:e6b08fafff114574c6bf919618d9b0ab1ee1dc98e62d360dd43ea25eefe44cde"
+        }
+      },
+      "previousHash": "sha256:4c7583077ecb5f4e2758a4ed5e8cc95e52c54fbc2b8b99f0fd0e1dd6067db497",
+      "hash": "sha256:d70cbbcad0e3843c0a92ab57a8bba47a1c4091adf9e3a4d4d35629ca2644d34c"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-cursor-observed-sample",
+      "sessionId": "cursor-observed-sample-session",
+      "sequence": 6,
+      "eventId": "cursor-t2-end",
+      "occurredAt": "2026-07-19T16:21:01.000Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "cursor-turn-2",
+          "turnOrdinal": 2,
+          "outcome": "COMPLETED",
+          "outputDigest": "sha256:bcfacb667143cc4d2e8f87be11ee66c0cbda99cd38d96e10c9849551b0ba14ed",
+          "contribution": "Second Cursor-observed stop; still not Codex hook provenance"
+        }
+      },
+      "previousHash": "sha256:d70cbbcad0e3843c0a92ab57a8bba47a1c4091adf9e3a4d4d35629ca2644d34c",
+      "hash": "sha256:2e196c7754db891169f6bf863080bd868b850163eaf2e6f9914fae58dc445e20"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-cursor-observed-sample",
+      "sessionId": "cursor-observed-sample-session",
+      "sequence": 7,
+      "eventId": "cursor-t2-checkpoint",
+      "occurredAt": "2026-07-19T16:21:02.000Z",
+      "event": {
+        "type": "WORKTREE_CHECKPOINT",
+        "payload": {
+          "checkpoint": {
+            "schemaVersion": "faultline.git-checkpoint.v1",
+            "repositoryRoot": "/redacted/cursor-observed-workspace",
+            "headCommit": "a73cb8bc405dc726b9f88ef5ee627027b7937324",
+            "treeDigest": "a1a6faf639aad82217e02c89b04c772ea689e12f",
+            "capturedAt": "2026-07-19T16:21:01.500Z",
+            "clean": true,
+            "digest": "sha256:698f90688df6f56729f1b9890e2b59baabdd7d97ee2c234d460321abe3aba1e8"
+          },
+          "afterTurnOrdinal": 2
+        }
+      },
+      "previousHash": "sha256:2e196c7754db891169f6bf863080bd868b850163eaf2e6f9914fae58dc445e20",
+      "hash": "sha256:ba3ced6fd0a44436eb701b29571502b81fd775e44dd2d18b979e4ee0bc95251e"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-cursor-observed-sample",
+      "sessionId": "cursor-observed-sample-session",
+      "sequence": 8,
+      "eventId": "cursor-session-end",
+      "occurredAt": "2026-07-19T16:21:30.000Z",
+      "event": {
+        "type": "SESSION_ENDED",
+        "payload": {
+          "reason": "COMPLETED",
+          "completedTurns": 2
+        }
+      },
+      "previousHash": "sha256:ba3ced6fd0a44436eb701b29571502b81fd775e44dd2d18b979e4ee0bc95251e",
+      "hash": "sha256:4ac9b46f6803ca36cd49472385bce8f2425f6ecc2bb1dce91171137c2d8645a1"
+    }
+  ]
+}

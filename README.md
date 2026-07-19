@@ -40,6 +40,7 @@ pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
+`pnpm install` runs `prepare` → `pnpm build`, so `pnpm fl` invokes the compiled `node dist/cli.js` entry (not per-invocation `tsx`). Use `pnpm fl:dev` only for local TypeScript iteration.  
 `fl doctor --proof-ready` routes Docker-less machines deliberately: if it is not READY, stay on `judge-proof` / the static preview — do not chase `demo live-git`.  
 `judge-proof` opens a **verified `COMMIT_PROOF` sample** package (disposable live-git sample root `sha256:f85c446d…`) — not the historical self-incident unless you open that package separately.  
 Headless: `FAULTLINE_NO_BROWSER=1 pnpm fl judge-proof --export-only` (clean exit; verified root printed last).  

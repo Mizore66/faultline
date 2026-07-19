@@ -22,6 +22,7 @@ events. See [security-model.md](../../security-model.md#provenance-honesty-never
 ## What this is not
 
 - Not `SIDE_CAR` / `CODEX_CLI` / `CODEX_APP` hook provenance
+- Not Cursor rebadged as Codex (see [../cursor-observed-transport/](../cursor-observed-transport/) for honest Cursor-shaped testimony under the same transport label)
 - Not the MUMBCS external-01 proof package
 - Not `docs/samples/later-turn-ledger/` (`RECORDED_REDACTED_FIXTURE` for CI drills)
 - Not an organic production incident

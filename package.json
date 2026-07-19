@@ -56,7 +56,9 @@
     "coverage-matrix": "node scripts/run-coverage-matrix.mjs",
     "measure:turn-snapshot": "pnpm build && node --import tsx scripts/measure-turn-snapshot.mjs",
     "dev": "tsx src/server.ts",
-    "fl": "tsx src/cli.ts",
+    "fl": "node dist/cli.js",
+    "fl:dev": "tsx src/cli.ts",
+    "prepare": "pnpm run build",
     "prepack": "pnpm build",
     "pack:check": "pnpm pack --dry-run"
   },

@@ -261,8 +261,13 @@ function isInsideDirectory(child: string, parent: string): boolean {
   // realpath. Compare directory identity while walking the actual requested
   // path as a final safe fallback; this is stricter than accepting Git's
   // string alone and still rejects an unrelated reported root.
+  //
+  // Skip the inode fallback when `ino` is 0: Win32 often reports `ino === 0`
+  // for every path on a volume, which would otherwise treat unrelated temp
+  // directories as identical and skip the UNSAFE_REPOSITORY_PATH rejection.
   try {
     const parentStat = statSync(parent);
+    if (parentStat.ino === 0) return false;
     let current = child;
     for (let depth = 0; depth < 256; depth += 1) {
       const currentStat = statSync(current);

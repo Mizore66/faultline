@@ -641,6 +641,14 @@ export function turnSnapshotSessionCachePath(ledgerPath: string): string {
     : `${ledgerPath}.turn-snapshot-cache.json`;
 }
 
+/**
+ * Repository-level content-fingerprint cache shared by `fl init` pre-warm and
+ * the Codex sidecar. Reuse is still gated by HEAD + policy + dirty fingerprints.
+ */
+export function turnSnapshotRepoCachePath(repositoryRoot: string): string {
+  return join(resolve(repositoryRoot), ".faultline", "turn-snapshot-cache.json");
+}
+
 function computePathDigests(
   repositoryRoot: string,
   candidates: readonly SnapshotCandidate[]

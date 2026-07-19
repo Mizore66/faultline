@@ -31,7 +31,7 @@ import {
 } from "./ledger.js";
 import {
   captureTurnTreeSnapshot,
-  turnSnapshotSessionCachePath,
+  turnSnapshotRepoCachePath,
   TurnSnapshotError,
   type TurnTreeSnapshot
 } from "./turn-snapshot.js";
@@ -42,11 +42,11 @@ const TURN_SNAPSHOT_OBJECT_DB_WARNING = [
   "FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY=1 for tracked-files-only capture."
 ].join(" ");
 
-function captureSidecarTurnTreeSnapshot(cwd: string, ledgerPath: string): TurnTreeSnapshot {
+function captureSidecarTurnTreeSnapshot(cwd: string, _ledgerPath: string): TurnTreeSnapshot {
   const trackedFilesOnly = process.env.FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY === "1";
   const { snapshot } = captureTurnTreeSnapshot(cwd, {
     trackedFilesOnly,
-    sessionCachePath: turnSnapshotSessionCachePath(ledgerPath),
+    sessionCachePath: turnSnapshotRepoCachePath(cwd),
     onWarning: (warning) => {
       process.stderr.write(`FaultLine snapshot warning: ${warning}\n`);
     }
