@@ -2,7 +2,7 @@
 
 Blank or "not measured" fields mean the value was not collected. Do not infer time savings or scale from this record.
 
-Filled case study: [external-case-study-mumbcs.md](external-case-study-mumbcs.md). Publishable summary: [publishable-summary-mumbcs.md](publishable-summary-mumbcs.md).
+Filled case study: [external-case-study-mumbcs.md](external-case-study-mumbcs.md). Publishable summary: [publishable-summary-mumbcs.md](publishable-summary-mumbcs.md). Partner handoff mirror: [partners/mumbcs-later-turn-handoff/](partners/mumbcs-later-turn-handoff/).
 
 ## Related recorded fixture (not this case)
 
@@ -14,7 +14,7 @@ CI still uses the carefully redacted recorded multi-turn ledger at [samples/late
 - Status: completed
 - Date and timezone: 2026-07-19 Asia/Singapore
 - Owner: FaultLine submitter / facilitator
-- Evidence retention location: private MUMBCS paths `mumbcs-later-turn-handoff/` and `.faultline/turn-proof-bundles/turns-1784447895435/` (not shipped in FaultLine)
+- Evidence retention location: in-repo partner handoff mirror `docs/partners/mumbcs-later-turn-handoff/` (summary + digests); full turn package remains private in MUMBCS at `.faultline/turn-proof-bundles/turns-1784447895435/` (not shipped in FaultLine)
 - Consent / sharing scope: MUMBCS may be named; digests and redacted summary published in FaultLine; screenshots/terminal captures consent-approved for external use but not in-tree here
 - Re-verification path: Path B — byte-level re-verify requires MUMBCS collaborator access or private redacted handoff; public readers use in-repo digests + consent + summary
 - Redaction review completed by: MUMBCS participant consent in Codex thread, 2026-07-19

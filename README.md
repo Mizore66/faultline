@@ -55,11 +55,11 @@ GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 ## Validation
 
 - **Dogfood (published):** Git self-incident at `97c3290` — [docs/faultline-self-incident.md](docs/faultline-self-incident.md)
-- **External protocol validation (permissioned, landed):** consented MUMBCS run (`monashblockchain/MUMBCS`) — offline-verified turn package root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1`, Turn 3 `PASS_TO_FAIL` under `EXPERIMENTAL_TURN` — [docs/publishable-summary-mumbcs.md](docs/publishable-summary-mumbcs.md), [docs/external-case-study-mumbcs.md](docs/external-case-study-mumbcs.md), [docs/impact-validation-external-01.md](docs/impact-validation-external-01.md) (`Status: completed`)
+- **External protocol validation (permissioned, landed):** consented MUMBCS run (`monashblockchain/MUMBCS`) — offline-verified turn package root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1`, Turn 3 `PASS_TO_FAIL` under `EXPERIMENTAL_TURN` — [docs/publishable-summary-mumbcs.md](docs/publishable-summary-mumbcs.md), [docs/external-case-study-mumbcs.md](docs/external-case-study-mumbcs.md), [docs/impact-validation-external-01.md](docs/impact-validation-external-01.md) (`Status: completed`), handoff mirror [docs/partners/mumbcs-later-turn-handoff/](docs/partners/mumbcs-later-turn-handoff/)
 
-This is **protocol / interoperability validation** (freeze → replay → locate → verify). It is **not** a claim that FaultLine caught a naturally occurring production bug, agent intent, unique root cause, or prevention. The recorded later-turn sample under `docs/samples/later-turn-ledger/` remains a CI fixture, not the MUMBCS case.
+This is **protocol / interoperability validation** (freeze → replay → locate → verify) that localized a production-code regression under a frozen witness importing `src/lib/slugify.ts`. It is **not** a claim that FaultLine caught a naturally occurring production bug, agent intent, unique root cause, prevention, or deployed live-site impact. The recorded later-turn sample under `docs/samples/later-turn-ledger/` remains a CI fixture, not the MUMBCS case.
 
-**Re-verification path:** FaultLine publishes digests + consent + redacted narrative. Byte-level re-verify of the turn package requires MUMBCS collaborator access or a private redacted handoff (MUMBCS is private). No proof-bundle fixture is shipped in this repo for that root.
+**Re-verification path:** FaultLine publishes digests + consent + redacted narrative (and the partner handoff mirror). Byte-level re-verify of the turn package requires MUMBCS collaborator access or a private redacted handoff (MUMBCS is private). No full proof-bundle fixture is shipped in this repo for that root.
 
 ## Codex + GPT-5.6
 
