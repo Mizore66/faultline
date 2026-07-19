@@ -18,7 +18,7 @@
 | `fl investigate turns` | **`EXPERIMENTAL_TURN`** | Codex-native First Bad Turn — remains experimental until the criteria below |
 | `fl judge-demo` | Sample | Evidence-model UI only |
 
-`EXPERIMENTAL_TURN` stays until: an external repository validates the full workflow, turn-boundary minimization is exercised end to end, prevention evidence is automatically bound from verified run artifacts, and the recorder completes platform soak testing. Details: [docs/concepts.md](docs/concepts.md#why-turn-stays-experimental_turn-not-missing-a-portable-package).
+`EXPERIMENTAL_TURN` stays until promotion criteria are met. Permissioned external protocol validation is landed (MUMBCS); still required: turn-boundary minimization end to end, prevention evidence bound from verified run artifacts, and recorder platform soak. Details: [docs/concepts.md](docs/concepts.md#why-turn-stays-experimental_turn-not-missing-a-portable-package). Attestation / host limits: [docs/security-model.md](docs/security-model.md).
 
 ## Judges: four commands
 
@@ -47,6 +47,7 @@ Zero-install snapshot: [`docs/self-incident-proof-preview.html`](docs/self-incid
 Fixture sandbox (not a real incident): `pnpm fl judge-demo`.  
 GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 
+**Install policy:** source-only for this phase — clone + `pnpm fl` (above). Global `npm install -g @mizore66/faultline` is **not** supported yet.  
 **Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux. Docker required for live proof.  
 **Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand.  
 **CI:** green Verify run on the post-pin fix ([run](https://github.com/Mizore66/faultline/actions/runs/29673784462)), including the **[native Docker proof E2E gate](https://github.com/Mizore66/faultline/actions/runs/29673784462/job/88157296321)**. Submission pin / Release: [`v0.1.0-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.0-buildweek).

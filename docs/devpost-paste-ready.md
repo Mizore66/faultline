@@ -46,7 +46,7 @@ GPT-5.6 sample artifacts (no API key): `docs/samples/gpt-5.6/`.
 Judge sample root: `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9`  
 (Not the historical self-incident root `sha256:f6a391b3…` — that dogfood is documented separately.)
 
-Global `npm install -g @mizore66/faultline` is **not** supported yet.
+**Source-only install:** clone + `pnpm fl` (commands above). Global `npm install -g @mizore66/faultline` is **not** supported yet — do not claim npm availability on Devpost.
 
 ---
 
@@ -108,5 +108,6 @@ FaultLine combines (1) a human-reviewed immutable executable witness, (2) replay
 
 - [ ] YOUTUBE_URL filled and video public
 - [x] EXTERNAL_IMPACT_SUMMARY filled from completed external-01 record ([publishable-summary-mumbcs.md](publishable-summary-mumbcs.md))
-- [ ] Video names Codex and GPT-5.6; cold-opens on judge-proof
+- [ ] Video names Codex and GPT-5.6
+- [ ] Cold-open follows teleprompter: **preferred** external MUMBCS protocol beat, then `judge-proof` sample (fallback: sample-only if external beat skipped) — see [video-teleprompter.md](video-teleprompter.md)
 - [ ] Submitted on Devpost before Jul 21, 2026 @ 5:00pm PDT

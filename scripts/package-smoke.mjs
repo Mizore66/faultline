@@ -32,6 +32,13 @@ function readUtf8(relativePath) {
 }
 
 function assertDocsLint() {
+  // Docs-lint contract for contributors:
+  // - README must pin judges to the submission tag (never "checkout main").
+  // - Cold-open mode is controlled by a stable HTML marker in docs/video-teleprompter.md:
+  //     <!-- faultline-cold-open: prefer-external -->
+  //     <!-- faultline-cold-open: sample-until-external -->
+  // - Marker must match docs/impact-validation-external-01.md Status (completed => prefer-external).
+  // Phrase wording around the marker may change; do not remove the marker without updating this gate.
   const readme = readUtf8("README.md");
   const teleprompter = readUtf8("docs/video-teleprompter.md");
   const impact = readUtf8("docs/impact-validation-external-01.md");
@@ -46,27 +53,25 @@ function assertDocsLint() {
 
   const impactStatusMatch = impact.match(/^- Status:\s*(\S+)/m);
   const impactStatus = impactStatusMatch?.[1] ?? "";
-  const prefersExternalColdOpen =
-    /## 0:00–0:20[^\n]*\n[\s\S]*?\*\*Preferred screen:\*\*[^\n]*external/i.test(teleprompter)
-    || /Cold open \(prefer external/i.test(teleprompter);
-  const sampleDefaultUntilCompleted =
-    /Default screen \(required until external status is completed\)/i.test(teleprompter);
+  const coldOpenMarker = teleprompter.match(/<!--\s*faultline-cold-open:\s*([a-z-]+)\s*-->/i)?.[1] ?? "";
+  const prefersExternalColdOpen = coldOpenMarker === "prefer-external";
+  const sampleUntilExternal = coldOpenMarker === "sample-until-external";
 
   if (impactStatus === "completed") {
     if (!prefersExternalColdOpen) {
       throw new Error(
-        "docs/video-teleprompter.md must prefer an external cold-open once docs/impact-validation-external-01.md status is completed"
+        "docs/video-teleprompter.md must include <!-- faultline-cold-open: prefer-external --> once impact-validation-external-01 status is completed"
       );
     }
   } else {
     if (prefersExternalColdOpen) {
       throw new Error(
-        `docs/video-teleprompter.md prefers an external cold-open while docs/impact-validation-external-01.md status is '${impactStatus || "missing"}' (must be completed)`
+        `docs/video-teleprompter.md prefers external cold-open while impact-validation-external-01 status is '${impactStatus || "missing"}' (must be completed)`
       );
     }
-    if (!sampleDefaultUntilCompleted) {
+    if (!sampleUntilExternal) {
       throw new Error(
-        "docs/video-teleprompter.md must make the verified sample the default cold-open until external status is completed"
+        "docs/video-teleprompter.md must include <!-- faultline-cold-open: sample-until-external --> until external status is completed"
       );
     }
   }
