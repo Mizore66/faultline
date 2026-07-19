@@ -10,6 +10,14 @@ That sample is produced by `scripts/generate-later-turn-ledger-fixture.mjs`, is
 honestly labeled `RECORDED_REDACTED_FIXTURE`, and must not be described as organic
 dogfood or as this external-01 impact case.
 
+## How to complete this record (issue #46)
+
+1. Run the partner session via [partners/mumbcs-faultline-guide.md](partners/mumbcs-faultline-guide.md) or [external-participant-invite.md](external-participant-invite.md).
+2. Copy structured fields into [external-case-study-template.md](external-case-study-template.md).
+3. Fill every `[INSERT]` below that you actually collected; leave blanks rather than inventing metrics.
+4. Set **Status** to `completed` only after consent + offline verify MATCH.
+5. Then update the README Validation section — not before.
+
 ## Record metadata
 
 - Record ID: `external-01`

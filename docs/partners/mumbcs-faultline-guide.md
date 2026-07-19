@@ -14,6 +14,15 @@ That FaultLine “caught a real bug in production.” A second, naturally occurr
 
 **Mandatory evidence rule:** the frozen witness **overlay bytes** must be identical on every turn state. Codex must change **production code/data only** — never the witness. Fill [../external-case-study-template.md](../external-case-study-template.md) with digests, timings, onboarding friction, one criticism, and one approved quote.
 
+**Landing #46 (permissioned publish):** after the session, complete the template’s
+**Publish readiness path**, fill [../impact-validation-external-01.md](../impact-validation-external-01.md),
+retain proof-root + frozen-witness digests offline, and only then update the FaultLine
+README Validation line. Until then, public wording stays “external protocol test
+(underway)” — dogfood + fixtures remain the published evidence base.
+
+**Not the case study:** [../samples/later-turn-ledger/](../samples/later-turn-ledger/) is a
+recorded CI fixture (`RECORDED_REDACTED_FIXTURE`), not a MUMBCS session export.
+
 > **Access note:** MUMBCS is a **private** repo (`master` default branch). The FaultLine collaborator needs read access (or a redacted handoff zip) to help verify packages.
 
 ---

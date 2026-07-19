@@ -54,9 +54,9 @@ GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 ## Validation
 
 - **Dogfood (published):** Git self-incident at `97c3290` — [docs/faultline-self-incident.md](docs/faultline-self-incident.md)
-- **External protocol test (underway):** independent developer + real Codex session + verified later-turn boundary — [docs/partners/mumbcs-faultline-guide.md](docs/partners/mumbcs-faultline-guide.md), [docs/external-case-study-template.md](docs/external-case-study-template.md)
+- **External protocol test (underway):** independent developer + real Codex session + verified later-turn boundary — partner runbook [docs/partners/mumbcs-faultline-guide.md](docs/partners/mumbcs-faultline-guide.md), publish template [docs/external-case-study-template.md](docs/external-case-study-template.md), impact record [docs/impact-validation-external-01.md](docs/impact-validation-external-01.md) (status `planned` until filled)
 
-The scripted partner run validates interoperability/usability. It is **not** automatically “FaultLine caught a real production bug.” Until the permissioned case study lands, public evidence remains dogfood + fixtures.
+The scripted partner run validates interoperability/usability. It is **not** automatically “FaultLine caught a real production bug.” Until the permissioned case study lands (issue [#46](https://github.com/Mizore66/faultline/issues/46)), public evidence remains dogfood + fixtures. The recorded later-turn sample under `docs/samples/later-turn-ledger/` is a CI fixture, not the external case.
 
 ## Codex + GPT-5.6
 
