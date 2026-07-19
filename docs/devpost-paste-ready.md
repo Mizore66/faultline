@@ -38,7 +38,8 @@ pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
-Pinned submission tag: `v0.1.0-buildweek` · SHA `589bbfd2dae6907e94b4a993e98848c35d3e5a81`.  
+Pinned submission tag / Release: [`v0.1.0-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.0-buildweek) · SHA `589bbfd2dae6907e94b4a993e98848c35d3e5a81`.  
+Green CI (incl. native Docker E2E): https://github.com/Mizore66/faultline/actions/runs/29673784462  
 Zero-install UI snapshot: open `docs/self-incident-proof-preview.html` after clone (or regenerate with `pnpm fl commit-proof-preview`).  
 GPT-5.6 sample artifacts (no API key): `docs/samples/gpt-5.6/`.
 

@@ -40,7 +40,7 @@ GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 
 **Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux. Docker required for live proof.  
 **Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand.  
-**CI:** public Verify workflow includes the native Docker proof E2E gate on `ubuntu-latest` when `FAULTLINE_DOCKER_INTEGRATION=1` (see Actions on this tag).
+**CI:** green Verify run on the post-pin fix ([run](https://github.com/Mizore66/faultline/actions/runs/29673784462)), including the **[native Docker proof E2E gate](https://github.com/Mizore66/faultline/actions/runs/29673784462/job/88157296321)**. Submission pin / Release: [`v0.1.0-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.0-buildweek).
 
 ## Validation
 
