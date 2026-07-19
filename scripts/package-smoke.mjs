@@ -185,7 +185,9 @@ try {
   assertDocsLint();
 
   run(npm, ["pack", "--pack-destination", packDirectory], repository);
-  const dryRun = JSON.parse(run(npm, ["pack", "--dry-run", "--json", "--ignore-scripts"], repository));
+  const dryRunOutput = run(npm, ["pack", "--dry-run", "--json", "--ignore-scripts"], repository);
+  const jsonStart = dryRunOutput.indexOf("[");
+  const dryRun = JSON.parse(jsonStart === -1 ? dryRunOutput : dryRunOutput.slice(jsonStart));
   const packedFiles = dryRun[0]?.files?.map(({ path }) => path) ?? [];
   const allowedExact = new Set([
     "package.json",
