@@ -14,7 +14,7 @@ CI still uses the carefully redacted recorded multi-turn ledger at [samples/late
 - Status: completed
 - Date and timezone: 2026-07-19 Asia/Singapore
 - Owner: FaultLine submitter / facilitator
-- Evidence retention location: in-repo partner handoff mirror `docs/partners/mumbcs-later-turn-handoff/` (summary + digests); full turn package remains private in MUMBCS at `.faultline/turn-proof-bundles/turns-1784447895435/` (not shipped in FaultLine)
+- Evidence retention location: in-repo partner handoff mirror `docs/partners/mumbcs-later-turn-handoff/` (summary + digests); sidecar ledger excerpt `docs/samples/mumbcs-sidecar-ledger/`; full turn package remains private in MUMBCS (Path B). Local corroboration 2026-07-19: `fl verify` on the retained partner package → Integrity **VALID**, External root **MATCH**, root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1`.
 - Consent / sharing scope: MUMBCS may be named; digests and redacted summary published in FaultLine; screenshots/terminal captures consent-approved for external use but not in-tree here
 - Re-verification path: Path B — byte-level re-verify requires MUMBCS collaborator access or private redacted handoff; public readers use in-repo digests + consent + summary
 - Redaction review completed by: MUMBCS participant consent in Codex thread, 2026-07-19

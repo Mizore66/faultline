@@ -31,6 +31,15 @@ export const TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL = "EXPERIMENTAL_TURN" as cons
 export const TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL =
   "Experimental turn-level evidence — not yet a portable proof" as const;
 
+/** Pre-rename label retained so older EXPERIMENTAL_TURN packages still verify. */
+export const TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL_LEGACY =
+  "Turn localization — experimental evidence" as const;
+
+export const TURN_PATH_EVIDENCE_LABELS_EXPERIMENTAL = Object.freeze([
+  TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL,
+  TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL_LEGACY
+] as const);
+
 /**
  * Reserved until the promotion criteria above are met. Must not be assigned
  * while any criterion remains open.

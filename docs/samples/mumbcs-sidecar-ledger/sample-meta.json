@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "faultline.mumbcs-sidecar-ledger-sample.v1",
+  "sourcePackageRoot": "sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1",
+  "frozenDigest": "sha256:3c7ebd021525de79ed7a70d3893a4f4585a47c10b44096843b2c313f7ffef133",
+  "proposalId": "mumbcs-check-slug",
+  "sessionId": "mumbcs-protocol-001",
+  "transport": "SIDE_CAR",
+  "eventCount": 11,
+  "eventTypes": [
+    "SESSION_STARTED",
+    "SESSION_BASELINE_SNAPSHOT",
+    "TURN_STARTED",
+    "TURN_COMPLETED",
+    "TURN_TREE_SNAPSHOT"
+  ],
+  "introductionTurnOrdinal": 3,
+  "note": "Ledger excerpt from the permissioned MUMBCS external-01 turn package. Full trees.pack is not shipped (Path B). Local fl verify of the full package: VALID + MATCH on 2026-07-19."
+}

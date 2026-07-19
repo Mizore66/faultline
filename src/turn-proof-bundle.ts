@@ -46,7 +46,8 @@ import {
 import {
   TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL,
   TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED,
-  TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL
+  TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL,
+  TURN_PATH_EVIDENCE_LABELS_EXPERIMENTAL
 } from "./evidence-grade.js";
 
 /**
@@ -667,8 +668,10 @@ export function validateTurnInvestigationProofSemantics(
   if (expectedProof && result.proof.evidenceGrade !== TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL) {
     errors.push("until turn/Git proof parity, isProof turn packages must remain graded EXPERIMENTAL_TURN");
   }
-  if (expectedProof && result.proof.evidenceLabel !== TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL) {
-    errors.push(`isProof turn packages must carry evidenceLabel "${TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL}"`);
+  if (expectedProof && !(TURN_PATH_EVIDENCE_LABELS_EXPERIMENTAL as readonly string[]).includes(result.proof.evidenceLabel)) {
+    errors.push(
+      `isProof turn packages must carry evidenceLabel "${TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL}" (or the legacy wording "${TURN_PATH_EVIDENCE_LABELS_EXPERIMENTAL[1]}")`
+    );
   }
   return errors;
 }

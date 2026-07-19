@@ -2822,6 +2822,19 @@ async function main(): Promise<void> {
         process.exitCode = result.valid ? 0 : 1;
         return;
       }
+      if (schemaVersion === "faultline.turn-proof-bundle.v1") {
+        const { verifyTurnInvestigationProofBundle } = await import("./turn-proof-bundle.js");
+        const result = await verifyTurnInvestigationProofBundle(root, option(args, "--expect-root"));
+        process.stdout.write(
+          `${result.externalRootStatus === "NOT_PROVIDED" ? "Turn proof self-consistency" : "Integrity"}: ${result.valid ? "VALID" : "INVALID"}\n`
+        );
+        process.stdout.write(
+          `Evidence grade: EXPERIMENTAL_TURN\nDeclared files checked: ${result.checkedFiles}\nBundle root: ${result.rootDigest ?? "unavailable"}\nExternal root: ${result.externalRootStatus}\n`
+        );
+        if (!result.valid) process.stdout.write(`${result.errors.map((error) => `- ${error}`).join("\n")}\n`);
+        process.exitCode = result.valid ? 0 : 1;
+        return;
+      }
       const result = schemaVersion === "faultline.git-proof-bundle.v1"
         ? verifyGitInvestigationProofBundle(root, option(args, "--expect-root"))
         : verifyProofBundle(root, option(args, "--expect-root"));

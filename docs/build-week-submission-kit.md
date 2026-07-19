@@ -145,8 +145,9 @@ Grep-able map of statements we may say publicly to the retained artifact that ba
 | Judge Idea path opens a verified `COMMIT_PROOF` sample | `docs/samples/self-incident-commit-proof/ROOT.sha256` | `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9` |
 | Sample package docs / replace procedure | `docs/samples/COMMIT_PROOF_SAMPLE.md` | Install from `fl demo live-git --export-only` |
 | Historical self-incident dogfood root | `docs/impact-validation-self-incident.md` | `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` at `97c3290` |
-| External-01 MUMBCS protocol validation (not organic prod bug) | `docs/impact-validation-external-01.md` | Status `completed`; root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1` |
+| External-01 MUMBCS protocol validation (not organic prod bug) | `docs/impact-validation-external-01.md` | Status `completed`; root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1`; local `fl verify` VALID+MATCH |
 | External-01 publishable summary | `docs/publishable-summary-mumbcs.md` | Same root; `EXPERIMENTAL_TURN` / Turn 3 |
+| External-01 Codex sidecar ledger (W0-2 via partner, not self-dogfood) | `docs/samples/mumbcs-sidecar-ledger/` | Real `SIDE_CAR` 11-event ledger; trees.pack not shipped |
 | Honest non-Codex observed transport sample | `docs/samples/observed-external-transport/` | `OBSERVED_EXTERNAL_TRANSPORT`; not Codex hooks |
 | Coverage matrix honesty (hybrid: spec/unit + Docker E2E rows in CI) | `benchmarks/REPORT.md` + `benchmarks/e2e-executed.json` | 8 scenarios; Docker CI promotes listed rows to `EXECUTABLE_E2E` |
 | Coverage matrix machine-readable twin | `benchmarks/report.json` | `faultline.coverage-matrix.v1` |
