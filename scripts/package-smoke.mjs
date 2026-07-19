@@ -49,13 +49,26 @@ function assertDocsLint() {
   const prefersExternalColdOpen =
     /## 0:00–0:20[^\n]*\n[\s\S]*?\*\*Preferred screen:\*\*[^\n]*external/i.test(teleprompter)
     || /Cold open \(prefer external/i.test(teleprompter);
-  if (prefersExternalColdOpen && impactStatus !== "completed") {
-    throw new Error(
-      `docs/video-teleprompter.md prefers an external cold-open while docs/impact-validation-external-01.md status is '${impactStatus || "missing"}' (must be completed)`
-    );
-  }
-  if (!/Default screen \(required until external status is completed\)/i.test(teleprompter)) {
-    throw new Error("docs/video-teleprompter.md must make the verified sample the default cold-open until external status is completed");
+  const sampleDefaultUntilCompleted =
+    /Default screen \(required until external status is completed\)/i.test(teleprompter);
+
+  if (impactStatus === "completed") {
+    if (!prefersExternalColdOpen) {
+      throw new Error(
+        "docs/video-teleprompter.md must prefer an external cold-open once docs/impact-validation-external-01.md status is completed"
+      );
+    }
+  } else {
+    if (prefersExternalColdOpen) {
+      throw new Error(
+        `docs/video-teleprompter.md prefers an external cold-open while docs/impact-validation-external-01.md status is '${impactStatus || "missing"}' (must be completed)`
+      );
+    }
+    if (!sampleDefaultUntilCompleted) {
+      throw new Error(
+        "docs/video-teleprompter.md must make the verified sample the default cold-open until external status is completed"
+      );
+    }
   }
 
   const localTags = spawnSync("git", ["tag", "-l", pinnedRef], { cwd: repository, encoding: "utf8" });

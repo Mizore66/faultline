@@ -8,15 +8,16 @@ This is a recording and submission checklist, not evidence that a submission has
 
 **Locked claim:** FaultLine produces a portable, offline-verifiable evidence package for one human-frozen predicate — another engineer verifies “where does *this* reviewed witness first go bad?” **without re-running repository code**, without trusting model intent.
 
-**Default sequence (required until `docs/impact-validation-external-01.md` status is `completed`):**
+**Default sequence (external-01 is `completed` — lead with permissioned later-turn, then mature sample):**
 
-1. **Cold-open on mature trust:** verified `COMMIT_PROOF` sample via `pnpm fl judge-proof` (sample root `sha256:f85c446d…` — disposable live-git sample, **not** the historical self-incident unless you open that package). Historical dogfood: [faultline-self-incident.md](faultline-self-incident.md).
-2. **Show GPT-5.6 on screen** — live `--live` when a key is available; otherwise committed redacted samples in `docs/samples/gpt-5.6/`.
-3. **Show Codex** — `/feedback` + sidecar.
-4. **Optional** later-turn / minimize / repair if time remains.
-5. **Optional** `judge-demo` fixture sandbox last — never the Idea headline.
+1. **Cold-open on permissioned later-turn:** MUMBCS external protocol validation (`EXPERIMENTAL_TURN`; say scripted protocol validation) — [publishable-summary-mumbcs.md](publishable-summary-mumbcs.md).
+2. **Show mature trust:** verified `COMMIT_PROOF` sample via `pnpm fl judge-proof` (sample root `sha256:f85c446d…` — disposable live-git sample, **not** the historical self-incident unless you open that package). Historical dogfood: [faultline-self-incident.md](faultline-self-incident.md).
+3. **Show GPT-5.6 on screen** — live `--live` when a key is available; otherwise committed redacted samples in `docs/samples/gpt-5.6/`.
+4. **Show Codex** — `/feedback` + sidecar.
+5. **Optional** later-turn / minimize / repair if time remains.
+6. **Optional** `judge-demo` fixture sandbox last — never the Idea headline.
 
-**Only after external status is `completed`:** lead with the permissioned later-turn beat (`EXPERIMENTAL_TURN`; say scripted protocol validation unless organic), then the COMMIT_PROOF sample.
+**Fallback** if you skip the external beat: cold-open on the COMMIT_PROOF sample only.
 
 Pinned recording checkout: `git checkout v0.1.0-buildweek`. Teleprompter: [video-teleprompter.md](video-teleprompter.md).
 
@@ -53,10 +54,10 @@ Say on camera that FaultLine did not auto-approve or auto-freeze; the one comman
 
 **On screen:** `pnpm fl judge-proof` proof page (sample root `sha256:f85c446d…`) or `docs/self-incident-proof-preview.html`. **Do not** open with `judge-demo` or “we built a better bisect.”
 
-**Speak (approx.) — after external case study:**  
-“An independent developer used FaultLine on their repo to record a real Codex session. Under one human-frozen overlay witness, Turn 3 was the earliest stable PASS→FAIL — experimental turn evidence. Same witness, recorded turn trees. Then counterfactual minimization. For portable trust: here is a verified COMMIT_PROOF **sample** package — root `sha256:f85c446d…` — distinct from our historical self-incident dogfood at `97c3290`.”
+**Speak (approx.) — external-01 landed:**  
+“In a consented external protocol validation on MUMBCS, FaultLine froze a human-reviewed witness and attributed Turn 3 as the earliest stable PASS→FAIL — experimental turn evidence, not a naturally occurring production bug. Same witness, recorded turn trees. For portable trust: here is a verified COMMIT_PROOF **sample** package — root `sha256:f85c446d…` — distinct from our historical self-incident dogfood at `97c3290`.”
 
-**Fallback cold open (no external package yet):** say “verified COMMIT_PROOF **sample** package,” never “real incident.”
+**Fallback cold open (skip external beat):** say “verified COMMIT_PROOF **sample** package,” never “real incident.”
 
 | Time | Screen | Narration point |
 | --- | --- | --- |

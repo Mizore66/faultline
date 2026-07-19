@@ -84,8 +84,8 @@ FaultLine is for engineers diagnosing an agent-assisted regression under review,
 
 **Dogfood:** FaultLine’s own provenance-workflow regression (`PASS→FAIL` at `97c3290`) — see `docs/impact-validation-self-incident.md`.
 
-**External N=1 (replace this paragraph after the session):**  
-EXTERNAL_IMPACT_SUMMARY — paste the approved paragraph from `docs/impact-validation-external-01.md` “Publishable summary”. Until then, do not invent third-party claims.
+**External N=1 (from completed `docs/impact-validation-external-01.md`):**  
+In one consented external protocol validation on `monashblockchain/MUMBCS`, FaultLine froze a human-reviewed witness over production slug validation and replayed recorded turn states in Docker. The retained package verifies offline with root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1` and attributes the first stable PASS->FAIL transition to Turn 3 under `EXPERIMENTAL_TURN` evidence. This validates the external workflow of freeze, replay, locate, and verify; it does not claim FaultLine caught a naturally occurring production bug, agent intent, unique root cause, or prevention.
 
 ### How FaultLine differs
 
@@ -107,6 +107,6 @@ FaultLine combines (1) a human-reviewed immutable executable witness, (2) replay
 ## Final gate
 
 - [ ] YOUTUBE_URL filled and video public
-- [ ] EXTERNAL_IMPACT_SUMMARY filled from completed external-01 record
+- [x] EXTERNAL_IMPACT_SUMMARY filled from completed external-01 record ([publishable-summary-mumbcs.md](publishable-summary-mumbcs.md))
 - [ ] Video names Codex and GPT-5.6; cold-opens on judge-proof
 - [ ] Submitted on Devpost before Jul 21, 2026 @ 5:00pm PDT

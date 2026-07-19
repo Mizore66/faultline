@@ -54,9 +54,11 @@ GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 ## Validation
 
 - **Dogfood (published):** Git self-incident at `97c3290` — [docs/faultline-self-incident.md](docs/faultline-self-incident.md)
-- **External protocol test (underway):** independent developer + real Codex session + verified later-turn boundary — [docs/partners/mumbcs-faultline-guide.md](docs/partners/mumbcs-faultline-guide.md), [docs/external-case-study-template.md](docs/external-case-study-template.md)
+- **External protocol validation (permissioned, landed):** consented MUMBCS run (`monashblockchain/MUMBCS`) — offline-verified turn package root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1`, Turn 3 `PASS_TO_FAIL` under `EXPERIMENTAL_TURN` — [docs/publishable-summary-mumbcs.md](docs/publishable-summary-mumbcs.md), [docs/external-case-study-mumbcs.md](docs/external-case-study-mumbcs.md), [docs/impact-validation-external-01.md](docs/impact-validation-external-01.md) (`Status: completed`)
 
-The scripted partner run validates interoperability/usability. It is **not** automatically “FaultLine caught a real production bug.” Until the permissioned case study lands, public evidence remains dogfood + fixtures.
+This is **protocol / interoperability validation** (freeze → replay → locate → verify). It is **not** a claim that FaultLine caught a naturally occurring production bug, agent intent, unique root cause, or prevention. The recorded later-turn sample under `docs/samples/later-turn-ledger/` remains a CI fixture, not the MUMBCS case.
+
+**Re-verification path:** FaultLine publishes digests + consent + redacted narrative. Byte-level re-verify of the turn package requires MUMBCS collaborator access or a private redacted handoff (MUMBCS is private). No proof-bundle fixture is shipped in this repo for that root.
 
 ## Codex + GPT-5.6
 
@@ -78,6 +80,8 @@ Help is tiered: `fl` / `fl quickstart` for the short surface; `fl advanced` for 
 | [docs/proof-bundles.md](docs/proof-bundles.md) | Verify / serve / minimize / prevention |
 | [docs/codex-sidecar.md](docs/codex-sidecar.md) | Sidecar install / status |
 | [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md) | Video run of show |
+| [docs/publishable-summary-mumbcs.md](docs/publishable-summary-mumbcs.md) | Permissioned MUMBCS external protocol summary |
+| [docs/external-case-study-mumbcs.md](docs/external-case-study-mumbcs.md) | Full MUMBCS structured case study |
 | [docs/partners/mumbcs-faultline-guide.md](docs/partners/mumbcs-faultline-guide.md) | External partner runbook (MUMBCS) |
 | [SECURITY.md](SECURITY.md) | Vulnerability reporting |
 | [docs/differentiation.md](docs/differentiation.md) | vs bisect / CI / repro |

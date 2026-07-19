@@ -14,7 +14,20 @@ That FaultLine “caught a real bug in production.” A second, naturally occurr
 
 **Mandatory evidence rule:** the frozen witness **overlay bytes** must be identical on every turn state. Codex must change **production code/data only** — never the witness. Fill [../external-case-study-template.md](../external-case-study-template.md) with digests, timings, onboarding friction, one criticism, and one approved quote.
 
+**#46 landed (permissioned publish):** the 2026-07-19 MUMBCS protocol validation is
+published in-repo as [../publishable-summary-mumbcs.md](../publishable-summary-mumbcs.md),
+[../external-case-study-mumbcs.md](../external-case-study-mumbcs.md), and
+[../impact-validation-external-01.md](../impact-validation-external-01.md) (`Status: completed`).
+Future partner runs still use [../external-case-study-template.md](../external-case-study-template.md).
+
+**Not the case study:** [../samples/later-turn-ledger/](../samples/later-turn-ledger/) is a
+recorded CI fixture (`RECORDED_REDACTED_FIXTURE`), not a MUMBCS session export.
+
 > **Access note:** MUMBCS is a **private** repo (`master` default branch). The FaultLine collaborator needs read access (or a redacted handoff zip) to help verify packages.
+>
+> **Re-verification (Path B, landed):** FaultLine publishes digests + consent + redacted narrative only. Byte-level re-verify of the turn package is not available from the FaultLine repo alone; it requires MUMBCS collaborator access or a private redacted handoff. Optional screenshots/terminal captures are outside FaultLine and are not required to cite the published digests.
+>
+> **Delegated Codex UI:** if a native Codex delegated-worktree replay shows live turns but `codex sidecar status` does not return a fresh `ledgerPath`, treat that UI replay as **demonstration-only**. Use the retained scripted-hook ledger/proof package for verification. Spec: [../codex-sidecar.md](../codex-sidecar.md#delegated-worktrees--demo-only-when-no-ledger).
 
 ---
 

@@ -73,10 +73,36 @@ Ask the developer to attempt from the README with **minimal intervention**. Reco
 
 **Strong:** “I installed it without help, went from CI log / sidecar ledger to a verified boundary in N minutes, and it identified an edit I had blamed incorrectly.”
 
+## Publish readiness path
+
+The MUMBCS N=1 permissioned case is already landed:
+[external-case-study-mumbcs.md](external-case-study-mumbcs.md) /
+[publishable-summary-mumbcs.md](publishable-summary-mumbcs.md) /
+[impact-validation-external-01.md](impact-validation-external-01.md).
+
+Use this blank template for any **future** partner run. Do not mark README or Devpost
+as completed for a new case until the checklist below is green with retained digests
+and explicit consent.
+
+| Step | Artifact | Owner |
+| --- | --- | --- |
+| 1. Run partner session | [partners/mumbcs-faultline-guide.md](partners/mumbcs-faultline-guide.md) (or equivalent invite) | Facilitator + partner |
+| 2. Capture structured fields | This template (tables above) | Facilitator |
+| 3. Fill impact record | [impact-validation-external-01.md](impact-validation-external-01.md) — set `Status: completed` only when filled | Facilitator |
+| 4. Offline verify | `fl verify <bundle> --expect-root <digest>` MATCH | Partner or facilitator |
+| 5. Redaction review | Private sources, overlays, CI logs scrubbed | Partner + facilitator |
+| 6. Public wording | README Validation section: “external underway” → permissioned summary link | Maintainer |
+
+**Not a substitute:** [samples/later-turn-ledger/](samples/later-turn-ledger/) is a
+`RECORDED_REDACTED_FIXTURE` for CI drills. It must never be published as the MUMBCS
+or external-01 case study.
+
 ## Publish checklist
 
 - [ ] Consent table complete  
 - [ ] Digests match retained packages (`fl verify … --expect-root`)  
 - [ ] Secrets / `.env` / private source removed  
-- [ ] README “External validation” section updated  
-- [ ] Impact note filled ([impact-validation-external-01.md](impact-validation-external-01.md))  
+- [ ] README Validation section updated only after consent + digests land  
+- [ ] Impact note filled ([impact-validation-external-01.md](impact-validation-external-01.md)) and status flipped from `planned` → `completed`  
+- [ ] One criticism + one approved quote captured (not generic praise)  
+
