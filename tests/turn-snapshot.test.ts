@@ -563,6 +563,39 @@ describe("Turn tree snapshot capture", () => {
     }
   });
 
+  it("refuses snapshot gc when a .faultline ledger still references quarantined trees unless --force", () => {
+    const repository = repositoryFixture();
+    try {
+      writeFileSync(join(repository, "tracked.txt"), "gc-ref-safety\n", "utf8");
+      const snapshot = capture(repository, { sleep: () => {} });
+      expect(existsSync(faultlineSnapshotObjectDirectory(repository))).toBe(true);
+
+      const recordings = join(repository, ".faultline", "recordings");
+      mkdirSync(recordings, { recursive: true });
+      const ledgerPath = join(recordings, "session-ledger.json");
+      writeFileSync(
+        ledgerPath,
+        `${JSON.stringify({
+          schemaVersion: "faultline.codex-lifecycle-ledger.v1",
+          note: "test fixture retaining a quarantined turn tree",
+          treeDigest: snapshot.treeDigest
+        }, null, 2)}\n`,
+        "utf8"
+      );
+
+      expect(() => purgeFaultlineSnapshotObjects(repository)).toThrow(/Refusing to purge|referenced|\.faultline/i);
+      expect(() => purgeFaultlineSnapshotObjects(repository)).toThrow(/recordings\/session-ledger\.json/);
+      expect(existsSync(faultlineSnapshotObjectDirectory(repository))).toBe(true);
+
+      const forced = purgeFaultlineSnapshotObjects(repository, { force: true });
+      expect(forced.status).toBe("PURGED");
+      expect(forced.referencingPaths.some((path) => path.includes("session-ledger.json"))).toBe(true);
+      expect(existsSync(faultlineSnapshotObjectDirectory(repository))).toBe(false);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
   it("starter ignore does not suppress lockfiles, and lockfile edits change environment fingerprints", () => {
     const repository = repositoryFixture();
     try {

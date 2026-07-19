@@ -1,7 +1,8 @@
 # Devpost paste-ready (fill YOUTUBE + external summary, then submit)
 
-> Replace `YOUTUBE_URL` and the external impact paragraph, then paste into https://openai.devpost.com/  
-> Deadline: Jul 21, 2026 @ 5:00pm PDT
+> Replace `YOUTUBE_URL` after you record (see [video-teleprompter.md](video-teleprompter.md)). Do not invent a URL.  
+> Deadline: Jul 21, 2026 @ 5:00pm PDT  
+> Bound only to green artifacts: external-01, observed-external-transport, coverage-matrix honesty, judge sample / self-incident roots, and (with Docker) `fl demo full` → `PREVENTION_VERIFIED` + `AGENTS.md`. No signed-release / soak / stranger claims.
 
 ---
 
@@ -41,7 +42,9 @@ pnpm fl judge-proof
 Pinned submission tag / Release: [`v0.1.0-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.0-buildweek) · SHA `589bbfd2dae6907e94b4a993e98848c35d3e5a81`.  
 Green CI (incl. native Docker E2E): https://github.com/Mizore66/faultline/actions/runs/29673784462  
 Zero-install UI snapshot: open `docs/self-incident-proof-preview.html` after clone (or regenerate with `pnpm fl commit-proof-preview`).  
-GPT-5.6 sample artifacts (no API key): `docs/samples/gpt-5.6/`.
+GPT-5.6 sample artifacts (no API key): `docs/samples/gpt-5.6/`.  
+Honest non-Codex transport sample: `docs/samples/observed-external-transport/` (`OBSERVED_EXTERNAL_TRANSPORT`).  
+Coverage matrix (spec/unit honesty — not a Docker soak): `benchmarks/REPORT.md`.
 
 Judge sample root: `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9`  
 (Not the historical self-incident root `sha256:f6a391b3…` — that dogfood is documented separately.)
@@ -68,13 +71,14 @@ Git history, CI logs, and a reproduction case are useful inputs, but they do not
 
 **Runnable Idea path for judges:** `pnpm fl judge-proof` (sample root `sha256:f85c446d…`).  
 **Historical dogfood (separate):** provenance-workflow `PASS→FAIL` at `97c3290`, root `sha256:f6a391b3…` — see repo docs.  
-**Fixture sandbox (not the Idea):** `pnpm fl judge-demo` / `docs/judge-preview.html`.
+**Fixture sandbox (not the Idea):** `pnpm fl judge-demo` / `docs/judge-preview.html`.  
+**Green supporting artifacts:** completed external-01 protocol record; `docs/samples/observed-external-transport/`; coverage matrix in `benchmarks/REPORT.md` (8 spec/unit rows — explicitly not independent CI Docker soak).
 
 ### How Codex and GPT-5.6 are used
 
 **Qualifying Codex `/feedback`:** `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 
-Codex accelerated implementation, adversarial testing, and product hardening. Product decisions stayed human-owned: evidence labels, fail-closed sandbox rules, and refusing model text as verdicts. At runtime, FaultLine can observe public Codex hook metadata via an opt-in sidecar or accept a hash-chained Codex-compatible lifecycle ledger.
+Codex accelerated implementation, adversarial testing, and product hardening. Product decisions stayed human-owned: evidence labels, fail-closed sandbox rules, and refusing model text as verdicts. At runtime, FaultLine can observe public Codex hook metadata via an opt-in sidecar or accept a hash-chained Codex-compatible lifecycle ledger. Non-Codex editor checkpoints use the honestly labeled `OBSERVED_EXTERNAL_TRANSPORT` sample path — never a forged Codex hook ledger.
 
 GPT-5.6 is used only for blinded witness proposal and evidence-cited repair briefs. It cannot decide verdicts, assign model intent, replace the frozen witness, or create proof evidence.
 
@@ -106,8 +110,10 @@ FaultLine combines (1) a human-reviewed immutable executable witness, (2) replay
 
 ## Final gate
 
-- [ ] YOUTUBE_URL filled and video public
+- [ ] YOUTUBE_URL filled and video public (**you** must record — teleprompter does not ship a URL)
 - [x] EXTERNAL_IMPACT_SUMMARY filled from completed external-01 record ([publishable-summary-mumbcs.md](publishable-summary-mumbcs.md))
 - [ ] Video names Codex and GPT-5.6
 - [ ] Cold-open follows teleprompter: **preferred** external MUMBCS protocol beat, then `judge-proof` sample (fallback: sample-only if external beat skipped) — see [video-teleprompter.md](video-teleprompter.md)
+- [ ] No claims of signed release, soak, or stranger test unless those artifacts exist at submit time
+- [ ] If showing `fl demo full`, only claim `PREVENTION_VERIFIED` / `AGENTS.md` when that run printed those classifications
 - [ ] Submitted on Devpost before Jul 21, 2026 @ 5:00pm PDT

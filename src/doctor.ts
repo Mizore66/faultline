@@ -2,6 +2,10 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { sha256 } from "./canonical.js";
+import { materializeFrozenOverlays } from "./safe-overlay.js";
+import { captureTurnTreeSnapshot } from "./turn-snapshot.js";
+import type { FrozenWitness } from "./witness-lock.js";
 
 /**
  * Read-only, local preflight diagnostics for the common Git + Docker path.
@@ -532,7 +536,9 @@ export const DOCTOR_SECURITY_SCHEMA_VERSION = "faultline.doctor-security.v1" as 
 export type DoctorSecurityCheckId =
   | "hooks-neutralization"
   | "protocol-allow-never"
-  | "path-filters";
+  | "path-filters"
+  | "overlay-path-traversal"
+  | "secret-shaped-blob";
 
 export type DoctorSecurityCheck = {
   readonly id: DoctorSecurityCheckId;
@@ -581,9 +587,10 @@ function securityGit(
 /**
  * Live self-test: spawn Git against a throwaway fixture that contains a
  * deliberately malicious hook and hostile protocol/filter config, then assert
- * FaultLine's hardened overrides neutralize them.
+ * FaultLine's hardened overrides neutralize them. Also probes overlay path
+ * traversal refuse and turn-snapshot secret rejection.
  */
-export function runFaultLineSecurityDoctor(): FaultLineSecurityDoctorReport {
+export async function runFaultLineSecurityDoctor(): Promise<FaultLineSecurityDoctorReport> {
   const fixtureRepository = mkdtempSync(join(tmpdir(), "faultline-doctor-security-"));
   const hooksDir = join(fixtureRepository, "malicious-hooks");
   const markerRelative = "HOOK_EXECUTED.marker";
@@ -662,6 +669,64 @@ export function runFaultLineSecurityDoctor(): FaultLineSecurityDoctorReport {
         `stored smudge=${filterSmudge.stdout.trim() || "<empty>"}`,
         `status exit=${statusHardened.status ?? "null"}`
       ].join("; ")
+    });
+
+    // Overlay path traversal: materializeFrozenOverlays must refuse ../escape
+    // even if a hostile FrozenWitness bypasses proposal-schema checks.
+    const overlayBytes = Buffer.from("export const hostile = true;\n", "utf8");
+    const hostileOverlayWitness = {
+      proposal: {
+        witness: {
+          overlays: [{
+            path: "../escape.mjs",
+            bytesBase64: overlayBytes.toString("base64"),
+            bytesDigest: `sha256:${sha256(overlayBytes)}`
+          }]
+        }
+      }
+    } as FrozenWitness;
+    let overlayRefused = false;
+    let overlayObservation = "";
+    try {
+      await materializeFrozenOverlays(fixtureRepository, hostileOverlayWitness);
+      overlayObservation = "materializeFrozenOverlays unexpectedly accepted ../escape.mjs";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      overlayRefused = /unsafe|escap/i.test(message);
+      overlayObservation = message.slice(0, 200);
+    }
+    checks.push({
+      id: "overlay-path-traversal",
+      status: overlayRefused ? "PASS" : "FAIL",
+      summary: overlayRefused
+        ? "materializeFrozenOverlays refused an overlay path that attempts ../escape."
+        : "Overlay path traversal was not refused.",
+      observation: overlayObservation || null
+    });
+
+    // Secret-shaped blob: turn-snapshot planning/capture must reject before write.
+    writeFileSync(
+      join(fixtureRepository, "leaked-secret.txt"),
+      "token = sk-proj-abcdefghijklmnopqrstuvwxyz012345\n",
+      "utf8"
+    );
+    let secretRefused = false;
+    let secretObservation = "";
+    try {
+      captureTurnTreeSnapshot(fixtureRepository, { sleep: () => {} });
+      secretObservation = "captureTurnTreeSnapshot unexpectedly accepted a secret-shaped blob";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      secretRefused = /secret material|high-entropy/i.test(message);
+      secretObservation = message.slice(0, 200);
+    }
+    checks.push({
+      id: "secret-shaped-blob",
+      status: secretRefused ? "PASS" : "FAIL",
+      summary: secretRefused
+        ? "Turn-tree snapshot refused a secret-shaped blob before acceptance."
+        : "Secret-shaped blob was not refused by turn-tree snapshot capture.",
+      observation: secretObservation || null
     });
   } finally {
     rmSync(fixtureRepository, { recursive: true, force: true });

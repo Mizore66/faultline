@@ -2,7 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_UI_HUB_PORT, discoverFaultLineArtifacts, startFaultLineUiHub } from "../src/ui-hub.js";
+import {
+  DEFAULT_UI_HUB_PORT,
+  UI_HUB_EMPTY_NEXT_COMMAND,
+  discoverFaultLineArtifacts,
+  startFaultLineUiHub
+} from "../src/ui-hub.js";
 
 describe("faultline ui hub", () => {
   it("defaults to the same port as fl serve", () => {
@@ -37,6 +42,9 @@ describe("faultline ui hub", () => {
         expect(response.status).toBe(200);
         const html = await response.text();
         expect(html).toContain("FaultLine UI");
+        expect(html).toContain("empty-state");
+        expect(html).toContain(UI_HUB_EMPTY_NEXT_COMMAND);
+        expect(UI_HUB_EMPTY_NEXT_COMMAND).toBe("fl quickstart");
       } finally {
         await hub.close();
       }

@@ -18,6 +18,8 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-tags: true
+          # Full history so package-smoke can assert the submission pin is an ancestor of HEAD.
+          fetch-depth: 0
       # The exact pnpm version is pinned in package.json.
       - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -51,6 +53,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-tags: true
+          fetch-depth: 0
       # The exact pnpm version is pinned in package.json.
       - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -62,9 +65,41 @@ jobs:
         run: pnpm audit --prod
         continue-on-error: true
       - run: pnpm build
-      - run: pnpm test -- tests/docker-integration.test.ts
+      - run: pnpm test -- tests/docker-integration.test.ts tests/later-turn-ledger-fixture.test.ts
         env:
           FAULTLINE_DOCKER_INTEGRATION: "1"
+          FAULTLINE_LIVE_TURN_MINIMIZE: "1"
+      - name: Regenerate coverage matrix with Docker E2E rows
+        run: pnpm coverage-matrix
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: faultline-coverage-matrix-docker-e2e
+          if-no-files-found: error
+          path: |
+            benchmarks/REPORT.md
+            benchmarks/report.json
+            benchmarks/e2e-executed.json
+
+  tag-checkout:
+    name: pinned tag judge-proof
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: v0.1.0-buildweek
+          fetch-tags: true
+          fetch-depth: 0
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Judge-proof from pinned submission tag
+        run: node dist/cli.js judge-proof --export-only
+        env:
+          FAULTLINE_NO_BROWSER: "1"
 
   provenance:
     name: signed GitHub CI provenance

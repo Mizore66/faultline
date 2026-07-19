@@ -136,14 +136,39 @@ These are separate facts to gather; none is created merely by copying this kit i
 
 Do not transform a blank status into a claim. The [Devpost description draft](devpost-description-draft.md), [impact-validation template](impact-validation-template.md), and [differentiation comparison](differentiation.md) are deliberately structured so a human can replace placeholders with auditable facts.
 
+## Claims inventory (public claim → artifact)
+
+Grep-able map of statements we may say publicly to the retained artifact that backs them. No row may be claimed without its artifact path. Re-verified 2026-07-19 against post-backlog roots.
+
+| Public claim | Artifact path | Recorded value / note |
+| --- | --- | --- |
+| Judge Idea path opens a verified `COMMIT_PROOF` sample | `docs/samples/self-incident-commit-proof/ROOT.sha256` | `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9` |
+| Sample package docs / replace procedure | `docs/samples/COMMIT_PROOF_SAMPLE.md` | Install from `fl demo live-git --export-only` |
+| Historical self-incident dogfood root | `docs/impact-validation-self-incident.md` | `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` at `97c3290` |
+| External-01 MUMBCS protocol validation (not organic prod bug) | `docs/impact-validation-external-01.md` | Status `completed`; root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1` |
+| External-01 publishable summary | `docs/publishable-summary-mumbcs.md` | Same root; `EXPERIMENTAL_TURN` / Turn 3 |
+| Honest non-Codex observed transport sample | `docs/samples/observed-external-transport/` | `OBSERVED_EXTERNAL_TRANSPORT`; not Codex hooks |
+| Coverage matrix honesty (hybrid: spec/unit + Docker E2E rows in CI) | `benchmarks/REPORT.md` + `benchmarks/e2e-executed.json` | 8 scenarios; Docker CI promotes listed rows to `EXECUTABLE_E2E` |
+| Coverage matrix machine-readable twin | `benchmarks/report.json` | `faultline.coverage-matrix.v1` |
+| Qualifying Codex `/feedback` session | README + this kit | `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` |
+| Zero-install proof page snapshot | `docs/self-incident-proof-preview.html` | Visual aid for sample; not a substitute for `fl verify` |
+| GPT-5.6 redacted samples (no API key) | `docs/samples/gpt-5.6/` | Proposal / repair-brief shapes |
+| Pinned submission checkout | README + `package-smoke` pin | `v0.1.0-buildweek` |
+| Security control → test traceability | `docs/security-model.md` appendix | Smoke-grepped by `scripts/package-smoke.mjs` |
+| Flagship `fl demo full` arc (Docker) | CLI: `fl demo full` | Ends with `PREVENTION_VERIFIED` + demo-repo `AGENTS.md` only when artifacts verify; requires Docker |
+
+**Do not claim without a green artifact in this inventory:** signed release, soak results, or stranger test.
+
 ## Claims we do not make (read before record / paste)
 
 - Model intent, private Codex interception, or unique semantic root cause
 - Tamper-proof host / Docker daemon enforcement (signed CI provenance binds receipt bytes + Actions identity only — [security-model.md](security-model.md))
 - That MUMBCS external-01 is a naturally occurring production bug (it is protocol / interoperability validation, `EXPERIMENTAL_TURN`)
 - That native Codex UI replay without a fresh sidecar ledger is the proof package (demo-only — [codex-sidecar.md](codex-sidecar.md#delegated-worktrees--demo-only-when-no-ledger))
+- Fabricated Codex ledgers (Cursor or other editors rebadged as Codex hook events) — [security-model.md](security-model.md#provenance-honesty-never-fake-codex-ledgers)
 - Time-saved metrics, third-party adoption scale, or npm global install
 - `TURN_PROOF` or “prevention verified” for the turn arc unless the retained artifacts actually say so
+- Signed release, soak, or stranger test unless those artifacts land and are added to the inventory above
 
 ## CI evidence packet to retain
 

@@ -1,8 +1,10 @@
 # Video teleprompter (&lt;3 min)
 
+**You must record this video** from a fresh pinned checkout and upload it yourself — this file is a script only. Do **not** invent or paste a placeholder `YOUTUBE_URL` into [devpost-paste-ready.md](devpost-paste-ready.md) until the public YouTube link exists.
+
 Record with product on screen. Prefer PowerShell: `pnpm.cmd fl …` if ExecutionPolicy blocks `pnpm`.
 
-**Hard rules:** no cold-open on `judge-demo`; do not say `judge-proof` is root `f6a391…`; do not invent time-saved metrics; external-01 is `completed` — say **protocol validation** / **`EXPERIMENTAL_TURN`**, not a naturally occurring production bug.
+**Hard rules:** no cold-open on `judge-demo`; do not say `judge-proof` is root `f6a391…`; do not invent time-saved metrics; external-01 is `completed` — say **protocol validation** / **`EXPERIMENTAL_TURN`**, not a naturally occurring production bug. Cut any beat whose feature is not green (no signed-release / soak / stranger). Prefer `fl demo full` when Docker is up; only say PREVENTION_VERIFIED / AGENTS.md if that run emitted them.
 
 **Pinned checkout for the video:** `git checkout v0.1.0-buildweek`
 
@@ -36,29 +38,25 @@ Record with product on screen. Prefer PowerShell: `pnpm.cmd fl …` if Execution
 
 ---
 
-## 0:45–1:20 — Docker replay
+## 0:45–1:35 — Flagship `fl demo full` (Docker)
 
-**Screen:** `pnpm fl demo live-git --export-only` **or** stay on proof page and highlight Docker / 3× runs. Docker Desktop must be running for live-git. Safe fallback: verified sample proof page.
+**Screen (preferred):**
 
-**Say:**
+```powershell
+pnpm fl demo full
+```
 
-> FaultLine replays that immutable witness over real Git states, three times per state, in constrained Docker. A compile error can never masquerade as a failure.
+Watch phases: intake/freeze/Docker localize → offline verify → minimize (file-level or hunk-refined) → `PREVENTION_VERIFIED` → demo-repo `AGENTS.md` block.
 
----
-
-## 1:20–1:50 — Fix + GPT-5.6 repair brief
-
-**Screen:** `pnpm fl repair --with-codex` (if time) then `pnpm fl repair brief --bundle … --live`.
-
-**Fallback:** `docs/samples/gpt-5.6/repair-brief.sample.json` — stronger GPT moment than proposal alone.
+**Fallback if Docker unavailable:** `pnpm fl demo live-git --export-only` or the verified sample proof page — then skip the PREVENTION_VERIFIED / AGENTS.md sentences.
 
 **Say:**
 
-> Codex implements the fix in a throwaway worktree; GPT-5.6 writes a repair brief that cites only executed facts and is labeled inference.
+> One command runs the arc: freeze a human-reviewed witness, replay it in Docker across real Git states, minimize the failure-inducing change, then emit a grounded PREVENTION_VERIFIED package and write digest-only invariants into AGENTS.md — never speculative.
 
 ---
 
-## 1:50–2:15 — Offline verify
+## 1:35–1:55 — Offline verify (sample path for judges)
 
 **Screen:**
 
@@ -72,12 +70,12 @@ pnpm fl verify .\docs\samples\self-incident-commit-proof --expect-root sha256:f8
 
 ---
 
-## 2:15–2:45 — Codex build story + close
+## 1:55–2:30 — Codex build story + close
 
-**Screen:** `/feedback` ID `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` and `pnpm test`.
+**Screen:** `/feedback` ID `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` and `pnpm test`. Optional: open the demo `AGENTS.md` FaultLine block from `fl demo full`.
 
 **Say (novelty):**
 
 > FaultLine freezes one human-reviewed executable check, replays those exact bytes across immutable Git and Codex-turn states in a locked-down sandbox, and emits a portable evidence package that a stranger can re-derive offline — it refuses every claim the executions don't support.
 
-**Claims to avoid:** “real production incident,” “root cause,” “prevention verified” for the turn arc, “invisible overhead,” or upgrading the MUMBCS beat beyond protocol validation / `EXPERIMENTAL_TURN`.
+**Claims to avoid:** “real production incident,” “root cause,” “prevention verified” for the turn arc without artifacts, “invisible overhead,” or upgrading the MUMBCS beat beyond protocol validation / `EXPERIMENTAL_TURN`.

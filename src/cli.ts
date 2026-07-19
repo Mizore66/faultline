@@ -66,7 +66,7 @@ import {
   writeGitInvestigationProofBundle
 } from "./git-proof-bundle.js";
 import { loadVerifiedGitProofView } from "./git-proof-view.js";
-import { runLiveGitDemo } from "./live-git-demo.js";
+import { runDemoFull, runLiveGitDemo } from "./live-git-demo.js";
 import {
   minimizeGitDiff,
   verifyGitMinimizationResultFile,
@@ -81,12 +81,14 @@ import {
   appendLifecycleEvent,
   appendLifecycleEventAtomic,
   captureGitCleanCheckpoint,
+  CodexTransportSchema,
   createCodexLifecycleLedger,
   LifecycleEventInputSchema,
   readVerifiedCodexLifecycleLedger,
   verifyCodexLifecycleLedger,
   verifyCodexLifecycleLedgerFile,
-  writeCodexLifecycleLedgerAtomic
+  writeCodexLifecycleLedgerAtomic,
+  type CodexTransport
 } from "./ledger.js";
 import { readModelOverlayInput } from "./overlay-input.js";
 import { describeBundlePath, verifyProofBundle, writeProofBundle } from "./proof-bundle.js";
@@ -158,7 +160,7 @@ More:
 
 Notes:
   fl doctor exits 0 for local CLI readiness; fl doctor --proof-ready exits nonzero unless Docker proof-grade preflight is READY.
-  fl doctor --security runs a live hardened-Git self-test (hooks / protocol.allow=never / filters).
+  fl doctor --security runs a live hardened-Git + refuse self-test (≥5 PASS: hooks / protocol.allow=never / filters / overlay traversal / secret blob).
   Headless judges: FAULTLINE_NO_BROWSER=1 pnpm fl judge-proof --export-only
   GPT-5.6 samples (no key): docs/samples/gpt-5.6/
   The judge demo/fixture paths do not require an OpenAI API key.`;
@@ -167,7 +169,7 @@ const advancedUsage = `FaultLine — full command reference
 
 Usage:
   fl judge-demo [--replay | --rerun-all] [--output <managed-bundle-directory>] [--export-only]
-  fl judge-proof [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--export-only] [--port <number>] [--serve-ms <ms>]
+  fl judge-proof [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--export-only] [--port <number>]
   fl commit-proof-preview [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--output <static-preview.html>]
   fl --version
   fl judge-preview [--output <static-preview.html>]
@@ -187,12 +189,12 @@ Usage:
   fl runtime resolve <node|python|go>
   fl runtime prepare <node|python|go> --yes
   fl runtime project <plan|build|resolve> [--context <directory>] [--dockerfile <file>] --tag <repository:tag> [--network <none|default>] [--yes]
-  fl demo live-git [--image <digest-pinned-image>] [--export-only] [--port <number>]
+  fl demo live-git|full [--image <digest-pinned-image>] [--export-only] [--port <number>]
   fl verify <proof-bundle-directory> [--expect-root <sha256:...>]
   fl serve [--port <number>]
   fl serve --bundle <git-proof-bundle-directory> [--expect-root <sha256:...>] [--minimization <result.json> --expect-minimization <sha256:...>] [--repair <repair-brief-directory> --expect-repair <sha256:...>] [--prevention <prevention-proof-directory> --expect-prevention <sha256:...>] [--port <number>]
   fl codex --dry-run | --snapshot [--repo <directory>]
-  fl codex snapshot gc [--repo <directory>]
+  fl codex snapshot gc [--repo <directory>] [--force]
   fl codex record <init|stdin|checkpoint|verify> [...]
   fl codex sidecar config (--cli <built-cli.js> | --command <hook-command> [--command-windows <hook-command>])
   fl codex sidecar install --repo <directory> --cli <built-cli.js> --yes
@@ -245,7 +247,8 @@ function requiredOption(args: string[], flag: string): string {
 
 /** Human-readable exits print exactly one copy-pasteable next command. */
 function printHumanNext(command: string): void {
-  process.stdout.write(`Next: ${command}\n`);
+  // Keep stdout machine-parseable for CI/demo JSON contracts; route guidance to stderr.
+  process.stderr.write(`Next: ${command}\n`);
 }
 
 function requireImageOrConfig(repository: string, args: string[]): string {
@@ -434,7 +437,7 @@ async function doctorCommand(args: string[]): Promise<void> {
     throw new Error("Usage: fl doctor [--repo <directory>] [--json] [--proof-ready | --security]");
   }
   if (securityOnly) {
-    const security = runFaultLineSecurityDoctor();
+    const security = await runFaultLineSecurityDoctor();
     if (hasFlag(args, "--json")) {
       process.stdout.write(`${JSON.stringify({
         ...security,
@@ -1027,7 +1030,7 @@ function printQuickstart(): void {
 4) Live paths (optional):
    OPENAI_API_KEY=… fl witness propose --live …
    OPENAI_API_KEY=… fl repair brief --live …
-   Docker required: fl demo live-git --export-only
+   Docker required: fl demo full   # or: fl demo live-git --export-only
 
 Pinned submission checkout: git checkout v0.1.0-buildweek
 Full command list: fl advanced
@@ -1154,10 +1157,63 @@ function commitProofPreviewCommand(args: string[]): void {
 
 /** Run the real Git/Docker product path against a disposable built-in incident. */
 async function demoCommand(args: string[]): Promise<void> {
-  if (args[0] !== "live-git") {
-    throw new Error("Usage: fl demo live-git [--image <digest-pinned-image>] [--export-only] [--port <number>]");
+  const mode = args[0];
+  if (mode !== "live-git" && mode !== "full") {
+    throw new Error("Usage: fl demo live-git|full [--image <digest-pinned-image>] [--export-only] [--port <number>]");
   }
   const requestedImage = option(args, "--image");
+
+  if (mode === "full") {
+    const demo = await runDemoFull({
+      workspace: process.cwd(),
+      ...(requestedImage === undefined ? {} : { image: requestedImage })
+    });
+    // Emit machine JSON first so CI/tests can parse stdout; human next-commands follow.
+    process.stdout.write(`${JSON.stringify({
+      status: demo.ok ? "DEMO_FULL_ARC" : "DEMO_FULL_PARTIAL",
+      mode,
+      directory: demo.directory,
+      repository: demo.repository,
+      image: demo.image,
+      frozenWitnessDigest: demo.frozenWitness.frozenDigest,
+      proofBundle: demo.proofBundle === null
+        ? null
+        : {
+          directory: demo.proofBundle.directory,
+          rootDigest: demo.proofBundle.rootDigest,
+          evidenceGrade: "COMMIT_PROOF",
+          transitions: demo.investigation.transitions.length
+        },
+      minimization: demo.minimization === null
+        ? null
+        : {
+          status: demo.minimization.status,
+          oneMinimal: demo.minimization.minimality.oneMinimal,
+          isProof: demo.minimization.proof.isProof,
+          hunkRefined: demo.minimization.attempts.some((attempt) => attempt.phase === "HUNK_ONE_MINIMAL"),
+          path: demo.minimizationPath
+        },
+      prevention: demo.prevention === null
+        ? null
+        : {
+          classification: demo.prevention.manifest.classification,
+          directory: demo.prevention.directory,
+          rootDigest: demo.prevention.rootDigest
+        },
+      agentsMd: demo.agentsMd,
+      phases: demo.phases,
+      sensitivity: "The portable package intentionally retains the frozen witness and recorded evidence. Treat it as sensitive incident material before sharing.",
+      limitation: demo.ok
+        ? undefined
+        : "One or more demo-full phases did not reach PREVENTION_VERIFIED + AGENTS.md; inspect phases[]. Never invent those claims without artifacts."
+    }, null, 2)}\n`);
+    for (const phase of demo.phases) {
+      if (phase.next) printHumanNext(phase.next);
+    }
+    process.exitCode = demo.ok ? 0 : 1;
+    return;
+  }
+
   const demo = await runLiveGitDemo({
     workspace: process.cwd(),
     ...(requestedImage === undefined ? {} : { image: requestedImage })
@@ -1191,6 +1247,7 @@ async function demoCommand(args: string[]): Promise<void> {
     },
     sensitivity: "The portable package intentionally retains the frozen witness and recorded evidence. Treat it as sensitive incident material before sharing."
   }, null, 2)}\n`);
+  printHumanNext(`fl verify ${demo.proofBundle.directory} --expect-root ${demo.proofBundle.rootDigest}`);
   if (hasFlag(args, "--export-only")) return;
   const server = await startGitProofServer({ proof, port: Number(option(args, "--port") ?? "4173") });
   process.stdout.write(`FaultLine live Git proof page: ${server.url}\nPress Ctrl+C to stop.\n`);
@@ -1395,6 +1452,16 @@ function lifecycleInputFromLine(value: unknown, repository?: string): unknown {
   };
 }
 
+function parseObservedTransport(raw: string): CodexTransport {
+  const parsed = CodexTransportSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `--transport must be one of ${CodexTransportSchema.options.join(", ")} (got ${JSON.stringify(raw)}). Use OBSERVED_EXTERNAL_TRANSPORT for honestly labeled non-Codex checkpoints — never rebadge Cursor/editor history as SIDE_CAR or CODEX_*.`
+    );
+  }
+  return parsed.data;
+}
+
 async function recordCommand(args: string[]): Promise<void> {
   const [action] = args;
   switch (action) {
@@ -1407,7 +1474,7 @@ async function recordCommand(args: string[]): Promise<void> {
       ledger = appendLifecycleEvent(ledger, {
         type: "SESSION_STARTED",
         payload: {
-          transport: (option(args, "--transport") ?? "SIDE_CAR") as "CODEX_CLI" | "CODEX_APP" | "SIDE_CAR",
+          transport: parseObservedTransport(option(args, "--transport") ?? "SIDE_CAR"),
           workingDirectory: repository,
           ...(option(args, "--thread") ? { codexThreadId: option(args, "--thread") } : {}),
           ...(option(args, "--model") ? { model: option(args, "--model") } : {}),
@@ -2710,7 +2777,11 @@ async function main(): Promise<void> {
       process.stdout.write(
         `FaultLine UI hub: ${hub.url}\nDiscovered ${hub.artifacts.length} local artifact(s) under .faultline\nPress Ctrl+C to stop.\n`
       );
-      printHumanNext(`fl ui --repo ${repository}`);
+      printHumanNext(
+        hub.artifacts.length === 0
+          ? "fl quickstart"
+          : `fl ui --repo ${repository}`
+      );
       openLocalDemoUrl(hub.url);
       await awaitServeInterrupt({ close: () => hub.close() });
       return;
@@ -2813,13 +2884,15 @@ async function main(): Promise<void> {
         return;
       }
       if (args[0] === "snapshot" && args[1] === "gc") {
-        const repository = resolve(option(args.slice(2), "--repo") ?? process.cwd());
-        const result = purgeFaultlineSnapshotObjects(repository);
+        const gcArgs = args.slice(2);
+        const repository = resolve(option(gcArgs, "--repo") ?? process.cwd());
+        const result = purgeFaultlineSnapshotObjects(repository, { force: hasFlag(gcArgs, "--force") });
         process.stdout.write(`${JSON.stringify({
           status: result.status,
           repositoryRoot: result.repositoryRoot,
           objectDirectory: result.objectDirectory,
           removedEntries: result.removedEntries,
+          referencingPaths: result.referencingPaths,
           next: "fl doctor --security"
         }, null, 2)}\n`);
         return;

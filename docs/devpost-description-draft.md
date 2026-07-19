@@ -46,6 +46,7 @@ Implemented workflow:
 
 - **Sandbox (no Docker / no API key):** `pnpm fl judge-demo` or [`judge-preview.html`](judge-preview.html) — protocol fixture only.
 - **Codex-native preview:** turn-boundary localization is `EXPERIMENTAL_TURN` and is not interchangeable with commit-path proof yet.
+- **Green supporting artifacts only:** completed [external-01](impact-validation-external-01.md); [observed-external-transport](samples/observed-external-transport/); coverage matrix honesty in [benchmarks/REPORT.md](../benchmarks/REPORT.md); optional Docker flagship `fl demo full` (COMMIT_PROOF → minimize → PREVENTION_VERIFIED + AGENTS.md). Do not claim signed release, soak, or stranger test unless those artifacts exist.
 
 ## How Codex and GPT-5.6 are used
 

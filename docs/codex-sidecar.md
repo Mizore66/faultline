@@ -53,7 +53,23 @@ This section is architectural guidance for the current cycle. It does not claim 
 
 ## Record attach
 
-For manually supplied observed events, record lifecycle facts and clean checkpoints directly:
+For manually supplied observed events, record lifecycle facts and clean checkpoints directly.
+This path is for **honest observed transports** — never use it to dress non-Codex editor history as Codex hook events (see [security-model.md](security-model.md#provenance-honesty-never-fake-codex-ledgers)). For non-Codex editor checkpoints, pass `--transport OBSERVED_EXTERNAL_TRANSPORT` (sample: [samples/observed-external-transport/](samples/observed-external-transport/)).
+
+```powershell
+pnpm fl record init --session <session-id> --repo . --transport OBSERVED_EXTERNAL_TRANSPORT --actor you@example.com
+pnpm fl record attach `
+  --ledger .faultline\recordings\<session-id>.json `
+  --repo . `
+  --turn turn-1 `
+  --ordinal 1 `
+  --prompt-digest sha256:<64-lowercase-hex> `
+  --output-digest sha256:<64-lowercase-hex> `
+  --contribution "non-Codex editor stop" `
+  --checkpoint
+```
+
+Legacy / Codex-shaped transports remain available when they are true:
 
 ```powershell
 pnpm fl record init --session <session-id> --repo . --transport SIDE_CAR --actor you@example.com
@@ -68,7 +84,7 @@ pnpm fl record attach `
   --checkpoint
 ```
 
-`record attach` is a convenience path for sidecar session attribution: it appends a started/completed turn pair and, when requested, a clean Git checkpoint for the completed turn. The attribution fields are reviewer-supplied context, not identity proof, private Codex interception, model intent, or turn-level blame. The ledger is observed evidence, not a claim that FaultLine reads private model reasoning.
+`record attach` is a convenience path for session attribution: it appends a started/completed turn pair and, when requested, a clean Git checkpoint for the completed turn. The attribution fields are reviewer-supplied context, not identity proof, private Codex interception, model intent, or turn-level blame. The ledger is observed evidence, not a claim that FaultLine reads private model reasoning.
 
 At runtime, `fl record` accepts a strictly ordered, hash-chained Codex-compatible NDJSON lifecycle stream and records clean Git checkpoints; it labels the supplied transport as `CODEX_CLI`, `CODEX_APP`, or `SIDE_CAR` rather than claiming private event interception. Start a recording with `pnpm fl codex record init --session <id> --repo . --transport CODEX_CLI`, pipe observed events through `fl codex record stdin`, and capture checkpoints with `fl codex record checkpoint`.
 

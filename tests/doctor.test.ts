@@ -247,16 +247,19 @@ describe("FaultLine doctor", () => {
     expect(doctorCliExitCode(report)).toBe(0);
   });
 
-  it("live --security self-test blocks malicious hooks and remote protocols", () => {
-    const report = runFaultLineSecurityDoctor();
+  it("live --security self-test blocks malicious hooks and remote protocols", async () => {
+    const report = await runFaultLineSecurityDoctor();
     expect(report.schemaVersion).toBe(DOCTOR_SECURITY_SCHEMA_VERSION);
     expect(report.status).toBe("SECURE");
     expect(doctorSecurityExitCode(report)).toBe(0);
     expect(report.checks.map((check) => check.id).sort()).toEqual([
       "hooks-neutralization",
+      "overlay-path-traversal",
       "path-filters",
-      "protocol-allow-never"
+      "protocol-allow-never",
+      "secret-shaped-blob"
     ].sort());
+    expect(report.checks).toHaveLength(5);
     expect(report.checks.every((check) => check.status === "PASS")).toBe(true);
   });
 });

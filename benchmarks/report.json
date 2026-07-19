@@ -1,12 +1,13 @@
 {
   "schemaVersion": "faultline.coverage-matrix.v1",
   "title": "FaultLine adversarial scenario coverage matrix",
-  "generatedAt": "2026-07-19T04:39:12.047Z",
+  "generatedAt": "2026-07-19T14:55:14.539Z",
   "kind": "COVERAGE_MATRIX",
   "executionMode": "UNIT_AND_INTEGRATION_COVERAGE",
   "incidents": 8,
   "expectedLocalizationOutcomes": 8,
   "unsupportedExactCauseClaims": 0,
+  "executableE2ERows": 0,
   "counterfactuallyValidated": 1,
   "correctlyMarkedUnstable": 1,
   "correctlyMarkedIncompatible": 1,
@@ -92,5 +93,5 @@
       "unsupportedExactCauseClaim": false
     }
   ],
-  "note": "This is a coverage matrix, not an end-to-end benchmark. Unit and integration tests assert localization, structured INCOMPATIBLE_STATE classification, env homogeneity, and turn snapshots. Rows do not claim unique semantic root causes."
+  "note": "This is a coverage matrix, not an end-to-end benchmark. Unit and integration tests assert localization, structured INCOMPATIBLE_STATE classification, env homogeneity, and turn snapshots. Rows do not claim unique semantic root causes until Docker CI writes benchmarks/e2e-executed.json."
 }

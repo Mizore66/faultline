@@ -91,7 +91,7 @@ const LifecycleBindingFields = z.object({
   path: z.literal("lifecycle/ledger.json"),
   ledgerDigest: DigestSchema,
   headHash: DigestSchema,
-  transport: z.enum(["CODEX_CLI", "CODEX_APP", "SIDE_CAR"]),
+  transport: z.enum(["CODEX_CLI", "CODEX_APP", "SIDE_CAR", "OBSERVED_EXTERNAL_TRANSPORT"]),
   /** Only checkpoints that exactly match a state in this investigation are listed. */
   checkpointBindings: z.array(z.object({
     sequence: z.number().int().positive(),

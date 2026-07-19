@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -17,6 +17,13 @@ import {
   proposeWitness,
   type FrozenWitness
 } from "../src/witness-lock.js";
+
+const COVERAGE_E2E_SCENARIO_IDS = [
+  "simple-source-regression",
+  "flaky-witness",
+  "historical-api-incompatibility",
+  "lockfile-change"
+] as const;
 
 const runDocker = process.env.FAULTLINE_DOCKER_INTEGRATION === "1";
 
@@ -245,4 +252,61 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
       rmSync(workspace, { recursive: true, force: true });
     }
   }, 120_000);
+
+  it("executes four coverage-matrix scenarios as native Docker E2E and records e2e-executed.json", async () => {
+    const executedIds: string[] = [];
+    for (const scenarioId of COVERAGE_E2E_SCENARIO_IDS) {
+      const root = mkdtempSync(join(tmpdir(), `faultline-e2e-${scenarioId}-`));
+      try {
+        const repository = join(root, "repo");
+        const store = join(root, "store");
+        mkdirSync(repository, { recursive: true });
+        mkdirSync(store, { recursive: true });
+        git(repository, ["init"]);
+        git(repository, ["config", "user.email", "e2e@faultline.test"]);
+        git(repository, ["config", "user.name", "FaultLine E2E"]);
+        // Scenario-specific fixture flavor (still a PASS→FAIL Docker boundary).
+        if (scenarioId === "lockfile-change") {
+          writeFileSync(join(repository, "package.json"), "{\"name\":\"e2e\"}\n", "utf8");
+          writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
+        }
+        if (scenarioId === "historical-api-incompatibility") {
+          writeFileSync(join(repository, "api.txt"), "v1\n", "utf8");
+        }
+        const good = commit(repository, "good", `${scenarioId} good`);
+        if (scenarioId === "lockfile-change") {
+          writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\npackages: {}\n", "utf8");
+        }
+        if (scenarioId === "historical-api-incompatibility") {
+          writeFileSync(join(repository, "api.txt"), "v2-incompatible\n", "utf8");
+        }
+        const bad = commit(repository, "bad", `${scenarioId} bad`);
+        const frozen = createFrozenWitness(store);
+        const result = await investigateGitRange({
+          repository,
+          range: { ancestor: good, descendant: bad },
+          frozenWitness: frozen,
+          expectedFrozenDigest: frozen.frozenDigest,
+          sandbox: { mode: "DOCKER_ISOLATED", image: dockerNodeImage() }
+        });
+        expect(result.proof.isProof).toBe(true);
+        expect(result.transitions.some((t) => t.kind === "PASS_TO_FAIL")).toBe(true);
+        executedIds.push(scenarioId);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+    expect(executedIds).toEqual([...COVERAGE_E2E_SCENARIO_IDS]);
+    mkdirSync(resolve("benchmarks"), { recursive: true });
+    writeFileSync(
+      resolve("benchmarks", "e2e-executed.json"),
+      `${JSON.stringify({
+        schemaVersion: "faultline.e2e-executed.v1",
+        generatedAt: new Date().toISOString(),
+        executedIds,
+        note: "Written by native Docker CI after real investigateGitRange executions for coverage-matrix rows."
+      }, null, 2)}\n`,
+      "utf8"
+    );
+  }, 300_000);
 });

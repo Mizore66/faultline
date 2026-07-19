@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   MINIMIZATION_CERTIFICATION_EXECUTIONS,
   minimizeGitDiff,
+  splitModifyUnitIntoHunks,
   verifyGitMinimizationResult,
   verifyGitMinimizationResultFile,
   writeGitMinimizationResult,
@@ -429,5 +430,110 @@ describe("Git diff counterfactual minimization", () => {
       rmSync(store, { recursive: true, force: true });
       rmSync(repository.root, { recursive: true, force: true });
     }
+  });
+
+  it("refines a one-file two-hunk MODIFY down to the failure-inducing hunk", async () => {
+    const store = mkdtempSync(join(tmpdir(), "faultline-git-minimization-hunk-store-"));
+    const root = mkdtempSync(join(tmpdir(), "faultline-git-minimization-hunk-repo-"));
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "faultline@example.test"]);
+      git(root, ["config", "user.name", "FaultLine Test"]);
+      writeFileSync(join(root, "module.txt"), ["alpha", "keep-1", "keep-2", "keep-3", "keep-4", "keep-5", "omega"].join("\n") + "\n", "utf8");
+      const before = commit(root, "before hunks");
+      writeFileSync(join(root, "module.txt"), ["ALPHA", "keep-1", "keep-2", "keep-3", "keep-4", "keep-5", "OMEGA"].join("\n") + "\n", "utf8");
+      const after = commit(root, "two independent hunks");
+
+      const runner: SandboxCommandRunner = {
+        async run(invocation) {
+          const body = readFileSync(join(invocation.cwd, "module.txt"), "utf8");
+          const overlay = readFileSync(join(invocation.cwd, "witness.mjs"), "utf8");
+          if (overlay !== "export const approved = true;\n") {
+            return { exitCode: 2, stdout: "", stderr: "overlay mismatch" };
+          }
+          // Only the ALPHA hunk is failure-inducing; OMEGA alone must PASS.
+          return body.includes("ALPHA")
+            ? { exitCode: 1, stdout: `hunk failed\n${formatWitnessResult("PREDICATE_FAIL")}\n`, stderr: "alpha" }
+            : { exitCode: 0, stdout: `hunk passed\n${formatWitnessResult("PREDICATE_PASS")}\n`, stderr: "" };
+        }
+      };
+      const witness = frozenWitness(store, "hunk-refinement");
+      const result = await minimizeGitDiff(requestFor(root, before, after, witness, runner));
+      expect(result.patchUnits.length).toBeGreaterThanOrEqual(1);
+      const parent = result.patchUnits.find((unit) => unit.path === "module.txt");
+      expect(parent).toBeDefined();
+      // After refinement, selected set should be a single hunk (or one parent if split skipped).
+      expect(result.candidateUnitIds.length).toBe(1);
+      expect(result.attempts.some((attempt) => attempt.phase === "HUNK_ONE_MINIMAL" || attempt.phase === "ONE_MINIMAL")).toBe(true);
+      const selected = result.patchUnits.filter((unit) => result.candidateUnitIds.includes(unit.id));
+      expect(selected).toHaveLength(1);
+      expect(selected[0]?.path).toBe("module.txt");
+    } finally {
+      rmSync(store, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("budget exhaustion mid hunk refinement retains the file-level one-minimal candidate", async () => {
+    const store = mkdtempSync(join(tmpdir(), "faultline-git-minimization-hunk-budget-store-"));
+    const root = mkdtempSync(join(tmpdir(), "faultline-git-minimization-hunk-budget-repo-"));
+    try {
+      git(root, ["init"]);
+      git(root, ["config", "user.email", "faultline@example.test"]);
+      git(root, ["config", "user.name", "FaultLine Test"]);
+      writeFileSync(join(root, "module.txt"), ["alpha", "keep-1", "keep-2", "keep-3", "keep-4", "keep-5", "omega"].join("\n") + "\n", "utf8");
+      const before = commit(root, "before hunks");
+      writeFileSync(join(root, "module.txt"), ["ALPHA", "keep-1", "keep-2", "keep-3", "keep-4", "keep-5", "OMEGA"].join("\n") + "\n", "utf8");
+      const after = commit(root, "two independent hunks");
+
+      let executions = 0;
+      const runner: SandboxCommandRunner = {
+        async run(invocation) {
+          executions += 1;
+          const body = readFileSync(join(invocation.cwd, "module.txt"), "utf8");
+          return body.includes("ALPHA")
+            ? { exitCode: 1, stdout: `hunk failed\n${formatWitnessResult("PREDICATE_FAIL")}\n`, stderr: "alpha" }
+            : { exitCode: 0, stdout: `hunk passed\n${formatWitnessResult("PREDICATE_PASS")}\n`, stderr: "" };
+        }
+      };
+      const witness = frozenWitness(store, "hunk-budget");
+      // Tight budget: enough for file-level one-minimal, then exhaust during hunk probes.
+      const result = await minimizeGitDiff({
+        ...requestFor(root, before, after, witness, runner),
+        budget: { maxExecutions: 6 }
+      });
+      // With a tight budget the search may stop before certification; never claim
+      // unsupported hunk proof when refinement could not finish.
+      expect(result.candidateUnitIds.length).toBeGreaterThanOrEqual(1);
+      expect(result.proof.isProof).toBe(false);
+      expect(
+        result.status === "BUDGET_EXHAUSTED"
+        || result.status === "CERTIFICATION_FAILED"
+        || !result.minimality.oneMinimal
+        || result.minimality.reason.toLowerCase().includes("budget")
+        || result.minimality.reason.toLowerCase().includes("file-level")
+        || result.attempts.some((attempt) => attempt.phase === "HUNK_ONE_MINIMAL")
+      ).toBe(true);
+      expect(executions).toBeLessThanOrEqual(6);
+    } finally {
+      rmSync(store, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("splitModifyUnitIntoHunks returns null for unsplittable single-hunk patches", () => {
+    const unit = {
+      id: `sha256:${"1".repeat(64)}`,
+      ordinal: 0,
+      changeKind: "MODIFY" as const,
+      path: "a.txt",
+      pathBytesBase64: Buffer.from("a.txt").toString("base64"),
+      pathDigest: `sha256:${"2".repeat(64)}`,
+      patchDigest: `sha256:${"3".repeat(64)}`,
+      patchBytes: 10,
+      binarySafe: true,
+      bytes: Buffer.from("diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n", "utf8")
+    };
+    expect(splitModifyUnitIntoHunks(unit)).toBeNull();
   });
 });

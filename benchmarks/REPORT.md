@@ -1,15 +1,12 @@
 # FaultLine adversarial scenario coverage matrix
 
-This artifact documents expected outcomes covered by **specification + unit/integration tests**.
-It is **not** an end-to-end Docker benchmark. Every row below is `SPEC_AND_UNIT_COVERED` today
-(0 of 8 are independent CI E2E executions). A future hybrid may split 4 executable integration
-scenarios from 4 spec-only adversarial scenarios — until then, do not call this a benchmark.
+This artifact documents expected outcomes covered by **specification + unit/integration tests**. It is **not** an end-to-end Docker benchmark until `benchmarks/e2e-executed.json` is produced by the native Docker CI job.
 
 - Scenarios: **8**
 - Distinct expected outcomes: **8**
 - Unsupported exact-cause claims: **0**
 - Execution mode: **UNIT_AND_INTEGRATION_COVERAGE**
-- Executable E2E rows in CI: **0** (all rows are spec/unit coverage)
+- Executable E2E rows in CI: **0**
 
 | Scenario | Expected | Observed | Result | Coverage |
 | --- | --- | --- | --- | --- |
@@ -27,7 +24,7 @@ scenarios from 4 spec-only adversarial scenarios — until then, do not call thi
 | Label | Meaning |
 | --- | --- |
 | `SPEC_AND_UNIT_COVERED` | Expected outcome asserted by unit/integration tests — **not** a full Docker E2E run in CI |
-| `EXECUTABLE_E2E` (reserved) | Scenario actually executed end-to-end in CI with Docker |
+| `EXECUTABLE_E2E` | Scenario actually executed end-to-end in CI with Docker (see `benchmarks/e2e-executed.json`) |
 
 ## Detail
 

@@ -91,7 +91,7 @@ const LifecycleBoundSchema = z.object({
   path: z.literal("lifecycle/ledger.json"),
   ledgerDigest: DigestSchema,
   headHash: DigestSchema,
-  transport: z.enum(["CODEX_CLI", "CODEX_APP", "SIDE_CAR"])
+  transport: z.enum(["CODEX_CLI", "CODEX_APP", "SIDE_CAR", "OBSERVED_EXTERNAL_TRANSPORT"])
 }).strict();
 
 export const TurnProofSourceMetadataSchema = z.object({

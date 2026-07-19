@@ -356,4 +356,79 @@ describe("portable turn investigation proof bundles", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("fails verification when artifact bytes are corrupted without updating hashes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-turn-proof-corrupt-"));
+    try {
+      const { repository, ledgerPath, frozen, observed } = await investigateBaselinePassFail(root);
+      const result = nativeDockerFixture(observed);
+      const output = join(root, "proofs", "corrupt-turns");
+      await writeTurnInvestigationProofBundle(output, result, frozen, {
+        proofRoot: join(root, "proofs"),
+        generatedAt: "2026-07-18T02:00:00.000Z",
+        lifecycleLedger: readVerifiedCodexLifecycleLedger(ledgerPath),
+        repository
+      });
+
+      const verifyPath = join(output, "VERIFY.md");
+      writeFileSync(verifyPath, `${readFileSync(verifyPath, "utf8")}\ncorrupted-bytes\n`, "utf8");
+
+      const verified = await verifyTurnInvestigationProofBundle(output);
+      expect(verified.valid).toBe(false);
+      expect(verified.errors.some((error) => /artifact digest mismatch|VERIFY\.md/i.test(error))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails verification when hashes.txt is reordered or broken relative to ROOT.sha256", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-turn-proof-hashes-"));
+    try {
+      const { repository, ledgerPath, frozen, observed } = await investigateBaselinePassFail(root);
+      const result = nativeDockerFixture(observed);
+      const output = join(root, "proofs", "broken-hashes");
+      await writeTurnInvestigationProofBundle(output, result, frozen, {
+        proofRoot: join(root, "proofs"),
+        generatedAt: "2026-07-18T02:00:00.000Z",
+        lifecycleLedger: readVerifiedCodexLifecycleLedger(ledgerPath),
+        repository
+      });
+
+      const hashesPath = join(output, "hashes.txt");
+      const lines = readFileSync(hashesPath, "utf8").trimEnd().split("\n").filter(Boolean);
+      expect(lines.length).toBeGreaterThan(2);
+      // Reverse catalog order without rewriting ROOT.sha256 — breaks root binding.
+      writeFileSync(hashesPath, `${[...lines].reverse().join("\n")}\n`, "utf8");
+
+      const verified = await verifyTurnInvestigationProofBundle(output);
+      expect(verified.valid).toBe(false);
+      expect(verified.errors.some((error) => /ROOT\.sha256|hashes\.txt/i.test(error))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports externalRootStatus MISMATCH when expectedRoot does not match", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-turn-proof-root-mismatch-"));
+    try {
+      const { repository, ledgerPath, frozen, observed } = await investigateBaselinePassFail(root);
+      const result = nativeDockerFixture(observed);
+      const output = join(root, "proofs", "root-mismatch");
+      const written = await writeTurnInvestigationProofBundle(output, result, frozen, {
+        proofRoot: join(root, "proofs"),
+        generatedAt: "2026-07-18T02:00:00.000Z",
+        lifecycleLedger: readVerifiedCodexLifecycleLedger(ledgerPath),
+        repository
+      });
+
+      const wrongRoot = `sha256:${"0".repeat(64)}`;
+      expect(wrongRoot).not.toBe(written.rootDigest);
+      const verified = await verifyTurnInvestigationProofBundle(written.directory, wrongRoot);
+      expect(verified.valid).toBe(false);
+      expect(verified.externalRootStatus).toBe("MISMATCH");
+      expect(verified.rootDigest).toBe(written.rootDigest);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
