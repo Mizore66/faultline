@@ -39,6 +39,18 @@ node $FaultLineCli incident continue <id> `
 
 The sidecar captures a checkpoint only when `Stop` sees a clean Git worktree. It reports a durable `CHECKPOINT_SKIPPED_DIRTY` result when agent edits remain uncommitted; it does not fake a clean turn or infer an ephemeral diff checkpoint. Commit/stash/model the state before a later observed checkpoint, or use the manual recording route below for another observed transport.
 
+## Delegated worktrees — demo-only when no ledger
+
+Codex may run a task in a **delegated worktree** (a separate checkout/path from the repo where you installed hooks). Expected operator checks:
+
+1. Install/enable hooks on the worktree Codex actually uses (or confirm that worktree inherits the same trusted hook config).
+2. After the session, run `codex sidecar status --repo <that-worktree>` and copy a returned `ledgerPath` only when it belongs to the incident states you will replay.
+3. If the UI shows live turns but status does **not** return a fresh `ledgerPath` for that delegated run, label the UI replay **demonstration-only**. Do not cite it as the proof ledger.
+
+**Admissible verification evidence** when no fresh native ledger appears: a retained scripted sidecar-hook capture / turn-proof package that still verifies offline (`valid: true`, matching external root). That split is exactly what the permissioned MUMBCS external-01 record documents ([publishable-summary-mumbcs.md](publishable-summary-mumbcs.md)).
+
+This section is architectural guidance for the current cycle. It does not claim a runtime fix for delegated-worktree hook binding.
+
 ## Record attach
 
 For manually supplied observed events, record lifecycle facts and clean checkpoints directly:

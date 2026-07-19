@@ -24,6 +24,10 @@ Future partner runs still use [../external-case-study-template.md](../external-c
 recorded CI fixture (`RECORDED_REDACTED_FIXTURE`), not a MUMBCS session export.
 
 > **Access note:** MUMBCS is a **private** repo (`master` default branch). The FaultLine collaborator needs read access (or a redacted handoff zip) to help verify packages.
+>
+> **Re-verification (Path B, landed):** FaultLine publishes digests + consent + redacted narrative only. Byte-level re-verify of the turn package is not available from the FaultLine repo alone; it requires MUMBCS collaborator access or a private redacted handoff. Optional screenshots/terminal captures are outside FaultLine and are not required to cite the published digests.
+>
+> **Delegated Codex UI:** if a native Codex delegated-worktree replay shows live turns but `codex sidecar status` does not return a fresh `ledgerPath`, treat that UI replay as **demonstration-only**. Use the retained scripted-hook ledger/proof package for verification. Spec: [../codex-sidecar.md](../codex-sidecar.md#delegated-worktrees--demo-only-when-no-ledger).
 
 ---
 

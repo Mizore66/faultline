@@ -2,25 +2,23 @@
 
 Record with product on screen. Prefer PowerShell: `pnpm.cmd fl …` if ExecutionPolicy blocks `pnpm`.
 
-**Hard rules:** no cold-open on `judge-demo`; do not say `judge-proof` is root `f6a391…`; do not invent time-saved metrics; **do not claim an external case study until `docs/impact-validation-external-01.md` status is `completed`.**
+**Hard rules:** no cold-open on `judge-demo`; do not say `judge-proof` is root `f6a391…`; do not invent time-saved metrics; external-01 is `completed` — say **protocol validation** / **`EXPERIMENTAL_TURN`**, not a naturally occurring production bug.
 
 **Pinned checkout for the video:** `git checkout v0.1.0-buildweek`
 
 ---
 
-## 0:00–0:20 — Cold open (default: verified sample)
+## 0:00–0:20 — Cold open (default: permissioned later-turn, then sample)
 
-**Default screen (required until external status is completed):** `pnpm fl judge-proof` sample root `sha256:f85c446d…`.
+**Default screen:** publishable MUMBCS summary / partner evidence story, then `pnpm fl judge-proof` sample root `sha256:f85c446d…`. See [publishable-summary-mumbcs.md](publishable-summary-mumbcs.md).
 
-**Say (default / fallback):**
+**Say (external-01 landed — preferred):**
+
+> In a consented external protocol validation on MUMBCS, FaultLine froze a human-reviewed witness and attributed Turn 3 as the earliest stable PASS→FAIL. That’s experimental turn evidence — scripted protocol validation, not a naturally occurring production bug — then we show mature portable COMMIT_PROOF for trust.
+
+**Fallback screen / say (skip external beat):** `pnpm fl judge-proof` sample root `sha256:f85c446d…`.
 
 > When an agent-assisted change turns CI red, FaultLine answers: where does *this* human-frozen witness first go bad? Here’s a verified COMMIT_PROOF **sample** package — root sha256:f85c446d — not our historical self-incident unless we open that package. Complements bisect and CI logs — doesn’t replace them.
-
-**External later-turn open (only if `docs/impact-validation-external-01.md` status is `completed`):** partner package / ledger story (Turn 3 earliest stable failure; say **`EXPERIMENTAL_TURN`**, say **scripted protocol validation** unless organic).
-
-**Say (external only when status is completed):**
-
-> An independent developer used FaultLine on their repository to record a Codex session. Under one human-frozen overlay witness, Turn 3 was the earliest stable PASS→FAIL. That’s experimental turn evidence — then we show mature portable COMMIT_PROOF for trust.
 
 ---
 
@@ -80,4 +78,4 @@ pnpm fl verify .\docs\samples\self-incident-commit-proof --expect-root sha256:f8
 
 > FaultLine freezes one human-reviewed executable check, replays those exact bytes across immutable Git and Codex-turn states in a locked-down sandbox, and emits a portable evidence package that a stranger can re-derive offline — it refuses every claim the executions don't support.
 
-**Claims to avoid:** “real production incident,” “root cause,” “prevention verified” for the turn arc, “invisible overhead,” any external-case sentence until the impact record is filled.
+**Claims to avoid:** “real production incident,” “root cause,” “prevention verified” for the turn arc, “invisible overhead,” or upgrading the MUMBCS beat beyond protocol validation / `EXPERIMENTAL_TURN`.

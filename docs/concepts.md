@@ -62,7 +62,7 @@ Host/Docker attestation limits, signature caveats, turn-tree storage, and packag
 
 ## Impact, models, and capability summary
 
-**Validation status:** internal dogfood is published ([faultline-self-incident.md](faultline-self-incident.md)); an **external repository test is underway** (see [external-case-study-template.md](external-case-study-template.md) / [partners/mumbcs-faultline-guide.md](partners/mumbcs-faultline-guide.md)). Until a permissioned case study lands, do not claim third-party adoption metrics.
+**Validation status:** internal dogfood is published ([faultline-self-incident.md](faultline-self-incident.md)); permissioned **external protocol validation is landed** for MUMBCS ([publishable-summary-mumbcs.md](publishable-summary-mumbcs.md), [external-case-study-mumbcs.md](external-case-study-mumbcs.md), [impact-validation-external-01.md](impact-validation-external-01.md) — `Status: completed`). That is protocol / interoperability validation (`EXPERIMENTAL_TURN`), not a claim of a naturally occurring production bug or third-party adoption metrics. Byte-level re-verify of the MUMBCS package requires collaborator access or a private handoff (not shipped here). Future partner runs still use [external-case-study-template.md](external-case-study-template.md).
 
 **Qualifying `/feedback`:** `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 

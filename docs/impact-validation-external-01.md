@@ -14,8 +14,9 @@ CI still uses the carefully redacted recorded multi-turn ledger at [samples/late
 - Status: completed
 - Date and timezone: 2026-07-19 Asia/Singapore
 - Owner: FaultLine submitter / facilitator
-- Evidence retention location: `mumbcs-later-turn-handoff/` and `.faultline/turn-proof-bundles/turns-1784447895435/`
-- Consent / sharing scope: MUMBCS may be named; screenshots, terminal captures, digests, and redacted summary may be published
+- Evidence retention location: private MUMBCS paths `mumbcs-later-turn-handoff/` and `.faultline/turn-proof-bundles/turns-1784447895435/` (not shipped in FaultLine)
+- Consent / sharing scope: MUMBCS may be named; digests and redacted summary published in FaultLine; screenshots/terminal captures consent-approved for external use but not in-tree here
+- Re-verification path: Path B — byte-level re-verify requires MUMBCS collaborator access or private redacted handoff; public readers use in-repo digests + consent + summary
 - Redaction review completed by: MUMBCS participant consent in Codex thread, 2026-07-19
 
 ## Audience and job to be done
@@ -25,7 +26,7 @@ CI still uses the carefully redacted recorded multi-turn ledger at [samples/late
 - Triggering question in the participant's words: "Help me run and test out the live ui demo of faultline with this project" and later consent to publish MUMBCS evidence
 - Current workflow and tools used: Codex, Git, Node 22.18.0, pnpm, Docker Desktop, FaultLine CLI, MUMBCS TypeScript / Next.js repository
 - What decision needs confidence, and by when: whether the MUMBCS run can support FaultLine external validation / hackathon submission evidence
-- Why existing evidence was insufficient: screenshots alone would not prove a frozen witness, Docker-isolated replay, retained root digest, or located turn transition
+- Why existing evidence was insufficient: visual demo alone would not prove a frozen witness, Docker-isolated replay, retained root digest, or located turn transition
 
 ## Incident replay record
 
@@ -39,7 +40,7 @@ CI still uses the carefully redacted recorded multi-turn ledger at [samples/late
 - What FaultLine showed that the prior workflow did not: a retained, offline-verifiable package with frozen witness digest, Docker-isolated run evidence, and Turn 3 attribution for the first stable PASS->FAIL transition
 - What FaultLine did not answer: it did not prove agent intent, unique semantic root cause, prevention, or that the failure was naturally occurring in production
 - Independent verification attempted by: MUMBCS local participant / facilitator
-- Verification result and source record: `valid: true`, `externalRootStatus: MATCH` from `node tools/faultline/verify-turn-bundle.mjs .faultline/turn-proof-bundles/turns-1784447895435 sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1`
+- Verification result and source record: `valid: true`, `externalRootStatus: MATCH` from `node tools/faultline/verify-turn-bundle.mjs .faultline/turn-proof-bundles/turns-1784447895435 sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1` (run in MUMBCS workspace; not reproducible from FaultLine alone)
 
 ## Interview record
 
@@ -67,7 +68,7 @@ CI still uses the carefully redacted recorded multi-turn ledger at [samples/late
 
 - Evidence that supports a useful problem/solution fit: the MUMBCS package retains a human-frozen witness, Docker-isolated replay evidence, a root digest that verifies offline, and an attributed later-turn PASS->FAIL transition
 - Evidence that weakens or contradicts the hypothesis: native Codex delegated worktree replay did not produce a fresh sidecar ledger; the proof ledger is from scripted sidecar-hook capture
-- Product change this record suggests: improve or document sidecar hook behavior for Codex delegated worktrees and make native-ledger capture status more obvious
+- Product change this record suggests: document sidecar expected behavior for Codex delegated worktrees and mark UI replay demo-only when no ledger is written (docs-only this cycle; see [codex-sidecar.md](codex-sidecar.md#delegated-worktrees--demo-only-when-no-ledger))
 - Product change explicitly not justified by this record: claiming prevention, agent intent, unique semantic root cause, or a naturally occurring production bug
 - Follow-up owner and date: FaultLine submitter, 2026-07-19
 - Publishable, anonymized summary approved? yes; named MUMBCS summary approved

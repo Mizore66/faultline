@@ -1,12 +1,16 @@
 # Publishable MUMBCS x FaultLine summary
 
-Consent status: MUMBCS may be named. Screenshots, terminal captures, retained digests, and this redacted summary may be published. Consent was provided in the Codex thread on 2026-07-19.
+Consent status: MUMBCS may be named. Retained digests and this redacted summary may be published. Consent also allows screenshots and terminal captures to be published when held outside this repo; this FaultLine tree does **not** ship screenshot or terminal-capture assets. Consent was provided in the Codex thread on 2026-07-19.
 
 Full structured record: [external-case-study-mumbcs.md](external-case-study-mumbcs.md). Impact record: [impact-validation-external-01.md](impact-validation-external-01.md).
 
 ## Short version
 
 In one consented external protocol validation on `monashblockchain/MUMBCS`, FaultLine froze a human-reviewed witness over production slug validation and replayed recorded turn states in Docker. The retained package verifies offline with root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1` and attributes the first stable PASS->FAIL transition to Turn 3 under `EXPERIMENTAL_TURN` evidence. This validates the external workflow of freeze, replay, locate, and verify; it does not claim FaultLine caught a naturally occurring production bug, agent intent, unique root cause, or prevention.
+
+## Re-verification (Path B)
+
+Public readers should treat in-repo digests + consent + this summary as the publishable evidence set. Byte-level re-verify of `.faultline/turn-proof-bundles/turns-1784447895435/` requires MUMBCS collaborator access or a private redacted handoff. FaultLine does not ship that package.
 
 ## Evidence to cite
 
@@ -28,7 +32,7 @@ In one consented external protocol validation on `monashblockchain/MUMBCS`, Faul
 
 ## Honest caveat
 
-The verified proof package uses the scripted sidecar-hook capture. A separate native Codex UI replay reproduced the Turn 1 PASS, Turn 2 PASS, Turn 3 FAIL sequence live, but that delegated worktree task did not create a fresh sidecar ledger. Present the native Codex UI screenshots as demonstration evidence and the retained proof bundle as verification evidence.
+The verified proof package uses the scripted sidecar-hook capture. A separate native Codex UI replay reproduced the Turn 1 PASS, Turn 2 PASS, Turn 3 FAIL sequence live, but that delegated worktree task did not create a fresh sidecar ledger. Treat native Codex UI replay as **demonstration-only** when no fresh ledger is written; the retained scripted-hook proof bundle is the verification evidence. Optional screenshots (if used in video/Devpost) live outside this repo and are not required to cite the digests above. See [codex-sidecar.md](codex-sidecar.md#delegated-worktrees--demo-only-when-no-ledger).
 
 ## Approved quote
 

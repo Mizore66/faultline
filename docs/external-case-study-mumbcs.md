@@ -1,6 +1,6 @@
 # External case study - MUMBCS x FaultLine
 
-Use after external developer consent. Consent for this record was provided in the Codex thread on 2026-07-19: MUMBCS can be named, screenshots can be published, and the retained evidence/digests may be published.
+Use after external developer consent. Consent for this record was provided in the Codex thread on 2026-07-19: MUMBCS can be named, retained digests may be published, and screenshots/terminal captures may be published when held outside FaultLine. This repo does not ship screenshot or terminal-capture files for the case.
 
 Framing: this is protocol / interoperability validation of FaultLine on MUMBCS. It is not a claim that FaultLine caught a naturally occurring production bug.
 
@@ -20,7 +20,9 @@ Companion docs: [impact-validation-external-01.md](impact-validation-external-01
 | May we publish screenshots? | yes |
 | Date of consent | 2026-07-19 Asia/Singapore |
 
-Publication scope: repo name, screenshots, terminal captures, proof digests, proof-root digest, redacted narrative, and the direct consent quote above may be published. Avoid publishing secrets, `.env` values, private service credentials, or unrelated private repository material.
+Publication scope: repo name, proof digests, proof-root digest, redacted narrative, and the direct consent quote above are published in FaultLine. Screenshots and terminal captures are consent-approved for external use (video/Devpost/private handoff) but are **not** in-tree assets here. Avoid publishing secrets, `.env` values, private service credentials, or unrelated private repository material.
+
+**Re-verification (Path B):** byte-level package verify requires MUMBCS collaborator access or a private redacted handoff. In-repo digests + this case study are the public evidence set; the turn-proof bundle is not shipped in FaultLine.
 
 ## Structured evidence fields
 
@@ -44,7 +46,7 @@ Publication scope: repo name, screenshots, terminal captures, proof digests, pro
 | Verification command | `node tools/faultline/verify-turn-bundle.mjs .faultline/turn-proof-bundles/turns-1784447895435 sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1` |
 | Minimization succeeded? | not attempted / not retained |
 | Proof-package root digest | `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1` |
-| Partner independently verified root? | yes, verified locally in the MUMBCS workspace |
+| Partner independently verified root? | yes, verified locally in the MUMBCS workspace (not re-runnable from FaultLine alone; Path B) |
 | Evidence grade | `EXPERIMENTAL_TURN` |
 | Organic incident or scripted protocol run? | scripted protocol / interoperability validation |
 | Unexpected failure / rough edges | The native delegated Codex UI replay showed live Turn 1/2/3 commits, but the sidecar did not create a fresh native ledger for that delegated worktree. The verified proof ledger is from scripted sidecar-hook capture. |
@@ -53,7 +55,7 @@ Publication scope: repo name, screenshots, terminal captures, proof digests, pro
 | Would use on a naturally occurring failure? | not collected |
 | Codex repair outcome | N/A; repair was not part of this record |
 | Approved quote (critical or mixed preferred) | "MUMBCS can be named, the screenshots can be published, all consent is given." |
-| One criticism (required) | Native Codex UI task replay worked visually, but sidecar recording did not produce a fresh native ledger in the delegated worktree; hook/worktree behavior needs clearer support or operator guidance. |
+| One criticism (required) | Native Codex UI task replay worked visually, but sidecar recording did not produce a fresh native ledger in the delegated worktree; mark that path demo-only until a ledger appears (see [codex-sidecar.md](codex-sidecar.md#delegated-worktrees--demo-only-when-no-ledger)). |
 
 ## Onboarding metrics (product experience)
 
@@ -75,3 +77,5 @@ Publication scope: repo name, screenshots, terminal captures, proof digests, pro
 - [x] Impact note filled in `impact-validation-external-01.md`
 - [x] Case framed as protocol validation, not a naturally occurring production bug
 - [x] Publish redacted summary in-repo (`publishable-summary-mumbcs.md` + README Validation)
+- [x] Re-verification path documented as collaborator/private handoff (no in-repo package fixture)
+- [x] Screenshots/terminal captures not required as in-repo assets

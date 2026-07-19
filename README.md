@@ -58,6 +58,8 @@ GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 
 This is **protocol / interoperability validation** (freeze → replay → locate → verify). It is **not** a claim that FaultLine caught a naturally occurring production bug, agent intent, unique root cause, or prevention. The recorded later-turn sample under `docs/samples/later-turn-ledger/` remains a CI fixture, not the MUMBCS case.
 
+**Re-verification path:** FaultLine publishes digests + consent + redacted narrative. Byte-level re-verify of the turn package requires MUMBCS collaborator access or a private redacted handoff (MUMBCS is private). No proof-bundle fixture is shipped in this repo for that root.
+
 ## Codex + GPT-5.6
 
 - **Codex (build):** implementation, adversarial tests, hardening. Qualifying `/feedback`: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
