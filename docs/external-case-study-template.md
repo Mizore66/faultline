@@ -73,11 +73,16 @@ Ask the developer to attempt from the README with **minimal intervention**. Reco
 
 **Strong:** “I installed it without help, went from CI log / sidecar ledger to a verified boundary in N minutes, and it identified an edit I had blamed incorrectly.”
 
-## Publish readiness path (issue #46)
+## Publish readiness path
 
-Docs and partner tooling are ready **before** real partner data exists. Do not mark
-README or Devpost as “external completed” until the checklist below is green with
-retained digests and explicit consent.
+The MUMBCS N=1 permissioned case is already landed:
+[external-case-study-mumbcs.md](external-case-study-mumbcs.md) /
+[publishable-summary-mumbcs.md](publishable-summary-mumbcs.md) /
+[impact-validation-external-01.md](impact-validation-external-01.md).
+
+Use this blank template for any **future** partner run. Do not mark README or Devpost
+as completed for a new case until the checklist below is green with retained digests
+and explicit consent.
 
 | Step | Artifact | Owner |
 | --- | --- | --- |
