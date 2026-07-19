@@ -284,12 +284,10 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
         const frozen = createFrozenWitness(store);
         const result = await investigateGitRange({
           repository,
-          from: good,
-          to: bad,
+          range: { ancestor: good, descendant: bad },
           frozenWitness: frozen,
           expectedFrozenDigest: frozen.frozenDigest,
-          image: dockerNodeImage(),
-          executionsPerState: 3
+          sandbox: { mode: "DOCKER_ISOLATED", image: dockerNodeImage() }
         });
         expect(result.proof.isProof).toBe(true);
         expect(result.transitions.some((t) => t.kind === "PASS_TO_FAIL")).toBe(true);

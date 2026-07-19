@@ -247,7 +247,8 @@ function requiredOption(args: string[], flag: string): string {
 
 /** Human-readable exits print exactly one copy-pasteable next command. */
 function printHumanNext(command: string): void {
-  process.stdout.write(`Next: ${command}\n`);
+  // Keep stdout machine-parseable for CI/demo JSON contracts; route guidance to stderr.
+  process.stderr.write(`Next: ${command}\n`);
 }
 
 function requireImageOrConfig(repository: string, args: string[]): string {
@@ -1163,14 +1164,11 @@ async function demoCommand(args: string[]): Promise<void> {
   const requestedImage = option(args, "--image");
 
   if (mode === "full") {
-    printHumanNext("fl demo full");
     const demo = await runDemoFull({
       workspace: process.cwd(),
       ...(requestedImage === undefined ? {} : { image: requestedImage })
     });
-    for (const phase of demo.phases) {
-      if (phase.next) printHumanNext(phase.next);
-    }
+    // Emit machine JSON first so CI/tests can parse stdout; human next-commands follow.
     process.stdout.write(`${JSON.stringify({
       status: demo.ok ? "DEMO_FULL_ARC" : "DEMO_FULL_PARTIAL",
       mode,
@@ -1209,11 +1207,13 @@ async function demoCommand(args: string[]): Promise<void> {
         ? undefined
         : "One or more demo-full phases did not reach PREVENTION_VERIFIED + AGENTS.md; inspect phases[]. Never invent those claims without artifacts."
     }, null, 2)}\n`);
+    for (const phase of demo.phases) {
+      if (phase.next) printHumanNext(phase.next);
+    }
     process.exitCode = demo.ok ? 0 : 1;
     return;
   }
 
-  printHumanNext("fl demo live-git --export-only");
   const demo = await runLiveGitDemo({
     workspace: process.cwd(),
     ...(requestedImage === undefined ? {} : { image: requestedImage })
@@ -1247,6 +1247,7 @@ async function demoCommand(args: string[]): Promise<void> {
     },
     sensitivity: "The portable package intentionally retains the frozen witness and recorded evidence. Treat it as sensitive incident material before sharing."
   }, null, 2)}\n`);
+  printHumanNext(`fl verify ${demo.proofBundle.directory} --expect-root ${demo.proofBundle.rootDigest}`);
   if (hasFlag(args, "--export-only")) return;
   const server = await startGitProofServer({ proof, port: Number(option(args, "--port") ?? "4173") });
   process.stdout.write(`FaultLine live Git proof page: ${server.url}\nPress Ctrl+C to stop.\n`);
