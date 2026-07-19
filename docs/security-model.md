@@ -6,7 +6,7 @@ Limits that matter when sharing proofs, reviewing signatures, or enabling turn-t
 
 Turn-tree capture supports experimental turn localization (`EXPERIMENTAL_TURN`). It is not commit-path portable proof (`COMMIT_PROOF`).
 
-Codex sidecar SessionStart/Stop turn-tree snapshots use a **temporary Git index**, but they are **not storage-neutral**: staging still writes blob objects into this repository's object database. Eligible **untracked** files may be included unless you opt out.
+Codex sidecar SessionStart/Stop turn-tree snapshots use a **temporary Git index**, but they are **not storage-neutral**: staging still writes blob objects. FaultLine quarantines those writes into `.git/faultline/objects` via `GIT_OBJECT_DIRECTORY` (registered as a Git alternate) so the primary `.git/objects` database is not polluted. Purge with `fl codex snapshot gc`. Eligible **untracked** files may be included unless you opt out.
 
 Mitigations:
 

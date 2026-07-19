@@ -145,7 +145,7 @@ function nativeDockerFixture(observed: GitInvestigationResult): GitInvestigation
       reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.",
       evidenceGrade: transitions.length > 0 ? "COMMIT_PROOF" : "NONE",
       evidenceLabel: transitions.length > 0
-        ? "Commit-path localization — portable proof"
+        ? "Proven at commit granularity — portable and offline-verifiable"
         : "Commit-path localization — not certified as portable proof"
     }
   });
@@ -293,6 +293,49 @@ describe("portable Git investigation proof bundles", () => {
       });
       expect(verifyGitInvestigationProofBundle(fullyBound.directory, fullyBound.rootDigest).manifest?.lifecycle)
         .toMatchObject({ status: "FULLY_BOUND", checkpointBindings: [{ stateIndex: 0 }, { stateIndex: 1 }, { stateIndex: 2 }] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(repository.root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to compile a package that contains UNSAFE_LOCAL run facts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-git-proof-unsafe-local-"));
+    const store = join(root, "witness-lock");
+    const repository = createRepository();
+    try {
+      const frozen = createFrozenWitness(store);
+      const observed = await investigateGitRange({
+        repository: repository.root,
+        range: { ancestor: "HEAD~2", descendant: "HEAD" },
+        frozenWitness: frozen,
+        expectedFrozenDigest: frozen.frozenDigest,
+        sandbox: { mode: "DOCKER_ISOLATED", image: pinnedImage },
+        runner: deterministicDockerRunner()
+      });
+      const result = nativeDockerFixture(observed);
+      const poisonedRuns = result.runs.map((run, index) => {
+        if (index !== 0) return run;
+        const { runId: _runId, ...unsigned } = {
+          ...run,
+          sandbox: { ...run.sandbox, kind: "UNSAFE_LOCAL" as const },
+          result: {
+            ...run.result,
+            kind: "UNSAFE_LOCAL" as const,
+            executor: "UNSAFE_LOCAL" as const,
+            verdict: "INAPPLICABLE" as const,
+            reason: "UNSAFE_LOCAL_NOT_PROOF" as const
+          }
+        };
+        return { ...unsigned, runId: digestJson(unsigned) };
+      });
+      const poisoned = {
+        ...result,
+        runs: poisonedRuns
+      };
+      expect(() => writeGitInvestigationProofBundle(join(root, "proofs", "unsafe-local"), poisoned as GitInvestigationResult, frozen, {
+        proofRoot: join(root, "proofs")
+      })).toThrow(/UNSAFE_LOCAL run facts are structurally unexportable/);
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(repository.root, { recursive: true, force: true });

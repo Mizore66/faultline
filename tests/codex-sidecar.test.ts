@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { sha256 } from "../src/canonical.js";
 import {
   codexSidecarLedgerPath,
+  digestToolAllowlistedFields,
   inspectObservedCodexSidecar,
   recordObservedCodexHook,
   sidecarEventId
@@ -399,6 +400,59 @@ describe("Codex observed hook sidecar", () => {
       expect(status.recordings).toHaveLength(1);
       expect(status.recordings[0]).toMatchObject({ valid: false });
       expect(status.recordings[0]?.errors.join("\n")).toContain("checkpoint digest does not match the ledger");
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("records PreToolUse/PostToolUse as digest-only TOOL_USE events during an active turn", () => {
+    const repository = repositoryFixture();
+    try {
+      recordObservedCodexHook(sessionStart(repository, "codex-session-tools"));
+      recordObservedCodexHook(promptEvent(repository, "secret prompt text", "codex-session-tools", "codex-turn-tools"));
+      const pre = recordObservedCodexHook({
+        hook_event_name: "PreToolUse",
+        session_id: "codex-session-tools",
+        cwd: repository,
+        model: "gpt-5.6",
+        turn_id: "codex-turn-tools",
+        tool_name: "Bash",
+        tool_call_id: "call-1",
+        tool_input: { command: "cat /etc/shadow" },
+        transcript_path: "C:/private/transcript.jsonl"
+      });
+      expect(pre).toMatchObject({ status: "TOOL_USE_STARTED", toolName: "Bash", idempotent: false });
+      const post = recordObservedCodexHook({
+        hook_event_name: "PostToolUse",
+        session_id: "codex-session-tools",
+        cwd: repository,
+        model: "gpt-5.6",
+        turn_id: "codex-turn-tools",
+        tool_name: "Bash",
+        tool_call_id: "call-1",
+        tool_input: { command: "cat /etc/shadow" }
+      });
+      expect(post).toMatchObject({ status: "TOOL_USE_COMPLETED", toolName: "Bash" });
+      const ledger = readVerifiedCodexLifecycleLedger(pre.ledgerPath);
+      const toolEvents = ledger.events.filter((event) =>
+        event.event.type === "TOOL_USE_STARTED" || event.event.type === "TOOL_USE_COMPLETED"
+      );
+      expect(toolEvents).toHaveLength(2);
+      const expectedDigest = digestToolAllowlistedFields({
+        sessionId: "codex-session-tools",
+        turnId: "codex-turn-tools",
+        toolName: "Bash",
+        toolCallId: "call-1"
+      });
+      for (const event of toolEvents) {
+        if (event.event.type !== "TOOL_USE_STARTED" && event.event.type !== "TOOL_USE_COMPLETED") continue;
+        expect(event.event.payload.allowlistedFieldsDigest).toBe(expectedDigest);
+        expect(event.event.payload.toolName).toBe("Bash");
+      }
+      const serialized = JSON.stringify(ledger);
+      expect(serialized).not.toContain("cat /etc/shadow");
+      expect(serialized).not.toContain("secret prompt text");
+      expect(serialized).not.toContain("transcript");
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }

@@ -458,6 +458,7 @@ export function createDockerSandboxPlan(request: SandboxPlanRequest): DockerSand
   const environmentPolicyDigest = digestJson(environment.policy);
   const policyDigest = dockerPolicyDigest(image, witness, limits, environmentPolicyDigest);
   const containerName = `faultline-${randomUUID().replaceAll("-", "")}`;
+  const fsizeLimit = limits.maxOutputBytes;
   const commandArguments = Object.freeze([
     "run",
     "--rm",
@@ -467,6 +468,8 @@ export function createDockerSandboxPlan(request: SandboxPlanRequest): DockerSand
     "--pull=never",
     "--network",
     "none",
+    "--ipc",
+    "none",
     "--read-only",
     "--user",
     "65534:65534",
@@ -474,6 +477,8 @@ export function createDockerSandboxPlan(request: SandboxPlanRequest): DockerSand
     "ALL",
     "--security-opt",
     "no-new-privileges:true",
+    "--ulimit",
+    `fsize=${fsizeLimit}:${fsizeLimit}`,
     "--pids-limit",
     String(limits.pidsLimit),
     "--memory",

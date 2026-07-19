@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "faultline.later-turn-ledger-fixture.v1",
+  "kind": "RECORDED_REDACTED_FIXTURE",
+  "sessionId": "later-turn-fixture-session",
+  "ledgerId": "ledger-later-turn-fixture",
+  "headHash": "sha256:15adea78e94d1f296d7031e9369286085af78a59f7ae2f8b00e517acf99b2ae1",
+  "eventCount": 11,
+  "turnTreeDigests": {
+    "baseline": "1443ed4599ab8cb135bf6b42432e89aaac1e6e47",
+    "turn1": "7e9b16247bb10e6a5b3044082df8c0bf0270655a",
+    "turn2": "cea52be185dcdb46ffa124fe34544bde26555b8c"
+  },
+  "note": "Not a live organic dogfood capture. Produced by scripts/generate-later-turn-ledger-fixture.mjs."
+}

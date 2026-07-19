@@ -564,6 +564,23 @@ export async function repairWithCodex(options: {
             rootDigest: exported.written.rootDigest,
             classification: exported.written.manifest.classification
           };
+          if (exported.written.manifest.classification === "PREVENTION_VERIFIED") {
+            try {
+              const { upsertFaultLineAgentsMd } = await import("./agents-md.js");
+              upsertFaultLineAgentsMd({
+                repository: options.repository,
+                classification: "PREVENTION_VERIFIED",
+                originalProofRoot: exported.written.prevention.originalProofRoot,
+                frozenWitnessDigest: exported.written.prevention.frozenWitnessDigest,
+                preventionRootDigest: exported.written.rootDigest,
+                lastGoodRunIds: exported.written.prevention.lastGood.runIds,
+                firstBadRunIds: exported.written.prevention.firstBad.runIds,
+                repairedRunIds: exported.written.prevention.repaired.runIds
+              });
+            } catch {
+              // Docs materialization is best-effort; the prevention package remains authoritative.
+            }
+          }
           writeFileSync(
             join(session.artifactsPath, "prevention-export.json"),
             `${JSON.stringify(preventionExport, null, 2)}\n`,

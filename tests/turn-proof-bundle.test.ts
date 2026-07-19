@@ -162,7 +162,7 @@ function nativeDockerFixture(observed: TurnInvestigationResult): TurnInvestigati
       isProof: transitions.length > 0,
       reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent turn-tree states.",
       evidenceGrade: transitions.length > 0 ? "EXPERIMENTAL_TURN" : "NONE",
-      evidenceLabel: "Turn localization — experimental evidence"
+      evidenceLabel: "Experimental turn-level evidence — not yet a portable proof"
     }
   });
 }

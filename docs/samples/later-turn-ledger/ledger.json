@@ -1,0 +1,234 @@
+{
+  "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+  "ledgerId": "ledger-later-turn-fixture",
+  "sessionId": "later-turn-fixture-session",
+  "createdAt": "2026-07-19T09:56:01.612Z",
+  "events": [
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 1,
+      "eventId": "fixture-session-start",
+      "occurredAt": "2026-07-19T09:56:01.669Z",
+      "event": {
+        "type": "SESSION_STARTED",
+        "payload": {
+          "transport": "SIDE_CAR",
+          "workingDirectory": "/redacted/application",
+          "model": "gpt-5.6"
+        }
+      },
+      "previousHash": "sha256:52acd6a9fc8e0d08a9d0226ea09833643b769b647d2e32e2a3f7f75e04c66e00",
+      "hash": "sha256:3099b999189be46cbe76cb220622b2301cd5f9defe67706818a3854c7df65e54"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 2,
+      "eventId": "fixture-baseline",
+      "occurredAt": "2026-07-19T09:56:04.480Z",
+      "event": {
+        "type": "SESSION_BASELINE_SNAPSHOT",
+        "payload": {
+          "snapshot": {
+            "schemaVersion": "faultline.turn-tree-snapshot.v1",
+            "repositoryRoot": "/redacted/application",
+            "headCommit": "7dec752035879bcedc87b15dab9b2fd93d644b12",
+            "treeDigest": "1443ed4599ab8cb135bf6b42432e89aaac1e6e47",
+            "capturedAt": "2026-07-19T09:56:04.476Z",
+            "dirty": false,
+            "statusDigest": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "digest": "sha256:d5088b23bba2b194d16d0793e3e8859aac6c9b0e60004ccdbf07739d0ed95409"
+          }
+        }
+      },
+      "previousHash": "sha256:3099b999189be46cbe76cb220622b2301cd5f9defe67706818a3854c7df65e54",
+      "hash": "sha256:12f204cb05e42dc25f5d9607b62d04b51daaff6e4496b7095224b1e4c4f3dd87"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 3,
+      "eventId": "fixture-t1-start",
+      "occurredAt": "2026-07-19T09:56:07.785Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "promptDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "previousHash": "sha256:12f204cb05e42dc25f5d9607b62d04b51daaff6e4496b7095224b1e4c4f3dd87",
+      "hash": "sha256:9c010276d00ad809d5c4f74e0e6bf0c4a23b9a69c6b3014427a134f544556ee2"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 4,
+      "eventId": "fixture-t1-tool-pre",
+      "occurredAt": "2026-07-19T09:56:07.794Z",
+      "event": {
+        "type": "TOOL_USE_STARTED",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "toolName": "Read",
+          "toolCallId": "call-read-1",
+          "allowlistedFieldsDigest": "sha256:2cff6ffb24b15cfceb91e7f588b8f18ea84da5e577703683ec00ab324e837334"
+        }
+      },
+      "previousHash": "sha256:9c010276d00ad809d5c4f74e0e6bf0c4a23b9a69c6b3014427a134f544556ee2",
+      "hash": "sha256:753300aa7cba67d57b6e5981234ba686a665f10dafbd264415516fd22ee0339a"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 5,
+      "eventId": "fixture-t1-tool-post",
+      "occurredAt": "2026-07-19T09:56:07.800Z",
+      "event": {
+        "type": "TOOL_USE_COMPLETED",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "toolName": "Read",
+          "toolCallId": "call-read-1",
+          "allowlistedFieldsDigest": "sha256:2cff6ffb24b15cfceb91e7f588b8f18ea84da5e577703683ec00ab324e837334"
+        }
+      },
+      "previousHash": "sha256:753300aa7cba67d57b6e5981234ba686a665f10dafbd264415516fd22ee0339a",
+      "hash": "sha256:5b0f4a55bce659d0bef494a3aa1852a3c3e6888b5bf43c10d038d4b1be35cdab"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 6,
+      "eventId": "fixture-t1-stop",
+      "occurredAt": "2026-07-19T09:56:07.806Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "outcome": "COMPLETED"
+        }
+      },
+      "previousHash": "sha256:5b0f4a55bce659d0bef494a3aa1852a3c3e6888b5bf43c10d038d4b1be35cdab",
+      "hash": "sha256:559146b612cc2b0e8c293f3ab6026e4f7dff2432ee1c214ba5153f1e0d381abb"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 7,
+      "eventId": "fixture-t1-snap",
+      "occurredAt": "2026-07-19T09:56:07.811Z",
+      "event": {
+        "type": "TURN_TREE_SNAPSHOT",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "snapshot": {
+            "schemaVersion": "faultline.turn-tree-snapshot.v1",
+            "repositoryRoot": "/redacted/application",
+            "headCommit": "7dec752035879bcedc87b15dab9b2fd93d644b12",
+            "treeDigest": "7e9b16247bb10e6a5b3044082df8c0bf0270655a",
+            "capturedAt": "2026-07-19T09:56:07.782Z",
+            "dirty": true,
+            "statusDigest": "sha256:f8f61b92c2c237f6c8989a46e8b60604481345d0f1380011e3766dc6c90d5a1c",
+            "digest": "sha256:1696941818fa7a4d4c32878516e215ece7e77e305c3e128d4e2f9397e8f157f3"
+          }
+        }
+      },
+      "previousHash": "sha256:559146b612cc2b0e8c293f3ab6026e4f7dff2432ee1c214ba5153f1e0d381abb",
+      "hash": "sha256:356e4b82d4702cce77f7df64406ec20eacb9ee27bd917bafd47c43286f0a548b"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 8,
+      "eventId": "fixture-t2-start",
+      "occurredAt": "2026-07-19T09:56:11.231Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "turn-2",
+          "turnOrdinal": 2,
+          "promptDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "previousHash": "sha256:356e4b82d4702cce77f7df64406ec20eacb9ee27bd917bafd47c43286f0a548b",
+      "hash": "sha256:36ac22f72814152645849ff442053c7e1a97a2a647e2714fef910488f2995329"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 9,
+      "eventId": "fixture-t2-stop",
+      "occurredAt": "2026-07-19T09:56:11.238Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "turn-2",
+          "turnOrdinal": 2,
+          "outcome": "COMPLETED"
+        }
+      },
+      "previousHash": "sha256:36ac22f72814152645849ff442053c7e1a97a2a647e2714fef910488f2995329",
+      "hash": "sha256:ed8b1dbe838166e7125362474bbaae3b90e204d67614430e2061e182c6a83aad"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 10,
+      "eventId": "fixture-t2-snap",
+      "occurredAt": "2026-07-19T09:56:11.246Z",
+      "event": {
+        "type": "TURN_TREE_SNAPSHOT",
+        "payload": {
+          "turnId": "turn-2",
+          "turnOrdinal": 2,
+          "snapshot": {
+            "schemaVersion": "faultline.turn-tree-snapshot.v1",
+            "repositoryRoot": "/redacted/application",
+            "headCommit": "7dec752035879bcedc87b15dab9b2fd93d644b12",
+            "treeDigest": "cea52be185dcdb46ffa124fe34544bde26555b8c",
+            "capturedAt": "2026-07-19T09:56:11.229Z",
+            "dirty": true,
+            "statusDigest": "sha256:8e70301265d26e031b2bd5d56572e1d4c13ca3018d9a1e692926fcfe4b538e8d",
+            "digest": "sha256:14b7a5adfd89962ea03f0fc55e4b7652cb1dae045b930e9a85e36636728498c1"
+          }
+        }
+      },
+      "previousHash": "sha256:ed8b1dbe838166e7125362474bbaae3b90e204d67614430e2061e182c6a83aad",
+      "hash": "sha256:6059f8939537950a87dcda6b3dc01cda1e7fc250809bc2f2d511f8f3e2a3fee5"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-later-turn-fixture",
+      "sessionId": "later-turn-fixture-session",
+      "sequence": 11,
+      "eventId": "fixture-session-end",
+      "occurredAt": "2026-07-19T09:56:11.256Z",
+      "event": {
+        "type": "SESSION_ENDED",
+        "payload": {
+          "reason": "COMPLETED",
+          "completedTurns": 2
+        }
+      },
+      "previousHash": "sha256:6059f8939537950a87dcda6b3dc01cda1e7fc250809bc2f2d511f8f3e2a3fee5",
+      "hash": "sha256:15adea78e94d1f296d7031e9369286085af78a59f7ae2f8b00e517acf99b2ae1"
+    }
+  ]
+}

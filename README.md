@@ -31,6 +31,15 @@ pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
+```bash
+git clone https://github.com/Mizore66/faultline.git
+cd faultline
+git checkout v0.1.0-buildweek
+pnpm install --frozen-lockfile
+pnpm fl doctor --proof-ready
+pnpm fl judge-proof
+```
+
 `fl doctor --proof-ready` routes Docker-less machines deliberately: if it is not READY, stay on `judge-proof` / the static preview — do not chase `demo live-git`.  
 `judge-proof` opens a **verified `COMMIT_PROOF` sample** package (disposable live-git sample root `sha256:f85c446d…`) — not the historical self-incident unless you open that package separately.  
 Headless: `FAULTLINE_NO_BROWSER=1 pnpm fl judge-proof --export-only` (clean exit; verified root printed last).  
@@ -78,6 +87,13 @@ Ops (runtime images, attestations, Actions, witness protocol): see `docs/` — n
 ## Development
 
 ```powershell
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm coverage-matrix
+```
+
+```bash
 pnpm typecheck
 pnpm test
 pnpm build

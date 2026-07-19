@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   DOCTOR_SCHEMA_VERSION,
   DOCTOR_SAFE_GIT_CONFIG,
+  DOCTOR_SECURITY_SCHEMA_VERSION,
   detectLikelyRuntime,
   doctorCliExitCode,
+  doctorSecurityExitCode,
   runFaultLineDoctor,
+  runFaultLineSecurityDoctor,
   type DoctorCommand,
   type DoctorCommandResult,
   type DoctorCommandRunner,
@@ -242,5 +245,18 @@ describe("FaultLine doctor", () => {
     const report = await runFaultLineDoctor({ repository: repositoryRoot, runner: fake.runner, fileProbe: markerProbe(["package.json"]) });
     expect(report.dockerInvestigationPreflight).toBe("UNAVAILABLE");
     expect(doctorCliExitCode(report)).toBe(0);
+  });
+
+  it("live --security self-test blocks malicious hooks and remote protocols", () => {
+    const report = runFaultLineSecurityDoctor();
+    expect(report.schemaVersion).toBe(DOCTOR_SECURITY_SCHEMA_VERSION);
+    expect(report.status).toBe("SECURE");
+    expect(doctorSecurityExitCode(report)).toBe(0);
+    expect(report.checks.map((check) => check.id).sort()).toEqual([
+      "hooks-neutralization",
+      "path-filters",
+      "protocol-allow-never"
+    ].sort());
+    expect(report.checks.every((check) => check.status === "PASS")).toBe(true);
   });
 });
