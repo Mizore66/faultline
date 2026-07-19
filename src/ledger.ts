@@ -18,10 +18,11 @@ import { digestJson } from "./canonical.js";
 import { TurnTreeSnapshotSchema, verifyTurnTreeSnapshot } from "./turn-snapshot.js";
 
 /**
- * A small, explicit transport boundary for records obtained from Codex.  The
- * ledger does not claim that it can intercept private Codex internals: callers
- * supply lifecycle facts they have observed, and FaultLine makes their order
- * and integrity independently checkable.
+ * A small, explicit transport boundary for observed lifecycle records.
+ * Callers supply lifecycle facts they have observed; FaultLine makes order and
+ * integrity independently checkable. Transport labels are honest provenance —
+ * never rebadge a non-Codex editor session as `SIDE_CAR` / `CODEX_*` hooks.
+ * Use `OBSERVED_EXTERNAL_TRANSPORT` for manually recorded non-Codex checkpoints.
  */
 export const CODEX_LIFECYCLE_LEDGER_VERSION = "faultline.codex-lifecycle-ledger.v1" as const;
 export const GIT_CHECKPOINT_VERSION = "faultline.git-checkpoint.v1" as const;
@@ -44,7 +45,12 @@ export const CanonicalTimestampSchema = z.string().refine(
   "Expected a canonical ISO-8601 UTC timestamp"
 );
 
-export const CodexTransportSchema = z.enum(["CODEX_CLI", "CODEX_APP", "SIDE_CAR"]);
+export const CodexTransportSchema = z.enum([
+  "CODEX_CLI",
+  "CODEX_APP",
+  "SIDE_CAR",
+  "OBSERVED_EXTERNAL_TRANSPORT"
+]);
 export const TurnOutcomeSchema = z.enum(["COMPLETED", "FAILED", "INTERRUPTED"]);
 export const SessionEndReasonSchema = z.enum(["COMPLETED", "FAILED", "INTERRUPTED", "ABANDONED"]);
 

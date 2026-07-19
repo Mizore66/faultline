@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "faultline.observed-external-transport-sample.v1",
+  "transport": "OBSERVED_EXTERNAL_TRANSPORT",
+  "notCodexHooks": true,
+  "headHash": "sha256:5f46ca486dac439ee084656a58cc9cd2cc55c151a5b29c23ac5411c97f661361",
+  "eventCount": 8,
+  "generatedAt": "2026-07-19T14:06:15.154Z"
+}

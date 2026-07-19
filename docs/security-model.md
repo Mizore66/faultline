@@ -2,6 +2,18 @@
 
 Limits that matter when sharing proofs, reviewing signatures, or enabling turn-tree capture. Product claim boundaries: [concepts.md](concepts.md).
 
+## Provenance honesty (never fake Codex ledgers)
+
+FaultLine refuses unearned claims. Do **not** fabricate Codex sidecar ledgers (including Cursor or other editor sessions rebadged as Codex `SessionStart`/`Stop` hook events). A forged ledger inside a provenance tool poisons every honest artifact and violates “must function as depicted.”
+
+Allowed Codex-native depth paths only:
+
+1. Real Codex sessions (credits / teammate / free tier) with genuine hook capture
+2. Partner redacted MUMBCS (or other) ledgers from real Codex
+3. Honestly labeled `fl record` observed-transport checkpoints with transport `OBSERVED_EXTERNAL_TRANSPORT` (sample: [samples/observed-external-transport/](samples/observed-external-transport/)) that explicitly say they are **not** Codex hook events
+
+Package-smoke continues to block claiming an external case study until `docs/impact-validation-external-01.md` status is `completed`. See META #108.
+
 ## Turn-tree snapshot storage warning
 
 Turn-tree capture supports experimental turn localization (`EXPERIMENTAL_TURN`). It is not commit-path portable proof (`COMMIT_PROOF`).

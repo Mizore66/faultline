@@ -142,6 +142,7 @@ Do not transform a blank status into a claim. The [Devpost description draft](de
 - Tamper-proof host / Docker daemon enforcement (signed CI provenance binds receipt bytes + Actions identity only — [security-model.md](security-model.md))
 - That MUMBCS external-01 is a naturally occurring production bug (it is protocol / interoperability validation, `EXPERIMENTAL_TURN`)
 - That native Codex UI replay without a fresh sidecar ledger is the proof package (demo-only — [codex-sidecar.md](codex-sidecar.md#delegated-worktrees--demo-only-when-no-ledger))
+- Fabricated Codex ledgers (Cursor or other editors rebadged as Codex hook events) — [security-model.md](security-model.md#provenance-honesty-never-fake-codex-ledgers)
 - Time-saved metrics, third-party adoption scale, or npm global install
 - `TURN_PROOF` or “prevention verified” for the turn arc unless the retained artifacts actually say so
 

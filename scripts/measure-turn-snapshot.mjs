@@ -301,9 +301,11 @@ async function main() {
     `- Trials per target: ${trials} (override with \`FAULTLINE_SNAPSHOT_TRIALS\`)`,
     "- Caps: 1 MiB/file, 32 MiB total, 2000 files (see `src/turn-snapshot.ts`)",
     "- Quiescence: up to 4 dual-tree attempts with 50 ms delay",
+    "- Object quarantine: snapshot blobs land in `.git/faultline/objects` via `GIT_OBJECT_DIRECTORY` + Git alternates (not primary `.git/objects`)",
     "- Cold: no `sessionCachePath`",
     "- Warm unchanged / one-file / 100-file modified: content-fingerprint cache (`faultline.turn-snapshot-cache.v2`)",
     "- FaultLine row uses this checkout with default ignore rules plus reviewed `.faultlineignore` (fixture paths only; lockfiles remain eligible)",
+    `- Generated at: ${report.generatedAt} (post object-quarantine measurement)`,
     "",
     "Regenerate: `pnpm measure:turn-snapshot`",
     ""

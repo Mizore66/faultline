@@ -81,12 +81,14 @@ import {
   appendLifecycleEvent,
   appendLifecycleEventAtomic,
   captureGitCleanCheckpoint,
+  CodexTransportSchema,
   createCodexLifecycleLedger,
   LifecycleEventInputSchema,
   readVerifiedCodexLifecycleLedger,
   verifyCodexLifecycleLedger,
   verifyCodexLifecycleLedgerFile,
-  writeCodexLifecycleLedgerAtomic
+  writeCodexLifecycleLedgerAtomic,
+  type CodexTransport
 } from "./ledger.js";
 import { readModelOverlayInput } from "./overlay-input.js";
 import { describeBundlePath, verifyProofBundle, writeProofBundle } from "./proof-bundle.js";
@@ -1395,6 +1397,16 @@ function lifecycleInputFromLine(value: unknown, repository?: string): unknown {
   };
 }
 
+function parseObservedTransport(raw: string): CodexTransport {
+  const parsed = CodexTransportSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `--transport must be one of ${CodexTransportSchema.options.join(", ")} (got ${JSON.stringify(raw)}). Use OBSERVED_EXTERNAL_TRANSPORT for honestly labeled non-Codex checkpoints — never rebadge Cursor/editor history as SIDE_CAR or CODEX_*.`
+    );
+  }
+  return parsed.data;
+}
+
 async function recordCommand(args: string[]): Promise<void> {
   const [action] = args;
   switch (action) {
@@ -1407,7 +1419,7 @@ async function recordCommand(args: string[]): Promise<void> {
       ledger = appendLifecycleEvent(ledger, {
         type: "SESSION_STARTED",
         payload: {
-          transport: (option(args, "--transport") ?? "SIDE_CAR") as "CODEX_CLI" | "CODEX_APP" | "SIDE_CAR",
+          transport: parseObservedTransport(option(args, "--transport") ?? "SIDE_CAR"),
           workingDirectory: repository,
           ...(option(args, "--thread") ? { codexThreadId: option(args, "--thread") } : {}),
           ...(option(args, "--model") ? { model: option(args, "--model") } : {}),

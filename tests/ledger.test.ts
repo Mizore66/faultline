@@ -58,6 +58,32 @@ function validLedger(): CodexLifecycleLedger {
   return ledger;
 }
 
+function validObservedExternalLedger(): CodexLifecycleLedger {
+  let ledger = createCodexLifecycleLedger({ ledgerId: "ledger-observed", sessionId: "session-observed", createdAt });
+  ledger = appendAt(ledger, {
+    type: "SESSION_STARTED",
+    payload: {
+      transport: "OBSERVED_EXTERNAL_TRANSPORT",
+      workingDirectory: "C:/work/faultline",
+      actor: "reviewer@example.test"
+    }
+  }, 0);
+  ledger = appendAt(ledger, { type: "TURN_STARTED", payload: { turnId: "turn-1", turnOrdinal: 1, promptDigest: "c".repeat(64).replace(/^/, "sha256:") } }, 1);
+  ledger = appendAt(ledger, {
+    type: "TURN_COMPLETED",
+    payload: {
+      turnId: "turn-1",
+      turnOrdinal: 1,
+      outcome: "COMPLETED",
+      outputDigest: "d".repeat(64).replace(/^/, "sha256:"),
+      contribution: "non-Codex editor checkpoint"
+    }
+  }, 2);
+  ledger = appendAt(ledger, { type: "WORKTREE_CHECKPOINT", payload: { checkpoint: checkpoint(), afterTurnOrdinal: 1 } }, 3);
+  ledger = appendAt(ledger, { type: "SESSION_ENDED", payload: { reason: "COMPLETED", completedTurns: 1 } }, 4);
+  return ledger;
+}
+
 function resign(events: CodexLifecycleEvent[], ledger: CodexLifecycleLedger): CodexLifecycleEvent[] {
   let previousHash = ledgerGenesisHash(ledger);
   return events.map((event) => {
@@ -101,6 +127,15 @@ describe("Codex lifecycle ledger", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it("accepts OBSERVED_EXTERNAL_TRANSPORT as an honest non-Codex transport label", () => {
+    const ledger = validObservedExternalLedger();
+    expect(verifyCodexLifecycleLedger(ledger)).toMatchObject({ valid: true, eventCount: 5 });
+    expect(ledger.events[0]?.event).toMatchObject({
+      type: "SESSION_STARTED",
+      payload: { transport: "OBSERVED_EXTERNAL_TRANSPORT" }
+    });
   });
 
   it("detects payload tampering even when the JSON remains schema-valid", () => {
