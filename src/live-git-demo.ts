@@ -2,12 +2,24 @@ import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { isAbsolute, join, parse, relative, resolve } from "node:path";
+import { upsertFaultLineAgentsMd } from "./agents-md.js";
 import { investigateGitRange, type GitInvestigationResult } from "./git-investigation.js";
 import {
   verifyGitInvestigationProofBundle,
   writeGitInvestigationProofBundle,
   type WrittenGitProofBundle
 } from "./git-proof-bundle.js";
+import {
+  minimizeGitDiff,
+  writeGitMinimizationResult,
+  type GitMinimizationResult
+} from "./git-minimization.js";
+import {
+  digestRepairPatchFile,
+  writePreventionProofFromVerifiedArtifacts,
+  type RepairedPreventionRun
+} from "./prevention-from-artifacts.js";
+import { defaultPreventionProofRoot, verifyPreventionProof, type WrittenPreventionProof } from "./prevention-proof.js";
 import {
   approveWitnessProposal,
   freezeApprovedWitness,
@@ -27,6 +39,22 @@ export type LiveGitDemoResult = {
   readonly frozenWitness: FrozenWitness;
   readonly investigation: GitInvestigationResult;
   readonly proofBundle: WrittenGitProofBundle | null;
+};
+
+export type DemoFullPhase = {
+  readonly phase: string;
+  readonly status: string;
+  readonly next?: string;
+  readonly detail?: unknown;
+};
+
+export type DemoFullResult = LiveGitDemoResult & {
+  readonly phases: readonly DemoFullPhase[];
+  readonly minimization: GitMinimizationResult | null;
+  readonly minimizationPath: string | null;
+  readonly prevention: WrittenPreventionProof | null;
+  readonly agentsMd: { path: string; status: string } | null;
+  readonly ok: boolean;
 };
 
 function run(executable: string, argumentsList: readonly string[], label: string): string {
@@ -173,4 +201,220 @@ export async function runLiveGitDemo(options: { readonly workspace?: string; rea
   const verification = verifyGitInvestigationProofBundle(proofBundle.directory, proofBundle.rootDigest);
   if (!verification.valid) throw new Error(`Live Git demo refused to publish an invalid proof bundle: ${verification.errors.join("; ")}`);
   return { directory, repository, image, frozenWitness, investigation, proofBundle };
+}
+
+function repairedRunsFromInvestigation(investigation: GitInvestigationResult): {
+  commit: string;
+  tree: string;
+  runs: RepairedPreventionRun[];
+} | null {
+  const recovery = investigation.transitions.find((transition) => transition.kind === "FAIL_TO_PASS");
+  if (!recovery) return null;
+  const environmentDigest = investigation.environment.distinctDigests[0];
+  if (investigation.environment.homogeneity !== "HOMOGENEOUS" || environmentDigest === undefined) return null;
+  const runs: RepairedPreventionRun[] = [];
+  for (const runId of recovery.after.runIds) {
+    const run = investigation.runs.find((entry) => entry.runId === runId);
+    if (!run || run.result.verdict !== "PASS" || run.result.executor !== "NATIVE_DOCKER") return null;
+    runs.push({
+      runId: run.runId,
+      executionId: run.executionId,
+      commit: run.commit,
+      tree: run.tree,
+      verdict: "PASS",
+      witnessDigest: run.witnessDigest,
+      environmentDigest,
+      executionTrust: "NATIVE_DOCKER",
+      executionKind: "EXECUTED"
+    });
+  }
+  if (runs.length !== 3) return null;
+  return { commit: recovery.after.commit, tree: recovery.after.tree, runs };
+}
+
+/**
+ * End-to-end flagship arc on the disposable live-git fixture:
+ * intake/freeze/Docker localize → offline verify → counterfactual minimize →
+ * PREVENTION_VERIFIED (+ AGENTS.md) from repaired-state Docker facts already in the proof.
+ */
+export async function runDemoFull(options: { readonly workspace?: string; readonly image?: string } = {}): Promise<DemoFullResult> {
+  const phases: DemoFullPhase[] = [];
+  const demo = await runLiveGitDemo(options);
+  if (demo.proofBundle === null) {
+    phases.push({
+      phase: "intake_freeze_docker_localize",
+      status: "DEMO_NOT_PROVEN",
+      detail: { investigationStatus: demo.investigation.status, errors: demo.investigation.errors }
+    });
+    return {
+      ...demo,
+      phases,
+      minimization: null,
+      minimizationPath: null,
+      prevention: null,
+      agentsMd: null,
+      ok: false
+    };
+  }
+
+  phases.push({
+    phase: "intake_freeze_docker_localize",
+    status: "DEMO_PROOF_READY",
+    next: `fl verify ${demo.proofBundle.directory} --expect-root ${demo.proofBundle.rootDigest}`,
+    detail: {
+      evidenceGrade: "COMMIT_PROOF",
+      transitions: demo.investigation.transitions.length,
+      rootDigest: demo.proofBundle.rootDigest
+    }
+  });
+
+  const verification = verifyGitInvestigationProofBundle(
+    demo.proofBundle.directory,
+    demo.proofBundle.rootDigest
+  );
+  phases.push({
+    phase: "offline_verify",
+    status: verification.valid ? "VERIFIED" : "INVALID",
+    next: "fl minimize git --help",
+    detail: {
+      valid: verification.valid,
+      externalRootStatus: verification.externalRootStatus,
+      evidenceGrade: "COMMIT_PROOF"
+    }
+  });
+  if (!verification.valid) {
+    return {
+      ...demo,
+      phases,
+      minimization: null,
+      minimizationPath: null,
+      prevention: null,
+      agentsMd: null,
+      ok: false
+    };
+  }
+
+  const introduction = demo.investigation.transitions.find((transition) => transition.kind === "PASS_TO_FAIL");
+  let minimization: GitMinimizationResult | null = null;
+  let minimizationPath: string | null = null;
+  if (introduction) {
+    minimization = await minimizeGitDiff({
+      repository: demo.repository,
+      before: introduction.before.commit,
+      after: introduction.after.commit,
+      frozenWitness: demo.frozenWitness,
+      expectedFrozenDigest: demo.frozenWitness.frozenDigest,
+      sandbox: { mode: "DOCKER_ISOLATED", image: demo.image },
+      budget: { maxExecutions: 64 }
+    });
+    const hunkRefined = minimization.attempts.some((attempt) => attempt.phase === "HUNK_ONE_MINIMAL");
+    const grade = minimization.proof.isProof
+      ? (hunkRefined ? "hunk-refined counterfactual" : "file-level counterfactual")
+      : "ASSOCIATED_NONMINIMAL / non-proof minimize";
+    try {
+      const written = await writeGitMinimizationResult(
+        join(demo.directory, "minimization.json"),
+        minimization
+      );
+      minimizationPath = written.path;
+    } catch {
+      minimizationPath = null;
+    }
+    phases.push({
+      phase: "minimize",
+      status: minimization.proof.isProof ? "MINIMIZED" : minimization.status,
+      next: "fl prevention write --from-bundle ...",
+      detail: {
+        evidenceGrade: grade,
+        oneMinimal: minimization.minimality.oneMinimal,
+        selectedUnitIds: minimization.candidateUnitIds,
+        hunkRefined,
+        path: minimizationPath
+      }
+    });
+  } else {
+    phases.push({
+      phase: "minimize",
+      status: "SKIPPED",
+      detail: { reason: "No PASS_TO_FAIL transition available for counterfactual minimize." }
+    });
+  }
+
+  const repaired = repairedRunsFromInvestigation(demo.investigation);
+  let prevention: WrittenPreventionProof | null = null;
+  let agentsMd: { path: string; status: string } | null = null;
+  if (repaired && introduction) {
+    const patchPath = join(demo.directory, "repair.patch");
+    const patch = git(
+      demo.repository,
+      ["diff", "--binary", introduction.after.commit, repaired.commit],
+      "Demo repair patch"
+    );
+    writeFileSync(patchPath, patch.endsWith("\n") ? patch : `${patch}\n`, "utf8");
+    const exportResult = writePreventionProofFromVerifiedArtifacts({
+      bundleDirectory: demo.proofBundle.directory,
+      expectRoot: demo.proofBundle.rootDigest,
+      outputDirectory: join(defaultPreventionProofRoot(), `demo-full-${Date.now()}`),
+      repaired,
+      repairPatchDigest: digestRepairPatchFile(patchPath),
+      repairBaseTree: introduction.after.tree
+    });
+    if (!exportResult.ok) {
+      phases.push({
+        phase: "repair_prevention_agents",
+        status: "PREVENTION_EXPORT_FAILED",
+        detail: { reasons: exportResult.reasons }
+      });
+    } else {
+      prevention = exportResult.written;
+      const preventionVerify = verifyPreventionProof(prevention.directory, prevention.rootDigest);
+      if (
+        preventionVerify.valid
+        && prevention.manifest.classification === "PREVENTION_VERIFIED"
+      ) {
+        const writtenAgents = upsertFaultLineAgentsMd({
+          repository: demo.repository,
+          classification: "PREVENTION_VERIFIED",
+          originalProofRoot: prevention.prevention.originalProofRoot,
+          frozenWitnessDigest: prevention.prevention.frozenWitnessDigest,
+          preventionRootDigest: prevention.rootDigest,
+          lastGoodRunIds: prevention.prevention.lastGood.runIds,
+          firstBadRunIds: prevention.prevention.firstBad.runIds,
+          repairedRunIds: prevention.prevention.repaired.runIds
+        });
+        agentsMd = { path: writtenAgents.path, status: writtenAgents.status };
+      }
+      phases.push({
+        phase: "repair_prevention_agents",
+        status: prevention.manifest.classification,
+        next: `fl prevention verify ${prevention.directory} --expect-root ${prevention.rootDigest}`,
+        detail: {
+          evidenceGrade: prevention.manifest.classification,
+          preventionRootDigest: prevention.rootDigest,
+          agentsMd,
+          note: "AGENTS.md is written only on real PREVENTION_VERIFIED; repaired runs reuse NATIVE_DOCKER facts from the proof package."
+        }
+      });
+    }
+  } else {
+    phases.push({
+      phase: "repair_prevention_agents",
+      status: "SKIPPED",
+      detail: { reason: "Missing FAIL_TO_PASS repaired state or PASS_TO_FAIL introduction." }
+    });
+  }
+
+  const ok = verification.valid
+    && prevention !== null
+    && prevention.manifest.classification === "PREVENTION_VERIFIED"
+    && agentsMd !== null;
+  return {
+    ...demo,
+    phases,
+    minimization,
+    minimizationPath,
+    prevention,
+    agentsMd,
+    ok
+  };
 }

@@ -61,3 +61,25 @@ The keyring, not the approval record, decides which reviewer keys are trusted. A
 Minimization verify detects a rewritten record only when an externally retained digest is supplied; it is not a cryptographic signature, identity assertion, or host-attestation claim.
 
 Full witness sign/verify and keyring schema: [witness-protocol.md](witness-protocol.md).
+
+## Appendix: claimed controls → enforcing tests
+
+Every control claimed above (and the hardened-Git doctor self-test) must map to an enforcing automated test. Gaps become B-2 worklist items — do not invent coverage here.
+
+| Claimed control | Enforcing test file | Test name (when known) |
+| --- | --- | --- |
+| Hardened Git hooks neutralization (`core.hooksPath` override) | `tests/doctor.test.ts` | `live --security self-test blocks malicious hooks and remote protocols` |
+| `protocol.allow=never` blocks remote Git probes | `tests/doctor.test.ts` | `live --security self-test blocks malicious hooks and remote protocols` |
+| Hostile `filter.lfs` process/smudge neutralization | `tests/doctor.test.ts` | `live --security self-test blocks malicious hooks and remote protocols` |
+| Overlay path traversal / escape refused | `tests/safe-overlay.test.ts` | `rejects overlay paths that attempt ../escape` |
+| Overlay symlink destination refused | `tests/safe-overlay.test.ts` | `rejects overlay writes when the target path is a symlink` |
+| Turn-snapshot secret scan rejects credential-shaped blobs | `tests/turn-snapshot.test.ts` | `rejects high-confidence secrets before snapshot acceptance` |
+| Turn-snapshot quarantines blobs outside primary `.git/objects` | `tests/turn-snapshot.test.ts` | `quarantines snapshot blobs outside .git/objects and gc leaves primary loose objects unchanged` |
+| `.faultlineignore` honored before Git object writes | `tests/turn-snapshot.test.ts` | `honors .faultlineignore before writing any Git objects` |
+| Protected environment descriptors cannot be ignored | `tests/turn-snapshot.test.ts` | `keeps lockfiles snapshot-eligible even when .faultlineignore lists them` |
+| Session cache requires dirty-path content fingerprints | `tests/turn-snapshot.test.ts` | `reuses a session cache only when dirty-path content fingerprints match` |
+| Reviewer Ed25519 signature fails closed when untrusted/altered | `tests/authenticated-witness-approval.test.ts` | `fails closed when a rehashed receipt no longer has a valid signature or trusted key` |
+| Lifecycle ledger rejects reordered records | `tests/ledger.test.ts` | `detects reordered records rather than treating an array as a trustworthy timeline` |
+| Provenance honesty / observed-external transport labeling | `tests/ledger.test.ts` | `accepts OBSERVED_EXTERNAL_TRANSPORT as an honest non-Codex transport label` |
+| Proof bundle external root mismatch detects tampering | `tests/engine.test.ts` | `covers every cited run and requires an external root for tamper detection` |
+| Turn proof bundle rejects rehashed semantic contradiction | `tests/turn-proof-bundle.test.ts` | `rejects a rehashed semantic contradiction instead of trusting the catalog or rewritten root` |

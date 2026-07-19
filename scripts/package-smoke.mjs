@@ -31,6 +31,50 @@ function readUtf8(relativePath) {
   return readFileSync(join(repository, relativePath), "utf8");
 }
 
+function assertSecurityControlTestMatrix() {
+  // B-1: every row in docs/security-model.md appendix must name a real test file
+  // (and optionally a test-title substring that appears in that file).
+  const securityModel = readUtf8("docs/security-model.md");
+  const appendixHeading = "## Appendix: claimed controls → enforcing tests";
+  const appendixAt = securityModel.indexOf(appendixHeading);
+  if (appendixAt < 0) {
+    throw new Error("docs/security-model.md must include appendix heading for claimed controls → enforcing tests");
+  }
+  const appendix = securityModel.slice(appendixAt);
+  const rowPattern = /^\|([^|\n]+)\|([^|\n]+)\|([^|\n]*)\|$/gm;
+  const rows = [];
+  for (const match of appendix.matchAll(rowPattern)) {
+    const control = match[1].trim();
+    const testFile = match[2].trim().replace(/^`+|`+$/g, "");
+    const testName = match[3].trim().replace(/^`+|`+$/g, "");
+    if (!control || control === "Claimed control" || control.startsWith("---")) continue;
+    if (!testFile.startsWith("tests/") || !testFile.endsWith(".test.ts")) {
+      throw new Error(`security-model appendix row for '${control}' must list a tests/*.test.ts file, got: ${testFile}`);
+    }
+    rows.push({ control, testFile, testName });
+  }
+  if (rows.length < 8) {
+    throw new Error(`security-model appendix must list at least 8 control→test rows (found ${rows.length})`);
+  }
+  for (const row of rows) {
+    const absolute = join(repository, row.testFile);
+    let body;
+    try {
+      body = readFileSync(absolute, "utf8");
+    } catch {
+      throw new Error(`security-model appendix lists missing test file for '${row.control}': ${row.testFile}`);
+    }
+    if (row.testName) {
+      // Optional: require the test title substring to appear in the file.
+      if (!body.includes(row.testName)) {
+        throw new Error(
+          `security-model appendix test name for '${row.control}' not found in ${row.testFile}: ${row.testName}`
+        );
+      }
+    }
+  }
+}
+
 function assertDocsLint() {
   // Docs-lint contract for contributors:
   // - README must pin judges to the submission tag (never "checkout main").
@@ -43,6 +87,8 @@ function assertDocsLint() {
   const teleprompter = readUtf8("docs/video-teleprompter.md");
   const impact = readUtf8("docs/impact-validation-external-01.md");
   const pinnedRef = "v0.1.0-buildweek";
+
+  assertSecurityControlTestMatrix();
 
   if (!readme.includes(`git checkout ${pinnedRef}`)) {
     throw new Error(`README.md must pin judges to git checkout ${pinnedRef}`);

@@ -6,7 +6,7 @@
 $ErrorActionPreference = "Continue"
 $env:Path = "C:\Program Files\GitHub CLI;" + $env:Path
 
-Set-Location (Resolve-Path (Join-Path $PSScriptRoot ".."))
+Set-Location (Resolve-Path (Join-Path $PSScriptRoot "..\.."))
 
 $origin = (git remote get-url origin).Trim()
 if (-not $origin) { throw "No git remote named origin." }

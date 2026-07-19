@@ -1,14 +1,15 @@
-import { readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * Adversarial scenario coverage matrix (not an end-to-end benchmark).
- * Each row records an expected outcome covered by unit/integration tests.
- * It does not execute Docker investigations or invent Exact-cause claims.
+ * Adversarial scenario coverage matrix (hybrid: spec/unit + optional CI E2E).
+ * Rows become EXECUTABLE_E2E only when benchmarks/e2e-executed.json lists them
+ * (written by the native Docker CI job after real executions).
  */
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const incidentsDir = join(root, "benchmarks", "incidents");
+const e2ePath = join(root, "benchmarks", "e2e-executed.json");
 const expectedOutcomes = [
   "LOCALIZE_BOUNDARY",
   "ONE_MINIMAL_SET",
@@ -31,31 +32,45 @@ for (const outcome of outcomes) {
 }
 if (new Set(outcomes).size !== 8) throw new Error("Expected eight distinct outcomes");
 
+/** @type {Set<string>} */
+let e2eIds = new Set();
+if (existsSync(e2ePath)) {
+  const payload = JSON.parse(readFileSync(e2ePath, "utf8"));
+  if (!Array.isArray(payload.executedIds)) {
+    throw new Error("benchmarks/e2e-executed.json must contain executedIds: string[]");
+  }
+  e2eIds = new Set(payload.executedIds.map(String));
+}
+
 const rows = specs.map((spec) => ({
   id: spec.id,
   scenario: spec.description ?? spec.id,
   expected: spec.expectedOutcome,
   observed: spec.expectedOutcome,
   result: "PASS",
-  coverage: "SPEC_AND_UNIT_COVERED",
+  coverage: e2eIds.has(spec.id) ? "EXECUTABLE_E2E" : "SPEC_AND_UNIT_COVERED",
   detail: spec.notes,
   unsupportedExactCauseClaim: false
 }));
 
+const e2eCount = rows.filter((row) => row.coverage === "EXECUTABLE_E2E").length;
 const report = {
   schemaVersion: "faultline.coverage-matrix.v1",
   title: "FaultLine adversarial scenario coverage matrix",
   generatedAt: new Date().toISOString(),
   kind: "COVERAGE_MATRIX",
-  executionMode: "UNIT_AND_INTEGRATION_COVERAGE",
+  executionMode: e2eCount > 0 ? "HYBRID_UNIT_AND_EXECUTABLE_E2E" : "UNIT_AND_INTEGRATION_COVERAGE",
   incidents: 8,
   expectedLocalizationOutcomes: 8,
   unsupportedExactCauseClaims: 0,
+  executableE2ERows: e2eCount,
   counterfactuallyValidated: 1,
   correctlyMarkedUnstable: 1,
   correctlyMarkedIncompatible: 1,
   rows,
-  note: "This is a coverage matrix, not an end-to-end benchmark. Unit and integration tests assert localization, structured INCOMPATIBLE_STATE classification, env homogeneity, and turn snapshots. Rows do not claim unique semantic root causes."
+  note: e2eCount > 0
+    ? `Hybrid coverage matrix: ${e2eCount} of 8 rows are EXECUTABLE_E2E (Docker CI facts from e2e-executed.json); remaining rows stay SPEC_AND_UNIT_COVERED. Do not invent Exact-cause claims.`
+    : "This is a coverage matrix, not an end-to-end benchmark. Unit and integration tests assert localization, structured INCOMPATIBLE_STATE classification, env homogeneity, and turn snapshots. Rows do not claim unique semantic root causes until Docker CI writes benchmarks/e2e-executed.json."
 };
 
 mkdirSync(join(root, "benchmarks"), { recursive: true });
@@ -63,16 +78,15 @@ writeFileSync(join(root, "benchmarks", "report.json"), `${JSON.stringify(report,
 writeFileSync(join(root, "benchmarks", "REPORT.md"), [
   "# FaultLine adversarial scenario coverage matrix",
   "",
-  "This artifact documents expected outcomes covered by **specification + unit/integration tests**.",
-  "It is **not** an end-to-end Docker benchmark. Every row below is `SPEC_AND_UNIT_COVERED` today",
-  "(0 of 8 are independent CI E2E executions). A future hybrid may split 4 executable integration",
-  "scenarios from 4 spec-only adversarial scenarios — until then, do not call this a benchmark.",
+  e2eCount > 0
+    ? `Hybrid artifact: **${e2eCount}** rows are \`EXECUTABLE_E2E\` (real Docker CI executions). Remaining rows are \`SPEC_AND_UNIT_COVERED\` only — do not call those a benchmark.`
+    : "This artifact documents expected outcomes covered by **specification + unit/integration tests**. It is **not** an end-to-end Docker benchmark until `benchmarks/e2e-executed.json` is produced by the native Docker CI job.",
   "",
   `- Scenarios: **${report.incidents}**`,
   `- Distinct expected outcomes: **${report.expectedLocalizationOutcomes}**`,
   `- Unsupported exact-cause claims: **${report.unsupportedExactCauseClaims}**`,
   `- Execution mode: **${report.executionMode}**`,
-  `- Executable E2E rows in CI: **0** (all rows are spec/unit coverage)`,
+  `- Executable E2E rows in CI: **${e2eCount}**`,
   "",
   "| Scenario | Expected | Observed | Result | Coverage |",
   "| --- | --- | --- | --- | --- |",
@@ -83,7 +97,7 @@ writeFileSync(join(root, "benchmarks", "REPORT.md"), [
   "| Label | Meaning |",
   "| --- | --- |",
   "| `SPEC_AND_UNIT_COVERED` | Expected outcome asserted by unit/integration tests — **not** a full Docker E2E run in CI |",
-  "| `EXECUTABLE_E2E` (reserved) | Scenario actually executed end-to-end in CI with Docker |",
+  "| `EXECUTABLE_E2E` | Scenario actually executed end-to-end in CI with Docker (see `benchmarks/e2e-executed.json`) |",
   "",
   "## Detail",
   "",
@@ -93,4 +107,4 @@ writeFileSync(join(root, "benchmarks", "REPORT.md"), [
   ""
 ].join("\n"), "utf8");
 
-process.stdout.write("Wrote benchmarks/report.json and benchmarks/REPORT.md (coverage matrix, 8 scenarios).\n");
+process.stdout.write(`Wrote benchmarks/report.json and benchmarks/REPORT.md (coverage matrix, ${e2eCount} E2E / ${8 - e2eCount} spec-only).\n`);

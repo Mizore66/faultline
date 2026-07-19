@@ -127,9 +127,12 @@ export function discoverFaultLineArtifacts(repository: string): readonly Discove
   });
 }
 
+/** Copy-pasteable next command when the hub has nothing to open yet. */
+export const UI_HUB_EMPTY_NEXT_COMMAND = "fl quickstart" as const;
+
 function renderHubIndex(repository: string, artifacts: readonly DiscoveredFaultLineArtifact[]): string {
   const rows = artifacts.length === 0
-    ? `<p class="empty">No bundles, incidents, or ledgers found under <code>.faultline</code>.</p>`
+    ? `<p class="empty empty-state">No bundles, incidents, or ledgers found under <code>.faultline</code>.<br>Next: <code class="next-command">${escapeHtml(UI_HUB_EMPTY_NEXT_COMMAND)}</code></p>`
     : `<ul class="catalog">${artifacts.map((artifact, index) => {
       const href = artifact.kind === "incident-draft" || artifact.kind === "ledger"
         ? `/raw/${index}`

@@ -192,6 +192,7 @@ export const GitMinimizationRunFactSchema = z.object({
     "DELTA_SUBSET",
     "DELTA_COMPLEMENT",
     "ONE_MINIMAL",
+    "HUNK_ONE_MINIMAL",
     "SUFFICIENCY_CERTIFICATION",
     "NECESSITY_CERTIFICATION"
   ]),
@@ -252,6 +253,7 @@ export const GitMinimizationAttemptSchema = z.object({
     "DELTA_SUBSET",
     "DELTA_COMPLEMENT",
     "ONE_MINIMAL",
+    "HUNK_ONE_MINIMAL",
     "SUFFICIENCY_CERTIFICATION",
     "NECESSITY_CERTIFICATION"
   ]),
@@ -356,7 +358,7 @@ export interface WrittenGitMinimizationResult {
 
 type ProcessResult = HardenedGitResult;
 
-type PatchUnitInternal = GitPatchUnit & { readonly bytes: Buffer };
+export type PatchUnitInternal = GitPatchUnit & { readonly bytes: Buffer };
 type Direction = GitPatchApplication["direction"];
 type RunRole = GitMinimizationRunFact["role"];
 type AttemptPhase = GitMinimizationAttempt["phase"];
@@ -636,6 +638,62 @@ function selectedPatch(units: readonly PatchUnitInternal[], candidateIds: readon
   const unitsSelected = units.filter((unit) => selected.has(unit.id));
   if (unitsSelected.length !== selected.size) throw new Error("Candidate references a patch unit that does not belong to this Git diff.");
   return { units: unitsSelected, bytes: Buffer.concat(unitsSelected.map((unit) => unit.bytes)) };
+}
+
+/**
+ * Split a whole-file text MODIFY patch into hunk-sized units. Returns null when
+ * the patch is binary, non-MODIFY, or cannot be safely split. Each hunk unit is
+ * a self-contained `git apply` patch (file headers + one @@ hunk).
+ */
+export function splitModifyUnitIntoHunks(unit: PatchUnitInternal): PatchUnitInternal[] | null {
+  if (unit.changeKind !== "MODIFY") return null;
+  const text = unit.bytes.toString("utf8");
+  if (text.includes("GIT binary patch") || text.includes("Binary files ")) return null;
+  const lines = text.split("\n");
+  const header: string[] = [];
+  const hunks: string[][] = [];
+  let current: string[] | null = null;
+  for (const line of lines) {
+    if (line.startsWith("@@ ")) {
+      if (current) hunks.push(current);
+      current = [line];
+      continue;
+    }
+    if (current) {
+      current.push(line);
+      continue;
+    }
+    header.push(line);
+  }
+  if (current) hunks.push(current);
+  if (hunks.length < 2) return null;
+  const headerText = header.join("\n").replace(/\n+$/, "");
+  const output: PatchUnitInternal[] = [];
+  for (let hunkIndex = 0; hunkIndex < hunks.length; hunkIndex += 1) {
+    const hunkBody = hunks[hunkIndex]!.join("\n");
+    const bytes = Buffer.from(`${headerText}\n${hunkBody}${hunkBody.endsWith("\n") ? "" : "\n"}`, "utf8");
+    const patchDigest = sha256Digest(bytes);
+    const id = digestJson({
+      schemaVersion: GIT_MINIMIZATION_SCHEMA_VERSION,
+      kind: "hunk",
+      parentPathDigest: unit.pathDigest,
+      hunkIndex,
+      patchDigest
+    });
+    output.push({
+      id,
+      ordinal: unit.ordinal * 1000 + hunkIndex,
+      changeKind: "MODIFY",
+      path: unit.path,
+      pathBytesBase64: unit.pathBytesBase64,
+      pathDigest: unit.pathDigest,
+      patchDigest,
+      patchBytes: bytes.length,
+      binarySafe: true,
+      bytes
+    });
+  }
+  return output;
 }
 
 /**
@@ -1131,6 +1189,69 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
   }
   if (!budgetStopped && oneMinimal) minimalityReason = "Every single-unit removal produced a Docker PASS.";
 
+  // Hunk refinement: after file-level one-minimality, try splitting surviving
+  // MODIFY text files into @@ hunks and re-running one-minimal over those units.
+  // Fall back to the file-level candidate on apply failure or budget exhaustion.
+  const fileLevelCandidate = [...candidate];
+  const fileLevelOneMinimal = oneMinimal;
+  const fileLevelMinimalityReason = minimalityReason;
+  if (!budgetStopped && oneMinimal && candidate.length > 0) {
+    const refinedUnits: PatchUnitInternal[] = [];
+    let splittable = false;
+    for (const unit of units) {
+      if (!candidate.includes(unit.id)) continue;
+      const hunks = splitModifyUnitIntoHunks(unit);
+      if (hunks === null) {
+        refinedUnits.push(unit);
+        continue;
+      }
+      splittable = true;
+      refinedUnits.push(...hunks);
+    }
+    if (splittable && refinedUnits.length > candidate.length) {
+      units = refinedUnits;
+      candidate = refinedUnits.map((unit) => unit.id);
+      let hunkIndex = 0;
+      let hunkOneMinimal = true;
+      let hunkAbandoned = false;
+      let hunkReason = "Every single-hunk removal was tested.";
+      while (hunkIndex < candidate.length && !budgetStopped) {
+        const removed = candidate[hunkIndex];
+        if (!removed) break;
+        const without = candidate.filter((id) => id !== removed);
+        const probe = await recordProbe("HUNK_ONE_MINIMAL", "FORWARD_FROM_BEFORE", without, "HUNK_ONE_MINIMAL");
+        if (probe.outcome === "NOT_RUN") {
+          budgetStopped = true;
+          hunkOneMinimal = false;
+          hunkReason = "The execution budget was exhausted during hunk refinement; retaining the file-level one-minimal candidate.";
+          break;
+        }
+        if (probe.outcome === "FAIL") {
+          candidate = without;
+          hunkIndex = 0;
+          hunkOneMinimal = true;
+          hunkReason = "A smaller failing hunk candidate was found; retesting its removals.";
+          continue;
+        }
+        if (probe.outcome === "UNRESOLVED") {
+          hunkAbandoned = true;
+          hunkReason = `${fileLevelMinimalityReason} Hunk refinement was abandoned after an unresolved hunk apply.`;
+          break;
+        }
+        hunkIndex += 1;
+      }
+      if (budgetStopped || hunkAbandoned) {
+        units = await derivePatchUnits(repository, before, after);
+        candidate = fileLevelCandidate;
+        oneMinimal = budgetStopped ? false : fileLevelOneMinimal;
+        minimalityReason = hunkReason;
+      } else if (hunkOneMinimal) {
+        oneMinimal = true;
+        minimalityReason = "Every single-hunk removal produced a Docker PASS after file-level refinement.";
+      }
+    }
+  }
+
   const certify = async (
     phase: Extract<AttemptPhase, "SUFFICIENCY_CERTIFICATION" | "NECESSITY_CERTIFICATION">,
     direction: Direction,
@@ -1220,6 +1341,7 @@ const ROLE_SEMANTICS = {
   DELTA_SUBSET: { phase: "DELTA_SUBSET", direction: "FORWARD_FROM_BEFORE" },
   DELTA_COMPLEMENT: { phase: "DELTA_COMPLEMENT", direction: "FORWARD_FROM_BEFORE" },
   ONE_MINIMAL: { phase: "ONE_MINIMAL", direction: "FORWARD_FROM_BEFORE" },
+  HUNK_ONE_MINIMAL: { phase: "HUNK_ONE_MINIMAL", direction: "FORWARD_FROM_BEFORE" },
   SUFFICIENCY_CERTIFICATION: { phase: "SUFFICIENCY_CERTIFICATION", direction: "FORWARD_FROM_BEFORE" },
   NECESSITY_CERTIFICATION: { phase: "NECESSITY_CERTIFICATION", direction: "REVERSE_FROM_AFTER" }
 } as const satisfies Record<GitMinimizationRunFact["role"], {
