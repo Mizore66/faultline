@@ -6,3 +6,6 @@
 # Intentional secret-shaped fixtures for redaction / snapshot tests only:
 tests/
 docs/samples/
+
+# Reviewed development-only placeholder that matches AUTHORIZATION_BASIC.
+scripts/dev/create-backlog-issues.ps1
