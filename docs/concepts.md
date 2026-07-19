@@ -24,10 +24,10 @@ Evidence vocabulary, grades, claim boundaries, and capability scope. For judge i
 
 Turn investigation already ships write-once packages with lifecycle binding, tree packs, external root verification, run reconstruction, and structured outcomes. The remaining **maturity policy** before `TURN_PROOF` is:
 
-1. External repository validation (permissioned case study beyond dogfood)
-2. Counterfactual edit isolation from a selected turn boundary (`fl investigate turns --minimize` / `fl prove transition`)
-3. Prevention-proof integration on the turn→repair arc
-4. Operational soak across supported platforms
+1. External repository validation (permissioned case study beyond dogfood) — **met** by MUMBCS external-01 (`Status: completed`; protocol validation, not organic prod bug)
+2. Counterfactual edit isolation from a selected turn boundary (`fl investigate turns --minimize` / `fl prove transition`) — **open**
+3. Prevention-proof integration on the turn→repair arc — **open**
+4. Operational soak across supported platforms — **open**
 
 Do not promote the grade for marketing. Promote only when those criteria are met.
 
@@ -153,7 +153,7 @@ Regenerate the static preview with `pnpm fl judge-preview`. `--replay` is cached
 | Live proof-grade investigation | Self-incident root `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` | Recorded |
 | Codex/GPT-5.6 use | Qualifying `/feedback` `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` plus the bounded runtime boundaries above | Recorded session id |
 | User or business impact | Self-incident dogfood only; no third-party adoption metrics | Scoped / honest |
-| npm install | Not published; clone + `pnpm fl` only | Source-only until first publish |
+| npm install | Not published; clone + `pnpm fl` only | **Source-only policy** for Build Week / current phase — do not claim `npm i -g @mizore66/faultline` |
 | Build Week video + Devpost fields | Narrated &lt;3 min YouTube URL and remaining form fields | Still human-owned |
 
 Use the [Devpost description draft](devpost-description-draft.md), [impact-validation template](impact-validation-template.md), and [differentiation comparison](differentiation.md) for the remaining human-reviewed copy.

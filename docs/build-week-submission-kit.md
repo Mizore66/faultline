@@ -52,12 +52,15 @@ Say on camera that FaultLine did not auto-approve or auto-freeze; the one comman
 
 ### Cold open script (0:00–0:20) — Idea beat (you record)
 
-**On screen:** `pnpm fl judge-proof` proof page (sample root `sha256:f85c446d…`) or `docs/self-incident-proof-preview.html`. **Do not** open with `judge-demo` or “we built a better bisect.”
+**Locked sequence (matches [video-teleprompter.md](video-teleprompter.md) + Devpost Final gate):**  
+1. **Preferred:** external MUMBCS protocol beat (summary / digests story), then  
+2. `pnpm fl judge-proof` sample root `sha256:f85c446d…` (or `docs/self-incident-proof-preview.html` only as a visual aid for the sample).  
+**Do not** open with `judge-demo` or “we built a better bisect.”
 
 **Speak (approx.) — external-01 landed:**  
 “In a consented external protocol validation on MUMBCS, FaultLine froze a human-reviewed witness and attributed Turn 3 as the earliest stable PASS→FAIL — experimental turn evidence, not a naturally occurring production bug. Same witness, recorded turn trees. For portable trust: here is a verified COMMIT_PROOF **sample** package — root `sha256:f85c446d…` — distinct from our historical self-incident dogfood at `97c3290`.”
 
-**Fallback cold open (skip external beat):** say “verified COMMIT_PROOF **sample** package,” never “real incident.”
+**Fallback cold open (skip external beat):** sample-only — say “verified COMMIT_PROOF **sample** package,” never “real incident.”
 
 | Time | Screen | Narration point |
 | --- | --- | --- |
@@ -132,6 +135,15 @@ These are separate facts to gather; none is created merely by copying this kit i
 | Signed CI provenance is shown | CI receipt, matching Sigstore bundle, trust file, trusted root, and exact verification result | [OPTIONAL / NOT YET RECORDED] |
 
 Do not transform a blank status into a claim. The [Devpost description draft](devpost-description-draft.md), [impact-validation template](impact-validation-template.md), and [differentiation comparison](differentiation.md) are deliberately structured so a human can replace placeholders with auditable facts.
+
+## Claims we do not make (read before record / paste)
+
+- Model intent, private Codex interception, or unique semantic root cause
+- Tamper-proof host / Docker daemon enforcement (signed CI provenance binds receipt bytes + Actions identity only — [security-model.md](security-model.md))
+- That MUMBCS external-01 is a naturally occurring production bug (it is protocol / interoperability validation, `EXPERIMENTAL_TURN`)
+- That native Codex UI replay without a fresh sidecar ledger is the proof package (demo-only — [codex-sidecar.md](codex-sidecar.md#delegated-worktrees--demo-only-when-no-ledger))
+- Time-saved metrics, third-party adoption scale, or npm global install
+- `TURN_PROOF` or “prevention verified” for the turn arc unless the retained artifacts actually say so
 
 ## CI evidence packet to retain
 
