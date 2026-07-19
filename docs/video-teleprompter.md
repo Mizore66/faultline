@@ -8,9 +8,9 @@ Record with product on screen. Prefer PowerShell: `pnpm.cmd fl …` if Execution
 
 ---
 
-## 0:00–0:20 — Cold open (default: permissioned later-turn, then sample)
+## 0:00–0:20 — Cold open (prefer external later-turn, then sample)
 
-**Default screen:** publishable MUMBCS summary / partner evidence story, then `pnpm fl judge-proof` sample root `sha256:f85c446d…`. See [publishable-summary-mumbcs.md](publishable-summary-mumbcs.md).
+**Preferred screen:** external MUMBCS protocol summary / partner evidence story, then `pnpm fl judge-proof` sample root `sha256:f85c446d…`. See [publishable-summary-mumbcs.md](publishable-summary-mumbcs.md).
 
 **Say (external-01 landed — preferred):**
 
