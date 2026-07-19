@@ -18,7 +18,14 @@ import {
   writeGithubProvenanceReceipt
 } from "./github-provenance.js";
 import { createDemoAnalysis } from "./engine.js";
-import { doctorCliExitCode, runFaultLineDoctor, type FaultLineDoctorReport } from "./doctor.js";
+import {
+  doctorCliExitCode,
+  doctorSecurityExitCode,
+  runFaultLineDoctor,
+  runFaultLineSecurityDoctor,
+  type FaultLineDoctorReport
+} from "./doctor.js";
+import { purgeFaultlineSnapshotObjects } from "./snapshot-gc.js";
 import { guidedInvestigateFromCiLog } from "./guided-investigate.js";
 import { assertIncidentFrozenWitnessBinding, runFrozenIncidentContinuation } from "./incident-continue.js";
 import { createIncidentDraft, type IncidentDraft } from "./incident.js";
@@ -118,7 +125,7 @@ import { ZodError } from "zod";
 const usage = `FaultLine — freeze one reviewed witness; prove only what executions support
 
 Quickstart (judges / first look):
-  fl doctor [--proof-ready]
+  fl doctor [--proof-ready] [--security]
   fl judge-proof [--export-only]          # verified COMMIT_PROOF sample (no Docker / no API key)
   fl quickstart                          # print the recommended next commands
   fl --version
@@ -139,6 +146,7 @@ More:
 
 Notes:
   fl doctor exits 0 for local CLI readiness; fl doctor --proof-ready exits nonzero unless Docker proof-grade preflight is READY.
+  fl doctor --security runs a live hardened-Git self-test (hooks / protocol.allow=never / filters).
   Headless judges: FAULTLINE_NO_BROWSER=1 pnpm fl judge-proof --export-only
   GPT-5.6 samples (no key): docs/samples/gpt-5.6/
   The judge demo/fixture paths do not require an OpenAI API key.`;
@@ -151,7 +159,7 @@ Usage:
   fl commit-proof-preview [--bundle <git-proof-bundle-directory>] [--expect-root <sha256:...>] [--output <static-preview.html>]
   fl --version
   fl judge-preview [--output <static-preview.html>]
-  fl doctor [--repo <directory>] [--json] [--proof-ready]
+  fl doctor [--repo <directory>] [--json] [--proof-ready] [--security]
   fl quickstart
   fl init [--repo <directory>] [--cli <built-cli.js>] [--runtime <node|python|go>] [--yes]
   fl incident suggest --repo <directory>
@@ -171,6 +179,7 @@ Usage:
   fl serve [--port <number>]
   fl serve --bundle <git-proof-bundle-directory> [--expect-root <sha256:...>] [--minimization <result.json> --expect-minimization <sha256:...>] [--repair <repair-brief-directory> --expect-repair <sha256:...>] [--prevention <prevention-proof-directory> --expect-prevention <sha256:...>] [--port <number>]
   fl codex --dry-run | --snapshot [--repo <directory>]
+  fl codex snapshot gc [--repo <directory>]
   fl codex record <init|stdin|checkpoint|verify> [...]
   fl codex sidecar config (--cli <built-cli.js> | --command <hook-command> [--command-windows <hook-command>])
   fl codex sidecar install --repo <directory> --cli <built-cli.js> --yes
@@ -353,9 +362,32 @@ function doctorSummary(report: FaultLineDoctorReport): string {
 }
 
 async function doctorCommand(args: string[]): Promise<void> {
+  const securityOnly = hasFlag(args, "--security");
+  const proofReadyOnly = hasFlag(args, "--proof-ready");
+  if (securityOnly && proofReadyOnly) {
+    throw new Error("Usage: fl doctor [--repo <directory>] [--json] [--proof-ready | --security]");
+  }
+  if (securityOnly) {
+    const security = runFaultLineSecurityDoctor();
+    if (hasFlag(args, "--json")) {
+      process.stdout.write(`${JSON.stringify({
+        ...security,
+        cliExitCode: doctorSecurityExitCode(security)
+      }, null, 2)}\n`);
+    } else {
+      process.stdout.write([
+        "FaultLine doctor --security",
+        `Status: ${security.status}`,
+        ...security.checks.map((check) => `- ${check.id}: ${check.status} — ${check.summary}`),
+        `Next: ${security.next}`
+      ].join("\n") + "\n");
+    }
+    process.exitCode = doctorSecurityExitCode(security);
+    return;
+  }
+
   const repository = resolve(option(args, "--repo") ?? process.cwd());
   const report = await runFaultLineDoctor({ repository });
-  const proofReadyOnly = hasFlag(args, "--proof-ready");
   if (hasFlag(args, "--json")) {
     process.stdout.write(`${JSON.stringify({
       ...report,
@@ -2540,6 +2572,18 @@ async function main(): Promise<void> {
         await codexSidecarCommand(args.slice(1));
         return;
       }
+      if (args[0] === "snapshot" && args[1] === "gc") {
+        const repository = resolve(option(args.slice(2), "--repo") ?? process.cwd());
+        const result = purgeFaultlineSnapshotObjects(repository);
+        process.stdout.write(`${JSON.stringify({
+          status: result.status,
+          repositoryRoot: result.repositoryRoot,
+          objectDirectory: result.objectDirectory,
+          removedEntries: result.removedEntries,
+          next: "fl doctor --security"
+        }, null, 2)}\n`);
+        return;
+      }
       if (hasFlag(args, "--dry-run")) {
         process.stdout.write(`${JSON.stringify({ adapter: "observed-codex-hook-sidecar", status: "DRY_RUN", records: ["public session and turn identifiers", "prompt digest only", "clean Git checkpoint when available"], limitation: "Install and trust the emitted hook configuration to observe public lifecycle metadata. FaultLine does not intercept private model state, transcripts, or reasoning." }, null, 2)}\n`);
         return;
@@ -2551,7 +2595,7 @@ async function main(): Promise<void> {
         process.stdout.write(`${JSON.stringify({ snapshot, file, limitation: "This is a clean Git sidecar snapshot, not a live Codex transport event." }, null, 2)}\n`);
         return;
       }
-      throw new Error("The current build exposes an observed Codex hook sidecar and a clean Git snapshot. Run: fl codex sidecar install --repo <directory> --cli <built-cli.js> --yes, fl codex --dry-run, or fl codex --snapshot --repo <directory>");
+      throw new Error("The current build exposes an observed Codex hook sidecar, quarantined turn-snapshot GC, and a clean Git snapshot. Run: fl codex sidecar install --repo <directory> --cli <built-cli.js> --yes, fl codex snapshot gc --repo <directory>, fl codex --dry-run, or fl codex --snapshot --repo <directory>");
     case "witness":
       await witnessCommand(args);
       return;

@@ -633,6 +633,13 @@ export function validateGitInvestigationProofSemantics(
   if (!result.witness?.valid || result.witness.externalDigestStatus !== "MATCH") {
     errors.push("investigation does not attest a valid externally matched frozen witness");
   }
+  for (const run of result.runs) {
+    if (run.result.kind === "UNSAFE_LOCAL" || run.sandbox.kind === "UNSAFE_LOCAL" || run.result.executor === "UNSAFE_LOCAL") {
+      errors.push(
+        `UNSAFE_LOCAL run facts are structurally unexportable and refuse package compilation: ${run.runId}`
+      );
+    }
+  }
 
   const witnessVerification = verifyFrozenWitnessRecord(frozenWitness, frozenWitness.frozenDigest);
   if (!witnessVerification.valid || witnessVerification.externalDigestStatus !== "MATCH") {
@@ -980,6 +987,17 @@ export function writeGitInvestigationProofBundle(
 ): WrittenGitProofBundle {
   const result = GitInvestigationResultSchema.parse(investigationInput);
   const frozenWitness = FrozenWitnessSchema.parse(frozenWitnessInput);
+  const unsafeLocalRuns = result.runs.filter(
+    (run) =>
+      run.result.kind === "UNSAFE_LOCAL"
+      || run.sandbox.kind === "UNSAFE_LOCAL"
+      || run.result.executor === "UNSAFE_LOCAL"
+  );
+  if (unsafeLocalRuns.length > 0) {
+    throw new Error(
+      `Refusing to compile Git proof bundle: UNSAFE_LOCAL run facts are structurally unexportable (${unsafeLocalRuns.map((run) => run.runId).join(", ")}).`
+    );
+  }
   const semanticErrors = validateGitInvestigationProofSemantics(result, frozenWitness);
   if (semanticErrors.length > 0) throw new Error(`Cannot write semantically inconsistent Git proof bundle: ${semanticErrors.join("; ")}`);
   const lifecycle = bindLifecycleLedger(options.lifecycleLedger, result);

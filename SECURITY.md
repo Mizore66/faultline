@@ -10,10 +10,11 @@ Security fixes are accepted for the current `main` branch of this repository (pr
 
 **Do not** open a public GitHub issue for security reports that could expose secrets, private proof bundles, or exploitable command-injection paths.
 
-Prefer one of:
+**Report privately through GitHub Security Advisories for this repository:**
 
-1. GitHub **Security Advisories** / private vulnerability reporting on [Mizore66/faultline](https://github.com/Mizore66/faultline) (if enabled), or
-2. Email the maintainers via the addresses listed in the repository’s GitHub profile / recent release notes.
+https://github.com/Mizore66/faultline/security/advisories/new
+
+That private advisory form is the sole security contact for FaultLine. Do not email maintainers or open a public issue for vulnerability reports.
 
 Include:
 

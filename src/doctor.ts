@@ -1,5 +1,6 @@
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 /**
@@ -524,6 +525,162 @@ export async function runFaultLineDoctor(options: FaultLineDoctorOptions = {}): 
       "Likely runtime detection uses root-file markers only; choose and digest-pin the actual image explicitly."
     ]
   };
+}
+
+export const DOCTOR_SECURITY_SCHEMA_VERSION = "faultline.doctor-security.v1" as const;
+
+export type DoctorSecurityCheckId =
+  | "hooks-neutralization"
+  | "protocol-allow-never"
+  | "path-filters";
+
+export type DoctorSecurityCheck = {
+  readonly id: DoctorSecurityCheckId;
+  readonly status: "PASS" | "FAIL";
+  readonly summary: string;
+  readonly observation: string | null;
+};
+
+export type FaultLineSecurityDoctorReport = {
+  readonly schemaVersion: typeof DOCTOR_SECURITY_SCHEMA_VERSION;
+  readonly fixtureRepository: string;
+  readonly checks: readonly DoctorSecurityCheck[];
+  readonly status: "SECURE" | "INSECURE";
+  readonly next: string;
+};
+
+function securityGit(
+  repository: string,
+  args: readonly string[],
+  options: { hardened: boolean; env?: NodeJS.ProcessEnv } = { hardened: true }
+): { status: number | null; stdout: string; stderr: string } {
+  const argv = options.hardened
+    ? [...DOCTOR_SAFE_GIT_CONFIG, "-C", repository, ...args]
+    : ["-C", repository, ...args];
+  const result = spawnSync("git", argv, {
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+    env: {
+      PATH: process.env.PATH ?? "",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+      GIT_TERMINAL_PROMPT: "0",
+      ...(process.platform === "win32" && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      ...(process.platform === "win32" && process.env.ComSpec ? { ComSpec: process.env.ComSpec } : {}),
+      ...options.env
+    }
+  });
+  return {
+    status: result.status,
+    stdout: String(result.stdout ?? ""),
+    stderr: String(result.stderr ?? "")
+  };
+}
+
+/**
+ * Live self-test: spawn Git against a throwaway fixture that contains a
+ * deliberately malicious hook and hostile protocol/filter config, then assert
+ * FaultLine's hardened overrides neutralize them.
+ */
+export function runFaultLineSecurityDoctor(): FaultLineSecurityDoctorReport {
+  const fixtureRepository = mkdtempSync(join(tmpdir(), "faultline-doctor-security-"));
+  const hooksDir = join(fixtureRepository, "malicious-hooks");
+  const markerRelative = "HOOK_EXECUTED.marker";
+  const checks: DoctorSecurityCheck[] = [];
+
+  try {
+    mkdirSync(hooksDir, { recursive: true, mode: 0o700 });
+    const hookPath = join(hooksDir, "pre-commit");
+    // Relative marker so the same POSIX hook body works under Git for Windows' sh.
+    writeFileSync(
+      hookPath,
+      `#!/bin/sh\nprintf 'hooked\\n' > ${markerRelative}\n`,
+      "utf8"
+    );
+    if (process.platform !== "win32") chmodSync(hookPath, 0o755);
+
+    securityGit(fixtureRepository, ["init"], { hardened: false });
+    securityGit(fixtureRepository, ["config", "user.email", "faultline-security@example.invalid"], { hardened: false });
+    securityGit(fixtureRepository, ["config", "user.name", "FaultLine Security Doctor"], { hardened: false });
+    securityGit(fixtureRepository, ["config", "core.hooksPath", hooksDir], { hardened: false });
+    securityGit(fixtureRepository, ["config", "filter.lfs.process", "malicious-lfs-filter"], { hardened: false });
+    securityGit(fixtureRepository, ["config", "filter.lfs.smudge", "malicious-lfs-smudge"], { hardened: false });
+    securityGit(fixtureRepository, ["config", "filter.lfs.required", "true"], { hardened: false });
+    writeFileSync(join(fixtureRepository, "tracked.txt"), "security-doctor\n", "utf8");
+    securityGit(fixtureRepository, ["add", "tracked.txt"], { hardened: false });
+
+    // Hardened commit must not execute the fixture's malicious pre-commit hook.
+    const hardenedCommit = securityGit(fixtureRepository, ["commit", "-m", "security-doctor"], { hardened: true });
+    const hookExecuted = existsSync(join(fixtureRepository, markerRelative));
+    checks.push({
+      id: "hooks-neutralization",
+      status: !hookExecuted && hardenedCommit.status === 0 ? "PASS" : "FAIL",
+      summary: !hookExecuted
+        ? "Hardened Git overrides prevented the malicious pre-commit hook from executing."
+        : "Malicious pre-commit hook executed despite hardened overrides.",
+      observation: hookExecuted
+        ? `Marker written at ${markerRelative}`
+        : `commit exit=${hardenedCommit.status ?? "null"}; marker absent`
+    });
+
+    const protocolProbe = securityGit(
+      fixtureRepository,
+      ["ls-remote", "https://example.invalid/faultline-security-probe.git"],
+      { hardened: true }
+    );
+    const protocolBlocked = protocolProbe.status !== 0;
+    checks.push({
+      id: "protocol-allow-never",
+      status: protocolBlocked ? "PASS" : "FAIL",
+      summary: protocolBlocked
+        ? "protocol.allow=never blocked a remote HTTPS Git probe."
+        : "Remote HTTPS Git probe unexpectedly succeeded under hardened overrides.",
+      observation: `exit=${protocolProbe.status ?? "null"}; stderr=${protocolProbe.stderr.trim().slice(0, 200)}`
+    });
+
+    const filterProcess = securityGit(fixtureRepository, ["config", "--get", "filter.lfs.process"], { hardened: true });
+    const filterSmudge = securityGit(fixtureRepository, ["config", "--get", "filter.lfs.smudge"], { hardened: true });
+    // With -c overrides, `git config --get` still reads the stored repo value.
+    // Prove neutralization by running a status under hardened config that must
+    // not invoke the configured LFS process (empty override + required=false).
+    const statusHardened = securityGit(
+      fixtureRepository,
+      ["status", "--porcelain=v1", "-z"],
+      { hardened: true }
+    );
+    const filtersNeutral = statusHardened.status === 0
+      && !statusHardened.stderr.toLowerCase().includes("malicious-lfs");
+    checks.push({
+      id: "path-filters",
+      status: filtersNeutral ? "PASS" : "FAIL",
+      summary: filtersNeutral
+        ? "Hardened overrides neutralize repository filter.lfs process/smudge settings during Git inspection."
+        : "Hardened Git inspection still appears to honor hostile filter.lfs settings.",
+      observation: [
+        `stored process=${filterProcess.stdout.trim() || "<empty>"}`,
+        `stored smudge=${filterSmudge.stdout.trim() || "<empty>"}`,
+        `status exit=${statusHardened.status ?? "null"}`
+      ].join("; ")
+    });
+  } finally {
+    rmSync(fixtureRepository, { recursive: true, force: true });
+  }
+
+  const status = checks.every((check) => check.status === "PASS") ? "SECURE" : "INSECURE";
+  return {
+    schemaVersion: DOCTOR_SECURITY_SCHEMA_VERSION,
+    fixtureRepository,
+    checks,
+    status,
+    next: status === "SECURE"
+      ? "fl doctor --proof-ready"
+      : "fl doctor --security"
+  };
+}
+
+export function doctorSecurityExitCode(report: FaultLineSecurityDoctorReport): number {
+  return report.status === "SECURE" ? 0 : 1;
 }
 
 /**

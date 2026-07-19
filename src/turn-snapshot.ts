@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
@@ -25,10 +25,16 @@ import {
  * building a throwaway Git tree in a temporary index, so FaultLine can still
  * localize a regression to the turn that introduced it even mid-session.
  *
- * Staging is not storage-neutral: `git add` / `write-tree` write blobs into
- * the repository object database. Every path is therefore filtered before any
- * Git object write.
+ * Staging is not storage-neutral: `git add` / `write-tree` write blobs. FaultLine
+ * quarantines those writes into `.git/faultline/objects` via
+ * `GIT_OBJECT_DIRECTORY` so the user's primary `.git/objects` database is not
+ * polluted. Every path is filtered before any Git object write.
  */
+
+/** Relative to the repository `.git` directory. */
+export const FAULTLINE_SNAPSHOT_OBJECT_DIR = "faultline/objects" as const;
+/** Alternates entry relative to `.git/objects` so normal Git reads can resolve quarantined trees. */
+export const FAULTLINE_SNAPSHOT_ALTERNATES_ENTRY = "../faultline/objects" as const;
 export const TURN_TREE_SNAPSHOT_VERSION = "faultline.turn-tree-snapshot.v1" as const;
 
 const HashSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/, "Expected a sha256 digest");
@@ -165,11 +171,60 @@ function hardenedGitEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
+export function faultlineSnapshotObjectDirectory(repositoryRoot: string): string {
+  return join(resolve(repositoryRoot), ".git", ...FAULTLINE_SNAPSHOT_OBJECT_DIR.split("/"));
+}
+
+export function primaryGitObjectDirectory(repositoryRoot: string): string {
+  return join(resolve(repositoryRoot), ".git", "objects");
+}
+
 /**
- * The default Git runner. `env` only ever carries `GIT_INDEX_FILE` for the
- * temporary-index add/write-tree calls; every read-only call (rev-parse,
- * status) omits it and therefore reads and writes back nothing but the
- * user's real, unmodified `.git/index`.
+ * Ensure the quarantine object store exists and is registered as an alternate
+ * of the primary object database so later reads (`ls-tree`, materialization)
+ * can resolve snapshot trees without copying blobs into `.git/objects`.
+ */
+export function ensureFaultlineSnapshotObjectStore(repositoryRoot: string): string {
+  const root = resolve(repositoryRoot);
+  const quarantine = faultlineSnapshotObjectDirectory(root);
+  mkdirSync(join(quarantine, "info"), { recursive: true, mode: 0o700 });
+  mkdirSync(join(quarantine, "pack"), { recursive: true, mode: 0o700 });
+  const alternatesPath = join(primaryGitObjectDirectory(root), "info", "alternates");
+  mkdirSync(join(primaryGitObjectDirectory(root), "info"), { recursive: true, mode: 0o700 });
+  let existing = "";
+  if (existsSync(alternatesPath)) {
+    existing = readFileSync(alternatesPath, "utf8");
+  }
+  const lines = existing.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.includes(FAULTLINE_SNAPSHOT_ALTERNATES_ENTRY)) {
+    writeFileSync(
+      alternatesPath,
+      `${[...lines, FAULTLINE_SNAPSHOT_ALTERNATES_ENTRY].join("\n")}\n`,
+      "utf8"
+    );
+  }
+  return quarantine;
+}
+
+/**
+ * Environment for `git add` / `write-tree` / cache `cat-file -e` so new objects
+ * land in `.git/faultline/objects` while existing primary objects remain readable.
+ */
+export function turnSnapshotObjectWriteEnvironment(repositoryRoot: string): NodeJS.ProcessEnv {
+  const root = resolve(repositoryRoot);
+  const quarantine = ensureFaultlineSnapshotObjectStore(root);
+  const primary = primaryGitObjectDirectory(root);
+  return {
+    GIT_OBJECT_DIRECTORY: quarantine,
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: primary
+  };
+}
+
+/**
+ * The default Git runner. `env` may carry `GIT_INDEX_FILE` and/or quarantined
+ * object-directory variables for add/write-tree/cat-file. Read-only calls
+ * (rev-parse, status) omit those and therefore leave the user's real index and
+ * primary object database alone.
  */
 export function defaultTurnSnapshotGitRunner(repositoryRoot: string, args: readonly string[], env?: NodeJS.ProcessEnv): string {
   const result = spawnSync("git", [...DOCTOR_SAFE_GIT_CONFIG, "-C", repositoryRoot, ...args], {
@@ -439,7 +494,13 @@ export function computeDirtyContentFingerprint(
 
 function gitTreeObjectExists(runGit: TurnSnapshotGitRunner, repositoryRoot: string, treeDigest: string): boolean {
   try {
-    runGit(repositoryRoot, ["cat-file", "-e", `${treeDigest}^{tree}`]);
+    // Inspect the quarantine object store (with primary as alternate) so cache
+    // reuse sees trees written by prior snapshot captures.
+    runGit(
+      repositoryRoot,
+      ["cat-file", "-e", `${treeDigest}^{tree}`],
+      turnSnapshotObjectWriteEnvironment(repositoryRoot)
+    );
     return true;
   } catch {
     return false;
@@ -794,12 +855,16 @@ function writeThrowawayTreeDigest(
   });
 
   const temporaryIndexPath = join(tmpdir(), `faultline-turn-tree-${randomUUID()}.index`);
+  const objectEnv = turnSnapshotObjectWriteEnvironment(repositoryRoot);
   try {
     for (const chunk of chunkPaths(plan.paths, TURN_SNAPSHOT_ADD_CHUNK_SIZE)) {
       if (chunk.length === 0) continue;
-      runGit(repositoryRoot, ["add", "--", ...chunk], { GIT_INDEX_FILE: temporaryIndexPath });
+      runGit(repositoryRoot, ["add", "--", ...chunk], { ...objectEnv, GIT_INDEX_FILE: temporaryIndexPath });
     }
-    const treeDigest = runGit(repositoryRoot, ["write-tree"], { GIT_INDEX_FILE: temporaryIndexPath }).trim();
+    const treeDigest = runGit(repositoryRoot, ["write-tree"], {
+      ...objectEnv,
+      GIT_INDEX_FILE: temporaryIndexPath
+    }).trim();
     if (!GitObjectIdSchema.safeParse(treeDigest).success) {
       throw new TurnSnapshotError("Git did not return a valid tree object id for this turn tree snapshot.");
     }

@@ -44,6 +44,10 @@ describe("FaultLine frozen-witness sandbox plans", () => {
     expect(first.policyDigest).toBe(second.policyDigest);
     expect(first.arguments).toContain("--network");
     expect(first.arguments).toContain("none");
+    expect(first.arguments).toContain("--ipc");
+    expect(first.arguments).toContain("none");
+    expect(first.arguments).toContain("--ulimit");
+    expect(first.arguments).toContain("fsize=1048576:1048576");
     expect(first.arguments).toContain("--read-only");
     expect(first.arguments).toContain("65534:65534");
     expect(first.arguments).toContain("--cap-drop");

@@ -50,6 +50,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "audit:prod": "pnpm audit --prod",
     "test:package": "node scripts/package-smoke.mjs",
     "benchmark": "node scripts/run-coverage-matrix.mjs",
     "coverage-matrix": "node scripts/run-coverage-matrix.mjs",
@@ -66,6 +67,6 @@
     "@types/node": "^22.15.30",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.10"
   }
 }

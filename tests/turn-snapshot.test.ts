@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -7,12 +7,15 @@ import { sha256 } from "../src/canonical.js";
 import { computeEnvironmentFingerprint } from "../src/environment-fingerprint.js";
 import { STARTER_FAULTLINEIGNORE } from "../src/project-init.js";
 import { fileContentDigest, SECRET_ALLOWLIST_SCHEMA_VERSION } from "../src/secret-allowlist.js";
+import { purgeFaultlineSnapshotObjects } from "../src/snapshot-gc.js";
 import {
   TURN_SNAPSHOT_MAX_QUIESCENCE_ATTEMPTS,
   TURN_SNAPSHOT_QUIESCENCE_DELAY_MS,
   TURN_TREE_SNAPSHOT_VERSION,
   captureTurnTreeSnapshot,
   defaultTurnSnapshotGitRunner,
+  faultlineSnapshotObjectDirectory,
+  primaryGitObjectDirectory,
   signTurnTreeSnapshot,
   verifyTurnTreeSnapshot,
   TurnSnapshotError,
@@ -20,6 +23,18 @@ import {
   type TurnSnapshotGitRunner,
   type TurnTreeSnapshot
 } from "../src/turn-snapshot.js";
+
+function countLooseObjects(objectsDirectory: string): number {
+  if (!existsSync(objectsDirectory)) return 0;
+  let count = 0;
+  for (const entry of readdirSync(objectsDirectory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name === "info" || entry.name === "pack" || entry.name === "faultline") continue;
+    if (!/^[0-9a-f]{2}$/i.test(entry.name)) continue;
+    count += readdirSync(join(objectsDirectory, entry.name)).filter((name) => !name.endsWith(".tmp")).length;
+  }
+  return count;
+}
 
 function git(repository: string, args: string[]): string {
   const result = spawnSync("git", ["-C", repository, ...args], { encoding: "utf8" });
@@ -520,6 +535,29 @@ describe("Turn tree snapshot capture", () => {
       expect(paths).toContain("pnpm-lock.yaml");
       expect(paths).toContain("package.json");
       expect(warnings.some((warning) => /Protected environment descriptor/i.test(warning))).toBe(true);
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("quarantines snapshot blobs outside .git/objects and gc leaves primary loose objects unchanged", () => {
+    const repository = repositoryFixture();
+    try {
+      const primaryObjects = primaryGitObjectDirectory(repository);
+      const beforeLoose = countLooseObjects(primaryObjects);
+      writeFileSync(join(repository, "tracked.txt"), "quarantine-me\n", "utf8");
+      writeFileSync(join(repository, "brand-new.txt"), "new blob for quarantine\n", "utf8");
+
+      const snapshot = capture(repository, { sleep: () => {} });
+      expect(snapshot.treeDigest).toMatch(/^[a-f0-9]{40}$/);
+      expect(existsSync(faultlineSnapshotObjectDirectory(repository))).toBe(true);
+      expect(countLooseObjects(primaryObjects)).toBe(beforeLoose);
+      expect(countLooseObjects(faultlineSnapshotObjectDirectory(repository))).toBeGreaterThan(0);
+
+      const gc = purgeFaultlineSnapshotObjects(repository);
+      expect(gc.status).toBe("PURGED");
+      expect(existsSync(faultlineSnapshotObjectDirectory(repository))).toBe(false);
+      expect(countLooseObjects(primaryObjects)).toBe(beforeLoose);
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }

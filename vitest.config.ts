@@ -8,12 +8,17 @@ export default defineConfig({
     // Under concurrent Windows file-system load they can exceed 15 seconds
     // even though their focused execution is much faster. This is a test
     // budget only; the product's Docker runner still enforces its own limits.
-    testTimeout: 60_000,
-    // The proof tests exercise real Git worktrees and cleanup. Running every
-    // file concurrently can leave Vitest's Windows worker RPC without a
-    // heartbeat even after all assertions pass, which CI reports as a false
-    // failure. Keep the verification order deterministic and favor an honest
-    // green result over a marginally faster test wall time.
-    fileParallelism: false
+    testTimeout: 120_000,
+    hookTimeout: 120_000,
+    teardownTimeout: 120_000,
+    // Heavy suites call spawnSync/execFileSync for real Git. That blocks the
+    // worker thread and can starve Vitest's birpc heartbeat (default 60s),
+    // producing `Timeout calling "onTaskUpdate"` after every assertion already
+    // passed. Keep verification serial and single-worker so the coordinator
+    // stays responsive and CI stays honestly green.
+    fileParallelism: false,
+    pool: "forks",
+    maxWorkers: 1,
+    minWorkers: 1
   }
 });
