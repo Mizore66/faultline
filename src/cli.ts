@@ -1032,7 +1032,7 @@ function printQuickstart(): void {
    OPENAI_API_KEY=… fl repair brief --live …
    Docker required: fl demo full   # or: fl demo live-git --export-only
 
-Pinned submission checkout: git checkout v0.1.0-buildweek
+Pinned submission checkout: git checkout v0.1.1-buildweek
 Full command list: fl advanced
 `);
 }

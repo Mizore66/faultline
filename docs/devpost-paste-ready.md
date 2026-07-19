@@ -33,18 +33,18 @@ Qualifying Codex `/feedback` session: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.0-buildweek
+git checkout v0.1.1-buildweek
 pnpm install --frozen-lockfile
 pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
-Pinned submission tag / Release: [`v0.1.0-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.0-buildweek) · SHA `589bbfd2dae6907e94b4a993e98848c35d3e5a81`.  
-Green CI (incl. native Docker E2E): https://github.com/Mizore66/faultline/actions/runs/29673784462  
+Pinned submission tag / Release: [`v0.1.1-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.1-buildweek) · SHA `PIN_COMMIT_SHA`.  
+Green CI on freeze tip (incl. native Docker E2E): https://github.com/Mizore66/faultline/actions/runs/29692659571  
 Zero-install UI snapshot: open `docs/self-incident-proof-preview.html` after clone (or regenerate with `pnpm fl commit-proof-preview`).  
 GPT-5.6 sample artifacts (no API key): `docs/samples/gpt-5.6/`.  
 Honest non-Codex transport sample: `docs/samples/observed-external-transport/` (`OBSERVED_EXTERNAL_TRANSPORT`).  
-Coverage matrix (spec/unit honesty — not a Docker soak): `benchmarks/REPORT.md`.
+Coverage matrix (hybrid: Docker CI promotes listed rows to `EXECUTABLE_E2E`): `benchmarks/REPORT.md`.
 
 Judge sample root: `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9`  
 (Not the historical self-incident root `sha256:f6a391b3…` — that dogfood is documented separately.)
