@@ -22,13 +22,14 @@
  */
 
 export const COMMIT_PATH_EVIDENCE_GRADE = "COMMIT_PROOF" as const;
-export const COMMIT_PATH_EVIDENCE_LABEL = "Commit-path localization — portable proof" as const;
+export const COMMIT_PATH_EVIDENCE_LABEL =
+  "Proven at commit granularity — portable and offline-verifiable" as const;
 export const COMMIT_PATH_EVIDENCE_LABEL_UNCERTIFIED =
   "Commit-path localization — not certified as portable proof" as const;
 
 export const TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL = "EXPERIMENTAL_TURN" as const;
 export const TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL =
-  "Turn localization — experimental evidence" as const;
+  "Experimental turn-level evidence — not yet a portable proof" as const;
 
 /**
  * Reserved until the promotion criteria above are met. Must not be assigned

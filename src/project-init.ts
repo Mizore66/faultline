@@ -1,5 +1,6 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { ensureFaultLineConfig, type FaultLineConfig } from "./config.js";
 import { detectLikelyRuntime, runFaultLineDoctor, type FaultLineDoctorReport } from "./doctor.js";
 
 export type ProjectInitRuntime = "node" | "python" | "go";
@@ -17,6 +18,13 @@ export type ProjectInitResult = {
     readonly status: "SKIPPED" | "CREATED" | "ALREADY_PRESENT";
     readonly path: string;
   };
+  readonly config: {
+    readonly status: "SKIPPED" | "CREATED" | "UPDATED" | "UNCHANGED";
+    readonly path: string;
+    readonly value: FaultLineConfig | null;
+  };
+  /** Exactly one actionable next command for human-readable exits. */
+  readonly next: string;
   readonly nextCommands: readonly string[];
   readonly limitations: readonly string[];
 };
@@ -51,6 +59,8 @@ export async function planProjectInit(options: {
   runtime?: ProjectInitRuntime;
   cliPath?: string;
   writeIgnoreIfMissing?: boolean;
+  /** When true, write/update `.faultline/config.json` even without other scaffolding. */
+  writeConfig?: boolean;
   /** When true and hooks are absent, caller installs hooks separately and reports INSTALLED. */
   markSidecarInstalled?: boolean;
 }): Promise<ProjectInitResult> {
@@ -99,22 +109,36 @@ export async function planProjectInit(options: {
   }
 
   const runtime = suggestedRuntime ?? "node";
-  const nextCommands = [
-    `fl doctor --repo ${repository}`,
-    `fl runtime prepare ${runtime}`,
-    `fl runtime prepare ${runtime} --yes`,
-    ...(options.cliPath === undefined
-      ? ["pnpm build  # in FaultLine checkout", "fl init --repo . --cli <FaultLine>/dist/cli.js --yes"]
-      : sidecar.status === "PREVIEW_REQUIRED"
-        ? [
-          `fl codex sidecar install --repo ${repository} --cli ${options.cliPath}`,
-          `fl codex sidecar install --repo ${repository} --cli ${options.cliPath} --yes`
-        ]
-        : [`fl codex sidecar status --repo ${repository}`]),
-    "Open Codex in this repo and trust hooks via /hooks",
-    "Freeze an immutable overlay witness that imports production code",
-    "fl investigate turns --repo . --latest --proposal <id> --expect-digest sha256:… --image <digest-pinned>"
-  ];
+  const writeConfig = options.writeIgnoreIfMissing === true || options.markSidecarInstalled === true
+    || options.writeConfig === true;
+  let config: ProjectInitResult["config"];
+  if (writeConfig) {
+    const written = ensureFaultLineConfig({
+      repository,
+      ...(suggestedRuntime == null ? {} : { runtimeAlias: suggestedRuntime })
+    });
+    config = { status: written.status, path: written.path, value: written.config };
+  } else if (existsSync(join(repository, ".faultline", "config.json"))) {
+    const written = ensureFaultLineConfig({
+      repository,
+      ...(suggestedRuntime == null ? {} : { runtimeAlias: suggestedRuntime })
+    });
+    config = { status: written.status, path: written.path, value: written.config };
+  } else {
+    config = {
+      status: "SKIPPED",
+      path: join(repository, ".faultline", "config.json"),
+      value: null
+    };
+  }
+
+  const next = config.status === "SKIPPED"
+    ? `fl init --repo ${repository} --yes`
+    : sidecar.status === "PREVIEW_REQUIRED" && options.cliPath !== undefined
+      ? `fl codex sidecar install --repo ${repository} --cli ${options.cliPath} --yes`
+      : `fl runtime prepare ${runtime} --yes`;
+
+  const nextCommands = [next];
 
   return {
     repository,
@@ -122,6 +146,8 @@ export async function planProjectInit(options: {
     suggestedRuntime,
     sidecar,
     ignoreFile,
+    config,
+    next,
     nextCommands,
     limitations: [
       "fl init does not pull Docker images, freeze witnesses, or create proof packages.",

@@ -47,7 +47,16 @@ import {
   recordObservedCodexHook,
   resolveLatestSidecarLedgerPath
 } from "./codex-sidecar.js";
+import {
+  resolveConfiguredImage,
+  updateFaultLineConfigImage
+} from "./config.js";
+import {
+  resolveInheritedSessionFacts,
+  writeIncidentSessionBinding
+} from "./incident-binding.js";
 import { planProjectInit, type ProjectInitRuntime } from "./project-init.js";
+import { DEFAULT_UI_HUB_PORT, startFaultLineUiHub } from "./ui-hub.js";
 import { GitInvestigationResultSchema, investigateGitRange } from "./git-investigation.js";
 import {
   defaultGitProofRoot,
@@ -128,6 +137,7 @@ Quickstart (judges / first look):
   fl doctor [--proof-ready] [--security]
   fl judge-proof [--export-only]          # verified COMMIT_PROOF sample (no Docker / no API key)
   fl quickstart                          # print the recommended next commands
+  fl ui [--repo <directory>] [--port <number>]
   fl --version
 
 Common product commands:
@@ -161,6 +171,7 @@ Usage:
   fl judge-preview [--output <static-preview.html>]
   fl doctor [--repo <directory>] [--json] [--proof-ready] [--security]
   fl quickstart
+  fl ui [--repo <directory>] [--port <number>]
   fl init [--repo <directory>] [--cli <built-cli.js>] [--runtime <node|python|go>] [--yes]
   fl incident suggest --repo <directory>
   fl incident start --repo <directory> (--command <failing-command> | --command-file <utf8-file>) [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--store <directory>]
@@ -205,7 +216,7 @@ Usage:
   fl witness implement --incident <incident.json> --proposal-id <id> --overlay-out <directory> [--repo <directory>] [--with-codex] [--behavior <text>]
   fl witness review <proposal-id> [--json | --port <number>] [--store <directory>] [--draft-store <directory>]
   fl witness approve <proposal-id> --approved-by <actor> [--store <directory>]
-  fl witness freeze <proposal-id> [--store <directory>]
+  fl witness freeze <proposal-id> [--repo <directory>] [--draft-store <directory>] [--store <directory>]
   fl witness sign <proposal-id> --private-key <ed25519-private.pem> --keyring <trusted-reviewers.json> [--store <directory>]
   fl witness verify <proposal-id> [--expect-digest <sha256:...>] [--keyring <trusted-reviewers.json> --require-signature] [--store <directory>]
 
@@ -228,6 +239,59 @@ function requiredOption(args: string[], flag: string): string {
   const value = option(args, flag);
   if (!value || value.startsWith("--")) throw new Error(`Missing required option: ${flag}`);
   return value;
+}
+
+/** Human-readable exits print exactly one copy-pasteable next command. */
+function printHumanNext(command: string): void {
+  process.stdout.write(`Next: ${command}\n`);
+}
+
+function requireImageOrConfig(repository: string, args: string[]): string {
+  const image = resolveConfiguredImage(repository, option(args, "--image"));
+  if (image === undefined) {
+    throw new Error(
+      "Missing required image: pass --image <digest-pinned-image> or run fl init / fl runtime prepare so `.faultline/config.json` stores one."
+    );
+  }
+  return image;
+}
+
+function sessionFlagOverrides(args: string[]): {
+  expectDigest?: string;
+  ledgerPath?: string;
+} {
+  const expectDigest = option(args, "--expect-digest");
+  const ledgerPath = option(args, "--ledger");
+  return {
+    ...(expectDigest === undefined ? {} : { expectDigest }),
+    ...(ledgerPath === undefined ? {} : { ledgerPath })
+  };
+}
+
+function requireExpectDigestOrBinding(options: {
+  args: string[];
+  storeDirectory: string;
+  incidentId: string;
+}): string {
+  const inherited = resolveInheritedSessionFacts({
+    storeDirectory: options.storeDirectory,
+    incidentId: options.incidentId,
+    ...sessionFlagOverrides(options.args)
+  });
+  if (inherited.expectDigest === undefined) {
+    throw new Error(
+      `Missing required option: --expect-digest (no local session binding for ${options.incidentId}). Freeze a witness first or pass --expect-digest explicitly.`
+    );
+  }
+  if (inherited.inheritedExpectDigest || option(options.args, "--expect-digest") !== undefined) {
+    // Persist successful resolution so later commands inherit without flags.
+    writeIncidentSessionBinding(options.storeDirectory, {
+      incidentId: options.incidentId,
+      expectDigest: inherited.expectDigest,
+      ...(inherited.ledgerPath === undefined ? {} : { ledgerPath: inherited.ledgerPath })
+    });
+  }
+  return inherited.expectDigest;
 }
 
 /**
@@ -399,6 +463,11 @@ async function doctorCommand(args: string[]): Promise<void> {
     if (proofReadyOnly) {
       process.stdout.write(`\n--proof-ready: ${report.dockerInvestigationPreflight === "READY" ? "READY" : "NOT READY"}\n`);
     }
+    printHumanNext(
+      report.dockerInvestigationPreflight === "READY"
+        ? "fl judge-proof"
+        : "fl doctor --proof-ready"
+    );
   }
   process.exitCode = proofReadyOnly
     ? (report.dockerInvestigationPreflight === "READY" ? 0 : 1)
@@ -553,16 +622,32 @@ async function continueIncidentCommand(args: string[]): Promise<void> {
     throw new Error("Usage: fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>] [--unsafe-local]");
   }
   const context = loadIncidentCommandContext(args, incidentId);
-  const expectedFrozenDigest = option(args, "--expect-digest");
-  const image = option(args, "--image");
-  const ledgerFile = option(args, "--ledger");
+  const inherited = resolveInheritedSessionFacts({
+    storeDirectory: context.draftStore,
+    incidentId,
+    ...sessionFlagOverrides(args)
+  });
+  if (inherited.expectDigest === undefined) {
+    throw new Error(
+      `Missing required option: --expect-digest (no local session binding for ${incidentId}). Freeze a witness first or pass --expect-digest explicitly.`
+    );
+  }
+  const expectedFrozenDigest = inherited.expectDigest;
+  const image = resolveConfiguredImage(context.repository, option(args, "--image"))
+    ?? context.draft.runtime?.image;
+  const ledgerFile = inherited.ledgerPath;
   const maxStates = option(args, "--max-states");
   const outputDirectory = option(args, "--output");
+  writeIncidentSessionBinding(context.draftStore, {
+    incidentId,
+    expectDigest: expectedFrozenDigest,
+    ...(ledgerFile === undefined ? {} : { ledgerPath: resolve(ledgerFile) })
+  });
   const result = await runFrozenIncidentContinuation({
     draft: context.draft,
     repository: context.repository,
     witnessStore: context.witnessStore,
-    ...(expectedFrozenDigest === undefined ? {} : { expectedFrozenDigest }),
+    expectedFrozenDigest,
     ...(image === undefined ? {} : { image }),
     ...(hasFlag(args, "--unsafe-local") ? { unsafeLocal: true } : {}),
     ...(ledgerFile === undefined ? {} : { ledgerFile }),
@@ -818,12 +903,17 @@ async function runtimeCommand(args: string[]): Promise<void> {
       throw new Error("FaultLine never pulls a runtime image implicitly. Use fl runtime prepare <node|python|go> --yes to explicitly pull one reviewed catalog image, or pull it yourself and then run fl runtime resolve again.");
     }
     const resolution = await resolveCuratedRuntime(requested);
+    updateFaultLineConfigImage({
+      repository: resolve(option(args, "--repo") ?? process.cwd()),
+      image: resolution.image,
+      runtimeAlias: resolution.runtime.alias
+    });
     process.stdout.write(`${JSON.stringify({
       status: "RESOLVED_LOCAL_DIGEST",
       runtime: resolution.runtime,
       requested: resolution.requested,
       image: resolution.image,
-      next: `Run fl incident start ... --runtime ${resolution.runtime.alias} to persist this resolved image, or after a human freeze pass the image value and retained --expect-digest to fl incident continue <id> --image.`
+      next: `fl incident start --repo . --command "<failing-command>" --runtime ${resolution.runtime.alias}`
     }, null, 2)}\n`);
     return;
   }
@@ -843,13 +933,18 @@ async function runtimeCommand(args: string[]): Promise<void> {
     throw new Error("fl runtime prepare already performs one explicit catalog pull after --yes; do not add --pull.");
   }
   const prepared = await prepareCuratedRuntime(requested);
+  updateFaultLineConfigImage({
+    repository: resolve(option(args, "--repo") ?? process.cwd()),
+    image: prepared.image,
+    runtimeAlias: prepared.runtime.alias
+  });
   process.stdout.write(`${JSON.stringify({
     status: "PREPARED_LOCAL_DIGEST",
     runtime: prepared.runtime,
     requested: prepared.requested,
     pulledTag: prepared.pull.tag,
     image: prepared.image,
-    next: `Run fl incident start ... --runtime ${prepared.runtime.alias} to bind this immutable image digest into the human-reviewed incident draft. The pull itself is setup only, not proof.`
+    next: `fl incident start --repo . --command "<failing-command>" --runtime ${prepared.runtime.alias}`
   }, null, 2)}\n`);
 }
 
@@ -1219,8 +1314,18 @@ async function witnessCommand(args: string[]): Promise<void> {
       return;
     }
     case "freeze": {
-      if (!proposalId) throw new Error("Usage: fl witness freeze <proposal-id>");
+      if (!proposalId) throw new Error("Usage: fl witness freeze <proposal-id> [--repo <directory>] [--draft-store <directory>]");
       const frozen = freezeApprovedWitness(store, proposalId);
+      const repository = resolve(option(args, "--repo") ?? process.cwd());
+      const draftStore = resolve(option(args, "--draft-store") ?? defaultIncidentDraftStore(repository));
+      try {
+        writeIncidentSessionBinding(draftStore, {
+          incidentId: proposalId,
+          expectDigest: frozen.frozenDigest
+        });
+      } catch {
+        // Binding write is best-effort when no draft store exists yet.
+      }
       process.stdout.write(`${JSON.stringify({ status: "FROZEN", proposalId, witnessDigest: frozen.witnessDigest, frozenDigest: frozen.frozenDigest, frozenAt: frozen.frozenAt }, null, 2)}\n`);
       return;
     }
@@ -1664,6 +1769,7 @@ async function initCommand(args: string[]): Promise<void> {
     ...(runtime === undefined ? {} : { runtime }),
     ...(resolvedCli === undefined ? {} : { cliPath: resolvedCli }),
     writeIgnoreIfMissing: yes,
+    writeConfig: yes,
     ...(installedSidecar ? { markSidecarInstalled: true } : {})
   });
 
@@ -1677,12 +1783,14 @@ async function initCommand(args: string[]): Promise<void> {
       diagnosticCount: result.doctor.diagnostics.length
     },
     ignoreFile: result.ignoreFile,
+    config: result.config,
     sidecar: result.sidecar,
+    next: result.next,
     nextCommands: result.nextCommands,
     limitations: result.limitations,
     note: yes
       ? "Scaffolding applied where safe. Images are not pulled; witnesses are not frozen; proof is not claimed."
-      : "Dry plan only. Re-run with --yes to write .faultlineignore (when missing) and install sidecar hooks when --cli is provided and hooks are absent."
+      : "Dry plan only. Re-run with --yes to write .faultline/config.json, .faultlineignore (when missing), and install sidecar hooks when --cli is provided and hooks are absent."
   }, null, 2)}\n`);
   process.exitCode = 0;
 }
@@ -1704,11 +1812,19 @@ async function investigateCommand(args: string[]): Promise<void> {
       throw new Error("Guided investigate accepts --from and --to together, or neither for the conservative local HEAD-parent fallback.");
     }
     const command = option(args, "--command");
-    const incidentId = option(args, "--id");
+    const incidentId = option(args, "--id") ?? resumeId;
     const runtime = option(args, "--runtime");
-    const image = option(args, "--image");
-    const expectDigest = option(args, "--expect-digest");
-    const ledgerFile = option(args, "--ledger");
+    const draftStoreForInherit = resolve(option(args, "--draft-store") ?? defaultIncidentDraftStore(repository));
+    const inherited = incidentId === undefined
+      ? null
+      : resolveInheritedSessionFacts({
+        storeDirectory: draftStoreForInherit,
+        incidentId,
+        ...sessionFlagOverrides(args)
+      });
+    const image = resolveConfiguredImage(repository, option(args, "--image"));
+    const expectDigest = inherited?.expectDigest ?? option(args, "--expect-digest");
+    const ledgerFile = inherited?.ledgerPath ?? option(args, "--ledger");
     const maxStates = option(args, "--max-states");
     const outputDirectory = option(args, "--output");
     const reviewPortRaw = option(args, "--port");
@@ -1725,7 +1841,7 @@ async function investigateCommand(args: string[]): Promise<void> {
         ...(command === undefined ? {} : { command }),
         ...(from === undefined ? {} : { from }),
         ...(to === undefined ? {} : { to }),
-        ...(incidentId === undefined ? {} : { incidentId }),
+        ...(incidentId === undefined || resumeId !== undefined ? {} : { incidentId }),
         ...(runtime === undefined ? {} : { runtime }),
         ...(image === undefined ? {} : { image }),
         ...(expectDigest === undefined ? {} : { expectDigest }),
@@ -1746,6 +1862,25 @@ async function investigateCommand(args: string[]): Promise<void> {
         },
         signal: abort.signal
       });
+      if (incidentId !== undefined && expectDigest !== undefined) {
+        writeIncidentSessionBinding(draftStoreForInherit, {
+          incidentId,
+          expectDigest,
+          ...(ledgerFile === undefined ? {} : { ledgerPath: resolve(ledgerFile) })
+        });
+      }
+      if (
+        incidentId !== undefined
+        && typeof result === "object"
+        && result !== null
+        && "frozenDigest" in result
+        && typeof (result as { frozenDigest?: unknown }).frozenDigest === "string"
+      ) {
+        writeIncidentSessionBinding(draftStoreForInherit, {
+          incidentId,
+          expectDigest: (result as { frozenDigest: string }).frozenDigest
+        });
+      }
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       process.exitCode = result.status === "GUIDED_PROOF_BUNDLE_READY" ? 0 : 1;
     } finally {
@@ -1763,10 +1898,18 @@ async function investigateCommand(args: string[]): Promise<void> {
     const store = witnessStore(args);
     const proposalId = requiredOption(args, "--proposal");
     const repository = resolve(requiredOption(args, "--repo"));
+    const draftStore = resolve(option(args, "--draft-store") ?? defaultIncidentDraftStore(repository));
     const latest = hasFlag(args, "--latest");
     const ledgerOption = option(args, "--ledger");
-    if (latest === (ledgerOption !== undefined)) {
-      throw new Error("fl investigate turns requires exactly one of --ledger <ledger.json> or --latest.");
+    const expectDigestFlag = option(args, "--expect-digest");
+    const inherited = resolveInheritedSessionFacts({
+      storeDirectory: draftStore,
+      incidentId: proposalId,
+      ...(expectDigestFlag === undefined ? {} : { expectDigest: expectDigestFlag }),
+      ...(ledgerOption === undefined ? {} : { ledgerPath: ledgerOption })
+    });
+    if (latest && ledgerOption !== undefined) {
+      throw new Error("fl investigate turns accepts only one of --ledger <ledger.json> or --latest.");
     }
     let ledgerPath: string;
     let latestResolution: ReturnType<typeof resolveLatestSidecarLedgerPath> | null = null;
@@ -1778,9 +1921,21 @@ async function investigateCommand(args: string[]): Promise<void> {
         throw error;
       }
       ledgerPath = resolve(latestResolution.ledgerPath);
+    } else if (ledgerOption !== undefined) {
+      ledgerPath = resolve(ledgerOption);
+    } else if (inherited.ledgerPath !== undefined) {
+      ledgerPath = resolve(inherited.ledgerPath);
     } else {
-      ledgerPath = resolve(requiredOption(args, "--ledger"));
+      throw new Error("fl investigate turns requires --ledger <ledger.json>, --latest, or a local session binding ledger path.");
     }
+    const expectedFrozenDigest = inherited.expectDigest
+      ?? requireExpectDigestOrBinding({ args, storeDirectory: draftStore, incidentId: proposalId });
+    const image = requireImageOrConfig(repository, args);
+    writeIncidentSessionBinding(draftStore, {
+      incidentId: proposalId,
+      expectDigest: expectedFrozenDigest,
+      ledgerPath
+    });
     const frozenWitness = readFrozenWitness(store, proposalId);
     const runtimeMappingPath = option(args, "--runtime-mapping");
     let runtimeMapping: Record<string, string> | undefined;
@@ -1790,11 +1945,11 @@ async function investigateCommand(args: string[]): Promise<void> {
         throw new Error("--runtime-mapping must be a JSON object of fingerprintDigest → digest-pinned image.");
       }
       runtimeMapping = Object.fromEntries(
-        Object.entries(parsed as Record<string, unknown>).map(([digest, image]) => {
-          if (typeof image !== "string") {
+        Object.entries(parsed as Record<string, unknown>).map(([digest, imageValue]) => {
+          if (typeof imageValue !== "string") {
             throw new Error(`--runtime-mapping entry for ${digest} must be a digest-pinned image string.`);
           }
-          return [digest, image];
+          return [digest, imageValue];
         })
       );
     }
@@ -1802,8 +1957,8 @@ async function investigateCommand(args: string[]): Promise<void> {
       repository,
       ledgerPath,
       frozenWitness,
-      expectedFrozenDigest: requiredOption(args, "--expect-digest"),
-      image: requiredOption(args, "--image"),
+      expectedFrozenDigest,
+      image,
       ...(runtimeMapping === undefined ? {} : { runtimeMapping })
     });
     if (!result.proof.isProof) {
@@ -1836,8 +1991,8 @@ async function investigateCommand(args: string[]): Promise<void> {
         repository,
         result,
         frozenWitness,
-        expectedFrozenDigest: requiredOption(args, "--expect-digest"),
-        image: requiredOption(args, "--image"),
+        expectedFrozenDigest,
+        image,
         ...(transitionOpt === undefined ? {} : { transitionIndex: transitionOpt }),
         ...(maxExecOpt === undefined ? {} : { maxExecutions: maxExecOpt }),
         ...(minOutOpt === undefined ? {} : { output: minOutOpt })
@@ -1864,19 +2019,34 @@ async function investigateCommand(args: string[]): Promise<void> {
   }
   const store = witnessStore(args);
   const proposalId = requiredOption(args, "--proposal");
+  const repository = resolve(requiredOption(args, "--repo"));
+  const draftStore = resolve(option(args, "--draft-store") ?? defaultIncidentDraftStore(repository));
   const unsafeLocal = hasFlag(args, "--unsafe-local");
   const maxStates = option(args, "--max-states");
   const frozenWitness = readFrozenWitness(store, proposalId);
-  const ledgerFile = option(args, "--ledger");
+  const inherited = resolveInheritedSessionFacts({
+    storeDirectory: draftStore,
+    incidentId: proposalId,
+    ...sessionFlagOverrides(args)
+  });
+  const expectedFrozenDigest = inherited.expectDigest
+    ?? requireExpectDigestOrBinding({ args, storeDirectory: draftStore, incidentId: proposalId });
+  const ledgerFile = inherited.ledgerPath ?? option(args, "--ledger");
   const lifecycleLedger = ledgerFile === undefined ? undefined : readVerifiedCodexLifecycleLedger(resolve(ledgerFile));
+  const image = unsafeLocal ? undefined : requireImageOrConfig(repository, args);
+  writeIncidentSessionBinding(draftStore, {
+    incidentId: proposalId,
+    expectDigest: expectedFrozenDigest,
+    ...(ledgerFile === undefined ? {} : { ledgerPath: resolve(ledgerFile) })
+  });
   const result = await investigateGitRange({
-    repository: resolve(requiredOption(args, "--repo")),
+    repository,
     range: { ancestor: requiredOption(args, "--from"), descendant: requiredOption(args, "--to") },
     frozenWitness,
-    expectedFrozenDigest: requiredOption(args, "--expect-digest"),
+    expectedFrozenDigest,
     sandbox: unsafeLocal
       ? { mode: "UNSAFE_LOCAL", allowUnsafeLocal: true }
-      : { mode: "DOCKER_ISOLATED", image: requiredOption(args, "--image") },
+      : { mode: "DOCKER_ISOLATED", image: image! },
     ...(maxStates === undefined ? {} : { maxStates: Number(maxStates) })
   });
   if (!result.proof.isProof) {
@@ -1995,16 +2165,32 @@ async function proveTransitionCommand(args: string[]): Promise<void> {
     JSON.parse(readFileSync(join(directory, "investigation.json"), "utf8"))
   );
   const store = witnessStore(args);
-  const frozenWitness = readFrozenWitness(store, requiredOption(args, "--proposal"));
+  const proposalId = requiredOption(args, "--proposal");
+  const repository = resolve(requiredOption(args, "--repo"));
+  const draftStore = resolve(option(args, "--draft-store") ?? defaultIncidentDraftStore(repository));
+  const expectDigestFlag = option(args, "--expect-digest");
+  const inherited = resolveInheritedSessionFacts({
+    storeDirectory: draftStore,
+    incidentId: proposalId,
+    ...(expectDigestFlag === undefined ? {} : { expectDigest: expectDigestFlag })
+  });
+  const expectedFrozenDigest = inherited.expectDigest
+    ?? requireExpectDigestOrBinding({ args, storeDirectory: draftStore, incidentId: proposalId });
+  const image = requireImageOrConfig(repository, args);
+  writeIncidentSessionBinding(draftStore, {
+    incidentId: proposalId,
+    expectDigest: expectedFrozenDigest
+  });
+  const frozenWitness = readFrozenWitness(store, proposalId);
   const transitionOpt = option(args, "--transition");
   const maxExecOpt = option(args, "--max-executions");
   const outOpt = option(args, "--output");
   const minimization = await minimizeFromTurnInvestigation({
-    repository: resolve(requiredOption(args, "--repo")),
+    repository,
     result: investigation,
     frozenWitness,
-    expectedFrozenDigest: requiredOption(args, "--expect-digest"),
-    image: requiredOption(args, "--image"),
+    expectedFrozenDigest,
+    image,
     ...(transitionOpt === undefined ? {} : { transitionIndex: transitionOpt }),
     ...(maxExecOpt === undefined ? {} : { maxExecutions: maxExecOpt }),
     ...(outOpt === undefined ? {} : { output: outOpt })
@@ -2475,6 +2661,21 @@ async function main(): Promise<void> {
     case "doctor":
       await doctorCommand(args);
       return;
+    case "ui": {
+      const repository = resolve(option(args, "--repo") ?? process.cwd());
+      const port = Number(option(args, "--port") ?? String(DEFAULT_UI_HUB_PORT));
+      if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+        throw new Error("--port must be an integer from 0 through 65535.");
+      }
+      const hub = await startFaultLineUiHub({ repository, port });
+      process.stdout.write(
+        `FaultLine UI hub: ${hub.url}\nDiscovered ${hub.artifacts.length} local artifact(s) under .faultline\nPress Ctrl+C to stop.\n`
+      );
+      printHumanNext(`fl ui --repo ${repository}`);
+      openLocalDemoUrl(hub.url);
+      await awaitServeInterrupt({ close: () => hub.close() });
+      return;
+    }
     case "init":
       await initCommand(args);
       return;
@@ -2643,7 +2844,8 @@ function formatCliFailure(error: unknown): string {
     const issueMsg = firstIssue ? `${firstIssue.message}${pathInfo}` : "Invalid schema layout";
     return [
       `FaultLine error: Invalid input shape (${issueMsg})`,
-      "Tip: Verify that the JSON payload or input file matches the expected structure."
+      "Tip: Verify that the JSON payload or input file matches the expected structure.",
+      "Next: pnpm fl help"
     ].join("\n");
   }
 
@@ -2653,8 +2855,8 @@ function formatCliFailure(error: unknown): string {
   if (isPortInUse) {
     return [
       "FaultLine error: Port already in use (EADDRINUSE).",
-      "Tip: Another instance of FaultLine or another process is running on this port.",
-      "     Please stop the conflicting process or pass a different port using the '--port' flag."
+      "Tip: Stop the conflicting process or pass a different '--port'.",
+      "Next: pnpm fl help"
     ].join("\n");
   }
 
@@ -2666,15 +2868,9 @@ function formatCliFailure(error: unknown): string {
     || /missing required argument/i.test(message)
     || /required option/i.test(message)
   ) {
-    const flagMatch = message.match(/(--\w+)/);
-    const flagTip = flagMatch
-      ? `     Make sure to provide the ${flagMatch[0]} flag.`
-      : "     Make sure to provide all required flags.";
     return [
       `FaultLine error: ${message}`,
-      "Tip: You are missing a mandatory flag for this command.",
-      flagTip,
-      "     Run 'pnpm fl help' to view valid options and usage instructions."
+      "Next: pnpm fl help"
     ].join("\n");
   }
 
@@ -2687,18 +2883,18 @@ function formatCliFailure(error: unknown): string {
   ].join("\n");
 
   if (/^Unknown command:\s*--\b/.test(message) || message.startsWith("Unknown command: --")) {
-    return `FaultLine error: ${message}\nNote: Do not place '--' between 'fl' and your subcommand. Use 'pnpm fl <command>'.`;
+    return `FaultLine error: ${message}\nNote: Do not place '--' between 'fl' and your subcommand. Use 'pnpm fl <command>'.\nNext: pnpm fl help`;
   }
 
   if (message.startsWith("Unknown command:")) {
-    return `FaultLine error: ${message}\nRun 'pnpm fl help' or check the documentation for valid options.`;
+    return `FaultLine error: ${message}\nNext: pnpm fl help`;
   }
 
   if (/ExecutionPolicy|running scripts is disabled|PSSecurityException|UnauthorizedAccess/i.test(message)) {
-    return [`FaultLine error: ${message}`, windowsHint].join("\n");
+    return [`FaultLine error: ${message}`, windowsHint, "Next: pnpm fl help"].join("\n");
   }
 
-  return `FaultLine error: ${message}`;
+  return `FaultLine error: ${message}\nNext: pnpm fl help`;
 }
 
 main().catch((error: unknown) => {

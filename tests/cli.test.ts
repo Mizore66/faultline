@@ -150,7 +150,7 @@ function nativeDockerFixture(observed: GitInvestigationResult): GitInvestigation
       reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.",
       evidenceGrade: transitions.length > 0 ? "COMMIT_PROOF" : "NONE",
       evidenceLabel: transitions.length > 0
-        ? "Commit-path localization — portable proof"
+        ? "Proven at commit granularity — portable and offline-verifiable"
         : "Commit-path localization — not certified as portable proof"
     }
   });
@@ -596,7 +596,7 @@ describe("FaultLine CLI workflows", () => {
       });
 
       expect(runFl(["witness", "approve", id, "--approved-by", "reviewer@example.test", "--store", store], { cwd: directory }).status).toBe(0);
-      const frozen = runFl(["witness", "freeze", id, "--store", store], { cwd: directory });
+      const frozen = runFl(["witness", "freeze", id, "--store", store, "--repo", repository], { cwd: directory });
       expect(frozen.status).toBe(0);
       const frozenDigest = (JSON.parse(frozen.stdout) as { frozenDigest: string }).frozenDigest;
 
@@ -616,12 +616,7 @@ describe("FaultLine CLI workflows", () => {
         frozenWitness: { valid: true, frozenDigest, externalDigestStatus: "MATCH" }
       });
 
-      const withoutRetainedDigest = runFl([
-        "incident", "continue", id, "--repo", repository, "--store", store, "--image", pinnedImage
-      ], { cwd: directory });
-      expect(withoutRetainedDigest.status).toBe(1);
-      expect(withoutRetainedDigest.stderr).toMatch(/requires --expect-digest/i);
-
+      // Session binding written at freeze lets continue inherit --expect-digest.
       // This local escape hatch is intentionally not proof-grade, but it
       // exercises the durable handoff without retyping the selected range,
       // proposal id, or frozen digest into `fl investigate git`.
@@ -635,7 +630,7 @@ describe("FaultLine CLI workflows", () => {
           id,
           range: { ancestor, descendant },
           frozenDigest,
-          frozenDigestExternalStatus: "NOT_PROVIDED"
+          frozenDigestExternalStatus: "MATCH"
         },
         proofBundle: null
       });
@@ -1070,10 +1065,15 @@ describe("FaultLine CLI workflows", () => {
         status: string;
         sidecar: { status: string };
         ignoreFile: { status: string };
+        config: { status: string };
+        next: string;
       };
       expect(appliedPayload.status).toBe("INIT_APPLIED");
       expect(appliedPayload.sidecar.status).toBe("INSTALLED");
       expect(appliedPayload.ignoreFile.status).toBe("CREATED");
+      expect(appliedPayload.config.status).toBe("CREATED");
+      expect(appliedPayload.next).toMatch(/^fl /);
+      expect(existsSync(join(repository, ".faultline", "config.json"))).toBe(true);
       expect(existsSync(join(repository, ".codex", "hooks.json"))).toBe(true);
       const ignoreText = readFileSync(join(repository, ".faultlineignore"), "utf8");
       expect(ignoreText).toMatch(/environment descriptors|lockfiles/i);

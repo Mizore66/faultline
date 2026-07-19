@@ -20,6 +20,13 @@ Push-Location $TargetRepo
 # Remaining commands use `fl …` with the application as cwd so `.faultline` stays beside that repo.
 ```
 
+```bash
+npm install -g @mizore66/faultline
+TargetRepo=/path/to/the/application
+cd "$TargetRepo"
+# Remaining commands use `fl …` with the application as cwd so `.faultline` stays beside that repo.
+```
+
 From a FaultLine source checkout instead:
 
 ```powershell
@@ -34,10 +41,26 @@ Push-Location $TargetRepo
 # Use `node $FaultLineCli …` wherever this guide shows `fl …`.
 ```
 
+```bash
+# In the FaultLine checkout.
+pnpm install --frozen-lockfile
+pnpm build
+FaultLineCli="$(pwd)/dist/cli.js"
+TargetRepo=/path/to/the/application
+
+# All remaining commands in this guide run from the application repository.
+cd "$TargetRepo"
+# Use `node "$FaultLineCli" …` wherever this guide shows `fl …`.
+```
+
 ## 1. Check the machine before you invest in setup
 
 ```powershell
 node $FaultLineCli doctor --repo .
+```
+
+```bash
+node "$FaultLineCli" doctor --repo .
 ```
 
 `fl doctor` is read-only. It checks Git, repository/worktree state, Node, the Docker CLI, the Docker daemon, and conventional runtime markers. It returns a nonzero exit code whenever the **machine preflight** is not ready, and `--json` emits the same structured report for CI or another UI. It deliberately reports image selection as `NOT_CHECKED`: a ready machine is not a selected image, a runnable witness, or a proof.
@@ -56,6 +79,14 @@ node $FaultLineCli codex sidecar install --repo $TargetRepo --cli $FaultLineCli
 node $FaultLineCli codex sidecar install --repo $TargetRepo --cli $FaultLineCli --yes
 ```
 
+```bash
+# Preview the exact project hook document first; this makes no change.
+node "$FaultLineCli" codex sidecar install --repo "$TargetRepo" --cli "$FaultLineCli"
+
+# After review, create "$TargetRepo"/.codex/hooks.json exactly once.
+node "$FaultLineCli" codex sidecar install --repo "$TargetRepo" --cli "$FaultLineCli" --yes
+```
+
 Open or restart Codex in `$TargetRepo`, then run `/hooks` to inspect, trust, enable, or disable FaultLine's commands before they run. Project-scoped hook configuration belongs only in a project you trust. The installer generates Unix and Windows-safe command variants automatically. If `$TargetRepo\.codex\hooks.json` already exists, FaultLine refuses to replace it; emit the same root document with `node $FaultLineCli codex sidecar config --cli $FaultLineCli`, review it, and merge the `hooks` object yourself. Advanced users can instead supply their own explicit `--command` and, when needed, `--command-windows` values to `sidecar config`.
 
 The sidecar stores only allowlisted public IDs/metadata and a SHA-256 prompt digest; it never stores the prompt itself, assistant text, or a transcript path. Its operational ledger lives under local Git metadata rather than the worktree. On each `Stop`, it records a real checkpoint only if the worktree is clean. An ordinary agent edit therefore produces `CHECKPOINT_SKIPPED_DIRTY`, not a made-up turn checkpoint.
@@ -64,6 +95,10 @@ Before binding observed evidence to a frozen incident, inspect it and use the ex
 
 ```powershell
 node $FaultLineCli codex sidecar status --repo .
+```
+
+```bash
+node "$FaultLineCli" codex sidecar status --repo .
 ```
 
 `status` exposes integrity, the latest checkpoint/skip state, and the path without printing prompt or transcript content. Add `--ledger <ledgerPath>` to the later `incident continue` command only when its clean checkpoints truly map to the selected Git states. A lifecycle binding can be full, partial, or absent; it is never a claim of model intent.
@@ -76,6 +111,12 @@ FaultLine includes small Node, Python, and Go catalogs for the common path. `fl 
 node $FaultLineCli runtime prepare node
 # Inspect the declared Docker/network effect, then explicitly confirm it:
 node $FaultLineCli runtime prepare node --yes
+```
+
+```bash
+node "$FaultLineCli" runtime prepare node
+# Inspect the declared Docker/network effect, then explicitly confirm it:
+node "$FaultLineCli" runtime prepare node --yes
 ```
 
 The resolver runs only a fixed, local `docker image inspect` command. It rejects a mutable tag, a digest from the wrong repository, or an unresolved image. The current catalog is:
@@ -99,6 +140,13 @@ pnpm fl investigate --ci-log .\ci.log `
   --runtime node
 ```
 
+```bash
+pnpm fl investigate --ci-log ./ci.log \
+  --repo . \
+  --command "pnpm test -- checkout" \
+  --runtime node
+```
+
 State transitions the operator sees:
 
 1. **Preflight** — `fl doctor` (Node must be ready; Docker readiness is required for proof-grade continuation).
@@ -113,6 +161,13 @@ If you interrupt during review, resume without redoing intake:
 pnpm fl investigate --resume <id> `
   --repo . `
   --expect-digest <frozen-digest> `
+  --runtime node
+```
+
+```bash
+pnpm fl investigate --resume <id> \
+  --repo . \
+  --expect-digest <frozen-digest> \
   --runtime node
 ```
 
@@ -139,12 +194,33 @@ node $FaultLineCli runtime project build `
   --yes
 ```
 
+```bash
+node "$FaultLineCli" runtime project plan \
+  --context . \
+  --dockerfile Dockerfile.faultline \
+  --tag registry.example/acme/my-app:faultline-deps-20260717 \
+  --network default
+
+# Copy the printed plan.review.planDigest only after reviewing the full plan.
+node "$FaultLineCli" runtime project build \
+  --context . \
+  --dockerfile Dockerfile.faultline \
+  --tag registry.example/acme/my-app:faultline-deps-20260717 \
+  --network default \
+  --expect-plan <plan-review-digest> \
+  --yes
+```
+
 `none` is the default build network and disables network access for Dockerfile `RUN` steps. It does not certify Docker daemon or base-image resolution networking; use `default` only when the reviewed Dockerfile needs networked `RUN` steps. FaultLine refuses contexts with links, special files, more than 10,000 files, or more than 256 MiB, because it cannot bind those safely to the reviewed plan. The proof sandbox binds Git source at `/workspace/src`; bake reusable dependencies outside that mount (for example, a Node image can install into its parent `/workspace/node_modules`) so the read-only source bind does not hide them. The image and selected Git states must still be compatible; a setup image does not prove that changing lockfiles or unavailable private dependencies are reproducible.
 
 Docker often exposes only a local image ID after a build. FaultLine refuses to call that a portable proof image. Push and pull the reviewed tag through your own registry workflow, then resolve the locally reported immutable `RepoDigest` without rebuilding:
 
 ```powershell
 node $FaultLineCli runtime project resolve --tag registry.example/acme/my-app:faultline-deps-20260717
+```
+
+```bash
+node "$FaultLineCli" runtime project resolve --tag registry.example/acme/my-app:faultline-deps-20260717
 ```
 
 Use the returned `repository@sha256:...` value as `--image` when starting the incident. For another stack, use your own reviewed digest-pinned image directly.
@@ -157,6 +233,10 @@ Paste the command that is failing in CI or locally. If you do not know its brack
 node $FaultLineCli incident suggest --repo .
 ```
 
+```bash
+node "$FaultLineCli" incident suggest --repo .
+```
+
 After reviewing a candidate, pass its exact commits to intake. With no `--from` / `--to`, FaultLine accepts only a conservative locally observed one-parent `HEAD~1 -> HEAD` bracket. It refuses a root commit or merge head rather than guessing a base.
 
 ```powershell
@@ -165,6 +245,15 @@ node $FaultLineCli incident start `
   --command "pnpm test -- checkout" `
   --from <reviewed-from-commit> `
   --to <reviewed-to-commit> `
+  --runtime node
+```
+
+```bash
+node "$FaultLineCli" incident start \
+  --repo . \
+  --command "pnpm test -- checkout" \
+  --from <reviewed-from-commit> \
+  --to <reviewed-to-commit> \
   --runtime node
 ```
 
@@ -187,6 +276,10 @@ Open the local review workbench returned by intake (or run the command below). I
 node $FaultLineCli witness review <id>
 ```
 
+```bash
+node "$FaultLineCli" witness review <id>
+```
+
 The screen verifies the strict blinded-packet shape and proposal digests before it enables action. A human enters their reviewer identity, explicitly acknowledges that they reviewed the exact command and visible overlay bytes, and clicks **Approve this reviewed witness**, then makes a separate explicit **Freeze this approved witness** click. Each click requires the current review digest and re-reads the write-once proposal; a stale, malformed, unblinded, or digest-mismatched proposal is refused before FaultLine writes an approval or freeze record.
 
 The freeze screen contains the externally retainable frozen digest. Keep it with the incident record before asking FaultLine to localize anything. A displayed reviewer name remains an assertion unless you add the optional reviewer signature workflow.
@@ -198,6 +291,11 @@ Do not retype the Git range, proposal ID, or selected runtime. `fl incident cont
 ```powershell
 node $FaultLineCli incident status <id> --expect-digest <frozen-digest>
 node $FaultLineCli incident continue <id> --image <resolved-image@sha256:...> --expect-digest <frozen-digest> [--ledger <ledgerPath-from-sidecar-status>]
+```
+
+```bash
+node "$FaultLineCli" incident status <id> --expect-digest <frozen-digest>
+node "$FaultLineCli" incident continue <id> --image <resolved-image@sha256:...> --expect-digest <frozen-digest> [--ledger <ledgerPath-from-sidecar-status>]
 ```
 
 If intake recorded a curated `--runtime` or explicit `--image`, its resolved digest is already bound to the draft, so omit `--image`. An explicit `--image` at continuation must exactly match that recorded digest. `continue` does not select a new base, mutate the draft, approve/freeze a witness, build/pull an image, or push to a registry. Its default output stays under the incident repository’s `.faultline/git-proof-bundles/` root.
@@ -216,11 +314,27 @@ node $FaultLineCli investigate git `
   --image <resolved-image@sha256:...>
 ```
 
+```bash
+node "$FaultLineCli" investigate git \
+  --repo . \
+  --from <ancestor-from-the-draft> \
+  --to <descendant-from-the-draft> \
+  --proposal <id> \
+  --expect-digest <frozen-digest> \
+  --image <resolved-image@sha256:...>
+```
+
 A proof package is written only when Docker-isolated executions establish the required stable transition. Inspect it through the same five-beat product experience used by the demo:
 
 ```powershell
 node $FaultLineCli serve `
   --bundle .faultline\git-proof-bundles\<investigation> `
+  --expect-root <retained-root-digest>
+```
+
+```bash
+node "$FaultLineCli" serve \
+  --bundle .faultline/git-proof-bundles/<investigation> \
   --expect-root <retained-root-digest>
 ```
 
@@ -235,6 +349,16 @@ node $FaultLineCli serve `
   --minimization .faultline\minimizations\<result>.json `
   --expect-minimization <retained-minimization-digest> `
   --repair .faultline\repair-briefs\<repair-id> `
+  --expect-repair <retained-repair-artifact-digest>
+```
+
+```bash
+node "$FaultLineCli" serve \
+  --bundle .faultline/git-proof-bundles/<investigation> \
+  --expect-root <retained-root-digest> \
+  --minimization .faultline/minimizations/<result>.json \
+  --expect-minimization <retained-minimization-digest> \
+  --repair .faultline/repair-briefs/<repair-id> \
   --expect-repair <retained-repair-artifact-digest>
 ```
 

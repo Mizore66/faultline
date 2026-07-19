@@ -35,7 +35,7 @@ function completedInvestigation() {
       isProof: true,
       reason: "three Docker runs",
       evidenceGrade: "COMMIT_PROOF",
-      evidenceLabel: "Commit-path localization — portable proof"
+      evidenceLabel: "Proven at commit granularity — portable and offline-verifiable"
     },
     errors: []
   };

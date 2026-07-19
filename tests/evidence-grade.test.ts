@@ -24,6 +24,6 @@ describe("evidence grade isolation", () => {
     });
     expect(turnPathEvidence({ hasTransitions: false }).evidenceGrade).toBe("NONE");
     expect(turnPathEvidence({ hasTransitions: true }).evidenceGrade).not.toBe("TURN_PROOF");
-    expect(turnPathEvidence({ hasTransitions: true }).evidenceLabel).not.toMatch(/portable proof/i);
+    expect(turnPathEvidence({ hasTransitions: true }).evidenceLabel).toMatch(/not yet a portable proof/i);
   });
 });
