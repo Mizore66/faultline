@@ -2,6 +2,14 @@
 
 > Fill during/after the consented external session. Blank fields mean “not collected.” Do not invent metrics. This is **not** the dogfood self-incident ([impact-validation-self-incident.md](impact-validation-self-incident.md)).
 
+## Related recorded fixture (not a live external case)
+
+Until a consented external session lands, CI and docs use the carefully redacted
+**recorded** multi-turn ledger at [samples/later-turn-ledger/](samples/later-turn-ledger/).
+That sample is produced by `scripts/generate-later-turn-ledger-fixture.mjs`, is
+honestly labeled `RECORDED_REDACTED_FIXTURE`, and must not be described as organic
+dogfood or as this external-01 impact case.
+
 ## Record metadata
 
 - Record ID: `external-01`

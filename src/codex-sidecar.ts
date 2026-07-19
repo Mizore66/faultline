@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
-import { canonicalJson, sha256 } from "./canonical.js";
+import { canonicalJson, digestJson, sha256 } from "./canonical.js";
 import { DOCTOR_SAFE_GIT_CONFIG } from "./doctor.js";
 import {
   appendLifecycleEvent,
@@ -87,10 +87,29 @@ const StopHookSchema = HookBaseSchema.extend({
   turn_id: IdentifierSchema
 });
 
+const ToolNameSchema = z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+
+/** Pre/Post tool hooks: accept tool_name + ids; strip any tool_input / transcript fields via .strip(). */
+const PreToolUseHookSchema = HookBaseSchema.extend({
+  hook_event_name: z.literal("PreToolUse"),
+  turn_id: IdentifierSchema,
+  tool_name: ToolNameSchema,
+  tool_call_id: IdentifierSchema.optional()
+}).strip();
+
+const PostToolUseHookSchema = HookBaseSchema.extend({
+  hook_event_name: z.literal("PostToolUse"),
+  turn_id: IdentifierSchema,
+  tool_name: ToolNameSchema,
+  tool_call_id: IdentifierSchema.optional()
+}).strip();
+
 export const CodexSidecarHookInputSchema = z.discriminatedUnion("hook_event_name", [
   SessionStartHookSchema,
   UserPromptSubmitHookSchema,
-  StopHookSchema
+  StopHookSchema,
+  PreToolUseHookSchema,
+  PostToolUseHookSchema
 ]);
 
 export type CodexSidecarHookInput = z.infer<typeof CodexSidecarHookInputSchema>;
@@ -98,6 +117,8 @@ export type CodexSidecarHookInput = z.infer<typeof CodexSidecarHookInputSchema>;
 export type CodexSidecarStatus =
   | "SESSION_STARTED"
   | "TURN_STARTED"
+  | "TOOL_USE_STARTED"
+  | "TOOL_USE_COMPLETED"
   | "CHECKPOINT_RECORDED"
   | "CHECKPOINT_SKIPPED_DIRTY"
   | "CHECKPOINT_SKIPPED_UNAVAILABLE"
@@ -109,6 +130,7 @@ export type CodexSidecarResult = {
   readonly ledgerPath: string;
   readonly sessionId: string;
   readonly turnId?: string;
+  readonly toolName?: string;
   readonly idempotent: boolean;
   readonly checkpointDigest?: string;
   readonly reason?: "DIRTY_WORKTREE" | "CHECKPOINT_UNAVAILABLE";
@@ -319,10 +341,37 @@ function stopReceiptPath(directory: string, sessionId: string, turnId: string): 
   return join(directory, `codex-stop-${key}.json`);
 }
 
-export function sidecarEventId(sessionId: string, turnId: string | null, phase: "session-start" | "session-baseline" | "turn-start" | "turn-stop" | "checkpoint" | "turn-snapshot"): string {
+export function sidecarEventId(
+  sessionId: string,
+  turnId: string | null,
+  phase:
+    | "session-start"
+    | "session-baseline"
+    | "turn-start"
+    | "turn-stop"
+    | "checkpoint"
+    | "turn-snapshot"
+    | `tool-pre-${string}`
+    | `tool-post-${string}`
+): string {
   const sessionKey = sha256(sessionId).slice(0, 24);
   const turnKey = turnId === null ? "session" : sha256(turnId).slice(0, 24);
   return `codex-sidecar-${sessionKey}-${turnKey}-${phase}`;
+}
+
+/** Digest only allowlisted stable identifiers — never tool args or transcripts. */
+export function digestToolAllowlistedFields(input: {
+  sessionId: string;
+  turnId: string;
+  toolName: string;
+  toolCallId?: string;
+}): `sha256:${string}` {
+  return digestJson({
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    toolName: input.toolName,
+    ...(input.toolCallId === undefined ? {} : { toolCallId: input.toolCallId })
+  }) as `sha256:${string}`;
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
@@ -871,6 +920,50 @@ function recordTurnStop(
   return result;
 }
 
+function recordToolUse(
+  input: z.infer<typeof PreToolUseHookSchema> | z.infer<typeof PostToolUseHookSchema>,
+  cwd: string,
+  ledgerPath: string
+): CodexSidecarResult {
+  if (!safeRegularFileExists(ledgerPath, "FaultLine sidecar ledger")) {
+    throw new CodexSidecarError(`${input.hook_event_name} was observed before SessionStart initialized the sidecar ledger.`);
+  }
+  let ledger = readSidecarLedger(ledgerPath);
+  assertExistingSession(ledger, input, cwd);
+  const turnOrdinal = turnOrdinalForStartedTurn(ledger, input.turn_id);
+  const allowlistedFieldsDigest = digestToolAllowlistedFields({
+    sessionId: input.session_id,
+    turnId: input.turn_id,
+    toolName: input.tool_name,
+    ...(input.tool_call_id === undefined ? {} : { toolCallId: input.tool_call_id })
+  });
+  const eventType = input.hook_event_name === "PreToolUse" ? "TOOL_USE_STARTED" as const : "TOOL_USE_COMPLETED" as const;
+  const status = input.hook_event_name === "PreToolUse" ? "TOOL_USE_STARTED" as const : "TOOL_USE_COMPLETED" as const;
+  const callKey = input.tool_call_id ?? `anon-${sha256(`${input.tool_name}\u0000${input.turn_id}`).slice(0, 16)}`;
+  const phase = input.hook_event_name === "PreToolUse" ? `tool-pre-${callKey}` as const : `tool-post-${callKey}` as const;
+  const lifecycleInput: LifecycleEventInput = {
+    type: eventType,
+    payload: {
+      turnId: input.turn_id,
+      turnOrdinal,
+      toolName: input.tool_name,
+      allowlistedFieldsDigest,
+      ...(input.tool_call_id === undefined ? {} : { toolCallId: input.tool_call_id })
+    }
+  };
+  const appended = appendIfAbsent(ledger, lifecycleInput, sidecarEventId(input.session_id, input.turn_id, phase));
+  ledger = appended.ledger;
+  writeSidecarLedger(ledgerPath, ledger);
+  return {
+    status,
+    ledgerPath,
+    sessionId: input.session_id,
+    turnId: input.turn_id,
+    toolName: input.tool_name,
+    idempotent: appended.idempotent
+  };
+}
+
 /**
  * Record one public Codex hook event. Unknown hook properties are discarded
  * before any record is created, so transcript paths, assistant messages, and
@@ -889,6 +982,9 @@ export function recordObservedCodexHook(value: unknown): CodexSidecarResult {
         return recordTurnStart(input, cwd, ledgerPath);
       case "Stop":
         return recordTurnStop(input, cwd, ledgerPath, directory);
+      case "PreToolUse":
+      case "PostToolUse":
+        return recordToolUse(input, cwd, ledgerPath);
     }
   });
 }

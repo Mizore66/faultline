@@ -57,6 +57,8 @@ import {
 } from "./incident-binding.js";
 import { planProjectInit, type ProjectInitRuntime } from "./project-init.js";
 import { DEFAULT_UI_HUB_PORT, startFaultLineUiHub } from "./ui-hub.js";
+import { upsertFaultLineAgentsMd } from "./agents-md.js";
+import type { WrittenPreventionProof } from "./prevention-proof.js";
 import { GitInvestigationResultSchema, investigateGitRange } from "./git-investigation.js";
 import {
   defaultGitProofRoot,
@@ -1219,17 +1221,16 @@ async function witnessCommand(args: string[]): Promise<void> {
                   if (!hasFlag(args, "--allow-codex-full-auto")) {
                     throw new Error("Codex drafting requires explicit --allow-codex-full-auto in addition to --with-codex.");
                   }
-                  const executed = spawnSync("codex", [...codexArgs], {
+                  const { spawnCodex } = await import("./runners/codex-runner.js");
+                  const executed = spawnCodex([...codexArgs], {
                     cwd: options.cwd,
-                    encoding: "utf8",
                     input: options.input,
-                    timeout: 120_000,
-                    env: { PATH: process.env.PATH ?? "", COMSPEC: process.env.COMSPEC }
+                    timeout: 120_000
                   });
                   return {
                     exitCode: executed.status,
-                    stdout: executed.stdout ?? "",
-                    stderr: executed.stderr ?? ""
+                    stdout: typeof executed.stdout === "string" ? executed.stdout : "",
+                    stderr: typeof executed.stderr === "string" ? executed.stderr : ""
                   };
                 }
               }
@@ -1610,6 +1611,12 @@ function codexSidecarHookConfig(command: SidecarHookCommand): Record<string, unk
       }],
       UserPromptSubmit: [{
         hooks: [hook("FaultLine records an observed Codex turn")]
+      }],
+      PreToolUse: [{
+        hooks: [hook("FaultLine records tool-use attribution (digests only)")]
+      }],
+      PostToolUse: [{
+        hooks: [hook("FaultLine records tool-use completion (digests only)")]
       }],
       Stop: [{
         hooks: [hook("FaultLine captures a clean observed checkpoint when available")]
@@ -2391,6 +2398,27 @@ async function provenanceCommand(args: string[]): Promise<void> {
 }
 
 /** Write or verify a `faultline.prevention-proof.v1` package (three-state PASS→FAIL→PASS). */
+function upsertAgentsMdFromPrevention(options: {
+  repository: string;
+  written: WrittenPreventionProof;
+}): { path: string; status: string } | undefined {
+  if (options.written.manifest.classification !== "PREVENTION_VERIFIED") return undefined;
+  try {
+    return upsertFaultLineAgentsMd({
+      repository: options.repository,
+      classification: "PREVENTION_VERIFIED",
+      originalProofRoot: options.written.prevention.originalProofRoot,
+      frozenWitnessDigest: options.written.prevention.frozenWitnessDigest,
+      preventionRootDigest: options.written.rootDigest,
+      lastGoodRunIds: options.written.prevention.lastGood.runIds,
+      firstBadRunIds: options.written.prevention.firstBad.runIds,
+      repairedRunIds: options.written.prevention.repaired.runIds
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 async function preventionCommand(args: string[]): Promise<void> {
   const [action, target] = args;
   if (action === "verify") {
@@ -2456,6 +2484,10 @@ async function preventionCommand(args: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
+      const agentsMd = upsertAgentsMdFromPrevention({
+        repository: resolve(option(args, "--repo") ?? process.cwd()),
+        written: exportResult.written
+      });
       process.stdout.write(`${JSON.stringify({
         status: "PREVENTION_VERIFIED",
         claim: "Prevention verified",
@@ -2463,7 +2495,8 @@ async function preventionCommand(args: string[]): Promise<void> {
         rootDigest: exportResult.written.rootDigest,
         originalProofRoot: exportResult.written.prevention.originalProofRoot,
         frozenWitnessDigest: exportResult.written.prevention.frozenWitnessDigest,
-        classification: exportResult.written.manifest.classification
+        classification: exportResult.written.manifest.classification,
+        ...(agentsMd === undefined ? {} : { agentsMd })
       }, null, 2)}\n`);
       process.stdout.write("Prevention verified\n");
       return;
@@ -2471,13 +2504,20 @@ async function preventionCommand(args: string[]): Promise<void> {
     const input = JSON.parse(readFileSync(resolve(inputPath!), "utf8")) as PreventionProofWriteInput;
     const written = writePreventionProof(output, input);
     const status = written.manifest.classification;
+    const agentsMd = status === "PREVENTION_VERIFIED"
+      ? upsertAgentsMdFromPrevention({
+        repository: resolve(option(args, "--repo") ?? process.cwd()),
+        written
+      })
+      : undefined;
     process.stdout.write(`${JSON.stringify({
       status,
       claim: status === "PREVENTION_VERIFIED" ? "Prevention verified" : "Prevention evidence summary",
       directory: written.directory,
       rootDigest: written.rootDigest,
       originalProofRoot: written.prevention.originalProofRoot,
-      frozenWitnessDigest: written.prevention.frozenWitnessDigest
+      frozenWitnessDigest: written.prevention.frozenWitnessDigest,
+      ...(agentsMd === undefined ? {} : { agentsMd })
     }, null, 2)}\n`);
     if (status === "PREVENTION_VERIFIED") process.stdout.write("Prevention verified\n");
     else process.stdout.write("Prevention evidence summary\n");
@@ -2528,17 +2568,16 @@ async function repairCommand(args: string[]): Promise<void> {
                 if (!hasFlag(args, "--allow-codex-full-auto")) {
                   throw new Error("Codex repair drafting requires explicit --allow-codex-full-auto in addition to --with-codex.");
                 }
-                const executed = spawnSync("codex", [...codexArgs], {
+                const { spawnCodex } = await import("./runners/codex-runner.js");
+                const executed = spawnCodex([...codexArgs], {
                   cwd: options.cwd,
-                  encoding: "utf8",
                   input: options.input,
-                  timeout: 180_000,
-                  env: { PATH: process.env.PATH ?? "", COMSPEC: process.env.COMSPEC }
+                  timeout: 180_000
                 });
                 return {
                   exitCode: executed.status,
-                  stdout: executed.stdout ?? "",
-                  stderr: executed.stderr ?? ""
+                  stdout: typeof executed.stdout === "string" ? executed.stdout : "",
+                  stderr: typeof executed.stderr === "string" ? executed.stderr : ""
                 };
               }
             }

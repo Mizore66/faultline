@@ -120,11 +120,26 @@ export const SessionEndedPayloadSchema = StrictObject({
   completedTurns: z.number().int().nonnegative()
 });
 
+/**
+ * Sub-turn tool attribution. Digests only — never raw tool args, transcripts,
+ * or source text. `allowlistedFieldsDigest` covers the stable identifier set
+ * used by the sidecar (tool name, optional tool_call_id, session/turn ids).
+ */
+export const ToolUseAttributionPayloadSchema = StrictObject({
+  turnId: IdentifierSchema,
+  turnOrdinal: z.number().int().positive(),
+  toolName: z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/, "toolName contains unsupported characters"),
+  toolCallId: IdentifierSchema.optional(),
+  allowlistedFieldsDigest: HashSchema
+});
+
 export const LifecycleEventInputSchema = z.discriminatedUnion("type", [
   StrictObject({ type: z.literal("SESSION_STARTED"), payload: SessionStartedPayloadSchema }),
   StrictObject({ type: z.literal("SESSION_BASELINE_SNAPSHOT"), payload: SessionBaselineSnapshotPayloadSchema }),
   StrictObject({ type: z.literal("TURN_STARTED"), payload: TurnStartedPayloadSchema }),
   StrictObject({ type: z.literal("TURN_COMPLETED"), payload: TurnCompletedPayloadSchema }),
+  StrictObject({ type: z.literal("TOOL_USE_STARTED"), payload: ToolUseAttributionPayloadSchema }),
+  StrictObject({ type: z.literal("TOOL_USE_COMPLETED"), payload: ToolUseAttributionPayloadSchema }),
   StrictObject({ type: z.literal("WORKTREE_CHECKPOINT"), payload: WorktreeCheckpointPayloadSchema }),
   StrictObject({ type: z.literal("TURN_TREE_SNAPSHOT"), payload: TurnTreeSnapshotPayloadSchema }),
   StrictObject({ type: z.literal("SESSION_ENDED"), payload: SessionEndedPayloadSchema })
@@ -399,6 +414,22 @@ function validateLifecycleState(event: CodexLifecycleEvent, state: LifecycleStat
       }
       state.completedTurnOrdinal = turnOrdinal;
       state.activeTurn = null;
+      return;
+    }
+    case "TOOL_USE_STARTED":
+    case "TOOL_USE_COMPLETED": {
+      if (!state.started) {
+        errors.push(`${prefix} occurs before SESSION_STARTED`);
+        return;
+      }
+      if (!state.activeTurn) {
+        errors.push(`${prefix} requires an active turn`);
+        return;
+      }
+      const { turnId, turnOrdinal } = event.event.payload;
+      if (turnId !== state.activeTurn.id || turnOrdinal !== state.activeTurn.ordinal) {
+        errors.push(`${prefix} does not match active turn ${state.activeTurn.id}/${state.activeTurn.ordinal}`);
+      }
       return;
     }
     case "WORKTREE_CHECKPOINT": {
