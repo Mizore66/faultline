@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { digestJson, sha256 } from "./canonical.js";
 import { DOCTOR_SAFE_GIT_CONFIG } from "./doctor.js";
@@ -631,6 +631,7 @@ function loadSessionCache(path: string | undefined): TurnSnapshotSessionCache | 
 
 function writeSessionCache(path: string | undefined, cache: TurnSnapshotSessionCache): void {
   if (path === undefined) return;
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(cache, null, 2)}\n`, "utf8");
 }
 
@@ -646,7 +647,9 @@ export function turnSnapshotSessionCachePath(ledgerPath: string): string {
  * the Codex sidecar. Reuse is still gated by HEAD + policy + dirty fingerprints.
  */
 export function turnSnapshotRepoCachePath(repositoryRoot: string): string {
-  return join(resolve(repositoryRoot), ".faultline", "turn-snapshot-cache.json");
+  const root = resolve(repositoryRoot);
+  const reportedGitDirectory = defaultTurnSnapshotGitRunner(root, ["rev-parse", "--git-common-dir"]);
+  return join(resolve(root, reportedGitDirectory.trim()), "faultline", "turn-snapshot-cache.json");
 }
 
 function computePathDigests(
