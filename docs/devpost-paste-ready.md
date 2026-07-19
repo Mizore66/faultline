@@ -38,7 +38,7 @@ pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
-Pinned submission tag: `v0.1.0-buildweek` (replace with the exact SHA after cutting the release).  
+Pinned submission tag: `v0.1.0-buildweek` · SHA `589bbfd2dae6907e94b4a993e98848c35d3e5a81`.  
 Zero-install UI snapshot: open `docs/self-incident-proof-preview.html` after clone (or regenerate with `pnpm fl commit-proof-preview`).  
 GPT-5.6 sample artifacts (no API key): `docs/samples/gpt-5.6/`.
 
