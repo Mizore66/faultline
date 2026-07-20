@@ -27,7 +27,12 @@ people/calendar gates.
 | PROD-02 | Real distribution | **done** (pack/tarball; `docs/distribution.md`) |
 | PROD-03 | Runtime mapping generator + persona docs | **done** |
 | CODEX-01 | Hooks-native live-fire + thread bindings | **done** |
+| COH-11 | Publish `@mizore66/faultline` to npm | **done** — `@mizore66/faultline@0.1.1` via Trusted Publishing ([#166](https://github.com/Mizore66/faultline/issues/166)) |
+| SEC-08 | Signed release tag + cold verify transcript | **partial** — SSH-signed `v0.1.7-buildweek` on GitHub; cold-machine stranger transcript pending partner ([#171](https://github.com/Mizore66/faultline/issues/171)) |
 | DEMO-01 | Zero-install / rehearsal | **open** ([#148](https://github.com/Mizore66/faultline/issues/148)) — people/video adjacent |
+| DEMO-03 | 20-second comprehension test | **open** ([#176](https://github.com/Mizore66/faultline/issues/176)) |
+| CDX-07 | Organic incident farming → PREVENTION_VERIFIED | **open** ([#173](https://github.com/Mizore66/faultline/issues/173)) |
+| CDX-08 | Plugin-native install behind live-fire gate | **open** ([#174](https://github.com/Mizore66/faultline/issues/174)) |
 
 ## People-gated
 
@@ -48,18 +53,26 @@ people/calendar gates.
 
 ## Open children (tracking parent [#136](https://github.com/Mizore66/faultline/issues/136))
 
-| Issue | Backlog ID | Gate |
-| --- | --- | --- |
-| [#148](https://github.com/Mizore66/faultline/issues/148) | DEMO-01 | people / demo |
-| [#149](https://github.com/Mizore66/faultline/issues/149) | EXT-01 | people |
-| [#150](https://github.com/Mizore66/faultline/issues/150) | EXT-02 | people |
-| [#151](https://github.com/Mizore66/faultline/issues/151) | EXT-03 | people |
-| [#152](https://github.com/Mizore66/faultline/issues/152) | TIME-01 | calendar / multi-OS soak |
-| [#154](https://github.com/Mizore66/faultline/issues/154) | TIME-03 | blocked on TIME-01 (+ policy) |
-| [#133](https://github.com/Mizore66/faultline/issues/133) / [#97](https://github.com/Mizore66/faultline/issues/97) | DEMO-02 / SUB | video + Devpost submit |
+| Issue | Backlog ID | Gate | Notes |
+| --- | --- | --- | --- |
+| [#171](https://github.com/Mizore66/faultline/issues/171) | SEC-08 | partner / cold machine | SSH-signed tag done; need stranger `git verify-tag` transcript |
+| [#148](https://github.com/Mizore66/faultline/issues/148) | DEMO-01 | people / demo | zero-install + comprehension adjacent |
+| [#176](https://github.com/Mizore66/faultline/issues/176) | DEMO-03 | people / demo | 20s comprehension iterate |
+| [#149](https://github.com/Mizore66/faultline/issues/149) | EXT-01 | people | independent security review |
+| [#150](https://github.com/Mizore66/faultline/issues/150) | EXT-02 | people | 3–5 unassisted new-user runs |
+| [#151](https://github.com/Mizore66/faultline/issues/151) | EXT-03 | people | second external turn-path |
+| [#152](https://github.com/Mizore66/faultline/issues/152) | TIME-01 | calendar / multi-OS soak | blocks TIME-03 |
+| [#154](https://github.com/Mizore66/faultline/issues/154) | TIME-03 | blocked on TIME-01 | do not invent `TURN_PROOF` |
+| [#173](https://github.com/Mizore66/faultline/issues/173) | CDX-07 | organic / calendar | incident farming |
+| [#174](https://github.com/Mizore66/faultline/issues/174) | CDX-08 | live-fire | plugin-native install |
+| [#162](https://github.com/Mizore66/faultline/issues/162) / [#133](https://github.com/Mizore66/faultline/issues/133) / [#97](https://github.com/Mizore66/faultline/issues/97) | SUB-04 / DEMO-02 | video + Devpost | `YOUTUBE_URL` absent |
+
+**Closed recently:** COH-11 [#166](https://github.com/Mizore66/faultline/issues/166) (`npm i -g @mizore66/faultline@0.1.1`), RIG-07 [#168](https://github.com/Mizore66/faultline/issues/168).
 
 ## Execution record
 
+- 2026-07-21: COH-11 — published `@mizore66/faultline@0.1.1` via npm Trusted Publishing (OIDC).
+- 2026-07-21: SEC-08 — SSH-signed annotated tag `v0.1.7-buildweek` pushed; cold-machine transcript still pending.
 - 2026-07-20: RIG-07 Windows-host Docker E2E — eight coverage-matrix rows executed;
   retained in `benchmarks/e2e-executed.json` (`osFamily: windows`, `count: 8`).
 - 2026-07-20: RIG/SEC/PROD/CODEX engineering backlog closed without fabricating soak.

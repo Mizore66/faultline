@@ -114,10 +114,11 @@ jobs:
         run: |
           try {
             docker version | Out-Null
+            docker pull node:22-alpine | Out-Null
             echo "available=true" >> $env:GITHUB_OUTPUT
           } catch {
             echo "available=false" >> $env:GITHUB_OUTPUT
-            Write-Host "Docker unavailable on this Windows runner; RIG-07 gate skipped."
+            Write-Host "Docker unavailable or image pull failed on this Windows runner; RIG-07 gate skipped."
           }
       - name: Native Docker E2E on Windows host kernel
         if: steps.docker.outputs.available == 'true'

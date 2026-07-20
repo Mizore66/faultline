@@ -421,7 +421,13 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
       expect(withMapping.proof.isProof).toBe(true);
       expect(withMapping.proof.reason).toMatch(/per-fingerprint runtime mapping/i);
       expect(withMapping.transitions.some((t) => t.kind === "PASS_TO_FAIL")).toBe(true);
-      const bundle = writeGitInvestigationProofBundle(join(workspace, "bundle"), withMapping, frozen);
+      const proofRoot = join(workspace, ".faultline", "git-proof-bundles");
+      const bundle = writeGitInvestigationProofBundle(
+        join(proofRoot, "hetero-range"),
+        withMapping,
+        frozen,
+        { proofRoot }
+      );
       const verified = verifyGitInvestigationProofBundle(bundle.directory, bundle.rootDigest);
       expect(verified.valid).toBe(true);
       expect(verified.externalRootStatus).toBe("MATCH");
