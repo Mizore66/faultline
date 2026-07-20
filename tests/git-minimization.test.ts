@@ -84,6 +84,22 @@ function interactionRunner(): SandboxCommandRunner {
   };
 }
 
+function nonMonotonicRunner(): SandboxCommandRunner {
+  return {
+    async run(invocation) {
+      const left = readFileSync(join(invocation.cwd, "left.txt"), "utf8").trim();
+      const right = readFileSync(join(invocation.cwd, "right.txt"), "utf8").trim();
+      const guard = readFileSync(join(invocation.cwd, "guard.txt"), "utf8").trim();
+      const overlay = readFileSync(join(invocation.cwd, "witness.mjs"), "utf8");
+      if (overlay !== "export const approved = true;\n") return { exitCode: 2, stdout: "", stderr: "overlay mismatch" };
+      const fails = guard === "new" || (left === "new") !== (right === "new");
+      return fails
+        ? { exitCode: 1, stdout: `non-monotonic fixture failed\n${formatWitnessResult("PREDICATE_FAIL")}\n`, stderr: "predicate failed" }
+        : { exitCode: 0, stdout: `non-monotonic fixture passed\n${formatWitnessResult("PREDICATE_PASS")}\n`, stderr: "" };
+    }
+  };
+}
+
 function interactionRepository(): { root: string; before: string; after: string } {
   const root = mkdtempSync(join(tmpdir(), "faultline-git-minimization-interaction-"));
   git(root, ["init"]);
@@ -95,6 +111,18 @@ function interactionRepository(): { root: string; before: string; after: string 
   writeFileSync(join(root, "left.txt"), "new\n", "utf8");
   writeFileSync(join(root, "right.txt"), "new\n", "utf8");
   const after = commit(root, "after interaction");
+  return { root, before, after };
+}
+
+function nonMonotonicRepository(): { root: string; before: string; after: string } {
+  const root = mkdtempSync(join(tmpdir(), "faultline-git-minimization-non-monotonic-"));
+  git(root, ["init"]);
+  git(root, ["config", "user.email", "faultline@example.test"]);
+  git(root, ["config", "user.name", "FaultLine Test"]);
+  for (const path of ["left.txt", "right.txt", "guard.txt"]) writeFileSync(join(root, path), "old\n", "utf8");
+  const before = commit(root, "before non-monotonic interaction");
+  for (const path of ["left.txt", "right.txt", "guard.txt"]) writeFileSync(join(root, path), "new\n", "utf8");
+  const after = commit(root, "after non-monotonic interaction");
   return { root, before, after };
 }
 
@@ -172,7 +200,11 @@ function forgedCertificateOnlyProof(result: GitMinimizationResult): GitMinimizat
     executionIds: necessityRuns.map((run) => run.executionId)
   };
   forged.status = "COMPLETED";
-  forged.minimality = { oneMinimal: true, reason: "Forged assertion without retained ordinary search evidence." };
+  forged.minimality = {
+    ...forged.minimality,
+    oneMinimal: true,
+    reason: "Forged assertion without retained ordinary search evidence."
+  };
   forged.proof = {
     ...forged.proof,
     dockerIsolated: true,
@@ -186,6 +218,28 @@ function forgedCertificateOnlyProof(result: GitMinimizationResult): GitMinimizat
 }
 
 describe("Git diff counterfactual minimization", () => {
+  it("enumerates bounded distinct minimal sets and retains a non-monotonic interaction verdict", async () => {
+    const store = mkdtempSync(join(tmpdir(), "faultline-git-minimization-non-monotonic-store-"));
+    const repository = nonMonotonicRepository();
+    try {
+      const witness = frozenWitness(store, "non-monotonic-interaction");
+      const result = await minimizeGitDiff(requestFor(repository.root, repository.before, repository.after, witness, nonMonotonicRunner()));
+
+      expect(result.minimality.enumeration).toMatchObject({ status: "COMPLETED", searchedCandidateSets: 6 });
+      expect(result.minimality.enumeration.distinctMinimalSets).toHaveLength(3);
+      expect(result.minimality.nonMonotonicInteraction.verdict).toBe("NON_MONOTONIC_INTERACTION");
+      expect(result.minimality.nonMonotonicInteraction.evidence).toMatchObject({
+        failingLeft: expect.any(Array),
+        failingRight: expect.any(Array),
+        passingUnion: expect.any(Array)
+      });
+      expect(verifyGitMinimizationResult(result)).toMatchObject({ valid: true });
+    } finally {
+      rmSync(store, { recursive: true, force: true });
+      rmSync(repository.root, { recursive: true, force: true });
+    }
+  });
+
   it("discovers a two-file interaction but refuses to certify an injected runner as Docker proof", async () => {
     const store = mkdtempSync(join(tmpdir(), "faultline-git-minimization-store-"));
     const repository = interactionRepository();

@@ -64,3 +64,8 @@ time evidence.
   manifests, malformed analysis, traversal-like declared paths, and an external
   root mismatch must fail closed without throwing. Archive-limit and broader
   mutation corpus coverage remain open.
+- 2026-07-20: RIG-01 is implemented with a 10-patch-unit / 8-minimal-set
+  bounded subset enumeration. Results retain the number of proper subsets
+  searched, distinct 1-minimal sets found, and a `NON_MONOTONIC_INTERACTION`
+  verdict when two recorded failures have a recorded passing union. The offline
+  verifier checks those claims against retained forward-run attempts.

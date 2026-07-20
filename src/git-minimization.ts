@@ -41,6 +41,9 @@ import { resolveSafeDirectorySegment } from "./safe-directory.js";
  */
 export const GIT_MINIMIZATION_SCHEMA_VERSION = "faultline.git-minimization.v1" as const;
 export const MINIMIZATION_CERTIFICATION_EXECUTIONS = 3 as const;
+/** Exhaustive subset enumeration is deliberately bounded to avoid turning proof search into an unbounded workload. */
+export const MAX_ENUMERATION_PATCH_UNITS = 10 as const;
+export const MAX_ENUMERATED_MINIMAL_SETS = 8 as const;
 
 const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/;
 const GIT_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
@@ -191,6 +194,7 @@ export const GitMinimizationRunFactSchema = z.object({
     "FULL_PATCH",
     "DELTA_SUBSET",
     "DELTA_COMPLEMENT",
+    "ENUMERATION",
     "ONE_MINIMAL",
     "HUNK_ONE_MINIMAL",
     "SUFFICIENCY_CERTIFICATION",
@@ -252,6 +256,7 @@ export const GitMinimizationAttemptSchema = z.object({
     "FULL_RANGE",
     "DELTA_SUBSET",
     "DELTA_COMPLEMENT",
+    "ENUMERATION",
     "ONE_MINIMAL",
     "HUNK_ONE_MINIMAL",
     "SUFFICIENCY_CERTIFICATION",
@@ -282,6 +287,32 @@ export const GitMinimizationCertificateSchema = z.object({
   note: z.string()
 }).strict();
 
+export const GitMinimalityEnumerationSchema = z.object({
+  status: z.enum(["COMPLETED", "BUDGET_EXHAUSTED", "SKIPPED_MAX_UNITS", "SET_LIMIT_REACHED", "NOT_RUN"]),
+  searchedCandidateSets: z.number().int().nonnegative(),
+  maxPatchUnits: z.literal(MAX_ENUMERATION_PATCH_UNITS),
+  maxDistinctMinimalSets: z.literal(MAX_ENUMERATED_MINIMAL_SETS),
+  distinctMinimalSets: z.array(z.array(DigestSchema).min(1)).max(MAX_ENUMERATED_MINIMAL_SETS),
+  note: z.string()
+}).strict();
+
+export const GitNonMonotonicInteractionSchema = z.object({
+  verdict: z.enum(["NOT_OBSERVED", "NON_MONOTONIC_INTERACTION", "INCONCLUSIVE"]),
+  evidence: z.object({
+    failingLeft: z.array(DigestSchema).min(1),
+    failingRight: z.array(DigestSchema).min(1),
+    passingUnion: z.array(DigestSchema).min(1)
+  }).strict().nullable(),
+  note: z.string()
+}).strict();
+
+export const GitMinimizationMinimalitySchema = z.object({
+  oneMinimal: z.boolean(),
+  reason: z.string(),
+  enumeration: GitMinimalityEnumerationSchema,
+  nonMonotonicInteraction: GitNonMonotonicInteractionSchema
+}).strict();
+
 export const GitMinimizationResultSchema = z.object({
   schemaVersion: z.literal(GIT_MINIMIZATION_SCHEMA_VERSION),
   recorder: z.literal("git-diff-counterfactual-minimization"),
@@ -310,10 +341,7 @@ export const GitMinimizationResultSchema = z.object({
   candidateUnitIds: z.array(DigestSchema),
   attempts: z.array(GitMinimizationAttemptSchema),
   runs: z.array(GitMinimizationRunFactSchema),
-  minimality: z.object({
-    oneMinimal: z.boolean(),
-    reason: z.string()
-  }).strict(),
+  minimality: GitMinimizationMinimalitySchema,
   certification: z.object({
     sufficiency: GitMinimizationCertificateSchema,
     necessity: GitMinimizationCertificateSchema
@@ -362,6 +390,73 @@ export type PatchUnitInternal = GitPatchUnit & { readonly bytes: Buffer };
 type Direction = GitPatchApplication["direction"];
 type RunRole = GitMinimizationRunFact["role"];
 type AttemptPhase = GitMinimizationAttempt["phase"];
+
+function emptyEnumeration(note: string): GitMinimizationResult["minimality"]["enumeration"] {
+  return {
+    status: "NOT_RUN",
+    searchedCandidateSets: 0,
+    maxPatchUnits: MAX_ENUMERATION_PATCH_UNITS,
+    maxDistinctMinimalSets: MAX_ENUMERATED_MINIMAL_SETS,
+    distinctMinimalSets: [],
+    note
+  };
+}
+
+function emptyInteraction(note: string): GitMinimizationResult["minimality"]["nonMonotonicInteraction"] {
+  return { verdict: "INCONCLUSIVE", evidence: null, note };
+}
+
+function minimalityRecord(
+  oneMinimal: boolean,
+  reason: string,
+  enumeration = emptyEnumeration("Enumeration did not run."),
+  nonMonotonicInteraction = emptyInteraction("No subset outcome matrix was retained.")
+): GitMinimizationResult["minimality"] {
+  return { oneMinimal, reason, enumeration, nonMonotonicInteraction };
+}
+
+function candidateKey(candidateIds: readonly string[]): string {
+  return candidateIds.join("\u0000");
+}
+
+function boundedProperSubsets(unitIds: readonly string[]): string[][] {
+  const output: string[][] = [];
+  const count = 2 ** unitIds.length;
+  for (let mask = 1; mask < count - 1; mask += 1) {
+    output.push(unitIds.filter((_, index) => (mask & (1 << index)) !== 0));
+  }
+  return output.sort((left, right) => left.length - right.length || candidateKey(left).localeCompare(candidateKey(right)));
+}
+
+function observedNonMonotonicInteraction(
+  unitIds: readonly string[],
+  outcomes: ReadonlyMap<string, "PASS" | "FAIL" | "UNRESOLVED" | "NOT_RUN">
+): GitMinimizationResult["minimality"]["nonMonotonicInteraction"] {
+  const failures = [...outcomes.entries()]
+    .filter(([, outcome]) => outcome === "FAIL")
+    .map(([key]) => key === "" ? [] : key.split("\u0000"));
+  for (let leftIndex = 0; leftIndex < failures.length; leftIndex += 1) {
+    const left = failures[leftIndex]!;
+    for (let rightIndex = leftIndex + 1; rightIndex < failures.length; rightIndex += 1) {
+      const right = failures[rightIndex]!;
+      const combined = new Set([...left, ...right]);
+      const union = unitIds.filter((id) => combined.has(id));
+      if (union.length === left.length || union.length === right.length) continue;
+      if (outcomes.get(candidateKey(union)) === "PASS") {
+        return {
+          verdict: "NON_MONOTONIC_INTERACTION",
+          evidence: { failingLeft: left, failingRight: right, passingUnion: union },
+          note: "Two failing subsets have a recorded passing union; monotonicity is contradicted."
+        };
+      }
+    }
+  }
+  return {
+    verdict: "NOT_OBSERVED",
+    evidence: null,
+    note: "No recorded pair of failing subsets had a passing union."
+  };
+}
 type ProbeOutcome = GitMinimizationAttempt["outcome"];
 
 type Probe = {
@@ -786,7 +881,7 @@ function baseResult(
     candidateUnitIds: [],
     attempts: [],
     runs: [],
-    minimality: { oneMinimal: false, reason: "No candidate was established." },
+    minimality: minimalityRecord(false, "No candidate was established."),
     certification: {
       sufficiency: emptyCertificate("FORWARD_FROM_BEFORE", "FAIL", "No sufficiency certification was run."),
       necessity: emptyCertificate("REVERSE_FROM_AFTER", "PASS", "No necessity certification was run.")
@@ -1091,13 +1186,16 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
   const defaultSufficiency = () => emptyCertificate("FORWARD_FROM_BEFORE", "FAIL", "No sufficiency certification was run.");
   const defaultNecessity = () => emptyCertificate("REVERSE_FROM_AFTER", "PASS", "No necessity certification was run.");
   const allIds = units.map((unit) => unit.id);
+  let enumeration = emptyEnumeration("Enumeration did not run because no valid full-range outcome exists yet.");
+  let nonMonotonicInteraction = emptyInteraction("No subset outcome matrix was retained.");
+  let budgetStopped = false;
 
   const baseline = await recordProbe("BASELINE", "FORWARD_FROM_BEFORE", [], "BASELINE_BEFORE");
   if (baseline.outcome !== "PASS") {
     return finalize(
       statusFromProbe(baseline, "PASS") ?? "EXECUTION_ERROR",
       [],
-      { oneMinimal: false, reason: "The before state did not produce a Docker PASS." },
+      minimalityRecord(false, "The before state did not produce a Docker PASS.", enumeration, nonMonotonicInteraction),
       defaultSufficiency(),
       defaultNecessity(),
       baseline.note
@@ -1109,16 +1207,72 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
     return finalize(
       statusFromProbe(full, "FAIL") ?? "EXECUTION_ERROR",
       allIds,
-      { oneMinimal: false, reason: "The full Git diff did not produce a Docker FAIL from the before state." },
+      minimalityRecord(false, "The full Git diff did not produce a Docker FAIL from the before state.", enumeration, nonMonotonicInteraction),
       defaultSufficiency(),
       defaultNecessity(),
       full.note
     );
   }
 
+  // Enumerate every proper subset only while the candidate universe is small
+  // enough to bound the work. These runs are retained separately from ddmin so
+  // the result can report multiple 1-minimal sets rather than implying the
+  // first one found is unique.
+  if (allIds.length > MAX_ENUMERATION_PATCH_UNITS) {
+    enumeration = {
+      ...emptyEnumeration(`Enumeration skipped: ${allIds.length} patch units exceed the ${MAX_ENUMERATION_PATCH_UNITS}-unit bound.`),
+      status: "SKIPPED_MAX_UNITS"
+    };
+    nonMonotonicInteraction = emptyInteraction("Subset enumeration was skipped by the patch-unit bound.");
+  } else {
+    const outcomes = new Map<string, "PASS" | "FAIL" | "UNRESOLVED" | "NOT_RUN">([
+      [candidateKey([]), baseline.outcome],
+      [candidateKey(allIds), full.outcome]
+    ]);
+    const subsets = boundedProperSubsets(allIds);
+    let searchedCandidateSets = 0;
+    for (const subset of subsets) {
+      const probe = await recordProbe("ENUMERATION", "FORWARD_FROM_BEFORE", subset, "ENUMERATION");
+      outcomes.set(candidateKey(subset), probe.outcome);
+      searchedCandidateSets += 1;
+      if (probe.outcome === "NOT_RUN") {
+        budgetStopped = true;
+        break;
+      }
+    }
+    const distinctMinimalSets: string[][] = [];
+    if (!budgetStopped) {
+      for (const subset of subsets) {
+        if (outcomes.get(candidateKey(subset)) !== "FAIL") continue;
+        const isOneMinimal = subset.every((removed) => outcomes.get(candidateKey(subset.filter((id) => id !== removed))) === "PASS");
+        if (!isOneMinimal) continue;
+        distinctMinimalSets.push(subset);
+        if (distinctMinimalSets.length === MAX_ENUMERATED_MINIMAL_SETS) break;
+      }
+    }
+    enumeration = {
+      status: budgetStopped
+        ? "BUDGET_EXHAUSTED"
+        : distinctMinimalSets.length === MAX_ENUMERATED_MINIMAL_SETS
+          ? "SET_LIMIT_REACHED"
+          : "COMPLETED",
+      searchedCandidateSets,
+      maxPatchUnits: MAX_ENUMERATION_PATCH_UNITS,
+      maxDistinctMinimalSets: MAX_ENUMERATED_MINIMAL_SETS,
+      distinctMinimalSets,
+      note: budgetStopped
+        ? "The global execution budget was exhausted during bounded subset enumeration."
+        : distinctMinimalSets.length === MAX_ENUMERATED_MINIMAL_SETS
+          ? `Found ${MAX_ENUMERATED_MINIMAL_SETS} distinct 1-minimal sets; the retained-set bound was reached.`
+          : `Found ${distinctMinimalSets.length} distinct 1-minimal set(s) after executing ${searchedCandidateSets} proper subset(s).`
+    };
+    nonMonotonicInteraction = budgetStopped
+      ? emptyInteraction("Subset enumeration did not finish, so monotonicity is inconclusive.")
+      : observedNonMonotonicInteraction(allIds, outcomes);
+  }
+
   let candidate = [...allIds];
   let granularity = 2;
-  let budgetStopped = false;
   while (candidate.length >= 2 && !budgetStopped) {
     const partitions = chunk(candidate, Math.min(granularity, candidate.length));
     let reduced = false;
@@ -1297,7 +1451,7 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
     return finalize(
       "BUDGET_EXHAUSTED",
       candidate,
-      { oneMinimal, reason: minimalityReason },
+      minimalityRecord(oneMinimal, minimalityReason, enumeration, nonMonotonicInteraction),
       defaultSufficiency(),
       defaultNecessity(),
       "The minimization execution budget was exhausted before bidirectional certification."
@@ -1332,7 +1486,7 @@ export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<
           : oneMinimal
             ? "Bidirectional Docker certification did not complete with the required outcomes."
             : minimalityReason;
-  return finalize(status, candidate, { oneMinimal, reason: minimalityReason }, sufficiency, necessity, reason);
+  return finalize(status, candidate, minimalityRecord(oneMinimal, minimalityReason, enumeration, nonMonotonicInteraction), sufficiency, necessity, reason);
 }
 
 const ROLE_SEMANTICS = {
@@ -1340,6 +1494,7 @@ const ROLE_SEMANTICS = {
   FULL_PATCH: { phase: "FULL_RANGE", direction: "FORWARD_FROM_BEFORE" },
   DELTA_SUBSET: { phase: "DELTA_SUBSET", direction: "FORWARD_FROM_BEFORE" },
   DELTA_COMPLEMENT: { phase: "DELTA_COMPLEMENT", direction: "FORWARD_FROM_BEFORE" },
+  ENUMERATION: { phase: "ENUMERATION", direction: "FORWARD_FROM_BEFORE" },
   ONE_MINIMAL: { phase: "ONE_MINIMAL", direction: "FORWARD_FROM_BEFORE" },
   HUNK_ONE_MINIMAL: { phase: "HUNK_ONE_MINIMAL", direction: "FORWARD_FROM_BEFORE" },
   SUFFICIENCY_CERTIFICATION: { phase: "SUFFICIENCY_CERTIFICATION", direction: "FORWARD_FROM_BEFORE" },
@@ -1700,6 +1855,57 @@ export function verifyGitMinimizationResult(value: unknown, expectedDigest?: str
     }
     for (const run of result.runs) {
       if (!referencedRuns.has(run.runId)) errors.push(`recorded run is not referenced by an attempt: ${run.runId}`);
+    }
+
+    const enumerationAttempts = result.attempts.filter((attempt) => attempt.phase === "ENUMERATION");
+    if (result.minimality.enumeration.searchedCandidateSets !== enumerationAttempts.length) {
+      errors.push("enumeration searched-candidate count does not match retained enumeration attempts");
+    }
+    const enumerationOutcomes = new Map<string, GitMinimizationAttempt["outcome"]>();
+    for (const attempt of result.attempts) {
+      const run = attempt.runId === null ? undefined : runs.get(attempt.runId);
+      // Reverse-direction necessity uses the same patch IDs but has the
+      // opposite predicate. It is not part of the forward subset lattice.
+      if (run !== undefined && run.application.direction !== "FORWARD_FROM_BEFORE") continue;
+      if (run === undefined && attempt.phase !== "ENUMERATION") continue;
+      const key = candidateKey(attempt.candidateUnitIds);
+      const previous = enumerationOutcomes.get(key);
+      if (previous !== undefined && previous !== attempt.outcome) {
+        errors.push(`conflicting recorded outcomes for candidate set: ${key || "[]"}`);
+      }
+      enumerationOutcomes.set(key, attempt.outcome);
+    }
+    const enumeration = result.minimality.enumeration;
+    const enumeratedUnitIds = [...new Set(enumerationAttempts.flatMap((attempt) => attempt.candidateUnitIds))];
+    if (enumeration.status === "COMPLETED" && enumeratedUnitIds.length >= 2
+      && enumerationAttempts.length !== boundedProperSubsets(enumeratedUnitIds).length) {
+      errors.push("completed enumeration does not retain every proper subset attempt");
+    }
+    for (const minimalSet of enumeration.distinctMinimalSets) {
+      if (enumerationOutcomes.get(candidateKey(minimalSet)) !== "FAIL") {
+        errors.push("enumerated minimal set lacks a retained FAIL outcome");
+      }
+      for (const removed of minimalSet) {
+        const without = minimalSet.filter((id) => id !== removed);
+        if (enumerationOutcomes.get(candidateKey(without)) !== "PASS") {
+          errors.push("enumerated minimal set lacks a retained PASS single-removal outcome");
+        }
+      }
+    }
+    const interaction = result.minimality.nonMonotonicInteraction;
+    if (interaction.verdict === "NON_MONOTONIC_INTERACTION") {
+      const evidence = interaction.evidence;
+      if (evidence === null) {
+        errors.push("non-monotonic interaction verdict lacks evidence");
+      } else {
+        if (enumerationOutcomes.get(candidateKey(evidence.failingLeft)) !== "FAIL"
+          || enumerationOutcomes.get(candidateKey(evidence.failingRight)) !== "FAIL"
+          || enumerationOutcomes.get(candidateKey(evidence.passingUnion)) !== "PASS") {
+          errors.push("non-monotonic interaction evidence does not match retained outcomes");
+        }
+      }
+    } else if (interaction.evidence !== null) {
+      errors.push("non-non-monotonic interaction verdict must not retain interaction evidence");
     }
 
     validateCertificate("sufficiency", result.certification.sufficiency, result, runs, errors);
