@@ -5,12 +5,12 @@ Executable stranger checklist binding **signed tag → green CI → attested art
 ## Chain
 
 1. **Pinned submission tag (prefer signed)**  
-   Checkout the current pin in README (e.g. `v0.1.6-buildweek`).  
+   Checkout the current pin in README (e.g. `v0.1.7-buildweek`).  
    Prefer a GPG- or SSH-signed annotated tag:
    ```powershell
    git fetch --tags
-   git verify-tag v0.1.6-buildweek
-   # or: git tag -v v0.1.6-buildweek
+   git verify-tag v0.1.7-buildweek
+   # or: git tag -v v0.1.7-buildweek
    ```
    CI job `tag-checkout` runs `fl judge-proof --export-only` on that tag.
 
@@ -31,7 +31,7 @@ Executable stranger checklist binding **signed tag → green CI → attested art
 # After downloading the provenance artifact + proof bundle:
 node scripts/verify-security-chain.mjs --checklist
 node scripts/verify-security-chain.mjs `
-  --tag v0.1.6-buildweek `
+  --tag v0.1.7-buildweek `
   --bundle <git-proof-bundle-directory> `
   --receipt <ci-receipt.json> `
   --attestation <sigstore-bundle.json> `

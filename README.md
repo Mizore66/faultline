@@ -28,7 +28,7 @@ open, issue #152). Do not invent soak stats. Attestation / host limits:
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.6-buildweek
+git checkout v0.1.7-buildweek
 pnpm install --frozen-lockfile
 pnpm fl doctor --proof-ready
 pnpm fl judge-proof
@@ -37,7 +37,7 @@ pnpm fl judge-proof
 ```bash
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.6-buildweek
+git checkout v0.1.7-buildweek
 pnpm install --frozen-lockfile
 pnpm fl doctor --proof-ready
 pnpm fl judge-proof
@@ -54,7 +54,7 @@ GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 **Install policy:** source-only for this phase — clone + `pnpm fl` (above). Global `npm install -g @mizore66/faultline` is **not** supported yet.  
 **Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux. Docker required for live proof.  
 **Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand.  
-**CI:** green Verify run on the validated pre-tag commit [`333f21d2779aa869958a840fb52c3be5d43f1726`](https://github.com/Mizore66/faultline/commit/333f21d2779aa869958a840fb52c3be5d43f1726) ([run](https://github.com/Mizore66/faultline/actions/runs/29734618279)), including the **native Docker proof E2E gate** and its [hybrid Docker E2E coverage-matrix REPORT artifact](https://github.com/Mizore66/faultline/actions/runs/29734618279/artifacts/8457770804). Submission pin / Release: [`v0.1.6-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.6-buildweek).
+**CI:** green Verify run on the validated pre-tag commit [`2e3522c1f9b56be8fd1d1d72400ac88c6cbd1e00`](https://github.com/Mizore66/faultline/commit/2e3522c1f9b56be8fd1d1d72400ac88c6cbd1e00) ([run](https://github.com/Mizore66/faultline/actions/runs/29734618279)), including the **native Docker proof E2E gate** and its [hybrid Docker E2E coverage-matrix REPORT artifact](https://github.com/Mizore66/faultline/actions/runs/29734618279/artifacts/8457770804). Submission pin / Release: [`v0.1.7-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.7-buildweek).
 
 ## Validation
 

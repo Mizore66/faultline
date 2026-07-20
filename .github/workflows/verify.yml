@@ -143,7 +143,7 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: v0.1.6-buildweek
+          ref: v0.1.7-buildweek
           fetch-tags: true
           fetch-depth: 0
       - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
