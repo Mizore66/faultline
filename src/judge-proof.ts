@@ -61,9 +61,9 @@ export function writeCommitProofPreview(options: {
     "</title>",
     "</title>\n<meta name=\"faultline-preview\" content=\"static-commit-proof-snapshot\" />"
   );
-  // Insert an honesty banner after chrome notice: rewrite the product notice to name the snapshot.
+  // Keep the bold chrome prefix; only rewrite the body for the static snapshot honesty line.
   const page = html.replace(
-    "Read-only verified bundle: FaultLine checked its complete declared file set before rendering. This page does not execute repository code or rerun the witness.",
+    "FaultLine checked its complete declared file set before rendering. This page does not execute repository code or rerun the witness.",
     "STATIC SNAPSHOT of a recorded COMMIT_PROOF package. Opened from disk HTML — not a live Docker run. Verify the retained root before treating this as authoritative evidence."
   );
   const output = resolve(options.outputFile ?? defaultCommitProofPreviewPath(options.workspace));
