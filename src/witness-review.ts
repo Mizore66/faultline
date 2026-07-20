@@ -290,3 +290,31 @@ export function freezeWitnessReview(
     ...(freeze.frozenAt === undefined ? {} : { frozenAt: freeze.frozenAt })
   });
 }
+
+export const WitnessReviewApproveAndFreezeInputSchema = WitnessReviewApprovalInputSchema.extend({
+  frozenAt: TimestampSchema.optional()
+}).strict();
+
+/**
+ * Atomic Approve+Freeze used by the humanized review surface and TTY path.
+ * Produces the same write-once approval and frozen records as the two-step flow.
+ */
+export function approveAndFreezeWitnessReview(
+  storeDirectory: string,
+  reviewInput: unknown,
+  input: unknown
+): { readonly approval: WitnessApproval; readonly frozen: FrozenWitness } {
+  const review = parseAndVerifyReview(reviewInput);
+  const parsed = WitnessReviewApproveAndFreezeInputSchema.parse(input);
+  assertConfirmed(review.reviewDigest, parsed.reviewDigest);
+  assertFreshReview(storeDirectory, review);
+  const approval = approveWitnessProposal(storeDirectory, review.proposal.proposalId, {
+    approvedBy: parsed.approvedBy,
+    ...(parsed.approvedAt === undefined ? {} : { approvedAt: parsed.approvedAt }),
+    ...(parsed.note === undefined ? {} : { note: parsed.note })
+  });
+  const frozen = freezeApprovedWitness(storeDirectory, review.proposal.proposalId, {
+    ...(parsed.frozenAt === undefined ? {} : { frozenAt: parsed.frozenAt })
+  });
+  return { approval, frozen };
+}

@@ -69,7 +69,8 @@ try {
   snapshotMod.captureTurnTreeSnapshot(repository, {
     turnId: "scale-turn",
     turnOrdinal: 1,
-    occurredAt: new Date().toISOString()
+    occurredAt: new Date().toISOString(),
+    trackedFilesOnly: true
   });
   snapshotOutcome = { status: "CAPTURED" };
 } catch (error) {
@@ -88,7 +89,8 @@ const report = {
     fileCountRequested: FILE_COUNT,
     filesWalked: walked,
     head,
-    worktree: "ephemeral (not retained)"
+    worktree: "ephemeral (not retained)",
+    mode: "trackedFilesOnly + clean HEAD^{tree} reuse"
   },
   timingsMs: {
     generate: Number(generateMs.toFixed(3)),
@@ -99,8 +101,8 @@ const report = {
   turnSnapshot: snapshotOutcome,
   nonClaims: [
     "Does not claim production localization latency at this scale.",
-    "Turn-tree snapshot hard-caps at 2000 files; refuse-at-cap is an expected outcome.",
-    "Numbers are machine-local; publish only after re-running the measurer."
+    "Dirty worktrees still refuse above the 2000 dirty-eligible-file cap.",
+    "Clean worktrees reuse HEAD^{tree}; numbers are machine-local."
   ]
 };
 

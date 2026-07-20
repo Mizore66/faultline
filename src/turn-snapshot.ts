@@ -849,8 +849,38 @@ function writeThrowawayTreeDigest(
     allowlistDigest: string;
     previousPathDigests?: Readonly<Record<string, string>>;
     previousAllowlistDigest?: string;
-  }
+  },
+  statusPorcelain: string
 ): WriteThrowawayResult {
+  const trackedFilesOnly = options.trackedFilesOnly === true;
+  const ignoreRules = loadFaultlineIgnoreRules(repositoryRoot);
+  // RIG-09: clean worktrees reuse HEAD^{tree} when no tracked path is ignore-filtered.
+  // Cap remains on files that must be re-hashed; repository size alone is not a refuse reason.
+  if (statusPorcelain.length === 0) {
+    const tracked = splitNullPaths(runGit(repositoryRoot, ["ls-files", "-z"]));
+    const ignoredTracked = tracked.filter((relativePath) => {
+      const ignored = isIgnoredByRules(relativePath, ignoreRules);
+      const protectedDescriptor = isProtectedEnvironmentDescriptorPath(relativePath);
+      return ignored && !protectedDescriptor;
+    });
+    if (ignoredTracked.length === 0) {
+      const headTree = runGit(repositoryRoot, ["rev-parse", "HEAD^{tree}"]).trim();
+      if (!GitObjectIdSchema.safeParse(headTree).success) {
+        throw new TurnSnapshotError("Git did not return a valid HEAD tree object id for the clean worktree fast path.");
+      }
+      return {
+        treeDigest: headTree,
+        warnings: [
+          trackedFilesOnly
+            ? "Reused HEAD^{tree} for clean tracked worktree (scale fast path)."
+            : "Reused HEAD^{tree} for clean worktree with no ignore-filtered tracked paths."
+        ],
+        pathDigests: {},
+        secretScanPathCount: 0
+      };
+    }
+  }
+
   // Gates 1–4 run here — before any temporary-index `git add` can write blobs.
   const plan = planTurnSnapshotPaths(repositoryRoot, runGit, {
     ...(options.trackedFilesOnly === undefined ? {} : { trackedFilesOnly: options.trackedFilesOnly }),
@@ -1012,7 +1042,7 @@ export function captureTurnTreeSnapshot(
           previousPathDigests: previousCache.pathDigests,
           previousAllowlistDigest: previousCache.allowlistDigest
         })
-    });
+    }, statusBeforeA);
     const statusAfterA = sampleStatus();
     if (statusBeforeA !== statusAfterA) {
       continue;
@@ -1033,7 +1063,7 @@ export function captureTurnTreeSnapshot(
       allowlistDigest,
       previousPathDigests: first.pathDigests,
       previousAllowlistDigest: allowlistDigest
-    });
+    }, statusBeforeB);
     const statusAfterB = sampleStatus();
     const headAfter = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();
     if (statusBeforeB !== statusAfterB) {
