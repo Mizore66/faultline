@@ -2006,7 +2006,7 @@ async function investigateCommand(args: string[]): Promise<void> {
         evidenceGrade: result.proof.evidenceGrade,
         evidenceLabel: result.proof.evidenceLabel,
         externalRootStatus: bundleVerification.externalRootStatus,
-        note: "Turn package graded TURN_PROOF when promotion checklist is retained; not COMMIT_PROOF."
+        note: "Turn package is experimentally graded (EXPERIMENTAL_TURN), not COMMIT_PROOF."
       },
       minimization
     }, null, 2)}\n`);
@@ -2138,7 +2138,7 @@ async function minimizeFromTurnInvestigation(options: {
     path: written.path,
     resultDigest: written.resultDigest,
     evidenceGradeNote:
-      "Counterfactual minimization from a turn boundary reuses Git-path machinery on synthetic commits. The parent turn package is graded TURN_PROOF when promotion checklist criteria are met."
+      "Counterfactual minimization from a turn boundary reuses Git-path machinery on synthetic commits. The parent turn package remains EXPERIMENTAL_TURN until TURN_PROOF promotion criteria are met."
   };
 }
 
@@ -2303,7 +2303,7 @@ function proofBundleSummary(directory: string): { rootDigest: string; witnessDig
     };
   }
   if (schemaVersion === "faultline.turn-proof-bundle.v1") {
-    throw new Error("Attestation create currently supports Git proof bundles only. Verify turn packages with `fl verify` (TURN_PROOF when promoted).");
+    throw new Error("Attestation create currently supports Git proof bundles only. Verify turn packages with `fl verify` (EXPERIMENTAL_TURN).");
   }
   const verification = verifyProofBundle(root);
   if (!verification.valid || !verification.rootDigest) throw new Error(`Proof bundle is invalid: ${verification.errors.join("; ")}`);
@@ -2786,7 +2786,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           `${result.externalRootStatus === "NOT_PROVIDED" ? "Turn proof self-consistency" : "Integrity"}: ${result.valid ? "VALID" : "INVALID"}\n`
         );
         process.stdout.write(
-          `Evidence grade: TURN_PROOF\nDeclared files checked: ${result.checkedFiles}\nBundle root: ${result.rootDigest ?? "unavailable"}\nExternal root: ${result.externalRootStatus}\n`
+          `Evidence grade: EXPERIMENTAL_TURN\nDeclared files checked: ${result.checkedFiles}\nBundle root: ${result.rootDigest ?? "unavailable"}\nExternal root: ${result.externalRootStatus}\n`
         );
         if (!result.valid) process.stdout.write(`${result.errors.map((error) => `- ${error}`).join("\n")}\n`);
         process.exitCode = result.valid ? 0 : 1;

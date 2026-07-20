@@ -18,7 +18,10 @@
 | `fl investigate turns` | **`EXPERIMENTAL_TURN`** | Codex-native First Bad Turn — remains experimental until the criteria below |
 | `fl judge-demo` | Sample | Evidence-model UI only |
 
-`TURN_PROOF` is assigned when promotion checklist criteria are retained (external validation, turn-boundary minimization, prevention integration, multi-OS soak). See [docs/concepts.md](docs/concepts.md) and [src/turn-proof-promotion.ts](src/turn-proof-promotion.ts). Attestation / host limits: [docs/security-model.md](docs/security-model.md).
+`EXPERIMENTAL_TURN` stays until promotion criteria are met (honest scoreboard in
+[src/turn-proof-promotion.ts](src/turn-proof-promotion.ts) — multi-OS soak still
+open, issue #152). Do not invent soak stats. Attestation / host limits:
+[docs/security-model.md](docs/security-model.md).
 
 ## Judges: four commands
 

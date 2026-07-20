@@ -300,8 +300,8 @@ describe("turn-tree localization", () => {
         turnOrdinal: null,
         turnId: null
       });
-      expect(result.proof.evidenceGrade).toBe("TURN_PROOF");
-      expect(result.proof.evidenceLabel).toBe("Turn-level portable proof — promotion criteria retained");
+      expect(result.proof.evidenceGrade).toBe("EXPERIMENTAL_TURN");
+      expect(result.proof.evidenceLabel).toBe(TURN_EVIDENCE_LABEL_EXPERIMENTAL);
       expect(result.proof.isProof).toBe(false);
       expect(result.proof.executionTrust).toBe("INJECTED_RUNNER");
       expect(result.runs).toHaveLength(result.states.length * 3);
@@ -943,7 +943,7 @@ describe("turn-tree localization", () => {
       ))).toBe(true);
       expect(result.transitions).toHaveLength(1);
       expect(result.proof.isProof).toBe(false);
-      expect(result.proof.evidenceGrade).toBe("TURN_PROOF");
+      expect(result.proof.evidenceGrade).toBe("EXPERIMENTAL_TURN");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
