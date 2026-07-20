@@ -63,7 +63,7 @@ GPT-5.6 is used through the Responses API only at two bounded points: proposing 
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.3-buildweek
+git checkout v0.1.4-buildweek
 pnpm install --frozen-lockfile
 pnpm fl judge-proof
 ```
