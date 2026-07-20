@@ -55,7 +55,7 @@ describe("local witness review server", () => {
       }
     });
     writeIncidentDraft(draftStore, draft);
-    const server = await startWitnessReviewServer({ store, proposalId: proposal.proposalId, draftStore });
+    const server = await startWitnessReviewServer({ store, proposalId: proposal.proposalId, draftStore, requireSeparateFreeze: true });
     try {
       const initial = await fetch(server.url);
       const initialPage = await initial.text();
@@ -63,12 +63,15 @@ describe("local witness review server", () => {
       expect(initial.headers.get("content-security-policy")).toContain("default-src 'none'");
       expect(initial.headers.get("cache-control")).toBe("no-store");
       expect(initialPage).toContain("node witness.mjs --review-only");
-      expect(initialPage).toContain(proposal.witness.overlays[0]!.bytesBase64);
+      expect(initialPage).toContain("console.log(&#039;review server bytes&#039;)");
       expect(initialPage).toContain("known-good-commit");
       expect(initialPage).toContain("known-bad-commit");
-      expect(initialPage).toContain("registry.example/faultline@sha256");
+      expect(initialPage).toContain("Evidence record");
       expect(initialPage).not.toContain("private failing CI log text");
       expect(initialPage).not.toMatch(/<script\b/i);
+
+      // Digest-pinned runtime image is evidence-only (collapsed); raw sha256 may appear inside Evidence record.
+      expect(initialPage).toContain("Evidence record");
 
       const token = formValue(initialPage, "token");
       const reviewDigest = formValue(initialPage, "reviewDigest");
@@ -146,7 +149,7 @@ describe("local witness review server", () => {
         commandDigest: proposal.witness.commandDigest
       }
     }));
-    const server = await startWitnessReviewServer({ store, proposalId: proposal.proposalId, draftStore });
+    const server = await startWitnessReviewServer({ store, proposalId: proposal.proposalId, draftStore, requireSeparateFreeze: true });
     try {
       const response = await fetch(server.url);
       expect(response.status).toBe(409);

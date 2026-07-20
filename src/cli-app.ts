@@ -1203,7 +1203,9 @@ async function witnessCommand(args: string[]): Promise<void> {
       return;
     }
     case "review": {
-      if (!proposalId) throw new Error("Usage: fl witness review <proposal-id> [--json | --port <number>] [--draft-store <directory>]");
+      if (!proposalId) {
+        throw new Error("Usage: fl witness review <proposal-id> [--json | --tty | --browser | --two-step | --port <number>] [--draft-store <directory>]");
+      }
       if (hasFlag(args, "--json")) {
         const review = openWitnessReview(store, proposalId);
         process.stdout.write(`${JSON.stringify({
@@ -1218,15 +1220,101 @@ async function witnessCommand(args: string[]): Promise<void> {
         throw new Error("--port must be an integer from 0 through 65535.");
       }
       const draftStore = resolve(option(args, "--draft-store") ?? defaultIncidentDraftStore());
+      const forceTty = hasFlag(args, "--tty");
+      const forceBrowser = hasFlag(args, "--browser") || option(args, "--port") !== undefined;
+      const requireSeparateFreeze = hasFlag(args, "--two-step") || process.env.FAULTLINE_WITNESS_TWO_STEP === "1";
+      const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
+      if (forceTty || (!forceBrowser && interactive)) {
+        const { runWitnessReviewTty, WitnessReviewTtyError, nonTtyReviewRefusalMessage } = await import("./witness-review-tty.js");
+        const { readIncidentDraft } = await import("./incident-store.js");
+        let draft = null;
+        try {
+          draft = readIncidentDraft(draftStore, proposalId).draft;
+        } catch {
+          draft = null;
+        }
+        try {
+          await runWitnessReviewTty({ store, proposalId, draft });
+        } catch (error) {
+          if (error instanceof WitnessReviewTtyError && error.code === "NON_TTY") {
+            const { startWitnessReviewServer } = await import("./witness-review-server.js");
+            const server = await startWitnessReviewServer({ store, proposalId, draftStore, port, requireSeparateFreeze });
+            process.stderr.write(`${nonTtyReviewRefusalMessage(server.url)}\n`);
+            process.stdout.write(`FaultLine local witness review: ${server.url}\nPress Ctrl+C to stop.\n`);
+            await new Promise<void>((resolveExit) => {
+              process.once("SIGINT", () => {
+                void server.close().finally(resolveExit);
+              });
+            });
+            process.exitCode = 1;
+            return;
+          }
+          throw error;
+        }
+        return;
+      }
       const { startWitnessReviewServer } = await import("./witness-review-server.js");
-      const server = await startWitnessReviewServer({ store, proposalId, draftStore, port });
-      process.stdout.write(`FaultLine local witness review: ${server.url}\nReview the exact command, overlays, and policy. Approve and freeze require separate explicit clicks. Press Ctrl+C to stop.\n`);
+      const server = await startWitnessReviewServer({ store, proposalId, draftStore, port, requireSeparateFreeze });
+      process.stdout.write(
+        requireSeparateFreeze
+          ? `FaultLine local witness review: ${server.url}\nTwo-step mode: Approve, then Freeze (separate clicks). Press Ctrl+C to stop.\n`
+          : `FaultLine local witness review: ${server.url}\nApprove & freeze is one action. Press Ctrl+C to stop.\n`
+      );
       await new Promise<void>((resolveExit) => {
         process.once("SIGINT", () => {
           void server.close().finally(resolveExit);
         });
       });
       return;
+    }
+    case "policy": {
+      const policyAction = proposalId;
+      if (policyAction === "freeze") {
+        const policyId = requiredOption(args, "--policy-id");
+        const frozenBy = requiredOption(args, "--frozen-by");
+        const command = requiredOption(args, "--command");
+        const maxTimeoutSeconds = Number(option(args, "--max-timeout") ?? "60");
+        if (!Number.isInteger(maxTimeoutSeconds) || maxTimeoutSeconds < 1) {
+          throw new Error("--max-timeout must be a positive integer.");
+        }
+        const { buildStandingApprovalPolicy, writeStandingApprovalPolicy } = await import("./standing-approval-policy.js");
+        const policy = writeStandingApprovalPolicy(store, buildStandingApprovalPolicy({
+          schemaVersion: "faultline.standing-approval-policy.v1",
+          policyId,
+          frozenBy,
+          frozenAt: new Date().toISOString(),
+          allowedCommands: [command],
+          allowedOverlayTemplates: [],
+          maxTimeoutSeconds,
+          network: "disabled",
+          credentials: "redacted"
+        }));
+        process.stdout.write(`${JSON.stringify({ status: "STANDING_POLICY_FROZEN", policyId: policy.policyId, policyDigest: policy.policyDigest }, null, 2)}\n`);
+        return;
+      }
+      if (policyAction === "apply") {
+        const targetProposalId = args[2];
+        if (!targetProposalId || targetProposalId.startsWith("--")) {
+          throw new Error("Usage: fl witness policy apply <proposal-id> --policy-id <id>");
+        }
+        const policyId = requiredOption(args, "--policy-id");
+        const { tryAutoFreezeFromStandingPolicy, policyApprovedBy } = await import("./standing-approval-policy.js");
+        const result = tryAutoFreezeFromStandingPolicy(store, targetProposalId, policyId);
+        if (result.frozen === null) {
+          process.stdout.write(`${JSON.stringify({ status: "STANDING_POLICY_NO_MATCH", reasons: result.reasons }, null, 2)}\n`);
+          process.exitCode = 1;
+          return;
+        }
+        process.stdout.write(`${JSON.stringify({
+          status: "FROZEN_BY_STANDING_POLICY",
+          proposalId: targetProposalId,
+          approvedBy: policyApprovedBy(result.policy),
+          frozenDigest: result.frozen.frozenDigest,
+          policyDigest: result.policy.policyDigest
+        }, null, 2)}\n`);
+        return;
+      }
+      throw new Error("Usage: fl witness policy freeze --policy-id <id> --frozen-by <actor> --command <exact> [--max-timeout <seconds>] | fl witness policy apply <proposal-id> --policy-id <id>");
     }
     case "propose": {
       const liveIncident = option(args, "--incident");

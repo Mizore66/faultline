@@ -238,6 +238,8 @@ describe("Turn tree snapshot capture", () => {
   it("refuses a torn snapshot when consecutive tree digests disagree even if status is unchanged", () => {
     const repository = repositoryFixture();
     try {
+      // Dirty the worktree so the clean HEAD^{tree} fast path does not skip write-tree.
+      writeFileSync(join(repository, "tracked.txt"), "dirty-for-torn-tree-test\n", "utf8");
       let writeTreeCalls = 0;
       const runGit: TurnSnapshotGitRunner = (root, args, env) => {
         if (args[0] === "write-tree") {

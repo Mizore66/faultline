@@ -140,8 +140,13 @@ Do not transform a blank status into a claim. The [Devpost description draft](de
 
 Grep-able map of statements we may say publicly to the retained artifact that backs them. No row may be claimed without its artifact path. Re-verified 2026-07-19 against post-backlog roots.
 
+### Public disclosure — soak integrity incident (SUB-03)
+
+We published a multi-OS SIDE_CAR soak sample that was fabricated by a generator script, then used it to self-grant `TURN_PROOF` promotion — that was our error, not an external discovery. Commit [`457fabeb9d5ff2261cbbf1ced4673ff28c9074d0`](https://github.com/Mizore66/faultline/commit/457fabeb9d5ff2261cbbf1ced4673ff28c9074d0) deletes those samples, restores honest promotion gates, and adds `tests/evidence-honesty.test.ts` so fabricated soak origins cannot quietly return. Release `v0.1.4-buildweek` is **retracted**; do not cite it.
+
 | Public claim | Artifact path | Recorded value / note |
 | --- | --- | --- |
+| Soak integrity revert + honesty tests (owned disclosure) | commit `457fabe` + `tests/evidence-honesty.test.ts` + retracted `v0.1.4-buildweek` | Fabricated multi-OS SIDE_CAR soak removed; `TURN_PROOF` reserved until organic/external soak; see SUB-03 paragraph above |
 | Judge Idea path opens a verified `COMMIT_PROOF` sample | `docs/samples/self-incident-commit-proof/ROOT.sha256` | `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9` |
 | Sample package docs / replace procedure | `docs/samples/COMMIT_PROOF_SAMPLE.md` | Install from `fl demo live-git --export-only` |
 | Historical self-incident dogfood root | `docs/impact-validation-self-incident.md` | `sha256:f6a391b3407731d766bd19510c4e4172ad44f28771f1d034030fc56513625b75` at `97c3290` |
