@@ -25,6 +25,10 @@ open, issue #152). Do not invent soak stats. Attestation / host limits:
 
 ## Judges: four commands
 
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Mizore66/faultline?ref=v0.1.7-buildweek)
+
+Zero-install / Codespaces / clone: [docs/demo-zero-install.md](docs/demo-zero-install.md). Rehearsal: [docs/demo-rehearsal.md](docs/demo-rehearsal.md).
+
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
@@ -80,6 +84,11 @@ Help is tiered: `fl` / `fl quickstart` for the short surface; `fl advanced` for 
 
 | Doc | Contents |
 | --- | --- |
+| [docs/demo-zero-install.md](docs/demo-zero-install.md) | npm / Codespaces / clone (DEMO-01) |
+| [docs/demo-rehearsal.md](docs/demo-rehearsal.md) | Pre-camera checklist |
+| [docs/demo-comprehension-test.md](docs/demo-comprehension-test.md) | 20s cold-viewer protocol (DEMO-03) |
+| [docs/demo-qa.md](docs/demo-qa.md) | Artifact-backed Q&A |
+| [docs/demo-fallback.md](docs/demo-fallback.md) | Live-fail switch artifacts |
 | [docs/concepts.md](docs/concepts.md) | Grades, promotion criteria, claim boundaries |
 | [docs/first-incident.md](docs/first-incident.md) | Guided first incident (`fl tutorial --yes`) |
 | [docs/personas/judge.md](docs/personas/judge.md) | Judge / evaluator entry |

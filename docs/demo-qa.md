@@ -2,6 +2,10 @@
 
 Use these answers on camera. Do not invent statistics. Every answer points at a retained artifact.
 
+## How do I try it with zero install?
+
+Three paths in [demo-zero-install.md](demo-zero-install.md): `npm i -g @mizore66/faultline@0.1.1`, [GitHub Codespaces on the pin](https://codespaces.new/Mizore66/faultline?ref=v0.1.7-buildweek), or clone `v0.1.7-buildweek`. Rehearsal checklist: [demo-rehearsal.md](demo-rehearsal.md).
+
 ## vs. Git bisect?
 
 FaultLine freezes a **human-reviewed witness** (exact command + overlays + cage) and produces an offline-verifiable proof package for “where does *this* predicate first go bad?” Bisect finds a commit that changes *some* behavior; it does not bind a blinded incident packet, Docker cage policy, or portable proof root. See [differentiation.md](differentiation.md).

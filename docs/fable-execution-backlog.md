@@ -29,8 +29,8 @@ people/calendar gates.
 | CODEX-01 | Hooks-native live-fire + thread bindings | **done** |
 | COH-11 | Publish `@mizore66/faultline` to npm | **done** — `@mizore66/faultline@0.1.1` via Trusted Publishing ([#166](https://github.com/Mizore66/faultline/issues/166)) |
 | SEC-08 | Signed release tag + cold verify transcript | **partial** — SSH-signed `v0.1.7-buildweek` on GitHub; cold-machine stranger transcript pending partner ([#171](https://github.com/Mizore66/faultline/issues/171)) |
-| DEMO-01 | Zero-install / rehearsal | **open** ([#148](https://github.com/Mizore66/faultline/issues/148)) — people/video adjacent |
-| DEMO-03 | 20-second comprehension test | **open** ([#176](https://github.com/Mizore66/faultline/issues/176)) |
+| DEMO-01 | Zero-install / rehearsal | **scaffolding done** — Codespaces + [demo-zero-install.md](demo-zero-install.md) + [demo-rehearsal.md](demo-rehearsal.md); stranger retention still open ([#148](https://github.com/Mizore66/faultline/issues/148)) |
+| DEMO-03 | 20-second comprehension test | **protocol ready** — [demo-comprehension-test.md](demo-comprehension-test.md); needs real cold PASS sheets ([#176](https://github.com/Mizore66/faultline/issues/176)) |
 | CDX-07 | Organic incident farming → PREVENTION_VERIFIED | **open** ([#173](https://github.com/Mizore66/faultline/issues/173)) |
 | CDX-08 | Plugin-native install behind live-fire gate | **open** ([#174](https://github.com/Mizore66/faultline/issues/174)) |
 
@@ -56,8 +56,8 @@ people/calendar gates.
 | Issue | Backlog ID | Gate | Notes |
 | --- | --- | --- | --- |
 | [#171](https://github.com/Mizore66/faultline/issues/171) | SEC-08 | partner / cold machine | SSH-signed tag done; need stranger `git verify-tag` transcript |
-| [#148](https://github.com/Mizore66/faultline/issues/148) | DEMO-01 | people / demo | zero-install + comprehension adjacent |
-| [#176](https://github.com/Mizore66/faultline/issues/176) | DEMO-03 | people / demo | 20s comprehension iterate |
+| [#148](https://github.com/Mizore66/faultline/issues/148) | DEMO-01 | people / demo | scaffolding landed; retain stranger Codespaces/npm run |
+| [#176](https://github.com/Mizore66/faultline/issues/176) | DEMO-03 | people / demo | protocol landed; need cold PASS sheet(s) |
 | [#149](https://github.com/Mizore66/faultline/issues/149) | EXT-01 | people | independent security review |
 | [#150](https://github.com/Mizore66/faultline/issues/150) | EXT-02 | people | 3–5 unassisted new-user runs |
 | [#151](https://github.com/Mizore66/faultline/issues/151) | EXT-03 | people | second external turn-path |
@@ -71,6 +71,8 @@ people/calendar gates.
 
 ## Execution record
 
+- 2026-07-21: DEMO-01/03 scaffolding — `.devcontainer`, `docs/demo-zero-install.md`,
+  `docs/demo-rehearsal.md`, `docs/demo-comprehension-test.md` (no fabricated subjects).
 - 2026-07-21: COH-11 — published `@mizore66/faultline@0.1.1` via npm Trusted Publishing (OIDC).
 - 2026-07-21: SEC-08 — SSH-signed annotated tag `v0.1.7-buildweek` pushed; cold-machine transcript still pending.
 - 2026-07-20: RIG-07 Windows-host Docker E2E — eight coverage-matrix rows executed;
