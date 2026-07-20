@@ -147,7 +147,7 @@ describe("Git commit-range investigation", () => {
     }
   });
 
-  it("marks unsafe-local replay inapplicable even if an injected runner returns zero", async () => {
+  it("rejects unsafe-local replay even if an injected runner returns zero", async () => {
     const store = mkdtempSync(join(tmpdir(), "faultline-git-investigation-store-"));
     const repository = createRepository();
     try {
@@ -159,11 +159,9 @@ describe("Git commit-range investigation", () => {
         { mode: "UNSAFE_LOCAL", allowUnsafeLocal: true }
       ));
 
-      expect(result.status).toBe("COMPLETED");
-      expect(result.runs).toHaveLength(3 * STABLE_EXECUTION_COUNT);
-      expect(result.runs.every((run) => run.result.verdict === "INAPPLICABLE" && run.result.reason === "UNSAFE_LOCAL_NOT_PROOF")).toBe(true);
-      expect(result.stableStates).toEqual([]);
-      expect(result.transitions).toEqual([]);
+      expect(result.status).toBe("INVALID_REQUEST");
+      expect(result.runs).toEqual([]);
+      expect(result.errors.join("\n")).toMatch(/DOCKER_ISOLATED|UNSAFE_LOCAL/i);
       expect(result.proof).toMatchObject({ dockerIsolated: false, isProof: false });
     } finally {
       rmSync(store, { recursive: true, force: true });

@@ -74,7 +74,8 @@ export const GitRangeSchema = z.object({
 }).strict();
 
 export const GitInvestigationSandboxSchema = z.object({
-  mode: z.enum(["DOCKER_ISOLATED", "UNSAFE_LOCAL"]).default("DOCKER_ISOLATED"),
+  /** New investigations are Docker-only; legacy unsafe facts remain readable only in stored records. */
+  mode: z.literal("DOCKER_ISOLATED").default("DOCKER_ISOLATED"),
   image: z.string().min(1).max(1_024).optional(),
   environment: z.record(z.string()).optional(),
   allowedEnvironment: z.array(z.string().min(1).max(128)).max(64).optional(),
@@ -85,8 +86,7 @@ export const GitInvestigationSandboxSchema = z.object({
     memoryBytes: z.number().int().positive().optional(),
     pidsLimit: z.number().int().positive().optional(),
     tmpfsBytes: z.number().int().positive().optional()
-  }).strict().optional(),
-  allowUnsafeLocal: z.literal(true).optional()
+  }).strict().optional()
 }).strict();
 
 /** Serializable portion of an investigation request. The runner stays injected, never serialized. */
@@ -410,8 +410,7 @@ function planRequestForState(
     ...(sandbox.image === undefined ? {} : { image: sandbox.image }),
     ...(sandbox.environment === undefined ? {} : { environment: sandbox.environment }),
     ...(sandbox.allowedEnvironment === undefined ? {} : { allowedEnvironment: sandbox.allowedEnvironment }),
-    ...(sandbox.limits === undefined ? {} : { limits: sandbox.limits as Partial<SandboxLimits> }),
-    ...(sandbox.allowUnsafeLocal === undefined ? {} : { allowUnsafeLocal: sandbox.allowUnsafeLocal })
+    ...(sandbox.limits === undefined ? {} : { limits: sandbox.limits as Partial<SandboxLimits> })
   };
 }
 
@@ -618,7 +617,7 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
     sandbox: request.sandbox,
     ...(request.maxStates === undefined ? {} : { maxStates: request.maxStates })
   });
-  const requestedSandboxMode = request.sandbox.mode === "UNSAFE_LOCAL" ? "UNSAFE_LOCAL" : "DOCKER_ISOLATED";
+  const requestedSandboxMode = "DOCKER_ISOLATED" as const;
   const requestedExecutionTrust = executionTrustFor(requestedSandboxMode, request.runner !== undefined);
   if (!parsedRequest.success) {
     return baseResult("INVALID_REQUEST", requestedSandboxMode, [`Invalid Git investigation request: ${parsedRequest.error.message}`], {

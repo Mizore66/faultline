@@ -96,8 +96,7 @@ export async function runFrozenIncidentContinuation(options: {
   const frozenWitness = readFrozenWitness(options.witnessStore, options.draft.draftId);
   assertIncidentFrozenWitnessBinding(options.draft, frozenWitness);
 
-  const unsafeLocal = options.unsafeLocal === true;
-  if (!unsafeLocal && options.expectedFrozenDigest === undefined) {
+  if (options.expectedFrozenDigest === undefined) {
     throw new Error(
       "Proof-grade incident continuation requires --expect-digest <retained-frozen-digest>. FaultLine will not treat the digest stored beside the witness as an external retention record."
     );
@@ -110,7 +109,7 @@ export async function runFrozenIncidentContinuation(options: {
     throw new Error("--image must match the digest-pinned runtime recorded in the immutable incident draft.");
   }
   const image = options.image ?? options.draft.runtime?.image;
-  if (!unsafeLocal && image === undefined) {
+  if (image === undefined) {
     throw new Error(
       "This incident has no selected runtime. Resolve a reviewed local runtime before intake, or supply --image <digest-pinned-image> for proof-grade replay."
     );
@@ -125,9 +124,7 @@ export async function runFrozenIncidentContinuation(options: {
     range: { ancestor: options.draft.range.ancestor, descendant: options.draft.range.descendant },
     frozenWitness,
     expectedFrozenDigest: options.expectedFrozenDigest ?? frozenWitness.frozenDigest,
-    sandbox: unsafeLocal
-      ? { mode: "UNSAFE_LOCAL", allowUnsafeLocal: true }
-      : { mode: "DOCKER_ISOLATED", image: image as string },
+    sandbox: { mode: "DOCKER_ISOLATED", image },
     ...(options.maxStates === undefined ? {} : { maxStates: options.maxStates })
   });
 

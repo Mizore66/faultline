@@ -368,7 +368,7 @@ describe("Git diff counterfactual minimization", () => {
     }
   });
 
-  it("never turns unsafe-local or Docker-unavailable results into proof", async () => {
+  it("rejects unsafe-local requests and never turns Docker-unavailable results into proof", async () => {
     const store = mkdtempSync(join(tmpdir(), "faultline-git-minimization-store-"));
     const repository = interactionRepository();
     try {
@@ -377,8 +377,9 @@ describe("Git diff counterfactual minimization", () => {
         ...requestFor(repository.root, repository.before, repository.after, witness, interactionRunner()),
         sandbox: { mode: "UNSAFE_LOCAL", allowUnsafeLocal: true }
       });
-      expect(unsafe.status).toBe("UNSAFE_LOCAL_INAPPLICABLE");
-      expect(unsafe.runs.every((run) => run.result?.verdict === "INAPPLICABLE")).toBe(true);
+      expect(unsafe.status).toBe("INVALID_REQUEST");
+      expect(unsafe.errors.join("\n")).toMatch(/DOCKER_ISOLATED|UNSAFE_LOCAL/i);
+      expect(unsafe.runs).toEqual([]);
       expect(unsafe.proof.isProof).toBe(false);
 
       const unavailable: SandboxCommandRunner = {

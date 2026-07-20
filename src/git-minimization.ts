@@ -62,7 +62,8 @@ const PASS_VERDICT_REASONS = new Set(["PREDICATE_PASS"]);
 const FAIL_VERDICT_REASONS = new Set(["PREDICATE_FAIL"]);
 
 export const GitMinimizationSandboxSchema = z.object({
-  mode: z.enum(["DOCKER_ISOLATED", "UNSAFE_LOCAL"]).default("DOCKER_ISOLATED"),
+  /** New minimization requests are Docker-only; legacy unsafe facts remain readable only in stored records. */
+  mode: z.literal("DOCKER_ISOLATED").default("DOCKER_ISOLATED"),
   image: z.string().min(1).max(1_024).optional(),
   environment: z.record(z.string()).optional(),
   allowedEnvironment: z.array(z.string().min(1).max(128)).max(64).optional(),
@@ -73,8 +74,7 @@ export const GitMinimizationSandboxSchema = z.object({
     memoryBytes: z.number().int().positive().optional(),
     pidsLimit: z.number().int().positive().optional(),
     tmpfsBytes: z.number().int().positive().optional()
-  }).strict().optional(),
-  allowUnsafeLocal: z.literal(true).optional()
+  }).strict().optional()
 }).strict();
 
 /** The execution budget covers actual sandbox invocations, not Git apply attempts. */
@@ -650,8 +650,7 @@ function planRequestForWorktree(sandbox: GitMinimizationSandbox, worktree: strin
     ...(sandbox.image === undefined ? {} : { image: sandbox.image }),
     ...(sandbox.environment === undefined ? {} : { environment: sandbox.environment }),
     ...(sandbox.allowedEnvironment === undefined ? {} : { allowedEnvironment: sandbox.allowedEnvironment }),
-    ...(sandbox.limits === undefined ? {} : { limits: sandbox.limits as Partial<SandboxLimits> }),
-    ...(sandbox.allowUnsafeLocal === undefined ? {} : { allowUnsafeLocal: sandbox.allowUnsafeLocal })
+    ...(sandbox.limits === undefined ? {} : { limits: sandbox.limits as Partial<SandboxLimits> })
   };
 }
 
@@ -898,9 +897,7 @@ function baseResult(
  * Docker executions reverse from `after`; unsafe-local runs are never proof.
  */
 export async function minimizeGitDiff(request: GitMinimizationRequest): Promise<GitMinimizationResult> {
-  const rawMode = request.sandbox && typeof request.sandbox === "object" && "mode" in request.sandbox && request.sandbox.mode === "UNSAFE_LOCAL"
-    ? "UNSAFE_LOCAL" as const
-    : "DOCKER_ISOLATED" as const;
+  const rawMode = "DOCKER_ISOLATED" as const;
   const requestedExecutionTrust = executionTrustFor(rawMode, request.runner !== undefined);
   const parsedRequest = GitMinimizationRequestSchema.safeParse({
     repository: request.repository,
