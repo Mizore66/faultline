@@ -616,24 +616,14 @@ describe("FaultLine CLI workflows", () => {
         frozenWitness: { valid: true, frozenDigest, externalDigestStatus: "MATCH" }
       });
 
-      // Session binding written at freeze lets continue inherit --expect-digest.
-      // This local escape hatch is intentionally not proof-grade, but it
-      // exercises the durable handoff without retyping the selected range,
-      // proposal id, or frozen digest into `fl investigate git`.
+      // Session binding written at freeze lets continue inherit --expect-digest,
+      // but production CLI no longer exposes a host-execution escape hatch.
       const continued = runFl([
         "incident", "continue", id, "--repo", repository, "--store", store, "--unsafe-local"
       ], { cwd: directory });
       expect(continued.status).toBe(1);
-      expect(JSON.parse(continued.stdout)).toMatchObject({
-        status: "INVESTIGATION_NOT_PROOF",
-        incident: {
-          id,
-          range: { ancestor, descendant },
-          frozenDigest,
-          frozenDigestExternalStatus: "MATCH"
-        },
-        proofBundle: null
-      });
+      expect(continued.stdout).toBe("");
+      expect(continued.stderr).toMatch(/--image|digest-pinned/i);
       expect(continued.stdout).not.toContain("node -e");
       expect(runFl(["incident", "status", id, "--repo", directory, "--store", store], { cwd: directory }).status).toBe(1);
     } finally {

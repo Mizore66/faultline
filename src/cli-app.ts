@@ -520,7 +520,7 @@ function incidentStatusCommand(args: string[]): void {
 async function continueIncidentCommand(args: string[]): Promise<void> {
   const incidentId = args[1];
   if (!incidentId) {
-    throw new Error("Usage: fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>] [--unsafe-local]");
+    throw new Error("Usage: fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>]");
   }
   const context = loadIncidentCommandContext(args, incidentId);
   const inherited = resolveInheritedSessionFacts({
@@ -550,7 +550,6 @@ async function continueIncidentCommand(args: string[]): Promise<void> {
     witnessStore: context.witnessStore,
     expectedFrozenDigest,
     ...(image === undefined ? {} : { image }),
-    ...(hasFlag(args, "--unsafe-local") ? { unsafeLocal: true } : {}),
     ...(ledgerFile === undefined ? {} : { ledgerFile }),
     ...(maxStates === undefined ? {} : { maxStates: Number(maxStates) }),
     ...(outputDirectory === undefined ? {} : { outputDirectory })
@@ -780,7 +779,7 @@ async function projectRuntimeCommand(args: string[]): Promise<void> {
           plan,
           limitation: error.message,
           proofNext: "FaultLine did not push an image or use registry credentials. For a portable proof, push and pull the reviewed tag with your own registry workflow, then run fl runtime project resolve --tag <repository:tag>.",
-          localDiagnosticNext: "For local wiring only after a human witness freeze, run fl incident continue <id> --unsafe-local. That route does not use this local image ID, is explicitly non-proof, and never exports a portable proof bundle."
+          localDiagnosticNext: "FaultLine will not fall back to host execution. Push a reviewed digest-pinned image before continuing the incident."
         }, null, 2)}\n`);
       process.exitCode = 1;
       return;
@@ -1828,7 +1827,6 @@ async function investigateCommand(args: string[]): Promise<void> {
         ...(runtime === undefined ? {} : { runtime }),
         ...(image === undefined ? {} : { image }),
         ...(expectDigest === undefined ? {} : { expectDigest }),
-        ...(hasFlag(args, "--unsafe-local") ? { unsafeLocal: true } : {}),
         ...(ledgerFile === undefined ? {} : { ledgerFile }),
         ...(maxStates === undefined ? {} : { maxStates: Number(maxStates) }),
         ...(outputDirectory === undefined ? {} : { outputDirectory }),
@@ -2004,7 +2002,6 @@ async function investigateCommand(args: string[]): Promise<void> {
   const proposalId = requiredOption(args, "--proposal");
   const repository = resolve(requiredOption(args, "--repo"));
   const draftStore = resolve(option(args, "--draft-store") ?? defaultIncidentDraftStore(repository));
-  const unsafeLocal = hasFlag(args, "--unsafe-local");
   const maxStates = option(args, "--max-states");
   const frozenWitness = readFrozenWitness(store, proposalId);
   const inherited = resolveInheritedSessionFacts({
@@ -2016,7 +2013,7 @@ async function investigateCommand(args: string[]): Promise<void> {
     ?? requireExpectDigestOrBinding({ args, storeDirectory: draftStore, incidentId: proposalId });
   const ledgerFile = inherited.ledgerPath ?? option(args, "--ledger");
   const lifecycleLedger = ledgerFile === undefined ? undefined : readVerifiedCodexLifecycleLedger(resolve(ledgerFile));
-  const image = unsafeLocal ? undefined : requireImageOrConfig(repository, args);
+  const image = requireImageOrConfig(repository, args);
   writeIncidentSessionBinding(draftStore, {
     incidentId: proposalId,
     expectDigest: expectedFrozenDigest,
@@ -2027,9 +2024,7 @@ async function investigateCommand(args: string[]): Promise<void> {
     range: { ancestor: requiredOption(args, "--from"), descendant: requiredOption(args, "--to") },
     frozenWitness,
     expectedFrozenDigest,
-    sandbox: unsafeLocal
-      ? { mode: "UNSAFE_LOCAL", allowUnsafeLocal: true }
-      : { mode: "DOCKER_ISOLATED", image: image! },
+    sandbox: { mode: "DOCKER_ISOLATED", image },
     ...(maxStates === undefined ? {} : { maxStates: Number(maxStates) })
   });
   if (!result.proof.isProof) {
@@ -2214,7 +2209,6 @@ async function minimizeCommand(args: string[]): Promise<void> {
     throw new Error("Usage: fl minimize git|verify ...");
   }
   const proposalId = requiredOption(args, "--proposal");
-  const unsafeLocal = hasFlag(args, "--unsafe-local");
   const maxExecutions = option(args, "--max-executions");
   const result = await minimizeGitDiff({
     repository: resolve(requiredOption(args, "--repo")),
@@ -2222,9 +2216,7 @@ async function minimizeCommand(args: string[]): Promise<void> {
     after: requiredOption(args, "--after"),
     frozenWitness: readFrozenWitness(witnessStore(args), proposalId),
     expectedFrozenDigest: requiredOption(args, "--expect-digest"),
-    sandbox: unsafeLocal
-      ? { mode: "UNSAFE_LOCAL", allowUnsafeLocal: true }
-      : { mode: "DOCKER_ISOLATED", image: requiredOption(args, "--image") },
+    sandbox: { mode: "DOCKER_ISOLATED", image: requiredOption(args, "--image") },
     ...(maxExecutions === undefined ? {} : { budget: { maxExecutions: Number(maxExecutions) } })
   });
   const output = safeManagedFileOutput(
