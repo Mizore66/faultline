@@ -531,7 +531,7 @@ export function createDockerSandboxPlan(request: SandboxPlanRequest): DockerSand
  * It exists only to make a developer's explicitly acknowledged escape hatch
  * visible in the proof record rather than silently falling back from Docker.
  */
-export function createUnsafeLocalSandboxPlan(request: SandboxPlanRequest): UnsafeLocalSandboxPlan {
+function createUnsafeLocalSandboxPlan(request: SandboxPlanRequest): UnsafeLocalSandboxPlan {
   if (request.allowUnsafeLocal !== true) {
     throw new Error("UNSAFE_LOCAL execution requires allowUnsafeLocal: true; Docker is the only default.");
   }
@@ -572,7 +572,7 @@ export function createUnsafeLocalSandboxPlan(request: SandboxPlanRequest): Unsaf
 
 export function createSandboxPlan(request: SandboxPlanRequest): SandboxPlan {
   if (request.mode === "UNSAFE_LOCAL") {
-    return createUnsafeLocalSandboxPlan(request);
+    throw new Error("UNSAFE_LOCAL execution is not available in the shipped FaultLine runtime.");
   }
   if (request.allowUnsafeLocal === true) {
     throw new Error("allowUnsafeLocal is only valid together with mode: UNSAFE_LOCAL.");

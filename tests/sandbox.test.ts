@@ -4,7 +4,6 @@ import {
   auditSandboxPlan,
   classifySandboxResult,
   createSandboxPlan,
-  createUnsafeLocalSandboxPlan,
   executeSandboxPlan,
   validateSandboxPlanAudit,
   type SandboxCommandRunner,
@@ -102,17 +101,9 @@ describe("FaultLine frozen-witness sandbox plans", () => {
     expect(() => createSandboxPlan(dockerRequest({ limits: { memoryBytes: 2_147_483_649 } }))).toThrow(/memoryBytes/);
   });
 
-  it("never creates an unsafe local plan without an explicit acknowledgement", () => {
-    expect(() => createSandboxPlan(dockerRequest({ mode: "UNSAFE_LOCAL" }))).toThrow(/allowUnsafeLocal: true/);
+  it("refuses unsafe local execution in the shipped runtime", () => {
+    expect(() => createSandboxPlan(dockerRequest({ mode: "UNSAFE_LOCAL" }))).toThrow(/not available in the shipped FaultLine runtime/);
     expect(() => createSandboxPlan(dockerRequest({ allowUnsafeLocal: true }))).toThrow(/only valid together/);
-
-    const plan = createUnsafeLocalSandboxPlan(dockerRequest({
-      mode: "UNSAFE_LOCAL",
-      allowUnsafeLocal: true
-    }));
-    expect(plan.kind).toBe("UNSAFE_LOCAL");
-    expect(plan.acknowledgement).toBe("UNSAFE_LOCAL_OPTED_IN");
-    expect(plan.audit.kind).toBe("UNSAFE_LOCAL");
   });
 
   it("classifies injected runner results without requiring a Docker daemon", async () => {
@@ -163,15 +154,6 @@ describe("FaultLine frozen-witness sandbox plans", () => {
       stdout: "",
       stderr: "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
     })).toMatchObject({ verdict: "ERROR", reason: "SANDBOX_UNAVAILABLE" });
-  });
-
-  it("marks every explicitly unsafe local execution as inapplicable evidence", () => {
-    const plan = createSandboxPlan(dockerRequest({ mode: "UNSAFE_LOCAL", allowUnsafeLocal: true }));
-    expect(classifySandboxResult(plan, {
-      exitCode: 0,
-      stdout: "local command passed",
-      stderr: ""
-    })).toMatchObject({ verdict: "INAPPLICABLE", reason: "UNSAFE_LOCAL_NOT_PROOF" });
   });
 
   it("classifies structured witness-result outcomes independently of exit code", () => {
