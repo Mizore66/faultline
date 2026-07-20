@@ -33,6 +33,21 @@ const workspace = process.cwd();
 const tsxCli = join(workspace, "node_modules", "tsx", "dist", "cli.mjs");
 const faultLineCli = join(workspace, "src", "cli.ts");
 
+/** Hosted Windows runners often hold temp dirs briefly; cleanup must not fail the assertion. */
+function rmTempTree(directory: string): void {
+  try {
+    rmSync(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === "win32" ? 20 : 3,
+      retryDelay: process.platform === "win32" ? 250 : 50
+    });
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
+    if (process.platform !== "win32" || (code !== "EPERM" && code !== "EBUSY")) throw error;
+  }
+}
+
 function runFl(
   args: string[],
   options: { cwd?: string; input?: string; env?: NodeJS.ProcessEnv } = {}
@@ -244,7 +259,7 @@ describe("FaultLine CLI workflows", () => {
         requiredPlanDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
       });
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -286,7 +301,7 @@ describe("FaultLine CLI workflows", () => {
         commandWindows: `node "${builtCli}" codex sidecar hook --quiet`
       });
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -323,7 +338,7 @@ describe("FaultLine CLI workflows", () => {
       expect(second.status).toBe(1);
       expect(second.stderr).toContain("will not replace an existing project hook document");
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -359,7 +374,7 @@ describe("FaultLine CLI workflows", () => {
       expect(output.recordings[0]?.ledgerPath).toContain("faultline");
       expect(status.stdout).not.toContain(prompt);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -380,7 +395,7 @@ describe("FaultLine CLI workflows", () => {
       expect(verified.status).toBe(0);
       expect(JSON.parse(verified.stdout)).toMatchObject({ valid: true, externalDigestStatus: "MATCH" });
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -425,7 +440,7 @@ describe("FaultLine CLI workflows", () => {
       expect(JSON.parse(verification.stdout)).toMatchObject({ valid: true, externalDigestStatus: "MATCH" });
       expect(existsSync(join(store, "frozen", "cli-witness.json"))).toBe(true);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -472,7 +487,7 @@ describe("FaultLine CLI workflows", () => {
       expect(existsSync(join(store, "proposals", "onboarding-incident.json"))).toBe(true);
       expect(existsSync(join(store, "frozen", "onboarding-incident.json"))).toBe(false);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -508,7 +523,7 @@ describe("FaultLine CLI workflows", () => {
       expect(ambiguous.status).toBe(1);
       expect(ambiguous.stderr).toMatch(/exactly one of --command/i);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -558,7 +573,7 @@ describe("FaultLine CLI workflows", () => {
         }
       });
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -627,7 +642,7 @@ describe("FaultLine CLI workflows", () => {
       expect(continued.stdout).not.toContain("node -e");
       expect(runFl(["incident", "status", id, "--repo", directory, "--store", store], { cwd: directory }).status).toBe(1);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -671,17 +686,8 @@ describe("FaultLine CLI workflows", () => {
       expect(doctor.stdout).toContain("Proof-grade preflight:");
       expect(existsSync(marker)).toBe(false);
     } finally {
-      try {
-        // Git or Defender can retain a just-closed handle beneath a temporary
-        // worktree longer than Node's short default retry window on hosted
-        // Windows runners. The security assertion already ran above; a final
-        // EPERM/EBUSY during disposable runner cleanup must not misreport the
-        // fsmonitor test as a FaultLine behavior failure.
-        rmSync(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-      } catch (error) {
-        const code = error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
-        if (process.platform !== "win32" || (code !== "EPERM" && code !== "EBUSY")) throw error;
-      }
+      // Git/Defender may retain handles under temp worktrees on Windows runners.
+      rmTempTree(directory);
     }
   });
 
@@ -704,7 +710,7 @@ describe("FaultLine CLI workflows", () => {
       expect(firstId).toMatch(/^incident-\d{17}-[0-9a-f-]{12}$/);
       expect(secondId).toMatch(/^incident-\d{17}-[0-9a-f-]{12}$/);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -762,7 +768,7 @@ describe("FaultLine CLI workflows", () => {
       expect(readFileSync(join(store, "authenticated-approvals", "cli-authenticated-witness.json"), "utf8"))
         .not.toContain(pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString());
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -778,7 +784,7 @@ describe("FaultLine CLI workflows", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toMatch(/only be created inside GitHub Actions/);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -810,7 +816,7 @@ describe("FaultLine CLI workflows", () => {
       expect(ledgerContents).toContain("refund settlement change");
       expect(ledgerContents).toContain("reviewer@example.test");
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -862,7 +868,7 @@ describe("FaultLine CLI workflows", () => {
       writeFileSync(join(output, "repair-brief.json"), "{}\n", "utf8");
       expect(runFl(["repair", "verify", output], { cwd: directory }).status).toBe(1);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   }, 180_000);
 
@@ -892,7 +898,7 @@ describe("FaultLine CLI workflows", () => {
       expect(payload.overlayPath.length).toBeGreaterThan(0);
       expect(existsSync(payload.overlayPath)).toBe(true);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -912,7 +918,7 @@ describe("FaultLine CLI workflows", () => {
       const payload = JSON.parse(result.stdout) as { status: string };
       expect(payload.status).toBe("BUNDLE_INVALID");
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -933,7 +939,7 @@ describe("FaultLine CLI workflows", () => {
       expect(payload.status).toBe("REPAIR_INSTRUCTIONS_PREPARED");
       expect(payload.note).toMatch(/not.*isolated Git repair worktree/i);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -1011,7 +1017,7 @@ describe("FaultLine CLI workflows", () => {
       ).toBe(true);
       expect(payload.investigation?.proof.isProof).toBe(false);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -1070,7 +1076,7 @@ describe("FaultLine CLI workflows", () => {
       expect(ignoreText).not.toMatch(/^pnpm-lock\.yaml$/m);
       expect(ignoreText).not.toMatch(/^tests\/$/m);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
@@ -1144,7 +1150,7 @@ describe("FaultLine CLI workflows", () => {
       expect(payload.proofBundle).toBeNull();
       expect(payload.investigation?.states.length).toBeGreaterThanOrEqual(1);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmTempTree(directory);
     }
   });
 
