@@ -52,6 +52,17 @@ Optional (stronger): configure **Trusted Publishing** from GitHub Actions so pub
 
 Actions → **Release and publish** → **Run workflow** → choose `patch` / `minor` / `major`.
 
+If a GitHub Release/tag already exists but npm failed (auth), re-run with **`publish_only: true`** — that publishes the current `package.json` version without bumping again.
+
+### npm E404 on publish
+
+A `404 Not Found` on `PUT …/@scope%2fpackage` almost always means **auth/permissions**, not “package missing”:
+
+- Token revoked, truncated when pasted into the secret, or not an **Automation** / publish-capable granular token
+- Token user is not a member/owner of `@mizore66` on npm
+- 2FA required and the token cannot bypass it for CI
+
+Fix: rotate the token, update `NPM_TOKEN`, then run **publish_only**.
 ## Local dry-run
 
 ```powershell
