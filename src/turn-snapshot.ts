@@ -35,10 +35,15 @@ import {
  * building a throwaway Git tree in a temporary index, so FaultLine can still
  * localize a regression to the turn that introduced it even mid-session.
  *
- * Staging is not storage-neutral: `git add` / `write-tree` write blobs. FaultLine
- * quarantines those writes into `.git/faultline/objects` via
+ * Staging is not storage-neutral: `hash-object` / `write-tree` write blobs.
+ * FaultLine quarantines those writes into `.git/faultline/objects` via
  * `GIT_OBJECT_DIRECTORY` so the user's primary `.git/objects` database is not
  * polluted. Every path is filtered before any Git object write.
+ *
+ * Dirty trees are staged incrementally: the temporary index is seeded from the
+ * previous accepted turn tree (same HEAD + policy) or `HEAD^{tree}`, then only
+ * modified, newly untracked, deleted, and policy-removed paths are updated —
+ * never a full-repo `git add` of every eligible file.
  */
 
 /** Relative to the repository `.git` directory. */
@@ -85,7 +90,6 @@ export class TurnSnapshotError extends Error {
 export const TURN_SNAPSHOT_MAX_FILE_BYTES = 1_048_576;
 export const TURN_SNAPSHOT_MAX_TOTAL_BYTES = 32 * 1_048_576;
 export const TURN_SNAPSHOT_MAX_FILE_COUNT = 2_000;
-const TURN_SNAPSHOT_ADD_CHUNK_SIZE = 64;
 const TURN_SNAPSHOT_SECRET_SCAN_BYTES = 256 * 1024;
 
 /**
@@ -152,7 +156,12 @@ export const TURN_SNAPSHOT_QUIESCENCE_DELAY_MS = 50;
 export const TURN_SNAPSHOT_MAX_QUIESCENCE_ATTEMPTS = 4;
 const STATUS_ARGS = ["status", "--porcelain=v1", "--untracked-files=all", "-z"] as const;
 
-export type TurnSnapshotGitRunner = (repositoryRoot: string, args: readonly string[], env?: NodeJS.ProcessEnv) => string;
+export type TurnSnapshotGitRunner = (
+  repositoryRoot: string,
+  args: readonly string[],
+  env?: NodeJS.ProcessEnv,
+  options?: { readonly input?: string | Buffer }
+) => string;
 
 export type TurnTreeSnapshotCaptureResult = {
   snapshot: TurnTreeSnapshot;
@@ -217,8 +226,9 @@ export function ensureFaultlineSnapshotObjectStore(repositoryRoot: string): stri
 }
 
 /**
- * Environment for `git add` / `write-tree` / cache `cat-file -e` so new objects
- * land in `.git/faultline/objects` while existing primary objects remain readable.
+ * Environment for quarantined object writes (`hash-object` / `write-tree` /
+ * cache `cat-file -e`) so new objects land in `.git/faultline/objects` while
+ * existing primary objects remain readable.
  */
 export function turnSnapshotObjectWriteEnvironment(repositoryRoot: string): NodeJS.ProcessEnv {
   const root = resolve(repositoryRoot);
@@ -232,17 +242,36 @@ export function turnSnapshotObjectWriteEnvironment(repositoryRoot: string): Node
 
 /**
  * The default Git runner. `env` may carry `GIT_INDEX_FILE` and/or quarantined
- * object-directory variables for add/write-tree/cat-file. Read-only calls
+ * object-directory variables for staging/write-tree/cat-file. Read-only calls
  * (rev-parse, status) omit those and therefore leave the user's real index and
  * primary object database alone.
+ *
+ * Staging calls may pass `{ input }` for `hash-object --stdin` so repository
+ * clean filters never see path-based content.
  */
-export function defaultTurnSnapshotGitRunner(repositoryRoot: string, args: readonly string[], env?: NodeJS.ProcessEnv): string {
-  const result = spawnSync("git", [...DOCTOR_SAFE_GIT_CONFIG, "-C", repositoryRoot, ...args], {
-    encoding: "utf8",
-    shell: false,
-    windowsHide: true,
-    env: { ...hardenedGitEnvironment(), ...env }
-  });
+export function defaultTurnSnapshotGitRunner(
+  repositoryRoot: string,
+  args: readonly string[],
+  env?: NodeJS.ProcessEnv,
+  options?: { readonly input?: string | Buffer }
+): string {
+  const result = spawnSync(
+    "git",
+    [
+      ...DOCTOR_SAFE_GIT_CONFIG,
+      "-c", "core.attributesFile=/nonexistent/faultline-attributes",
+      "-C",
+      repositoryRoot,
+      ...args
+    ],
+    {
+      encoding: "utf8",
+      shell: false,
+      windowsHide: true,
+      env: { ...hardenedGitEnvironment(), ...env },
+      ...(options?.input === undefined ? {} : { input: options.input })
+    }
+  );
   if (result.error || result.status !== 0) {
     const detail = `${result.stderr ?? ""}${result.error?.message ?? ""}`.trim();
     throw new TurnSnapshotError(`FaultLine could not safely capture a turn tree snapshot: ${detail || `exit ${result.status ?? "unknown"}`}`);
@@ -566,6 +595,62 @@ function gitTreeObjectExists(runGit: TurnSnapshotGitRunner, repositoryRoot: stri
   }
 }
 
+function listTreePaths(
+  runGit: TurnSnapshotGitRunner,
+  repositoryRoot: string,
+  treeDigest: string
+): ReadonlySet<string> {
+  const listed = runGit(
+    repositoryRoot,
+    ["ls-tree", "-r", "--name-only", "-z", treeDigest],
+    turnSnapshotObjectWriteEnvironment(repositoryRoot)
+  );
+  return new Set(splitNullPaths(listed));
+}
+
+export type TurnSnapshotIndexDelta = {
+  readonly baseTree: string;
+  readonly updatePaths: readonly string[];
+  readonly removePaths: readonly string[];
+};
+
+/**
+ * Compute the minimal temp-index updates needed to materialize `planPaths`
+ * from `baseTree`. Unchanged paths already present in the base tree are left alone.
+ */
+export function computeTurnSnapshotIndexDelta(options: {
+  readonly baseTree: string;
+  readonly basePaths: ReadonlySet<string>;
+  readonly planPaths: readonly string[];
+  readonly repositoryRoot: string;
+  /** Paths whose worktree bytes differ from the last fingerprint / porcelain dirty set. */
+  readonly dirtyPaths: ReadonlySet<string>;
+}): TurnSnapshotIndexDelta {
+  const desiredExisting: string[] = [];
+  for (const relativePath of options.planPaths) {
+    const absolutePath = join(options.repositoryRoot, ...relativePath.split("/"));
+    try {
+      const stat = lstatSync(absolutePath);
+      if (stat.isSymbolicLink() || !stat.isFile()) continue;
+      desiredExisting.push(relativePath);
+    } catch {
+      // Missing path: treat as removal if present in the base tree.
+    }
+  }
+  const desiredSet = new Set(desiredExisting);
+  const removePaths = [...options.basePaths]
+    .filter((path) => !desiredSet.has(path))
+    .sort((left, right) => left.localeCompare(right));
+  const updatePaths = desiredExisting
+    .filter((path) => !options.basePaths.has(path) || options.dirtyPaths.has(path))
+    .sort((left, right) => left.localeCompare(right));
+  return {
+    baseTree: options.baseTree,
+    updatePaths,
+    removePaths
+  };
+}
+
 function loadFaultlineIgnoreRules(repositoryRoot: string): IgnoreRule[] {
   const defaults = parseIgnoreLines(TURN_SNAPSHOT_DEFAULT_IGNORE_PATTERNS);
   const ignorePath = join(repositoryRoot, ".faultlineignore");
@@ -884,14 +969,6 @@ export function planTurnSnapshotPaths(
   };
 }
 
-function chunkPaths(paths: readonly string[], size: number): string[][] {
-  const chunks: string[][] = [];
-  for (let index = 0; index < paths.length; index += size) {
-    chunks.push([...paths.slice(index, index + size)]);
-  }
-  return chunks;
-}
-
 type WriteThrowawayResult = {
   treeDigest: string;
   warnings: readonly string[];
@@ -908,6 +985,8 @@ function writeThrowawayTreeDigest(
     allowlistDigest: string;
     previousPathDigests?: Readonly<Record<string, string>>;
     previousAllowlistDigest?: string;
+    /** Prefer this tree as the incremental base when it still exists under quarantine. */
+    preferredBaseTree?: string;
   },
   statusPorcelain: string
 ): WriteThrowawayResult {
@@ -940,7 +1019,7 @@ function writeThrowawayTreeDigest(
     }
   }
 
-  // Gates 1–4 run here — before any temporary-index `git add` can write blobs.
+  // Gates 1–4 run here — before any temporary-index object write.
   const plan = planTurnSnapshotPaths(repositoryRoot, runGit, {
     ...(options.trackedFilesOnly === undefined ? {} : { trackedFilesOnly: options.trackedFilesOnly }),
     ...(options.maxFileBytes === undefined ? {} : { maxFileBytes: options.maxFileBytes }),
@@ -954,17 +1033,79 @@ function writeThrowawayTreeDigest(
       : { previousAllowlistDigest: scanContext.previousAllowlistDigest })
   });
 
+  const maxFileBytes = options.maxFileBytes ?? TURN_SNAPSHOT_MAX_FILE_BYTES;
+  const dirty = computeDirtyContentFingerprint(repositoryRoot, statusPorcelain, {
+    trackedFilesOnly,
+    ignoreRules,
+    maxFileBytes
+  });
+  const dirtyPaths = new Set(Object.keys(dirty.paths));
+
+  const headTree = runGit(repositoryRoot, ["rev-parse", "HEAD^{tree}"]).trim();
+  if (!GitObjectIdSchema.safeParse(headTree).success) {
+    throw new TurnSnapshotError("Git did not return a valid HEAD tree object id for incremental turn staging.");
+  }
+  let baseTree = headTree;
+  if (
+    typeof scanContext.preferredBaseTree === "string"
+    && GitObjectIdSchema.safeParse(scanContext.preferredBaseTree).success
+    && gitTreeObjectExists(runGit, repositoryRoot, scanContext.preferredBaseTree)
+  ) {
+    baseTree = scanContext.preferredBaseTree;
+  }
+
+  const basePaths = listTreePaths(runGit, repositoryRoot, baseTree);
+  const delta = computeTurnSnapshotIndexDelta({
+    baseTree,
+    basePaths,
+    planPaths: plan.paths,
+    repositoryRoot,
+    dirtyPaths
+  });
+
   const temporaryIndexPath = join(tmpdir(), `faultline-turn-tree-${randomUUID()}.index`);
-  const objectEnv = turnSnapshotObjectWriteEnvironment(repositoryRoot);
+  const objectEnv = {
+    ...turnSnapshotObjectWriteEnvironment(repositoryRoot),
+    GIT_INDEX_FILE: temporaryIndexPath
+  };
   try {
-    for (const chunk of chunkPaths(plan.paths, TURN_SNAPSHOT_ADD_CHUNK_SIZE)) {
-      if (chunk.length === 0) continue;
-      runGit(repositoryRoot, ["add", "--", ...chunk], { ...objectEnv, GIT_INDEX_FILE: temporaryIndexPath });
+    runGit(repositoryRoot, ["read-tree", delta.baseTree], objectEnv);
+
+    for (const relativePath of delta.removePaths) {
+      runGit(repositoryRoot, ["update-index", "--force-remove", "--", relativePath], objectEnv);
     }
-    const treeDigest = runGit(repositoryRoot, ["write-tree"], {
-      ...objectEnv,
-      GIT_INDEX_FILE: temporaryIndexPath
-    }).trim();
+
+    for (const relativePath of delta.updatePaths) {
+      const absolutePath = join(repositoryRoot, ...relativePath.split("/"));
+      const stat = lstatSync(absolutePath);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new TurnSnapshotError(`Refusing turn-tree snapshot: path is not a regular file: ${relativePath}`);
+      }
+      if (stat.size > maxFileBytes) {
+        throw new TurnSnapshotError(
+          `Refusing turn-tree snapshot: ${relativePath} is ${stat.size} bytes (max ${maxFileBytes} per file).`
+        );
+      }
+      const mode = (stat.mode & 0o111) !== 0 ? "100755" : "100644";
+      // Hash via stdin so path-based clean filters never run.
+      const content = readFileSync(absolutePath);
+      const blob = runGit(
+        repositoryRoot,
+        ["hash-object", "-w", "--stdin"],
+        objectEnv,
+        { input: content }
+      ).trim();
+      if (!GitObjectIdSchema.safeParse(blob).success) {
+        throw new TurnSnapshotError(`git hash-object --stdin did not return a blob id for ${relativePath}`);
+      }
+      runGit(
+        repositoryRoot,
+        ["update-index", "--add", "--cacheinfo", `${mode},${blob},${relativePath}`],
+        objectEnv
+      );
+    }
+
+    const treeDigest = runGit(repositoryRoot, ["write-tree"], objectEnv).trim();
     if (!GitObjectIdSchema.safeParse(treeDigest).success) {
       throw new TurnSnapshotError("Git did not return a valid tree object id for this turn tree snapshot.");
     }
@@ -990,7 +1131,8 @@ function writeThrowawayTreeDigest(
  * 3. Caps filter (count / per-file / total size via lstat)
  * 4. Secret scan (regex + entropy on eligible buffers; incremental when a
  *    session cache is supplied)
- * Only then: temporary-index `git add` + `write-tree`.
+ * Only then: temporary-index incremental staging (`read-tree` + delta
+ * `hash-object` / `update-index`) + `write-tree`.
  *
  * Quiescence is proven by dual tree capture with status brackets and bounded
  * retries; exhaustion fails closed rather than returning a torn snapshot.
@@ -1094,6 +1236,14 @@ export function captureTurnTreeSnapshot(
       }
     }
 
+    const preferredBaseTree =
+      previousCache !== null
+      && previousCache.headCommit === headBefore
+      && previousCache.policyDigest === policyDigest
+      && gitTreeObjectExists(runGit, repositoryRoot, previousCache.treeDigest)
+        ? previousCache.treeDigest
+        : undefined;
+
     const first = writeThrowawayTreeDigest(runGit, repositoryRoot, options, {
       allowlist,
       allowlistDigest,
@@ -1102,7 +1252,8 @@ export function captureTurnTreeSnapshot(
         : {
           previousPathDigests: previousCache.pathDigests,
           previousAllowlistDigest: previousCache.allowlistDigest
-        })
+        }),
+      ...(preferredBaseTree === undefined ? {} : { preferredBaseTree })
     }, statusBeforeA);
     const statusAfterA = sampleStatus();
     if (statusBeforeA !== statusAfterA) {
@@ -1124,7 +1275,11 @@ export function captureTurnTreeSnapshot(
       allowlist,
       allowlistDigest,
       previousPathDigests: first.pathDigests,
-      previousAllowlistDigest: allowlistDigest
+      previousAllowlistDigest: allowlistDigest,
+      // Second capture of the same quiescence attempt must use the same base as
+      // the first (HEAD or prior accepted tree) — never the first's new tree —
+      // so mid-write drift cannot be laundered into a false dual-tree match.
+      ...(preferredBaseTree === undefined ? {} : { preferredBaseTree })
     }, statusBeforeB);
     const statusAfterB = sampleStatus();
     const headAfter = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();

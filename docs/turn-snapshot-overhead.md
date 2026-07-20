@@ -2,7 +2,9 @@
 
 Measured with `pnpm measure:turn-snapshot` (`scripts/measure-turn-snapshot.mjs`).
 
-**Does recording slow Codex?** Each Stop that captures a turn tree pays this cost once. Unchanged dirty trees can reuse a content-fingerprint session cache; porcelain status alone is never enough for reuse.
+**Does recording slow Codex?** Each Stop that captures a turn tree pays this cost once. FaultLine snapshots at turn boundaries with **bounded overhead** — it is not claimed to be invisible.
+
+**Staging model (current):** dirty trees seed a temporary index from the previous accepted turn tree (same HEAD + policy) or `HEAD^{tree}`, then update only modified / newly untracked / deleted / policy-removed paths via `hash-object --stdin` + `update-index` (no full-repo `git add`). Unchanged warm trees can still short-circuit via the content-fingerprint session cache; porcelain status alone is never enough for reuse.
 
 **CLI entrypoint:** production `pnpm fl` runs `node dist/cli.js` (compiled). `pnpm fl:dev` keeps `tsx` for local TypeScript. Judge blocks run `pnpm install` (prepare builds `dist`) then `pnpm fl`.
 
@@ -17,6 +19,8 @@ Measured with `pnpm measure:turn-snapshot` (`scripts/measure-turn-snapshot.mjs`)
 | Medium fixture (1,000) one-file modified | one-file-modified | 1000 | 2836.3 | 2951.1 | n/a | n/a | 0 |
 | Medium fixture (1,000) 100-file modified | multi-file-modified | 1000 | 2989.7 | 3113.9 | n/a | n/a | 0 |
 | Large fixture (1,800 under cap) | cold | 1800 | 5022.8 | 5073.3 | 0 | 0 | 0 |
+
+> Timing rows above were measured **before** incremental dirty staging landed. Regenerate before citing one-file / multi-file dirty latency numbers.
 
 ## Method
 

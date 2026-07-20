@@ -206,12 +206,12 @@ describe("Turn tree snapshot capture", () => {
     try {
       const torn = (): { runGit: TurnSnapshotGitRunner; calls: () => number } => {
         let statusCalls = 0;
-        const runGit: TurnSnapshotGitRunner = (root, args, env) => {
+        const runGit: TurnSnapshotGitRunner = (root, args, env, options) => {
           if (args[0] === "status") {
             statusCalls += 1;
             return statusCalls % 2 === 1 ? "" : "?? changed-mid-write.txt\0";
           }
-          return defaultTurnSnapshotGitRunner(root, args, env);
+          return defaultTurnSnapshotGitRunner(root, args, env, options);
         };
         return { runGit, calls: () => statusCalls };
       };
@@ -241,13 +241,13 @@ describe("Turn tree snapshot capture", () => {
       // Dirty the worktree so the clean HEAD^{tree} fast path does not skip write-tree.
       writeFileSync(join(repository, "tracked.txt"), "dirty-for-torn-tree-test\n", "utf8");
       let writeTreeCalls = 0;
-      const runGit: TurnSnapshotGitRunner = (root, args, env) => {
+      const runGit: TurnSnapshotGitRunner = (root, args, env, options) => {
         if (args[0] === "write-tree") {
           writeTreeCalls += 1;
           return writeTreeCalls % 2 === 1 ? "a".repeat(40) : "b".repeat(40);
         }
         if (args[0] === "add") return "";
-        return defaultTurnSnapshotGitRunner(root, args, env);
+        return defaultTurnSnapshotGitRunner(root, args, env, options);
       };
 
       expect(() => capture(repository, {
@@ -378,9 +378,9 @@ describe("Turn tree snapshot capture", () => {
       expect(JSON.parse(readFileSync(cachePath, "utf8")).schemaVersion).toBe("faultline.turn-snapshot-cache.v2");
 
       let writeTreeCalls = 0;
-      const runGit: TurnSnapshotGitRunner = (root, args, env) => {
+      const runGit: TurnSnapshotGitRunner = (root, args, env, options) => {
         if (args[0] === "write-tree") writeTreeCalls += 1;
-        return defaultTurnSnapshotGitRunner(root, args, env);
+        return defaultTurnSnapshotGitRunner(root, args, env, options);
       };
       const second = capture(repository, { sessionCachePath: cachePath, sleep: () => {}, runGit });
       expect(second.treeDigest).toBe(first.treeDigest);
@@ -400,9 +400,9 @@ describe("Turn tree snapshot capture", () => {
 
       writeFileSync(join(repository, "tracked.txt"), "version B — still modified, different bytes\n", "utf8");
       let writeTreeCalls = 0;
-      const runGit: TurnSnapshotGitRunner = (root, args, env) => {
+      const runGit: TurnSnapshotGitRunner = (root, args, env, options) => {
         if (args[0] === "write-tree") writeTreeCalls += 1;
-        return defaultTurnSnapshotGitRunner(root, args, env);
+        return defaultTurnSnapshotGitRunner(root, args, env, options);
       };
       const second = capture(repository, { sessionCachePath: cachePath, sleep: () => {}, runGit });
       expect(second.treeDigest).not.toBe(first.treeDigest);
@@ -452,9 +452,9 @@ describe("Turn tree snapshot capture", () => {
         "utf8"
       );
       let writeTreeCalls = 0;
-      const runGit: TurnSnapshotGitRunner = (root, args, env) => {
+      const runGit: TurnSnapshotGitRunner = (root, args, env, options) => {
         if (args[0] === "write-tree") writeTreeCalls += 1;
-        return defaultTurnSnapshotGitRunner(root, args, env);
+        return defaultTurnSnapshotGitRunner(root, args, env, options);
       };
       const afterIgnore = capture(repository, { sessionCachePath: cachePath, sleep: () => {}, runGit });
       expect(afterIgnore.treeDigest).not.toBe(first.treeDigest);
@@ -622,6 +622,102 @@ describe("Turn tree snapshot capture", () => {
       expect(turnFp.files["pnpm-lock.yaml"]).not.toBe(baselineFp.files["pnpm-lock.yaml"]);
     } finally {
       rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("stages dirty trees incrementally without git add of the full eligible set", () => {
+    const repository = repositoryFixture();
+    try {
+      for (let index = 0; index < 40; index += 1) {
+        writeFileSync(join(repository, `bulk-${index}.txt`), `bulk ${index}\n`, "utf8");
+      }
+      git(repository, ["add", "."]);
+      git(repository, ["commit", "-m", "bulk"]);
+      writeFileSync(join(repository, "tracked.txt"), "one dirty edit\n", "utf8");
+
+      const commands: string[] = [];
+      let hashObjectCalls = 0;
+      let updateIndexCalls = 0;
+      const runGit: TurnSnapshotGitRunner = (root, args, env, options) => {
+        commands.push(args[0] ?? "");
+        if (args[0] === "hash-object") hashObjectCalls += 1;
+        if (args[0] === "update-index") updateIndexCalls += 1;
+        return defaultTurnSnapshotGitRunner(root, args, env, options);
+      };
+      const snapshot = capture(repository, { sleep: () => {}, runGit });
+      expect(snapshot.dirty).toBe(true);
+      expect(commands).toContain("read-tree");
+      expect(commands).not.toContain("add");
+      // Dual-tree quiescence runs staging twice; only the dirty path is hashed each time.
+      expect(hashObjectCalls).toBe(2);
+      expect(updateIndexCalls).toBe(2);
+      expect(git(repository, ["show", `${snapshot.treeDigest}:tracked.txt`])).toBe("one dirty edit");
+      expect(git(repository, ["ls-tree", "-r", "--name-only", snapshot.treeDigest]).split("\n")).toContain("bulk-0.txt");
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+
+  it("does not invoke repository clean filters while staging a dirty turn tree", () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-turn-filter-"));
+    const repository = join(root, "repo");
+    try {
+      mkdirSync(repository);
+      git(repository, ["init"]);
+      git(repository, ["config", "user.email", "turn@faultline.test"]);
+      git(repository, ["config", "user.name", "FaultLine Turn"]);
+      writeFileSync(join(repository, "app.js"), "console.log(1);\n", "utf8");
+      git(repository, ["add", "."]);
+      git(repository, ["commit", "-m", "base"]);
+
+      const filterScript = join(root, "evil-clean.cjs");
+      writeFileSync(
+        filterScript,
+        [
+          "let data = Buffer.alloc(0);",
+          "process.stdin.on('data', (chunk) => { data = Buffer.concat([data, chunk]); });",
+          "process.stdin.on('end', () => { process.stdout.write(Buffer.concat([Buffer.from('CLEANED:'), data])); });",
+          ""
+        ].join("\n"),
+        "utf8"
+      );
+      git(repository, ["config", "filter.faultline-evil.clean", `node "${filterScript}"`]);
+      writeFileSync(join(repository, ".gitattributes"), "*.js filter=faultline-evil\n", "utf8");
+      writeFileSync(join(repository, "app.js"), "console.log(2);\n", "utf8");
+
+      const commands: string[] = [];
+      const runGit: TurnSnapshotGitRunner = (repoRoot, args, env, options) => {
+        commands.push(args[0] ?? "");
+        return defaultTurnSnapshotGitRunner(repoRoot, args, env, options);
+      };
+      const snapshot = capture(repository, { sleep: () => {}, runGit });
+      expect(commands).not.toContain("add");
+      // Path-based clean filters would prefix CLEANED:; stdin hashing must preserve bytes.
+      expect(git(repository, ["show", `${snapshot.treeDigest}:app.js`])).toBe("console.log(2);");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes newly ignored tracked paths via incremental index delta", () => {
+    const repository = repositoryFixture();
+    const cachePath = join(tmpdir(), `faultline-cache-ignore-delta-${Date.now()}.json`);
+    try {
+      writeFileSync(join(repository, "noise.tmp"), "noise\n", "utf8");
+      git(repository, ["add", "noise.tmp"]);
+      git(repository, ["commit", "-m", "noise"]);
+      writeFileSync(join(repository, "tracked.txt"), "dirty\n", "utf8");
+      const before = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+      expect(git(repository, ["ls-tree", "-r", "--name-only", before.treeDigest])).toContain("noise.tmp");
+
+      writeFileSync(join(repository, ".faultlineignore"), "noise.tmp\n", "utf8");
+      // Worktree content for noise.tmp is unchanged; policy must force removal.
+      const after = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+      expect(git(repository, ["ls-tree", "-r", "--name-only", after.treeDigest])).not.toContain("noise.tmp");
+      expect(git(repository, ["show", `${after.treeDigest}:tracked.txt`])).toBe("dirty");
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+      rmSync(cachePath, { force: true });
     }
   });
 });
