@@ -6,7 +6,7 @@ Record with product on screen. Prefer PowerShell: `pnpm.cmd fl …` if Execution
 
 **Hard rules:** no cold-open on `judge-demo`; do not say `judge-proof` is root `f6a391…`; do not invent time-saved metrics; external-01 is `completed` — say **protocol validation** / **`EXPERIMENTAL_TURN`**, not a naturally occurring production bug. Cut any beat whose feature is not green (no signed-release / soak / stranger). Prefer `fl demo full` when Docker is up; only say PREVENTION_VERIFIED / AGENTS.md if that run emitted them.
 
-**Pinned checkout for the video:** `git checkout v0.1.5-buildweek`
+**Pinned checkout for the video:** `git checkout v0.1.6-buildweek`
 
 ---
 

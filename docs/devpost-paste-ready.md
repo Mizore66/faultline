@@ -35,15 +35,15 @@ Qualifying Codex `/feedback` session: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.5-buildweek
+git checkout v0.1.6-buildweek
 pnpm install --frozen-lockfile
 pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
-Pinned submission tag / Release: [`v0.1.5-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.5-buildweek) · validated pre-tag commit SHA: `457fabeb9d5ff2261cbbf1ced4673ff28c9074d0`.
+Pinned submission tag / Release: [`v0.1.6-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.6-buildweek) · validated pre-tag commit SHA: `333f21d2779aa869958a840fb52c3be5d43f1726`.
 `pnpm install` builds `dist` via `prepare`; `pnpm fl` runs `node dist/cli.js` (compiled entry).  
-Green CI on validated pre-tag commit `457fabeb9d5ff2261cbbf1ced4673ff28c9074d0` (incl. native Docker E2E): https://github.com/Mizore66/faultline/actions/runs/29734618279
+Green CI on validated pre-tag commit `333f21d2779aa869958a840fb52c3be5d43f1726` (incl. native Docker E2E): https://github.com/Mizore66/faultline/actions/runs/29734618279
 Zero-install UI snapshot: open `docs/self-incident-proof-preview.html` after clone (or regenerate with `pnpm fl commit-proof-preview`).  
 GPT-5.6 sample artifacts (no API key): `docs/samples/gpt-5.6/`.  
 Honest non-Codex transport sample: `docs/samples/observed-external-transport/` (`OBSERVED_EXTERNAL_TRANSPORT`).  
