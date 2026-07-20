@@ -53,10 +53,16 @@ export const TURN_PATH_EVIDENCE_LABELS_EXPERIMENTAL = Object.freeze([
  */
 export const TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED = "TURN_PROOF" as const;
 
+/** Exploratory autonomous draft — never exportable as COMMIT_PROOF / TURN_PROOF. */
+export const AGENT_DRAFT_EVIDENCE_GRADE = "AGENT_DRAFT" as const;
+export const AGENT_DRAFT_EVIDENCE_LABEL =
+  "Exploratory agent draft — not human-owned; cannot export a proof bundle" as const;
+
 export type CommitPathEvidenceGrade = typeof COMMIT_PATH_EVIDENCE_GRADE | "NONE";
 export type TurnPathEvidenceGrade =
   | typeof TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL
   | typeof TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED
+  | typeof AGENT_DRAFT_EVIDENCE_GRADE
   | "NONE";
 
 export type PathEvidenceAnnotation = {

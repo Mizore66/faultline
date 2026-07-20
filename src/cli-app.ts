@@ -1316,6 +1316,35 @@ async function witnessCommand(args: string[]): Promise<void> {
       }
       throw new Error("Usage: fl witness policy freeze --policy-id <id> --frozen-by <actor> --command <exact> [--max-timeout <seconds>] | fl witness policy apply <proposal-id> --policy-id <id>");
     }
+    case "resolve-autonomous": {
+      if (!proposalId) throw new Error("Usage: fl witness resolve-autonomous <proposal-id> [--policy-id <id>]");
+      const { resolveAutonomousProposal } = await import("./autonomous-session.js");
+      const { readStandingApprovalPolicy } = await import("./standing-approval-policy.js");
+      const policyId = option(args, "--policy-id");
+      const policy = policyId === undefined ? null : readStandingApprovalPolicy(store, policyId);
+      const result = resolveAutonomousProposal(store, proposalId, policy);
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      process.exitCode = result.outcome === "PARKED_AGENT_DRAFT" ? 0 : 0;
+      return;
+    }
+    case "ratify": {
+      if (!proposalId) throw new Error("Usage: fl witness ratify <proposal-id> --executed-digest <sha256:…> --ratified-by <actor>");
+      const { ratifyExecutedWitness } = await import("./autonomous-session.js");
+      const note = option(args, "--note");
+      const { ratification, frozen } = ratifyExecutedWitness(store, proposalId, {
+        executedWitnessDigest: requiredOption(args, "--executed-digest"),
+        ratifiedBy: requiredOption(args, "--ratified-by"),
+        ...(note === undefined ? {} : { note })
+      });
+      process.stdout.write(`${JSON.stringify({
+        status: "APPROVED_AFTER_EXECUTION",
+        proposalId,
+        ratificationDigest: ratification.ratificationDigest,
+        frozenDigest: frozen.frozenDigest,
+        approvedBy: frozen.approval.approvedBy
+      }, null, 2)}\n`);
+      return;
+    }
     case "propose": {
       const liveIncident = option(args, "--incident");
       if (hasFlag(args, "--live") && liveIncident) {
@@ -1818,6 +1847,21 @@ async function initCommand(args: string[]): Promise<void> {
   const runtime = runtimeFlag as ProjectInitRuntime | undefined;
   const resolvedCli = cliPath === undefined ? undefined : resolve(cliPath);
 
+  const standingPolicyRequested = hasFlag(args, "--standing-policy");
+  const standingCommand = option(args, "--standing-command");
+  const standingFrozenBy = option(args, "--standing-frozen-by");
+  if (standingPolicyRequested || standingCommand !== undefined) {
+    if (!yes) {
+      throw new Error("Standing policy on-ramp requires --yes (exact allowlist is write-once).");
+    }
+    if (standingCommand === undefined || standingCommand.trim() === "") {
+      throw new Error("Pass --standing-command <exact UTF-8 command> for the YOLO standing-policy allowlist.");
+    }
+    if (standingFrozenBy === undefined || standingFrozenBy.trim() === "") {
+      throw new Error("Pass --standing-frozen-by <actor> so the standing policy records a human owner.");
+    }
+  }
+
   let installedSidecar = false;
   if (yes && resolvedCli !== undefined) {
     const preview = await planProjectInit({
@@ -1838,7 +1882,19 @@ async function initCommand(args: string[]): Promise<void> {
     ...(resolvedCli === undefined ? {} : { cliPath: resolvedCli }),
     writeIgnoreIfMissing: yes,
     writeConfig: yes,
-    ...(installedSidecar ? { markSidecarInstalled: true } : {})
+    ...(installedSidecar ? { markSidecarInstalled: true } : {}),
+    ...((standingPolicyRequested || standingCommand !== undefined) && standingCommand && standingFrozenBy
+      ? {
+          standingPolicy: {
+            policyId: option(args, "--standing-policy-id") ?? "init-default",
+            frozenBy: standingFrozenBy,
+            allowedCommands: [standingCommand],
+            ...(option(args, "--standing-max-timeout") === undefined
+              ? {}
+              : { maxTimeoutSeconds: Number(option(args, "--standing-max-timeout")) })
+          }
+        }
+      : {})
   });
 
   let snapshotPrewarm:
@@ -1882,13 +1938,14 @@ async function initCommand(args: string[]): Promise<void> {
     ignoreFile: result.ignoreFile,
     config: result.config,
     sidecar: result.sidecar,
+    standingPolicy: result.standingPolicy,
     ...(snapshotPrewarm === undefined ? {} : { snapshotPrewarm }),
     next: result.next,
     nextCommands: result.nextCommands,
     limitations: result.limitations,
     note: yes
-      ? "Scaffolding applied where safe. Images are not pulled; witnesses are not frozen; proof is not claimed."
-      : "Dry plan only. Re-run with --yes to write .faultline/config.json, .faultlineignore (when missing), and install sidecar hooks when --cli is provided and hooks are absent."
+      ? "Scaffolding applied where safe. Images are not pulled; witnesses are not frozen; proof is not claimed. Standing policies are exact-string allowlists; unmatched autonomous proposals park as AGENT_DRAFT."
+      : "Dry plan only. Re-run with --yes to write .faultline/config.json, .faultlineignore (when missing), and install sidecar hooks when --cli is provided and hooks are absent. Add --standing-policy --standing-command <exact> --standing-frozen-by <you> for the YOLO on-ramp."
   }, null, 2)}\n`);
   process.exitCode = 0;
 }

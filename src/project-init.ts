@@ -2,8 +2,19 @@ import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ensureFaultLineConfig, type FaultLineConfig } from "./config.js";
 import { detectLikelyRuntime, runFaultLineDoctor, type FaultLineDoctorReport } from "./doctor.js";
+import {
+  buildStandingApprovalPolicy,
+  writeStandingApprovalPolicy
+} from "./standing-approval-policy.js";
 
 export type ProjectInitRuntime = "node" | "python" | "go";
+
+export type StandingPolicyInitInput = {
+  readonly policyId?: string;
+  readonly frozenBy: string;
+  readonly allowedCommands: readonly string[];
+  readonly maxTimeoutSeconds?: number;
+};
 
 export type ProjectInitResult = {
   readonly repository: string;
@@ -22,6 +33,12 @@ export type ProjectInitResult = {
     readonly status: "SKIPPED" | "CREATED" | "UPDATED" | "UNCHANGED";
     readonly path: string;
     readonly value: FaultLineConfig | null;
+  };
+  readonly standingPolicy: {
+    readonly status: "SKIPPED" | "CREATED" | "PROMPT_AVAILABLE";
+    readonly policyId?: string;
+    readonly policyDigest?: string;
+    readonly detail: string;
   };
   /** Exactly one actionable next command for human-readable exits. */
   readonly next: string;
@@ -63,6 +80,8 @@ export async function planProjectInit(options: {
   writeConfig?: boolean;
   /** When true and hooks are absent, caller installs hooks separately and reports INSTALLED. */
   markSidecarInstalled?: boolean;
+  /** YOLO on-ramp: freeze an exact-string standing approval policy into the witness store. */
+  standingPolicy?: StandingPolicyInitInput;
 }): Promise<ProjectInitResult> {
   const repository = resolve(options.repository);
   const doctor = await runFaultLineDoctor({ repository });
@@ -132,11 +151,46 @@ export async function planProjectInit(options: {
     };
   }
 
+  let standingPolicy: ProjectInitResult["standingPolicy"];
+  if (options.standingPolicy !== undefined && options.standingPolicy.allowedCommands.length > 0) {
+    const witnessStore = config.value?.stores.witnesses
+      ?? join(repository, ".faultline", "witnesses");
+    const policy = writeStandingApprovalPolicy(witnessStore, buildStandingApprovalPolicy({
+      schemaVersion: "faultline.standing-approval-policy.v1",
+      policyId: options.standingPolicy.policyId ?? "init-default",
+      frozenBy: options.standingPolicy.frozenBy,
+      frozenAt: new Date().toISOString(),
+      allowedCommands: [...options.standingPolicy.allowedCommands],
+      allowedOverlayTemplates: [],
+      maxTimeoutSeconds: options.standingPolicy.maxTimeoutSeconds ?? 120,
+      network: "disabled",
+      credentials: "redacted"
+    }));
+    standingPolicy = {
+      status: "CREATED",
+      policyId: policy.policyId,
+      policyDigest: policy.policyDigest,
+      detail: `Standing approval frozen for ${policy.allowedCommands.length} exact command(s). Novel commands still stop for review (COH-09/12).`
+    };
+  } else if (options.writeIgnoreIfMissing === true || options.writeConfig === true) {
+    standingPolicy = {
+      status: "PROMPT_AVAILABLE",
+      detail: "Pass --standing-policy --standing-command <exact> --standing-frozen-by <you> to enable the YOLO allowlist on-ramp."
+    };
+  } else {
+    standingPolicy = {
+      status: "SKIPPED",
+      detail: "Standing policy not requested. Use fl init --standing-policy … or fl witness policy freeze."
+    };
+  }
+
   const next = config.status === "SKIPPED"
     ? `fl init --repo ${repository} --yes`
     : sidecar.status === "PREVIEW_REQUIRED" && options.cliPath !== undefined
       ? `fl codex sidecar install --repo ${repository} --cli ${options.cliPath} --yes`
-      : `fl runtime prepare ${runtime} --yes`;
+      : standingPolicy.status === "PROMPT_AVAILABLE"
+        ? `fl init --repo ${repository} --yes --standing-policy --standing-command "<exact predicate>" --standing-frozen-by "<you>"`
+        : `fl runtime prepare ${runtime} --yes`;
 
   const nextCommands = [next];
 
@@ -147,11 +201,13 @@ export async function planProjectInit(options: {
     sidecar,
     ignoreFile,
     config,
+    standingPolicy,
     next,
     nextCommands,
     limitations: [
       "fl init does not pull Docker images, freeze witnesses, or create proof packages.",
       "Sidecar install still requires explicit --yes after human review.",
+      "Standing policies match exact command strings only — CI-log suggestions never auto-match.",
       "Turn localization remains EXPERIMENTAL_TURN until promotion criteria are met."
     ]
   };

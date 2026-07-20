@@ -18,6 +18,8 @@ Developer Tools
 
 FaultLine produces a portable, offline-verifiable evidence package for one human-frozen predicate — another engineer can verify where that reviewed witness first goes bad without re-running repository code.
 
+**Autonomous sessions:** Unattended sessions keep moving, but nothing becomes proof until a human owned the question — before it ran, or verifiably unchanged after.
+
 ## Demo video
 
 YOUTUBE_URL

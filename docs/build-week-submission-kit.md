@@ -146,6 +146,7 @@ We published a multi-OS SIDE_CAR soak sample that was fabricated by a generator 
 
 | Public claim | Artifact path | Recorded value / note |
 | --- | --- | --- |
+| Autonomous design (COH-12) | `docs/devpost-paste-ready.md` + `src/autonomous-session.ts` | Unattended sessions keep moving, but nothing becomes proof until a human owned the question — before it ran, or verifiably unchanged after. |
 | Soak integrity revert + honesty tests (owned disclosure) | commit `457fabe` + `tests/evidence-honesty.test.ts` + retracted `v0.1.4-buildweek` | Fabricated multi-OS SIDE_CAR soak removed; `TURN_PROOF` reserved until organic/external soak; see SUB-03 paragraph above |
 | Judge Idea path opens a verified `COMMIT_PROOF` sample | `docs/samples/self-incident-commit-proof/ROOT.sha256` | `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9` |
 | Sample package docs / replace procedure | `docs/samples/COMMIT_PROOF_SAMPLE.md` | Install from `fl demo live-git --export-only` |

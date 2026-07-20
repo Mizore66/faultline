@@ -633,6 +633,12 @@ export function validateGitInvestigationProofSemantics(
   if (!result.witness?.valid || result.witness.externalDigestStatus !== "MATCH") {
     errors.push("investigation does not attest a valid externally matched frozen witness");
   }
+  if (String(result.proof.evidenceGrade) === "AGENT_DRAFT") {
+    errors.push("AGENT_DRAFT evidence cannot be exported as a Git proof bundle");
+  }
+  if ((frozenWitness.approval.note ?? "").includes("AGENT_DRAFT") && !(frozenWitness.approval.note ?? "").includes("APPROVED_AFTER_EXECUTION")) {
+    errors.push("AGENT_DRAFT approvals cannot be exported as a Git proof bundle without APPROVED_AFTER_EXECUTION ratification");
+  }
   for (const run of result.runs) {
     if (run.result.kind === "UNSAFE_LOCAL" || run.sandbox.kind === "UNSAFE_LOCAL" || run.result.executor === "UNSAFE_LOCAL") {
       errors.push(
