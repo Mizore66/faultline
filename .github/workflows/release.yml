@@ -214,7 +214,7 @@ jobs:
             }
           '
 
-          if [ "$EXCHANGE_CODE" != "200" ] || [ ! -f /tmp/npm-oidc-token.txt ]; then
+          if { [ "$EXCHANGE_CODE" != "200" ] && [ "$EXCHANGE_CODE" != "201" ]; } || [ ! -f /tmp/npm-oidc-token.txt ]; then
             echo "::error::npm Trusted Publisher exchange failed (HTTP ${EXCHANGE_CODE}). On https://www.npmjs.com/package/@mizore66/faultline → Settings → Trusted Publisher set exactly: org Mizore66, repo faultline, workflow release.yml, environment empty, allowed action npm publish. Do not use the workflow display name 'Release and publish'."
             exit 1
           fi
