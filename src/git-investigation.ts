@@ -11,9 +11,13 @@ import {
 } from "./git-materialization.js";
 import { redactText } from "./redaction.js";
 import {
+  buildEffectiveRuntimeMapping,
   computeEnvironmentFingerprint,
+  ENVIRONMENT_CHANGED_PROOF_MESSAGE,
   environmentHomogeneity,
   EnvironmentFingerprintSchema,
+  missingRuntimeMappingDigests,
+  type RuntimeMapping,
   type EnvironmentFingerprint,
   type EnvironmentHomogeneity
 } from "./environment-fingerprint.js";
@@ -110,6 +114,8 @@ export interface GitInvestigationRequest {
   readonly frozenWitness: FrozenWitness;
   readonly expectedFrozenDigest: string;
   readonly sandbox: z.input<typeof GitInvestigationSandboxSchema>;
+  /** Required for every fingerprint when the commit range is heterogeneous. */
+  readonly runtimeMapping?: RuntimeMapping;
   readonly maxStates?: number;
   /** Injectable for deterministic tests or a controlled production runner. */
   readonly runner?: SandboxCommandRunner;
@@ -672,8 +678,35 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
   const runs: GitInvestigationRunFact[] = [];
   const errors: string[] = [];
   const fingerprints: Array<{ stateIndex: number; commit: string; fingerprint: EnvironmentFingerprint }> = [];
+  const fingerprintByCommit = new Map<string, EnvironmentFingerprint>();
+  let effectiveRuntimeMapping: Record<string, string> = {};
   let configurationError = false;
   try {
+    // Phase 1: fingerprint every historical state before executing the witness.
+    // This prevents a heterogeneous range from silently using one image.
+    for (const state of states) {
+      let materialized: Awaited<ReturnType<typeof materializeGitTree>> | null = null;
+      try {
+        materialized = await materializeGitTree({ repository, commit: state.commit, tempRoot, name: `fp-${state.index}-${state.commit.slice(0, 16)}` });
+        fingerprintByCommit.set(state.commit, computeEnvironmentFingerprint(materialized.worktree));
+      } catch (error) {
+        errors.push(errorMessage(error));
+      } finally {
+        if (materialized) {
+          const cleanupError = await materialized.cleanup();
+          if (cleanupError) errors.push(cleanupError);
+        }
+      }
+    }
+    if (fingerprintByCommit.size !== states.length) {
+      return baseResult("EXECUTION_ERROR", input.sandbox.mode, errors, { repository, requestedRange: input.range, resolvedRange: { ancestor: first, descendant: last }, witness: summary }, executionTrustFor(input.sandbox.mode, request.runner !== undefined));
+    }
+    const preflightFingerprints = states.map((state) => fingerprintByCommit.get(state.commit)!);
+    const preflightHomogeneity = environmentHomogeneity(preflightFingerprints);
+    if (preflightHomogeneity === "HETEROGENEOUS" && missingRuntimeMappingDigests(preflightFingerprints, request.runtimeMapping ?? {}).length > 0) {
+      return baseResult("CONFIGURATION_ERROR", input.sandbox.mode, [ENVIRONMENT_CHANGED_PROOF_MESSAGE], { repository, requestedRange: input.range, resolvedRange: { ancestor: first, descendant: last }, witness: summary }, executionTrustFor(input.sandbox.mode, request.runner !== undefined));
+    }
+    effectiveRuntimeMapping = buildEffectiveRuntimeMapping(preflightFingerprints, request.runtimeMapping ?? {}, input.sandbox.image, preflightHomogeneity);
     for (const state of states) {
       let materialized: Awaited<ReturnType<typeof materializeGitTree>> | null = null;
       try {
@@ -691,7 +724,11 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
         const overlays = await materializeFrozenOverlays(materialized.worktree, input.frozenWitness, materialized);
         let plan;
         try {
-          plan = createSandboxPlan(planRequestForState(input.sandbox, materialized.worktree, input.frozenWitness));
+          const fingerprint = fingerprintByCommit.get(state.commit);
+          if (!fingerprint) throw new Error(`Missing preflight environment fingerprint for ${state.commit}.`);
+          const image = effectiveRuntimeMapping[fingerprint.digest];
+          if (!image) throw new Error(`Missing runtime image mapping for ${fingerprint.digest}.`);
+          plan = createSandboxPlan(planRequestForState({ ...input.sandbox, image }, materialized.worktree, input.frozenWitness));
         } catch (error) {
           configurationError = true;
           throw new Error(`Could not create sandbox plan for ${state.commit}: ${errorMessage(error)}`);
