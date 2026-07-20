@@ -19,7 +19,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Mizore66/faultline.git"
+    "url": "https://github.com/Mizore66/faultline.git"
   },
   "publishConfig": {
     "access": "public"
@@ -41,7 +41,7 @@
   ],
   "packageManager": "pnpm@10.32.1",
   "bin": {
-    "fl": "./dist/cli.js"
+    "fl": "dist/cli.js"
   },
   "engines": {
     "node": ">=22"

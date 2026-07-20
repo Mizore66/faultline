@@ -193,8 +193,39 @@ jobs:
             console.log("  allowed actions: npm publish");
           ' "$OIDC_JWT"
 
-          # Direct npm publish (not pnpm) so ACTIONS_ID_TOKEN_* reach the CLI.
+          # Direct exchange probe — surfaces Trusted Publisher mismatches with a real HTTP code.
+          EXCHANGE_CODE=$(curl -sS -o /tmp/npm-oidc-exchange.json -w "%{http_code}" -X POST \
+            -H "Authorization: Bearer ${OIDC_JWT}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@mizore66%2ffaultline")
+          echo "OIDC token exchange HTTP ${EXCHANGE_CODE}"
+          # Never print the token value — only keys / error text.
+          node -e '
+            const fs = require("fs");
+            const j = JSON.parse(fs.readFileSync("/tmp/npm-oidc-exchange.json", "utf8"));
+            if (j.token) {
+              console.log("Exchange OK (token received, length=" + String(j.token).length + ")");
+              fs.writeFileSync("/tmp/npm-oidc-token.txt", j.token);
+            } else {
+              console.log("Exchange body (no token):", JSON.stringify(j));
+            }
+          '
+
+          if [ "$EXCHANGE_CODE" != "200" ] || [ ! -f /tmp/npm-oidc-token.txt ]; then
+            echo "::error::npm Trusted Publisher exchange failed (HTTP ${EXCHANGE_CODE}). On https://www.npmjs.com/package/@mizore66/faultline → Settings → Trusted Publisher set exactly: org Mizore66, repo faultline, workflow release.yml, environment empty, allowed action npm publish. Do not use the workflow display name 'Release and publish'."
+            exit 1
+          fi
+
+          # Prefer explicit exchange token (avoids CLI OIDC short-circuits).
+          {
+            echo "//registry.npmjs.org/:_authToken=$(cat /tmp/npm-oidc-token.txt)"
+            echo "registry=https://registry.npmjs.org/"
+          } > .npmrc
+          rm -f /tmp/npm-oidc-token.txt
+
           npm publish --access public
+          rm -f .npmrc
 
       - name: Confirm registry (best-effort; CDN can lag)
         env:
