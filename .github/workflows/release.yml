@@ -36,14 +36,14 @@ concurrency:
   group: release-main
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  id-token: write
-
 jobs:
   release:
     name: bump · tag · GitHub Release · npm publish
     runs-on: ubuntu-latest
+    # Job-scoped: id-token:write is required for npm Trusted Publishing (OIDC).
+    permissions:
+      contents: write
+      id-token: write
     if: >
       github.event_name == 'workflow_dispatch' ||
       (
@@ -59,11 +59,12 @@ jobs:
 
       - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
 
+      # Do NOT set registry-url here — it writes an .npmrc with a placeholder
+      # _authToken that makes npm skip OIDC Trusted Publishing (misleading E404).
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: pnpm
-          registry-url: https://registry.npmjs.org
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -129,43 +130,24 @@ jobs:
           EOF
           )"
 
-      - name: Publish to npm
+      - name: Publish to npm (OIDC Trusted Publishing)
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ steps.bump.outputs.version || steps.existing.outputs.version }}
         run: |
           set -euo pipefail
-          echo "Publishing @mizore66/faultline@${VERSION}"
+          echo "Publishing @mizore66/faultline@${VERSION} via OIDC"
 
-          # 1) Prefer OIDC Trusted Publishing (no long-lived token). Requires package
-          #    Settings → Trusted Publisher → GitHub Actions → workflow release.yml.
-          set +e
-          pnpm publish --access public --no-git-checks --provenance
-          oidc_status=$?
-          set -e
-          if [ "$oidc_status" -eq 0 ]; then
-            echo "Published via OIDC provenance (Trusted Publishing)"
-            exit 0
-          fi
-          echo "OIDC/provenance publish failed (exit ${oidc_status}); trying NPM_TOKEN…"
+          # Drop any auth .npmrc (setup-node registry-url / prior steps).
+          # NODE_AUTH_TOKEN must stay unset so npm uses Trusted Publishing.
+          rm -f .npmrc
+          unset NODE_AUTH_TOKEN || true
 
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::npm publish failed. Configure Trusted Publishing on the package, or set repo secret NPM_TOKEN (Automation token with publish + 2FA bypass)."
-            exit 1
-          fi
+          # Node 22 ships an npm too old for reliable OIDC; need npm ≥ 11.5.1.
+          npm install -g npm@latest
+          npm --version
 
-          {
-            echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}"
-            echo "registry=https://registry.npmjs.org/"
-            echo "always-auth=true"
-          } > .npmrc
-
-          npm whoami || {
-            echo "::error::npm whoami failed — NPM_TOKEN is invalid, revoked, or lacks access to @mizore66"
-            exit 1
-          }
-
-          pnpm publish --access public --no-git-checks
+          # Direct npm publish (not pnpm) so ACTIONS_ID_TOKEN_* reach the CLI.
+          npm publish --access public --provenance
 
       - name: Confirm registry (best-effort; CDN can lag)
         env:
