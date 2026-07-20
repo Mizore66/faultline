@@ -73,7 +73,8 @@ jobs:
         run: pnpm audit --prod
         continue-on-error: true
       - run: pnpm build
-      - run: pnpm test -- tests/docker-integration.test.ts tests/later-turn-ledger-fixture.test.ts
+      - name: Native Docker E2E tests only
+        run: pnpm exec vitest run tests/docker-integration.test.ts tests/later-turn-ledger-fixture.test.ts
         env:
           FAULTLINE_DOCKER_INTEGRATION: "1"
           FAULTLINE_LIVE_TURN_MINIMIZE: "1"

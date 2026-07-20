@@ -767,15 +767,26 @@ export function classifySandboxResult(
     return { ...base, verdict: "ERROR", reason: "SANDBOX_UNAVAILABLE" };
   }
   // Command-not-found and permission-denied are infrastructure/setup errors,
-  // not evidence that the approved predicate failed.
-  if (result.exitCode === 126 || result.exitCode === 127 || /(?:command not found|not found|no such file|cannot find module|permission denied)/i.test(result.stderr)) {
+  // not evidence that the approved predicate failed. Only apply the stderr
+  // heuristic when the container exited nonzero and emitted no structured
+  // witness result — otherwise a deliberate read-only probe that prints
+  // "Permission denied" (Debian) would erase a valid PREDICATE_PASS.
+  if (result.exitCode === 126 || result.exitCode === 127) {
+    return { ...base, verdict: "ERROR", reason: "WITNESS_SETUP_ERROR" };
+  }
+  const witnessResultEarly = parseWitnessResult(result.stdout);
+  if (
+    result.exitCode !== 0
+    && witnessResultEarly === null
+    && /(?:command not found|not found|no such file|cannot find module|permission denied)/i.test(result.stderr)
+  ) {
     return { ...base, verdict: "ERROR", reason: "WITNESS_SETUP_ERROR" };
   }
   // A witness that opts into the structured witness-result protocol is
   // classified from that outcome alone; its exit code is not consulted.
   // This is what keeps a compile/setup incompatibility that happens to exit
   // nonzero from ever being reported as a behavioral predicate failure.
-  const witnessResult = parseWitnessResult(result.stdout);
+  const witnessResult = witnessResultEarly;
   if (witnessResult) {
     const classified = classifyFromWitnessResult(witnessResult.outcome);
     return { ...base, verdict: classified.verdict, reason: classified.reason as SandboxReason };

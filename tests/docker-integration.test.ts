@@ -317,14 +317,16 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
       resolve("benchmarks", "e2e-executed.json"),
       `${JSON.stringify({
         schemaVersion: "faultline.coverage-e2e-executed.v1",
-        executedAt: new Date().toISOString(),
+        generatedAt: new Date().toISOString(),
+        executedIds: executedIds,
         osFamily,
         runner: process.env.RUNNER_OS ?? process.platform,
         imageFamily: (process.env.FAULTLINE_DOCKER_NODE_TAG ?? "node:22-alpine").includes("bookworm")
           ? "debian-bookworm"
           : "alpine",
-        scenarioIds: executedIds,
-        count: executedIds.length
+        imageTag: process.env.FAULTLINE_DOCKER_NODE_TAG ?? "node:22-alpine",
+        count: executedIds.length,
+        note: "Written by native Docker CI after real investigateGitRange executions for coverage-matrix rows."
       }, null, 2)}\n`,
       "utf8"
     );

@@ -36,10 +36,15 @@ if (new Set(outcomes).size !== 8) throw new Error("Expected eight distinct outco
 let e2eIds = new Set();
 if (existsSync(e2ePath)) {
   const payload = JSON.parse(readFileSync(e2ePath, "utf8"));
-  if (!Array.isArray(payload.executedIds)) {
+  const ids = Array.isArray(payload.executedIds)
+    ? payload.executedIds
+    : Array.isArray(payload.scenarioIds)
+      ? payload.scenarioIds
+      : null;
+  if (ids === null) {
     throw new Error("benchmarks/e2e-executed.json must contain executedIds: string[]");
   }
-  e2eIds = new Set(payload.executedIds.map(String));
+  e2eIds = new Set(ids.map(String));
 }
 
 const rows = specs.map((spec) => ({

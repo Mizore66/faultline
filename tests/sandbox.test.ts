@@ -171,6 +171,13 @@ describe("FaultLine frozen-witness sandbox plans", () => {
       stderr: ""
     })).toMatchObject({ verdict: "PASS", reason: "PREDICATE_PASS" });
 
+    // Debian RO probes often print Permission denied while still emitting PASS.
+    expect(classifySandboxResult(plan, {
+      exitCode: 0,
+      stdout: `${formatWitnessResult("PREDICATE_PASS")}\n`,
+      stderr: "touch: cannot touch 'sealed.txt': Permission denied\n"
+    })).toMatchObject({ verdict: "PASS", reason: "PREDICATE_PASS" });
+
     // A structured outcome wins even against an exit code that would
     // otherwise imply the opposite legacy verdict.
     expect(classifySandboxResult(plan, {
