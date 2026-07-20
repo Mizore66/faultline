@@ -1,11 +1,17 @@
-# Security verification chain (SEC-03)
+# Security verification chain (SEC-03 / SEC-08)
 
-Executable stranger checklist binding **pinned tag → green CI → attested artifacts → offline verify**.
+Executable stranger checklist binding **signed tag → green CI → attested artifacts → offline verify**.
 
 ## Chain
 
-1. **Pinned submission tag**  
-   Checkout `v0.1.5-buildweek` (or the current pin in README).  
+1. **Pinned submission tag (prefer signed)**  
+   Checkout the current pin in README (e.g. `v0.1.6-buildweek`).  
+   Prefer a GPG- or SSH-signed annotated tag:
+   ```powershell
+   git fetch --tags
+   git verify-tag v0.1.6-buildweek
+   # or: git tag -v v0.1.6-buildweek
+   ```
    CI job `tag-checkout` runs `fl judge-proof --export-only` on that tag.
 
 2. **Green Verify workflow**  
@@ -23,6 +29,14 @@ Executable stranger checklist binding **pinned tag → green CI → attested art
 
 ```powershell
 # After downloading the provenance artifact + proof bundle:
+node scripts/verify-security-chain.mjs --checklist
+node scripts/verify-security-chain.mjs `
+  --tag v0.1.6-buildweek `
+  --bundle <git-proof-bundle-directory> `
+  --receipt <ci-receipt.json> `
+  --attestation <sigstore-bundle.json> `
+  --trust docs/faultline-github-attestation-trust.example.json
+
 fl provenance verify `
   --bundle <git-proof-bundle-directory> `
   --receipt <ci-receipt.json> `
@@ -38,6 +52,8 @@ fl judge-proof --bundle <git-proof-bundle-directory> --expect-root <sha256:...> 
 ```powershell
 node scripts/verify-security-chain.mjs --help
 ```
+
+Cold-machine transcript: retain the stdout of the commands above on a machine that never held the signing key.
 
 ## Honesty
 

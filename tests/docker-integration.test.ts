@@ -330,5 +330,107 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
       }, null, 2)}\n`,
       "utf8"
     );
+    // RIG-06: hybrid coverage-matrix must promote all eight Docker E2E rows.
+    expect(executedIds).toHaveLength(8);
+  }, 300_000);
+
+  it("RIG-08: heterogeneous lockfile range binds two image digests via runtime mapping", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "faultline-hetero-e2e-"));
+    try {
+      const repository = join(workspace, "repo");
+      const store = join(workspace, "store");
+      mkdirSync(repository, { recursive: true });
+      mkdirSync(store, { recursive: true });
+      git(repository, ["init"]);
+      git(repository, ["config", "user.email", "hetero@faultline.test"]);
+      git(repository, ["config", "user.name", "FaultLine Hetero E2E"]);
+      writeFileSync(join(repository, "package.json"), "{\"name\":\"hetero\",\"version\":\"1.0.0\"}\n", "utf8");
+      writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nimporters:\n  .\n    dependencies: {}\n", "utf8");
+      writeFileSync(join(repository, "state.txt"), "good\n", "utf8");
+      git(repository, ["add", "."]);
+      git(repository, ["commit", "-m", "good with lockfile A"]);
+      const good = git(repository, ["rev-parse", "HEAD"]);
+
+      writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\nimporters:\n  .\n    dependencies:\n      left-pad:\n        specifier: 1.3.0\n        version: 1.3.0\n", "utf8");
+      writeFileSync(join(repository, "state.txt"), "bad\n", "utf8");
+      git(repository, ["add", "."]);
+      git(repository, ["commit", "-m", "bad with lockfile B"]);
+      const bad = git(repository, ["rev-parse", "HEAD"]);
+
+      const alpineTag = "node:22-alpine";
+      const bookwormTag = "node:22-bookworm";
+      execFileSync("docker", ["pull", alpineTag], { stdio: "inherit" });
+      execFileSync("docker", ["pull", bookwormTag], { stdio: "inherit" });
+      const alpineImage = execFileSync(
+        "docker",
+        ["image", "inspect", alpineTag, "--format", "{{index .RepoDigests 0}}"],
+        { encoding: "utf8" }
+      ).trim();
+      const bookwormImage = execFileSync(
+        "docker",
+        ["image", "inspect", bookwormTag, "--format", "{{index .RepoDigests 0}}"],
+        { encoding: "utf8" }
+      ).trim();
+      expect(alpineImage).toMatch(/@sha256:[a-f0-9]{64}$/);
+      expect(bookwormImage).toMatch(/@sha256:[a-f0-9]{64}$/);
+      expect(alpineImage).not.toBe(bookwormImage);
+
+      const { computeEnvironmentFingerprint } = await import("../src/environment-fingerprint.js");
+      // Fingerprints are computed on worktrees at each commit; materialize briefly via checkout.
+      git(repository, ["checkout", "-f", good]);
+      const fpGood = computeEnvironmentFingerprint(repository);
+      git(repository, ["checkout", "-f", bad]);
+      const fpBad = computeEnvironmentFingerprint(repository);
+      git(repository, ["checkout", "-f", bad]);
+      expect(fpGood.digest).not.toBe(fpBad.digest);
+
+      const mapping = {
+        [fpGood.digest]: alpineImage,
+        [fpBad.digest]: bookwormImage
+      };
+      const mappingPath = join(workspace, "runtime-mapping.json");
+      const { writeRuntimeMappingFile } = await import("../src/runtime-mapping-file.js");
+      writeRuntimeMappingFile({
+        outputPath: mappingPath,
+        pairs: [
+          { fingerprintDigest: fpGood.digest, image: alpineImage },
+          { fingerprintDigest: fpBad.digest, image: bookwormImage }
+        ],
+        source: "RIG-08 heterogeneous Docker E2E"
+      });
+
+      const frozen = createFrozenWitness(store);
+      const withoutMapping = await investigateGitRange({
+        repository,
+        range: { ancestor: good, descendant: bad },
+        frozenWitness: frozen,
+        expectedFrozenDigest: frozen.frozenDigest,
+        sandbox: { mode: "DOCKER_ISOLATED", image: alpineImage }
+      });
+      expect(withoutMapping.status).toBe("CONFIGURATION_ERROR");
+      expect(withoutMapping.proof.isProof).toBe(false);
+
+      const withMapping = await investigateGitRange({
+        repository,
+        range: { ancestor: good, descendant: bad },
+        frozenWitness: frozen,
+        expectedFrozenDigest: frozen.frozenDigest,
+        sandbox: { mode: "DOCKER_ISOLATED", image: alpineImage },
+        runtimeMapping: mapping
+      });
+      expect(withMapping.proof.isProof).toBe(true);
+      expect(withMapping.proof.reason).toMatch(/per-fingerprint runtime mapping/i);
+      expect(withMapping.transitions.some((t) => t.kind === "PASS_TO_FAIL")).toBe(true);
+      const bundle = writeGitInvestigationProofBundle(join(workspace, "bundle"), withMapping, frozen);
+      const verified = verifyGitInvestigationProofBundle(bundle.directory, bundle.rootDigest);
+      expect(verified.valid).toBe(true);
+      expect(verified.externalRootStatus).toBe("MATCH");
+      const proofText = JSON.stringify(withMapping);
+      expect(proofText).toContain(fpGood.digest);
+      expect(proofText).toContain(fpBad.digest);
+      expect(mappingPath).toContain("runtime-mapping.json");
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   }, 300_000);
 });

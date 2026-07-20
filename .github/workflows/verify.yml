@@ -91,6 +91,52 @@ jobs:
             benchmarks/report.json
             benchmarks/e2e-executed.json
 
+  # RIG-07: second-kernel Docker proof gate (Windows host + Docker Engine).
+  # Skips cleanly when Docker is unavailable on the runner.
+  docker-integration-windows:
+    name: native Docker proof E2E gate (windows-host)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Check Docker availability
+        id: docker
+        shell: pwsh
+        run: |
+          try {
+            docker version | Out-Null
+            echo "available=true" >> $env:GITHUB_OUTPUT
+          } catch {
+            echo "available=false" >> $env:GITHUB_OUTPUT
+            Write-Host "Docker unavailable on this Windows runner; RIG-07 gate skipped."
+          }
+      - name: Native Docker E2E on Windows host kernel
+        if: steps.docker.outputs.available == 'true'
+        shell: pwsh
+        run: pnpm exec vitest run tests/docker-integration.test.ts -t "eight coverage-matrix"
+        env:
+          FAULTLINE_DOCKER_INTEGRATION: "1"
+          FAULTLINE_DOCKER_NODE_TAG: "node:22-alpine"
+      - name: Upload Windows E2E coverage facts
+        if: steps.docker.outputs.available == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: faultline-coverage-matrix-docker-e2e-windows-host
+          if-no-files-found: warn
+          path: |
+            benchmarks/REPORT.md
+            benchmarks/report.json
+            benchmarks/e2e-executed.json
+
   tag-checkout:
     name: pinned tag judge-proof
     runs-on: ubuntu-latest

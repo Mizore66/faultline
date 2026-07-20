@@ -743,15 +743,34 @@ export function validateGitInvestigationProofSemantics(
     && transitions.some((transition) => transition.kind === "FAIL_TO_PASS");
   if (result.nonMonotonic !== nonMonotonic) errors.push("persisted nonMonotonic flag contradicts reconstructed transitions");
   if (result.proof.proofTransitions !== transitions.length) errors.push("proof transition count contradicts reconstructed transitions");
+
+  const heterogeneousMapped = result.environment.homogeneity === "HETEROGENEOUS"
+    && result.environment.fingerprints.every((entry) => {
+      const run = result.runs.find((candidate) => candidate.commit === entry.commit);
+      const image = run?.sandbox.runtime.image;
+      return typeof image === "string" && /@sha256:[a-f0-9]{64}$/.test(image);
+    })
+    && new Set(
+      result.environment.fingerprints.map((entry) => {
+        const run = result.runs.find((candidate) => candidate.commit === entry.commit);
+        return run?.sandbox.runtime.image;
+      })
+    ).size >= Math.min(2, result.environment.distinctDigests.length);
+
   const expectedProof = result.proof.dockerIsolated && result.proof.executionTrust === "NATIVE_DOCKER"
     && result.status === "COMPLETED" && transitions.length > 0
-    && result.environment.homogeneity !== "HETEROGENEOUS";
+    && (result.environment.homogeneity !== "HETEROGENEOUS" || heterogeneousMapped);
   if (result.proof.isProof !== expectedProof) errors.push("proof isProof flag contradicts reconstructed transitions, status, and environment homogeneity");
-  if (expectedProof && result.proof.reason !== "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.") {
+  if (expectedProof && result.environment.homogeneity !== "HETEROGENEOUS"
+    && result.proof.reason !== "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.") {
     errors.push("proof reason does not match a completed Docker transition proof");
   }
-  if (result.environment.homogeneity === "HETEROGENEOUS" && result.proof.isProof) {
-    errors.push("heterogeneous environment fingerprints cannot certify a single-image proof");
+  if (expectedProof && result.environment.homogeneity === "HETEROGENEOUS"
+    && !result.proof.reason.includes("per-fingerprint runtime mapping")) {
+    errors.push("heterogeneous proof reason must cite per-fingerprint runtime mapping");
+  }
+  if (result.environment.homogeneity === "HETEROGENEOUS" && result.proof.isProof && !heterogeneousMapped) {
+    errors.push("heterogeneous environment fingerprints cannot certify proof without per-state digest-pinned images");
   }
   if (expectedProof && result.proof.evidenceGrade !== "COMMIT_PROOF") {
     errors.push("proof evidenceGrade must be COMMIT_PROOF when isProof is true");

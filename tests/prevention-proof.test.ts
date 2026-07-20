@@ -163,6 +163,32 @@ describe("faultline.prevention-proof.v1", () => {
     }
   });
 
+  it("fails closed when codexThreadId is tampered in the prevention package (CDX-09)", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "faultline-prevention-thread-tamper-"));
+    tempRoots.push(workspace);
+    const previous = process.cwd();
+    process.chdir(workspace);
+    try {
+      const written = writePreventionProof(join(defaultPreventionProofRoot(), "thread-bind"), sampleInput({
+        codexThreadId: "thread_offline_binding_001"
+      }));
+      const verified = verifyPreventionProof(written.directory, written.rootDigest);
+      expect(verified.valid).toBe(true);
+      expect(verified.prevention?.codexThreadId).toBe("thread_offline_binding_001");
+      expect(JSON.stringify(verified.prevention)).not.toMatch(/transcript|promptText|messages/i);
+
+      const bodyPath = join(written.directory, "prevention.json");
+      const body = JSON.parse(readFileSync(bodyPath, "utf8")) as { codexThreadId?: string };
+      body.codexThreadId = "thread_offline_binding_TAMPERED";
+      writeFileSync(bodyPath, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+      const tampered = verifyPreventionProof(written.directory, written.rootDigest);
+      expect(tampered.valid).toBe(false);
+      expect(tampered.errors.join("\n")).toMatch(/digest|root|mismatch|schema/i);
+    } finally {
+      process.chdir(previous);
+    }
+  });
+
   it("refuses to write non-PASS/FAIL/PASS or non-Docker evidence", () => {
     const workspace = mkdtempSync(join(tmpdir(), "faultline-prevention-refuse-"));
     tempRoots.push(workspace);

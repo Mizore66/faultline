@@ -803,6 +803,11 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
   const homogeneity = environmentHomogeneity(fingerprints.map((entry) => entry.fingerprint));
   const distinctDigests = [...new Set(fingerprints.map((entry) => entry.fingerprint.digest))].sort();
   const environmentChanged = homogeneity === "HETEROGENEOUS";
+  const mappingComplete = !environmentChanged
+    || missingRuntimeMappingDigests(
+      fingerprints.map((entry) => entry.fingerprint),
+      effectiveRuntimeMapping
+    ).length === 0;
   const proofReason = executionTrust === "INJECTED_RUNNER"
     ? "An injected runner produced these observations; FaultLine refuses to certify it as native Docker proof."
     : !dockerIsolated
@@ -811,11 +816,13 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
       ? "Docker was unavailable; no execution result is proof."
       : status === "EXECUTION_ERROR"
         ? "An execution or worktree error prevents an investigation-wide proof claim."
-        : environmentChanged
+        : environmentChanged && !mappingComplete
           ? "Environment descriptors (lockfiles/toolchains) changed across the investigated range; FaultLine refuses a single-image proof grade. Provide per-fingerprint runtimes or narrow the range."
         : transitions.length === 0
           ? "No adjacent states produced three matching Docker PASS/FAIL executions."
-          : "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.";
+          : environmentChanged
+            ? "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states with a complete per-fingerprint runtime mapping."
+            : "Each listed transition has three distinct Docker-isolated executions on both adjacent Git states.";
   const result = {
     schemaVersion: GIT_INVESTIGATION_SCHEMA_VERSION,
     recorder: "git-commit-range-replay" as const,
@@ -837,7 +844,7 @@ export async function investigateGitRange(request: GitInvestigationRequest): Pro
       distinctDigests
     },
     proof: (() => {
-      const isProof = dockerIsolated && status === "COMPLETED" && transitions.length > 0 && !environmentChanged;
+      const isProof = dockerIsolated && status === "COMPLETED" && transitions.length > 0 && mappingComplete;
       const evidence = commitPathEvidence(isProof);
       return {
         requiresDockerIsolation: true as const,

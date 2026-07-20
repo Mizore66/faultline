@@ -1,0 +1,1 @@
+OPENAI_API_KEY=sk-proj-1a8c27385ab2d3cee7e0b06f5212dab71a8c2738
