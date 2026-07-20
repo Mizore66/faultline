@@ -69,3 +69,15 @@ time evidence.
   searched, distinct 1-minimal sets found, and a `NON_MONOTONIC_INTERACTION`
   verdict when two recorded failures have a recorded passing union. The offline
   verifier checks those claims against retained forward-run attempts.
+- 2026-07-20: **Codex organic self-dogfood evidence populated** (Windows slice;
+  multi-OS remains future work for TIME-01): trusted `SIDE_CAR` sessions during
+  genuine development produced a 96-event valid Windows ledger (~74 min, 18
+  turn-tree snapshots, `CHECKPOINT_SKIPPED_DIRTY` on Stops) plus a shorter
+  5-event session; public redacted excerpt + impact record at
+  `docs/samples/faultline-self-sidecar-soak/` and
+  `docs/impact-validation-codex-self-dogfood.md`. Guided `fl investigate --ci-log`
+  on organic CI failure `29694948356` retained freeze
+  `ci-29694948356-pnpm-test` (digest `sha256:89313b84…`, `fl witness verify`
+  valid). **Future work for TIME-01 (#152):** macOS + Linux + second developer +
+  published per-OS stability table. Optional TIME-02 deepening (#153): full
+  PREVENTION_VERIFIED arc beyond organic use + CI freeze.

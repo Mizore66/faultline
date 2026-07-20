@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "faultline.self-sidecar-soak-sample.v1",
+  "transport": "SIDE_CAR",
+  "notCursor": true,
+  "notObservedExternal": true,
+  "repository": "Mizore66/faultline (self-dogfood)",
+  "platform": "windows",
+  "privateLedgerBasename": "codex-60908cfa094e765871fc47e275078a07c207fa7b9ce4be0569481029ebcda511.json",
+  "privateSessionId": "019f7c98-39cd-72e1-9eb3-2a80f10fe1b8",
+  "privateEventCount": 96,
+  "privateHeadHash": "sha256:ef0c9a2f034f9388d84766237542cff5a16a422e4f04be912517c9d94e99d586",
+  "privateFirstOccurredAt": "2026-07-20T06:27:48.696Z",
+  "privateLastOccurredAt": "2026-07-20T07:41:37.187Z",
+  "privateTypeCounts": {
+    "SESSION_STARTED": 1,
+    "SESSION_BASELINE_SNAPSHOT": 1,
+    "TURN_STARTED": 19,
+    "TURN_COMPLETED": 18,
+    "TURN_TREE_SNAPSHOT": 18,
+    "TOOL_USE_STARTED": 20,
+    "TOOL_USE_COMPLETED": 19
+  },
+  "privateWorktreeCheckpoints": 0,
+  "privateTurnTreeSnapshots": 18,
+  "privateLatestStopStatus": "CHECKPOINT_SKIPPED_DIRTY",
+  "privateLatestStopReason": "DIRTY_WORKTREE",
+  "excerptEventCount": 8,
+  "excerptHeadHash": "sha256:10ec8e1cbc8eca47fc361344f23d48530fe485ae21083a103172b3fb8d47b9d4",
+  "excerptNote": "Public ledger.json is a redacted verifying excerpt (session + first two turns). Full private ledger remains under .git/faultline/recordings/ (not shipped).",
+  "claimBoundary": "Organic Windows self-dogfood SIDE_CAR soak slice (genuine Codex development). Multi-OS/multi-developer soak remains future work (#152). Not a PREVENTION_VERIFIED package.",
+  "generatedAt": "2026-07-20T08:14:36.213Z"
+}

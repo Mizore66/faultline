@@ -33,6 +33,7 @@ Full case study: [../../external-case-study-mumbcs.md](../../external-case-study
 
 ## Related honesty samples
 
+- Maintainer organic Windows self-dogfood `SIDE_CAR` (multi-OS = future work): [../faultline-self-sidecar-soak/](../faultline-self-sidecar-soak/)
 - Non-Codex editor checkpoints (when credits unavailable): [../observed-external-transport/](../observed-external-transport/) (`OBSERVED_EXTERNAL_TRANSPORT`)
 - CI later-turn fixture (not MUMBCS): [../later-turn-ledger/](../later-turn-ledger/) (`RECORDED_REDACTED_FIXTURE`)
 

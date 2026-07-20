@@ -1,0 +1,177 @@
+{
+  "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+  "ledgerId": "ledger-faultline-self-sidecar-soak-excerpt",
+  "sessionId": "019f7c98-39cd-72e1-9eb3-2a80f10fe1b8",
+  "createdAt": "2026-07-20T06:27:48.696Z",
+  "events": [
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-faultline-self-sidecar-soak-excerpt",
+      "sessionId": "019f7c98-39cd-72e1-9eb3-2a80f10fe1b8",
+      "sequence": 1,
+      "eventId": "codex-sidecar-60908cfa094e765871fc47e2-session-session-start-excerpt",
+      "occurredAt": "2026-07-20T06:27:48.696Z",
+      "event": {
+        "type": "SESSION_STARTED",
+        "payload": {
+          "transport": "SIDE_CAR",
+          "workingDirectory": "/redacted/faultline-self-codex-dogfood",
+          "model": "gpt-5.6-terra"
+        }
+      },
+      "previousHash": "sha256:d6306237a7856499831c3cbca58476f080bc1ac23a1b5c13da0f7dea2f1c907b",
+      "hash": "sha256:387108891ae16334cf697c29743f05b2175d49f1c8772c3cab7e43ad02a352b1"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-faultline-self-sidecar-soak-excerpt",
+      "sessionId": "019f7c98-39cd-72e1-9eb3-2a80f10fe1b8",
+      "sequence": 2,
+      "eventId": "codex-sidecar-60908cfa094e765871fc47e2-session-session-baseline-excerpt",
+      "occurredAt": "2026-07-20T06:27:50.117Z",
+      "event": {
+        "type": "SESSION_BASELINE_SNAPSHOT",
+        "payload": {
+          "snapshot": {
+            "schemaVersion": "faultline.turn-tree-snapshot.v1",
+            "repositoryRoot": "/redacted/faultline-self-codex-dogfood",
+            "headCommit": "f56b30a1b45f72159553e99b884ffe1d2dbc05e9",
+            "treeDigest": "9444c6a216f853ea64661d529d8e416b97e3b08e",
+            "capturedAt": "2026-07-20T06:27:50.114Z",
+            "dirty": true,
+            "statusDigest": "sha256:d6df7f85728f166458c97ed57247d7a5c846842f2792079a672efc06237bcc4a",
+            "digest": "sha256:b2e5b64c3edc6a6c07bd1fd041eae6ff441f278f4c3823550a10202459d1c12f"
+          }
+        }
+      },
+      "previousHash": "sha256:387108891ae16334cf697c29743f05b2175d49f1c8772c3cab7e43ad02a352b1",
+      "hash": "sha256:1c8ea880aea9d7b9e5e0849a971388703d04aec48240a256674ef4ede3c7debf"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-faultline-self-sidecar-soak-excerpt",
+      "sessionId": "019f7c98-39cd-72e1-9eb3-2a80f10fe1b8",
+      "sequence": 3,
+      "eventId": "codex-sidecar-60908cfa094e765871fc47e2-9fc114baeab4ecf428b0e57f-turn-start-excerpt",
+      "occurredAt": "2026-07-20T06:27:50.647Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "019f7e35-93f2-7402-a3b6-06dfebb7cc34",
+          "turnOrdinal": 1,
+          "promptDigest": "sha256:4b261f49f519dce76b525ec0573bc918e1cc94b753c81d7f62c9aa83f6bc6647"
+        }
+      },
+      "previousHash": "sha256:1c8ea880aea9d7b9e5e0849a971388703d04aec48240a256674ef4ede3c7debf",
+      "hash": "sha256:25d901c3fd9ee09334dc5a9adf65aa0669106dc8a6bff8d0e423291db5a042ba"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-faultline-self-sidecar-soak-excerpt",
+      "sessionId": "019f7c98-39cd-72e1-9eb3-2a80f10fe1b8",
+      "sequence": 4,
+      "eventId": "codex-sidecar-60908cfa094e765871fc47e2-9fc114baeab4ecf428b0e57f-turn-stop-excerpt",
+      "occurredAt": "2026-07-20T06:27:58.958Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "019f7e35-93f2-7402-a3b6-06dfebb7cc34",
+          "turnOrdinal": 1,
+          "outcome": "COMPLETED"
+        }
+      },
+      "previousHash": "sha256:25d901c3fd9ee09334dc5a9adf65aa0669106dc8a6bff8d0e423291db5a042ba",
+      "hash": "sha256:f6eb9382985e813c2ca477a731aa8ad918d719a53ce7872402397cdf07e375fa"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-faultline-self-sidecar-soak-excerpt",
+      "sessionId": "019f7c98-39cd-72e1-9eb3-2a80f10fe1b8",
+      "sequence": 5,
+      "eventId": "codex-sidecar-60908cfa094e765871fc47e2-9fc114baeab4ecf428b0e57f-turn-snapshot-excerpt",
+      "occurredAt": "2026-07-20T06:27:59.516Z",
+      "event": {
+        "type": "TURN_TREE_SNAPSHOT",
+        "payload": {
+          "turnId": "019f7e35-93f2-7402-a3b6-06dfebb7cc34",
+          "turnOrdinal": 1,
+          "snapshot": {
+            "schemaVersion": "faultline.turn-tree-snapshot.v1",
+            "repositoryRoot": "/redacted/faultline-self-codex-dogfood",
+            "headCommit": "f56b30a1b45f72159553e99b884ffe1d2dbc05e9",
+            "treeDigest": "9444c6a216f853ea64661d529d8e416b97e3b08e",
+            "capturedAt": "2026-07-20T06:27:59.514Z",
+            "dirty": true,
+            "statusDigest": "sha256:d6df7f85728f166458c97ed57247d7a5c846842f2792079a672efc06237bcc4a",
+            "digest": "sha256:99695d042054d4b71d7078b6d177782dadbd63711627f48e3e0a8faa74fea5be"
+          }
+        }
+      },
+      "previousHash": "sha256:f6eb9382985e813c2ca477a731aa8ad918d719a53ce7872402397cdf07e375fa",
+      "hash": "sha256:42408b10c15b508c09d3c477a2f76df039180b6ae8ce26868246f275c5087c02"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-faultline-self-sidecar-soak-excerpt",
+      "sessionId": "019f7c98-39cd-72e1-9eb3-2a80f10fe1b8",
+      "sequence": 6,
+      "eventId": "codex-sidecar-60908cfa094e765871fc47e2-0f8130e0bc454d778d80bb7f-turn-start-excerpt",
+      "occurredAt": "2026-07-20T06:28:47.908Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "019f7e36-7b65-7461-ac45-482c65fcc958",
+          "turnOrdinal": 2,
+          "promptDigest": "sha256:71155d7e390c1f6afbcac0f2797ac7471a6c94b44793391ac95b378af32005d9"
+        }
+      },
+      "previousHash": "sha256:42408b10c15b508c09d3c477a2f76df039180b6ae8ce26868246f275c5087c02",
+      "hash": "sha256:1ef0a13cb4311101e031572fb6fba21385e8cee159b44bc6c100a4f6c3b75080"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-faultline-self-sidecar-soak-excerpt",
+      "sessionId": "019f7c98-39cd-72e1-9eb3-2a80f10fe1b8",
+      "sequence": 7,
+      "eventId": "codex-sidecar-60908cfa094e765871fc47e2-0f8130e0bc454d778d80bb7f-turn-stop-excerpt",
+      "occurredAt": "2026-07-20T06:28:57.821Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "019f7e36-7b65-7461-ac45-482c65fcc958",
+          "turnOrdinal": 2,
+          "outcome": "COMPLETED"
+        }
+      },
+      "previousHash": "sha256:1ef0a13cb4311101e031572fb6fba21385e8cee159b44bc6c100a4f6c3b75080",
+      "hash": "sha256:20648f95d32ad0ca7dfa079f055f87766d8c33ac044e20672a5d86657cee852d"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-faultline-self-sidecar-soak-excerpt",
+      "sessionId": "019f7c98-39cd-72e1-9eb3-2a80f10fe1b8",
+      "sequence": 8,
+      "eventId": "codex-sidecar-60908cfa094e765871fc47e2-0f8130e0bc454d778d80bb7f-turn-snapshot-excerpt",
+      "occurredAt": "2026-07-20T06:28:58.356Z",
+      "event": {
+        "type": "TURN_TREE_SNAPSHOT",
+        "payload": {
+          "turnId": "019f7e36-7b65-7461-ac45-482c65fcc958",
+          "turnOrdinal": 2,
+          "snapshot": {
+            "schemaVersion": "faultline.turn-tree-snapshot.v1",
+            "repositoryRoot": "/redacted/faultline-self-codex-dogfood",
+            "headCommit": "f56b30a1b45f72159553e99b884ffe1d2dbc05e9",
+            "treeDigest": "9444c6a216f853ea64661d529d8e416b97e3b08e",
+            "capturedAt": "2026-07-20T06:28:58.354Z",
+            "dirty": true,
+            "statusDigest": "sha256:d6df7f85728f166458c97ed57247d7a5c846842f2792079a672efc06237bcc4a",
+            "digest": "sha256:ec9f5349a17c562079f69a88e358e1a376ce6958bd9a6bdaf0484c91fc522b46"
+          }
+        }
+      },
+      "previousHash": "sha256:20648f95d32ad0ca7dfa079f055f87766d8c33ac044e20672a5d86657cee852d",
+      "hash": "sha256:10ec8e1cbc8eca47fc361344f23d48530fe485ae21083a103172b3fb8d47b9d4"
+    }
+  ]
+}

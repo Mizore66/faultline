@@ -148,6 +148,8 @@ Grep-able map of statements we may say publicly to the retained artifact that ba
 | External-01 MUMBCS protocol validation (not organic prod bug) | `docs/impact-validation-external-01.md` | Status `completed`; root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1`; local `fl verify` VALID+MATCH |
 | External-01 publishable summary | `docs/publishable-summary-mumbcs.md` | Same root; `EXPERIMENTAL_TURN` / Turn 3 |
 | External-01 Codex sidecar ledger (W0-2 via partner, not self-dogfood) | `docs/samples/mumbcs-sidecar-ledger/` | Real `SIDE_CAR` 11-event ledger; trees.pack not shipped |
+| Codex organic self-dogfood SIDE_CAR (Windows) | `docs/impact-validation-codex-self-dogfood.md` + `docs/samples/faultline-self-sidecar-soak/` | Genuine Codex development sessions; 96-event private ledger head `sha256:ef0c9a2f…`; public excerpt verifies; **multi-OS soak = future work (#152)** |
+| Guided CI freeze on organic CI failure | `docs/impact-validation-codex-self-dogfood.md` §B | Run `29694948356`; frozen `ci-29694948356-pnpm-test` digest `sha256:89313b84…`; local `fl witness verify` valid; not a COMMIT_PROOF package |
 | Honest non-Codex observed transport sample | `docs/samples/observed-external-transport/` | `OBSERVED_EXTERNAL_TRANSPORT`; not Codex hooks |
 | Coverage matrix honesty (hybrid: spec/unit + Docker E2E rows in CI) | `benchmarks/REPORT.md` + `benchmarks/e2e-executed.json` | 8 scenarios; Docker CI promotes listed rows to `EXECUTABLE_E2E` |
 | Coverage matrix machine-readable twin | `benchmarks/report.json` | `faultline.coverage-matrix.v1` |
