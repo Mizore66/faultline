@@ -112,14 +112,21 @@ jobs:
         id: docker
         shell: pwsh
         run: |
-          try {
-            docker version | Out-Null
-            docker pull node:22-alpine | Out-Null
-            echo "available=true" >> $env:GITHUB_OUTPUT
-          } catch {
-            echo "available=false" >> $env:GITHUB_OUTPUT
-            Write-Host "Docker unavailable or image pull failed on this Windows runner; RIG-07 gate skipped."
+          $available = "false"
+          docker version 2>&1 | Out-Host
+          if ($LASTEXITCODE -eq 0) {
+            docker pull node:22-alpine 2>&1 | Out-Host
+            if ($LASTEXITCODE -eq 0) {
+              $available = "true"
+            } else {
+              Write-Host "Docker image pull failed on this Windows runner; RIG-07 gate skipped."
+            }
+          } else {
+            Write-Host "Docker unavailable on this Windows runner; RIG-07 gate skipped."
           }
+          "available=$available" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # Never fail the job from this probe — skip E2E when unavailable.
+          exit 0
       - name: Native Docker E2E on Windows host kernel
         if: steps.docker.outputs.available == 'true'
         shell: pwsh
