@@ -1,0 +1,2 @@
+prefix=sk-proj-
+suffix=abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOP

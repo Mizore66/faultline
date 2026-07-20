@@ -526,12 +526,23 @@ export function createDockerSandboxPlan(request: SandboxPlanRequest): DockerSand
   });
 }
 
+/** Development-only gate for constructing UNSAFE_LOCAL plans (never shipped selection). */
+export const DEV_UNSAFE_LOCAL_ENV = "FAULTLINE_DEV_UNSAFE_LOCAL" as const;
+
+export function isDevUnsafeLocalEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[DEV_UNSAFE_LOCAL_ENV] === "1";
+}
+
 /**
- * Local execution is deliberately opt-in and produces no PASS/FAIL evidence.
- * It exists only to make a developer's explicitly acknowledged escape hatch
- * visible in the proof record rather than silently falling back from Docker.
+ * Local execution is deliberately opt-in, development-gated, and produces no
+ * PASS/FAIL evidence. The shipped `createSandboxPlan` API never constructs it.
  */
 function createUnsafeLocalSandboxPlan(request: SandboxPlanRequest): UnsafeLocalSandboxPlan {
+  if (!isDevUnsafeLocalEnabled()) {
+    throw new Error(
+      `UNSAFE_LOCAL construction requires ${DEV_UNSAFE_LOCAL_ENV}=1 (development-only). Docker is the only shipped runtime.`
+    );
+  }
   if (request.allowUnsafeLocal !== true) {
     throw new Error("UNSAFE_LOCAL execution requires allowUnsafeLocal: true; Docker is the only default.");
   }
@@ -578,6 +589,17 @@ export function createSandboxPlan(request: SandboxPlanRequest): SandboxPlan {
     throw new Error("allowUnsafeLocal is only valid together with mode: UNSAFE_LOCAL.");
   }
   return createDockerSandboxPlan(request);
+}
+
+/**
+ * Development-only escape hatch. Requires FAULTLINE_DEV_UNSAFE_LOCAL=1 and
+ * allowUnsafeLocal: true. Never used by production CLI selection paths.
+ */
+export function createDevUnsafeLocalSandboxPlan(request: SandboxPlanRequest): UnsafeLocalSandboxPlan {
+  return createUnsafeLocalSandboxPlan({
+    ...request,
+    allowUnsafeLocal: true
+  });
 }
 
 /** A serializable, value-redacted representation safe for proof bundles. */

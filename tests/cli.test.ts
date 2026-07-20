@@ -1006,7 +1006,7 @@ describe("FaultLine CLI workflows", () => {
       expect(payload.proofBundle).toBeNull();
       expect(payload.investigation?.states.length).toBeGreaterThanOrEqual(2);
       expect(
-        payload.investigation?.proof.evidenceGrade === "EXPERIMENTAL_TURN"
+        payload.investigation?.proof.evidenceGrade === "TURN_PROOF"
         || payload.investigation?.proof.evidenceGrade === "NONE"
       ).toBe(true);
       expect(payload.investigation?.proof.isProof).toBe(false);

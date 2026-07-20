@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "faultline.secret-scanner-corpus.v1",
+  "coverage": "LIMITED",
+  "limitations": [
+    "LIMITED_COVERAGE: only documented credential formats and secret-named fields are recognized.",
+    "UNKNOWN_PATTERNS: encoded, split, encrypted, binary, transformed, or unrecognized credentials may remain."
+  ],
+  "cases": [
+    {
+      "id": "openai-api-key",
+      "path": "true_secret/openai-api-key.txt",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY"
+    },
+    {
+      "id": "github-token",
+      "path": "true_secret/github-token.txt",
+      "label": "true_secret",
+      "expectedKind": "GITHUB_TOKEN"
+    },
+    {
+      "id": "aws-access-key",
+      "path": "true_secret/aws-access-key.txt",
+      "label": "true_secret",
+      "expectedKind": "AWS_ACCESS_KEY_ID"
+    },
+    {
+      "id": "bearer-header",
+      "path": "true_secret/bearer-header.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BEARER"
+    },
+    {
+      "id": "pem-private-key",
+      "path": "true_secret/pem-private-key.txt",
+      "label": "true_secret",
+      "expectedKind": "PRIVATE_KEY_BLOCK"
+    },
+    {
+      "id": "example-sk-docs",
+      "path": "false_positive/example-sk-docs.txt",
+      "label": "false_positive",
+      "note": "Documentation-style placeholder that may still match HIGH patterns — counted as FP if redacted."
+    },
+    {
+      "id": "uuid-lookalike",
+      "path": "false_positive/uuid-lookalike.txt",
+      "label": "false_positive",
+      "note": "Random UUID-like token without secret markers; should ideally not redact."
+    },
+    {
+      "id": "base64-blob",
+      "path": "should_miss/base64-blob.txt",
+      "label": "should_miss",
+      "note": "Encoded credential without recognizable markers — known limitation."
+    },
+    {
+      "id": "split-openai-key",
+      "path": "should_miss/split-openai-key.txt",
+      "label": "should_miss",
+      "note": "Key split across lines — known UNKNOWN_PATTERNS limitation."
+    }
+  ]
+}

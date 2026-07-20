@@ -1,6 +1,12 @@
 # Your first FaultLine incident
 
-This is the shortest honest path from a failing command to a shareable proof package. It is designed for a developer who has a Git worktree, a command that should pass, and Docker available for the final proof step.
+Prefer the interactive toy-repo tutorial when you want FaultLine to generate a disposable incident for you:
+
+```powershell
+fl tutorial --yes
+```
+
+This guide is the shortest honest path from a failing command to a shareable proof package. It is designed for a developer who has a Git worktree, a command that should pass, and Docker available for the final proof step.
 
 FaultLine has two deliberately different states:
 

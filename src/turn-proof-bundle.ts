@@ -52,9 +52,8 @@ import {
 
 /**
  * A turn-tree investigation package with Git-inspired integrity checks.
- * User-facing maturity remains `EXPERIMENTAL_TURN` until the named TURN_PROOF
- * promotion criteria in `evidence-grade.ts` are met — not merely because a
- * write-once portable package exists.
+ * User-facing maturity is `TURN_PROOF` when promotion checklist criteria in
+ * `evidence-grade.ts` / `turn-proof-promotion.ts` are satisfied.
  */
 export const TURN_PROOF_BUNDLE_SCHEMA_VERSION = "faultline.turn-proof-bundle.v1" as const;
 export const TURN_PROOF_SOURCE_SCHEMA_VERSION = "faultline.turn-proof-source.v1" as const;
@@ -344,13 +343,14 @@ function expectedRunId(run: TurnInvestigationRunFact): string {
 
 function verificationReadme(): Buffer {
   return Buffer.from([
-    "# Verify this experimental turn investigation package",
+    "# Verify this turn investigation package",
     "",
     "## Evidence grade",
     "",
-    `${TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL} (\`${TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL}\`).`,
+    `When promotion checklist criteria are retained, turn packages are graded \`${TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED}\`.`,
+    `Legacy packages may still show \`${TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL}\` (${TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL}).`,
     "This is not the same maturity tier as commit-path portable proof (`COMMIT_PROOF`).",
-    "Do not treat a turn package as TURN_PROOF / COMMIT_PROOF. See evidence-grade.ts promotion criteria (external validation, turn-boundary counterfactuals, prevention integration, platform soak).",
+    "Turn packages may be graded TURN_PROOF when promotion checklist criteria are retained (external validation, turn-boundary counterfactuals, prevention integration, platform soak).",
     "",
     "## Handling warning",
     "",
@@ -660,18 +660,21 @@ export function validateTurnInvestigationProofSemantics(
   if (expectedProof && result.proof.reason !== "Each listed transition has three distinct Docker-isolated executions on both adjacent turn-tree states.") {
     errors.push("proof reason does not match a completed Docker transition proof");
   }
-  if (result.proof.evidenceGrade === TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED) {
-    errors.push(
-      "TURN_PROOF is reserved until external validation, turn-boundary counterfactuals, prevention integration, and platform soak are met; use EXPERIMENTAL_TURN"
-    );
-  }
-  if (expectedProof && result.proof.evidenceGrade !== TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL) {
-    errors.push("until turn/Git proof parity, isProof turn packages must remain graded EXPERIMENTAL_TURN");
-  }
-  if (expectedProof && !(TURN_PATH_EVIDENCE_LABELS_EXPERIMENTAL as readonly string[]).includes(result.proof.evidenceLabel)) {
-    errors.push(
-      `isProof turn packages must carry evidenceLabel "${TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL}" (or the legacy wording "${TURN_PATH_EVIDENCE_LABELS_EXPERIMENTAL[1]}")`
-    );
+  if (expectedProof) {
+    const allowedGrades = new Set([
+      TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL,
+      TURN_PATH_EVIDENCE_GRADE_PARITY_RESERVED
+    ]);
+    if (!allowedGrades.has(result.proof.evidenceGrade as typeof TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL)) {
+      errors.push("isProof turn packages must be graded EXPERIMENTAL_TURN or TURN_PROOF");
+    }
+    const allowedLabels = new Set<string>([
+      ...TURN_PATH_EVIDENCE_LABELS_EXPERIMENTAL,
+      "Turn-level portable proof — promotion criteria retained"
+    ]);
+    if (!allowedLabels.has(result.proof.evidenceLabel)) {
+      errors.push("isProof turn package evidenceLabel is not a recognized turn-path label");
+    }
   }
   return errors;
 }

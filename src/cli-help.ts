@@ -45,12 +45,14 @@ Usage:
   fl incident suggest --repo <directory>
   fl incident start --repo <directory> (--command <failing-command> | --command-file <utf8-file>) [--id <safe-id>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--store <directory>]
   fl incident status <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--expect-digest <sha256:...>]
-  fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>] [--unsafe-local]
-  fl investigate --ci-log <file> --repo <directory> [--command <failing-command>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--id <safe-id>] [--unsafe-local]
-  fl investigate --resume <incident-id> --repo <directory> [--expect-digest <sha256:...>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--unsafe-local]
+  fl incident continue <id> [--repo <directory>] [--store <directory>] [--draft-store <directory>] [--image <digest-pinned-image>] [--expect-digest <sha256:...>] [--ledger <ledger.json>] [--max-states <count>] [--output <managed-bundle-directory>]
+  fl investigate --ci-log <file> --repo <directory> [--command <failing-command>] [--from <commit> --to <commit>] [--runtime <node|python|go> | --image <digest-pinned-image>] [--id <safe-id>]
+  fl investigate --resume <incident-id> --repo <directory> [--expect-digest <sha256:...>] [--runtime <node|python|go> | --image <digest-pinned-image>]
+  fl tutorial [--repo <directory>] [--yes]
   fl investigate turns --repo <directory> (--ledger <ledger.json> | --latest) --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--runtime-mapping <mapping.json>] [--output <managed-bundle-directory>] [--minimize] [--transition <index>] [--max-executions <count>]
   fl prove transition <turn-proof-bundle-directory> --repo <directory> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--transition <index>] [--max-executions <count>] [--output <managed-result.json>]
-  fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]
+  fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--runtime-mapping <mapping.json>] [--ledger <ledger.json>] [--output <managed-bundle-directory>]
+  fl runtime mapping write --fingerprint <sha256:...> --image <digest-pinned-image> [--fingerprint <sha256:...> --image <digest-pinned-image> ...] --output <mapping.json>
   fl runtime resolve <node|python|go>
   fl runtime prepare <node|python|go> --yes
   fl runtime project <plan|build|resolve> [--context <directory>] [--dockerfile <file>] --tag <repository:tag> [--network <none|default>] [--yes]

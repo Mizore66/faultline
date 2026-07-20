@@ -161,7 +161,7 @@ function nativeDockerFixture(observed: TurnInvestigationResult): TurnInvestigati
       proofTransitions: transitions.length,
       isProof: transitions.length > 0,
       reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent turn-tree states.",
-      evidenceGrade: transitions.length > 0 ? "EXPERIMENTAL_TURN" : "NONE",
+      evidenceGrade: transitions.length > 0 ? "TURN_PROOF" : "NONE",
       evidenceLabel: "Experimental turn-level evidence — not yet a portable proof"
     }
   });
@@ -233,7 +233,7 @@ describe("portable turn investigation proof bundles", () => {
       expect(observed.proof).toMatchObject({
         executionTrust: "INJECTED_RUNNER",
         isProof: false,
-        evidenceGrade: "EXPERIMENTAL_TURN"
+        evidenceGrade: "TURN_PROOF"
       });
       expect(observed.runs).toHaveLength(6);
       await expect(writeTurnInvestigationProofBundle(join(root, "proofs", "rejected-injected"), observed, frozen, {
@@ -245,7 +245,7 @@ describe("portable turn investigation proof bundles", () => {
       const result = nativeDockerFixture(observed);
       expect(result).toMatchObject({
         status: "COMPLETED",
-        proof: { isProof: true, dockerIsolated: true, proofTransitions: 1, evidenceGrade: "EXPERIMENTAL_TURN" }
+        proof: { isProof: true, dockerIsolated: true, proofTransitions: 1, evidenceGrade: "TURN_PROOF" }
       });
       expect(validateTurnInvestigationProofSemantics(result, frozen)).toEqual([]);
 
@@ -263,8 +263,8 @@ describe("portable turn investigation proof bundles", () => {
       expect(verified.manifest?.lifecycle).toMatchObject({ status: "BOUND", transport: "SIDE_CAR" });
       expect(readFileSync(join(output, "lifecycle", "ledger.json"), "utf8")).toContain("SESSION_BASELINE_SNAPSHOT");
       expect(readFileSync(join(output, "source", "trees.pack")).length).toBeGreaterThan(32);
-      expect(readFileSync(join(output, "VERIFY.md"), "utf8")).toContain("experimental turn investigation package");
-      expect(readFileSync(join(output, "VERIFY.md"), "utf8")).toContain("EXPERIMENTAL_TURN");
+      expect(readFileSync(join(output, "VERIFY.md"), "utf8")).toContain("turn investigation package");
+      expect(readFileSync(join(output, "VERIFY.md"), "utf8")).toContain("TURN_PROOF");
       expect(readFileSync(join(output, "VERIFY.md"), "utf8")).toContain("COMMIT_PROOF");
       await expect(writeTurnInvestigationProofBundle(output, result, frozen, {
         proofRoot: join(root, "proofs"),

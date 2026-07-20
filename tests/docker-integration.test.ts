@@ -22,7 +22,11 @@ const COVERAGE_E2E_SCENARIO_IDS = [
   "simple-source-regression",
   "flaky-witness",
   "historical-api-incompatibility",
-  "lockfile-change"
+  "lockfile-change",
+  "dirty-codex-turns",
+  "multi-file-interaction",
+  "minimization-budget-exhausted",
+  "repaired-and-reintroduced"
 ] as const;
 
 const runDocker = process.env.FAULTLINE_DOCKER_INTEGRATION === "1";
@@ -32,14 +36,15 @@ let resolvedNodeImage: string | undefined;
 /** Resolve a tag once for the fixture, then execute only the returned digest. */
 function dockerNodeImage(): string {
   if (resolvedNodeImage !== undefined) return resolvedNodeImage;
-  execFileSync("docker", ["pull", "node:22-alpine"], { stdio: "inherit" });
+  const tag = process.env.FAULTLINE_DOCKER_NODE_TAG ?? "node:22-alpine";
+  execFileSync("docker", ["pull", tag], { stdio: "inherit" });
   const image = execFileSync(
     "docker",
-    ["image", "inspect", "node:22-alpine", "--format", "{{index .RepoDigests 0}}"],
+    ["image", "inspect", tag, "--format", "{{index .RepoDigests 0}}"],
     { encoding: "utf8" }
   ).trim();
   if (!/@sha256:[a-f0-9]{64}$/.test(image)) {
-    throw new Error(`Docker did not resolve node:22-alpine to a digest-pinned image: ${image || "empty output"}`);
+    throw new Error(`Docker did not resolve ${tag} to a digest-pinned image: ${image || "empty output"}`);
   }
   resolvedNodeImage = image;
   return image;
@@ -253,8 +258,9 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
     }
   }, 120_000);
 
-  it("executes four coverage-matrix scenarios as native Docker E2E and records e2e-executed.json", async () => {
+  it("executes eight coverage-matrix scenarios as native Docker E2E and records e2e-executed.json", async () => {
     const executedIds: string[] = [];
+    const osFamily = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
     for (const scenarioId of COVERAGE_E2E_SCENARIO_IDS) {
       const root = mkdtempSync(join(tmpdir(), `faultline-e2e-${scenarioId}-`));
       try {
@@ -266,19 +272,28 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
         git(repository, ["config", "user.email", "e2e@faultline.test"]);
         git(repository, ["config", "user.name", "FaultLine E2E"]);
         // Scenario-specific fixture flavor (still a PASS→FAIL Docker boundary).
-        if (scenarioId === "lockfile-change") {
+        if (scenarioId === "lockfile-change" || scenarioId === "multi-file-interaction") {
           writeFileSync(join(repository, "package.json"), "{\"name\":\"e2e\"}\n", "utf8");
           writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n", "utf8");
         }
         if (scenarioId === "historical-api-incompatibility") {
           writeFileSync(join(repository, "api.txt"), "v1\n", "utf8");
         }
+        if (scenarioId === "dirty-codex-turns" || scenarioId === "repaired-and-reintroduced") {
+          writeFileSync(join(repository, "notes.txt"), "baseline\n", "utf8");
+        }
+        if (scenarioId === "minimization-budget-exhausted" || scenarioId === "flaky-witness") {
+          writeFileSync(join(repository, "extra.txt"), "stable\n", "utf8");
+        }
         const good = commit(repository, "good", `${scenarioId} good`);
-        if (scenarioId === "lockfile-change") {
+        if (scenarioId === "lockfile-change" || scenarioId === "multi-file-interaction") {
           writeFileSync(join(repository, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\npackages: {}\n", "utf8");
         }
         if (scenarioId === "historical-api-incompatibility") {
           writeFileSync(join(repository, "api.txt"), "v2-incompatible\n", "utf8");
+        }
+        if (scenarioId === "dirty-codex-turns" || scenarioId === "repaired-and-reintroduced") {
+          writeFileSync(join(repository, "notes.txt"), "mutated\n", "utf8");
         }
         const bad = commit(repository, "bad", `${scenarioId} bad`);
         const frozen = createFrozenWitness(store);
@@ -301,10 +316,15 @@ describe.skipIf(!runDocker)("native Docker proof boundary", () => {
     writeFileSync(
       resolve("benchmarks", "e2e-executed.json"),
       `${JSON.stringify({
-        schemaVersion: "faultline.e2e-executed.v1",
-        generatedAt: new Date().toISOString(),
-        executedIds,
-        note: "Written by native Docker CI after real investigateGitRange executions for coverage-matrix rows."
+        schemaVersion: "faultline.coverage-e2e-executed.v1",
+        executedAt: new Date().toISOString(),
+        osFamily,
+        runner: process.env.RUNNER_OS ?? process.platform,
+        imageFamily: (process.env.FAULTLINE_DOCKER_NODE_TAG ?? "node:22-alpine").includes("bookworm")
+          ? "debian-bookworm"
+          : "alpine",
+        scenarioIds: executedIds,
+        count: executedIds.length
       }, null, 2)}\n`,
       "utf8"
     );

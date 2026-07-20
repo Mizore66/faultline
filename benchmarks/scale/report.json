@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "faultline.scale-benchmark.v1",
+  "generatedAt": "2026-07-20T09:40:23.704Z",
+  "protocol": "docs/scale-benchmark-protocol.md",
+  "fixture": {
+    "fileCountRequested": 10000,
+    "filesWalked": 10018,
+    "head": "57391da2fd2af62a91944a8ddaeabedeb7f5d889",
+    "worktree": "ephemeral (not retained)"
+  },
+  "timingsMs": {
+    "generate": 5007.821,
+    "walk": 220.948,
+    "gitCommit": 6459.77,
+    "turnSnapshotAttempt": 726.701
+  },
+  "turnSnapshot": {
+    "status": "REFUSED_OR_FAILED",
+    "message": "Refusing turn-tree snapshot: 10000 eligible files exceed the maximum of 2000."
+  },
+  "nonClaims": [
+    "Does not claim production localization latency at this scale.",
+    "Turn-tree snapshot hard-caps at 2000 files; refuse-at-cap is an expected outcome.",
+    "Numbers are machine-local; publish only after re-running the measurer."
+  ]
+}

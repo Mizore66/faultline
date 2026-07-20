@@ -18,7 +18,7 @@
 | `fl investigate turns` | **`EXPERIMENTAL_TURN`** | Codex-native First Bad Turn — remains experimental until the criteria below |
 | `fl judge-demo` | Sample | Evidence-model UI only |
 
-`EXPERIMENTAL_TURN` stays until promotion criteria are met. Permissioned external protocol validation is landed (MUMBCS); still required: turn-boundary minimization end to end, prevention evidence bound from verified run artifacts, and recorder platform soak. Details: [docs/concepts.md](docs/concepts.md#why-turn-stays-experimental_turn-not-missing-a-portable-package). Attestation / host limits: [docs/security-model.md](docs/security-model.md).
+`TURN_PROOF` is assigned when promotion checklist criteria are retained (external validation, turn-boundary minimization, prevention integration, multi-OS soak). See [docs/concepts.md](docs/concepts.md) and [src/turn-proof-promotion.ts](src/turn-proof-promotion.ts). Attestation / host limits: [docs/security-model.md](docs/security-model.md).
 
 ## Judges: four commands
 
@@ -78,7 +78,12 @@ Help is tiered: `fl` / `fl quickstart` for the short surface; `fl advanced` for 
 | Doc | Contents |
 | --- | --- |
 | [docs/concepts.md](docs/concepts.md) | Grades, promotion criteria, claim boundaries |
-| [docs/first-incident.md](docs/first-incident.md) | Guided first incident |
+| [docs/first-incident.md](docs/first-incident.md) | Guided first incident (`fl tutorial --yes`) |
+| [docs/personas/judge.md](docs/personas/judge.md) | Judge / evaluator entry |
+| [docs/personas/new-user.md](docs/personas/new-user.md) | New-user entry |
+| [docs/personas/forensics.md](docs/personas/forensics.md) | Forensics entry |
+| [docs/distribution.md](docs/distribution.md) | Pack / tarball / publish |
+| [docs/security-chain.md](docs/security-chain.md) | Tag → CI → attestation chain |
 | [docs/proof-bundles.md](docs/proof-bundles.md) | Verify / serve / minimize / prevention |
 | [docs/codex-sidecar.md](docs/codex-sidecar.md) | Sidecar install / status |
 | [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md) | Video run of show |

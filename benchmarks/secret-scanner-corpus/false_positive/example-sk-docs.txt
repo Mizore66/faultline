@@ -1,0 +1,3 @@
+# Docs example — replace with your key
+# OPENAI_API_KEY=sk-example-not-a-real-key-for-docs-only-xxxxxxxxxx
+const docsNote = "Use sk-... style keys in .env; never commit them.";

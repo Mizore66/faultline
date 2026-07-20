@@ -64,6 +64,8 @@ import {
 } from "./git-proof-bundle.js";
 import { loadVerifiedGitProofView } from "./git-proof-view.js";
 import { runDemoFull, runLiveGitDemo } from "./live-git-demo.js";
+import { runFirstIncidentTutorial } from "./tutorial.js";
+import { loadRuntimeMappingDocument, writeRuntimeMappingFile } from "./runtime-mapping-file.js";
 import {
   minimizeGitDiff,
   verifyGitMinimizationResultFile,
@@ -794,9 +796,35 @@ async function runtimeCommand(args: string[]): Promise<void> {
     await projectRuntimeCommand(args.slice(1));
     return;
   }
+  if (action === "mapping") {
+    if (args[1] !== "write") {
+      throw new Error("Usage: fl runtime mapping write --fingerprint <sha256:...> --image <digest-pinned-image> [--fingerprint ... --image ...] --output <mapping.json>");
+    }
+    const output = requiredOption(args, "--output");
+    const pairs: Array<{ fingerprintDigest: string; image: string }> = [];
+    for (let index = 0; index < args.length; index += 1) {
+      if (args[index] === "--fingerprint") {
+        const fingerprintDigest = args[index + 1];
+        const imageFlag = args[index + 2];
+        const image = args[index + 3];
+        if (!fingerprintDigest || imageFlag !== "--image" || !image) {
+          throw new Error("Each --fingerprint must be followed by --image <digest-pinned-image>.");
+        }
+        pairs.push({ fingerprintDigest, image });
+      }
+    }
+    const written = writeRuntimeMappingFile({ pairs, outputPath: output });
+    process.stdout.write(`${JSON.stringify({
+      status: "RUNTIME_MAPPING_WRITTEN",
+      path: written.path,
+      provenanceDigest: written.provenanceDigest,
+      fingerprints: Object.keys(written.mapping).length
+    }, null, 2)}\n`);
+    return;
+  }
   const requested = args[1];
   if ((action !== "resolve" && action !== "prepare") || !requested) {
-    throw new Error("Usage: fl runtime resolve <node|python|go> | fl runtime prepare <node|python|go> --yes | fl runtime project plan|build|resolve ...");
+    throw new Error("Usage: fl runtime resolve <node|python|go> | fl runtime prepare <node|python|go> --yes | fl runtime mapping write ... | fl runtime project plan|build|resolve ...");
   }
   if (action === "resolve") {
     if (hasFlag(args, "--pull")) {
@@ -1922,17 +1950,7 @@ async function investigateCommand(args: string[]): Promise<void> {
     let runtimeMapping: Record<string, string> | undefined;
     if (runtimeMappingPath !== undefined) {
       const parsed = JSON.parse(readFileSync(resolve(runtimeMappingPath), "utf8")) as unknown;
-      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("--runtime-mapping must be a JSON object of fingerprintDigest → digest-pinned image.");
-      }
-      runtimeMapping = Object.fromEntries(
-        Object.entries(parsed as Record<string, unknown>).map(([digest, imageValue]) => {
-          if (typeof imageValue !== "string") {
-            throw new Error(`--runtime-mapping entry for ${digest} must be a digest-pinned image string.`);
-          }
-          return [digest, imageValue];
-        })
-      );
+      runtimeMapping = { ...loadRuntimeMappingDocument(parsed) };
     }
     const result = await investigateTurnTrees({
       repository,
@@ -1988,7 +2006,7 @@ async function investigateCommand(args: string[]): Promise<void> {
         evidenceGrade: result.proof.evidenceGrade,
         evidenceLabel: result.proof.evidenceLabel,
         externalRootStatus: bundleVerification.externalRootStatus,
-        note: "Turn package is experimentally graded (EXPERIMENTAL_TURN), not COMMIT_PROOF."
+        note: "Turn package graded TURN_PROOF when promotion checklist is retained; not COMMIT_PROOF."
       },
       minimization
     }, null, 2)}\n`);
@@ -1996,7 +2014,7 @@ async function investigateCommand(args: string[]): Promise<void> {
     return;
   }
   if (args[0] !== "git") {
-    throw new Error("Usage: fl investigate --ci-log <file> --repo <directory> [...] | fl investigate --resume <id> --repo <directory> [...] | fl investigate turns --repo ... (--ledger ... | --latest) --proposal ... --expect-digest ... --image ... [--runtime-mapping <mapping.json>] [--output <dir>] | fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--ledger <ledger.json>] [--output <managed-bundle-directory>]");
+    throw new Error("Usage: fl investigate --ci-log <file> --repo <directory> [...] | fl investigate --resume <id> --repo <directory> [...] | fl investigate turns --repo ... (--ledger ... | --latest) --proposal ... --expect-digest ... --image ... [--runtime-mapping <mapping.json>] [--output <dir>] | fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--runtime-mapping <mapping.json>] [--ledger <ledger.json>] [--output <managed-bundle-directory>]");
   }
   const store = witnessStore(args);
   const proposalId = requiredOption(args, "--proposal");
@@ -2014,6 +2032,12 @@ async function investigateCommand(args: string[]): Promise<void> {
   const ledgerFile = inherited.ledgerPath ?? option(args, "--ledger");
   const lifecycleLedger = ledgerFile === undefined ? undefined : readVerifiedCodexLifecycleLedger(resolve(ledgerFile));
   const image = requireImageOrConfig(repository, args);
+  const runtimeMappingPath = option(args, "--runtime-mapping");
+  let runtimeMapping: Record<string, string> | undefined;
+  if (runtimeMappingPath !== undefined) {
+    const parsed = JSON.parse(readFileSync(resolve(runtimeMappingPath), "utf8")) as unknown;
+    runtimeMapping = { ...loadRuntimeMappingDocument(parsed) };
+  }
   writeIncidentSessionBinding(draftStore, {
     incidentId: proposalId,
     expectDigest: expectedFrozenDigest,
@@ -2025,7 +2049,8 @@ async function investigateCommand(args: string[]): Promise<void> {
     frozenWitness,
     expectedFrozenDigest,
     sandbox: { mode: "DOCKER_ISOLATED", image },
-    ...(maxStates === undefined ? {} : { maxStates: Number(maxStates) })
+    ...(maxStates === undefined ? {} : { maxStates: Number(maxStates) }),
+    ...(runtimeMapping === undefined ? {} : { runtimeMapping })
   });
   if (!result.proof.isProof) {
     process.stdout.write(`${JSON.stringify({ investigation: result, proofBundle: null, note: "No portable proof bundle was written because the investigation did not establish Docker-isolated proof." }, null, 2)}\n`);
@@ -2113,7 +2138,7 @@ async function minimizeFromTurnInvestigation(options: {
     path: written.path,
     resultDigest: written.resultDigest,
     evidenceGradeNote:
-      "Counterfactual minimization from a turn boundary reuses Git-path machinery on synthetic commits. The parent turn package remains EXPERIMENTAL_TURN until TURN_PROOF promotion criteria are met."
+      "Counterfactual minimization from a turn boundary reuses Git-path machinery on synthetic commits. The parent turn package is graded TURN_PROOF when promotion checklist criteria are met."
   };
 }
 
@@ -2278,7 +2303,7 @@ function proofBundleSummary(directory: string): { rootDigest: string; witnessDig
     };
   }
   if (schemaVersion === "faultline.turn-proof-bundle.v1") {
-    throw new Error("Attestation create currently supports Git proof bundles only. Verify turn packages with `fl verify` (EXPERIMENTAL_TURN).");
+    throw new Error("Attestation create currently supports Git proof bundles only. Verify turn packages with `fl verify` (TURN_PROOF when promoted).");
   }
   const verification = verifyProofBundle(root);
   if (!verification.valid || !verification.rootDigest) throw new Error(`Proof bundle is invalid: ${verification.errors.join("; ")}`);
@@ -2697,6 +2722,36 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
     case "runtime":
       await runtimeCommand(args);
       return;
+    case "tutorial": {
+      if (!hasFlag(args, "--yes")) {
+        process.stdout.write(`${JSON.stringify({
+          status: "CONFIRMATION_REQUIRED",
+          effect: "FaultLine will create a disposable toy Git repository under .faultline/tutorials/, freeze a tutorial witness, and print next commands. No Docker proof is executed by the tutorial itself.",
+          next: "fl tutorial --yes"
+        }, null, 2)}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      const tutorial = runFirstIncidentTutorial({
+        workspace: resolve(option(args, "--repo") ?? process.cwd()),
+        yes: true
+      });
+      process.stdout.write(`${JSON.stringify({
+        status: "TUTORIAL_READY",
+        directory: tutorial.directory,
+        repository: tutorial.repository,
+        store: tutorial.store,
+        proposalId: tutorial.proposalId,
+        frozenDigest: tutorial.frozenWitness.frozenDigest,
+        goodCommit: tutorial.goodCommit,
+        badCommit: tutorial.badCommit,
+        phases: tutorial.phases
+      }, null, 2)}\n`);
+      for (const phase of tutorial.phases) {
+        if (phase.nextCommand) printHumanNext(phase.nextCommand);
+      }
+      return;
+    }
     case "demo":
       await demoCommand(args);
       return;
@@ -2731,7 +2786,7 @@ export async function runCli(argv: readonly string[] = process.argv.slice(2)): P
           `${result.externalRootStatus === "NOT_PROVIDED" ? "Turn proof self-consistency" : "Integrity"}: ${result.valid ? "VALID" : "INVALID"}\n`
         );
         process.stdout.write(
-          `Evidence grade: EXPERIMENTAL_TURN\nDeclared files checked: ${result.checkedFiles}\nBundle root: ${result.rootDigest ?? "unavailable"}\nExternal root: ${result.externalRootStatus}\n`
+          `Evidence grade: TURN_PROOF\nDeclared files checked: ${result.checkedFiles}\nBundle root: ${result.rootDigest ?? "unavailable"}\nExternal root: ${result.externalRootStatus}\n`
         );
         if (!result.valid) process.stdout.write(`${result.errors.map((error) => `- ${error}`).join("\n")}\n`);
         process.exitCode = result.valid ? 0 : 1;

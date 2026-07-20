@@ -47,8 +47,16 @@ jobs:
       - run: node dist/cli.js verify .faultline/bundles/judge-demo
 
   docker-integration:
-    name: native Docker proof E2E gate
+    name: native Docker proof E2E gate (${{ matrix.imageFamily }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - imageFamily: alpine
+            nodeTag: node:22-alpine
+          - imageFamily: debian-bookworm
+            nodeTag: node:22-bookworm
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -69,11 +77,13 @@ jobs:
         env:
           FAULTLINE_DOCKER_INTEGRATION: "1"
           FAULTLINE_LIVE_TURN_MINIMIZE: "1"
+          FAULTLINE_DOCKER_NODE_TAG: ${{ matrix.nodeTag }}
       - name: Regenerate coverage matrix with Docker E2E rows
+        if: matrix.imageFamily == 'alpine'
         run: pnpm coverage-matrix
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: faultline-coverage-matrix-docker-e2e
+          name: faultline-coverage-matrix-docker-e2e-${{ matrix.imageFamily }}
           if-no-files-found: error
           path: |
             benchmarks/REPORT.md

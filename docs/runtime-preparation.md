@@ -60,7 +60,7 @@ pnpm fl runtime project build `
   --yes
 ```
 
-This build is never a proof and FaultLine never pushes credentials or images. If Docker reports only a local image ID, push and pull the reviewed tag through your own registry, then resolve its immutable digest without rebuilding. If you only need to validate the workflow locally after human witness freeze, `fl incident continue <id> --unsafe-local` is the explicitly non-proof route; it neither uses that local image ID nor exports a portable bundle.
+This build is never a proof and FaultLine never pushes credentials or images. If Docker reports only a local image ID, push and pull the reviewed tag through your own registry, then resolve its immutable digest without rebuilding. Proof-grade continuation requires a digest-pinned `--image`; there is no shipped `--unsafe-local` escape hatch (development-only `FAULTLINE_DEV_UNSAFE_LOCAL=1` constructs non-proof plans in tests only).
 
 ```powershell
 pnpm fl runtime project resolve --tag registry.example/acme/my-app:faultline-deps-20260717
@@ -87,6 +87,6 @@ pnpm fl investigate --resume <incident-id> `
   --runtime node
 ```
 
-FaultLine never auto-approves or auto-freezes. Use `--unsafe-local` only for non-proof diagnosis when Docker is unavailable.
+FaultLine never auto-approves or auto-freezes. Proof-grade diagnosis requires Docker with a digest-pinned image.
 
 Local-only range suggestions (`fl incident suggest`), draft start, and status/continue details: [first-incident.md](first-incident.md).
