@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "faultline.coverage-e2e-executed.v1",
+  "generatedAt": "2026-07-20T18:48:00.497Z",
+  "executedIds": [
+    "simple-source-regression",
+    "flaky-witness",
+    "historical-api-incompatibility",
+    "lockfile-change",
+    "dirty-codex-turns",
+    "multi-file-interaction",
+    "minimization-budget-exhausted",
+    "repaired-and-reintroduced"
+  ],
+  "osFamily": "windows",
+  "runner": "win32",
+  "imageFamily": "alpine",
+  "imageTag": "node:22-alpine",
+  "count": 8,
+  "note": "Written by native Docker CI after real investigateGitRange executions for coverage-matrix rows."
+}

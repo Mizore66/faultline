@@ -18,7 +18,7 @@ No. GPT-5.6 can draft a witness proposal (`fl witness propose --live`); a human 
 
 ## Why trust the Docker runs happened?
 
-Native Docker proof E2E runs in GitHub Actions on alpine and debian-bookworm images; hybrid coverage-matrix REPORT artifacts are attached to the Verify workflow. Local `fl doctor` / Docker E2E tests exercise the same gate. This is CI-logged execution, not a slide.
+Native Docker proof E2E runs in GitHub Actions on alpine and debian-bookworm images; hybrid coverage-matrix REPORT artifacts are attached to the Verify workflow. RIG-07 also has a **Windows host** fact file: `benchmarks/e2e-executed.json` (`osFamily: "windows"`, eight coverage-matrix IDs, `node:22-alpine` guest). Local `fl doctor` / Docker E2E tests exercise the same gate. This is logged execution, not a slide.
 
 ## What breaks at scale?
 

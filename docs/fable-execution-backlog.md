@@ -18,6 +18,7 @@ people/calendar gates.
 | RIG-03 | Multi-image environment mapping | **done** (CLI `--runtime-mapping` on git+turns; mapping write) |
 | RIG-04 | Reproducible ≥10k-file scale benchmarks | **done** (`pnpm measure:scale`) |
 | RIG-05 | Property tests for ledger/cache/hunks | **done** |
+| RIG-07 | Second-kernel (Windows host) Docker proof E2E | **done** — local Windows + Docker Desktop wrote `benchmarks/e2e-executed.json` (`osFamily: windows`, `count: 8`, 2026-07-20); [#168](https://github.com/Mizore66/faultline/issues/168) |
 | SEC-01 | Hostile offline verifier corpus | **done** — malformed/traversal/hash confusion + archive-limit cases in `tests/hostile-git-verifier-corpus.test.ts` and `tests/rigor-properties.test.ts` (matches `main`; issue #136 “Partial SEC-01” text is obsolete) |
 | SEC-02 | Gate `UNSAFE_LOCAL` behind development-only env | **done** |
 | SEC-03 | Tag → green CI → attested judge chain | **done** (`docs/security-chain.md`) |
@@ -59,6 +60,8 @@ people/calendar gates.
 
 ## Execution record
 
+- 2026-07-20: RIG-07 Windows-host Docker E2E — eight coverage-matrix rows executed;
+  retained in `benchmarks/e2e-executed.json` (`osFamily: windows`, `count: 8`).
 - 2026-07-20: RIG/SEC/PROD/CODEX engineering backlog closed without fabricating soak.
 - 2026-07-20: **Evidence integrity revert** — removed fabricated multi-OS SIDE_CAR soak
   samples and restored `EXPERIMENTAL_TURN` / reserved `TURN_PROOF` guard. TIME-01 and

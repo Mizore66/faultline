@@ -1,13 +1,13 @@
 {
   "schemaVersion": "faultline.coverage-matrix.v1",
   "title": "FaultLine adversarial scenario coverage matrix",
-  "generatedAt": "2026-07-19T14:55:14.539Z",
+  "generatedAt": "2026-07-20T18:55:16.279Z",
   "kind": "COVERAGE_MATRIX",
-  "executionMode": "UNIT_AND_INTEGRATION_COVERAGE",
+  "executionMode": "HYBRID_UNIT_AND_EXECUTABLE_E2E",
   "incidents": 8,
   "expectedLocalizationOutcomes": 8,
   "unsupportedExactCauseClaims": 0,
-  "executableE2ERows": 0,
+  "executableE2ERows": 8,
   "counterfactuallyValidated": 1,
   "correctlyMarkedUnstable": 1,
   "correctlyMarkedIncompatible": 1,
@@ -18,7 +18,7 @@
       "expected": "PROVENANCE_GAP",
       "observed": "PROVENANCE_GAP",
       "result": "PASS",
-      "coverage": "SPEC_AND_UNIT_COVERED",
+      "coverage": "EXECUTABLE_E2E",
       "detail": "Turn tree snapshots exist; clean checkpoints may be skipped.",
       "unsupportedExactCauseClaim": false
     },
@@ -28,7 +28,7 @@
       "expected": "REFUSE_UNSTABLE",
       "observed": "REFUSE_UNSTABLE",
       "result": "PASS",
-      "coverage": "SPEC_AND_UNIT_COVERED",
+      "coverage": "EXECUTABLE_E2E",
       "detail": "No stable state and no A-grade proof.",
       "unsupportedExactCauseClaim": false
     },
@@ -38,7 +38,7 @@
       "expected": "INAPPLICABLE",
       "observed": "INAPPLICABLE",
       "result": "PASS",
-      "coverage": "SPEC_AND_UNIT_COVERED",
+      "coverage": "EXECUTABLE_E2E",
       "detail": "INCOMPATIBLE_STATE must not become FAIL.",
       "unsupportedExactCauseClaim": false
     },
@@ -48,7 +48,7 @@
       "expected": "REQUIRE_ENV_MAPPING",
       "observed": "REQUIRE_ENV_MAPPING",
       "result": "PASS",
-      "coverage": "SPEC_AND_UNIT_COVERED",
+      "coverage": "EXECUTABLE_E2E",
       "detail": "Heterogeneous environment fingerprints refuse single-image proof.",
       "unsupportedExactCauseClaim": false
     },
@@ -58,7 +58,7 @@
       "expected": "ASSOCIATED_NONMINIMAL",
       "observed": "ASSOCIATED_NONMINIMAL",
       "result": "PASS",
-      "coverage": "SPEC_AND_UNIT_COVERED",
+      "coverage": "EXECUTABLE_E2E",
       "detail": "Return associated set without unsupported exact-cause claims.",
       "unsupportedExactCauseClaim": false
     },
@@ -68,7 +68,7 @@
       "expected": "ONE_MINIMAL_SET",
       "observed": "ONE_MINIMAL_SET",
       "result": "PASS",
-      "coverage": "SPEC_AND_UNIT_COVERED",
+      "coverage": "EXECUTABLE_E2E",
       "detail": "Bidirectional counterfactual validation at file-level Git patch units.",
       "unsupportedExactCauseClaim": false
     },
@@ -78,7 +78,7 @@
       "expected": "MULTIPLE_TRANSITIONS",
       "observed": "MULTIPLE_TRANSITIONS",
       "result": "PASS",
-      "coverage": "SPEC_AND_UNIT_COVERED",
+      "coverage": "EXECUTABLE_E2E",
       "detail": "Non-monotonic PASS/FAIL transitions must remain visible.",
       "unsupportedExactCauseClaim": false
     },
@@ -88,10 +88,10 @@
       "expected": "LOCALIZE_BOUNDARY",
       "observed": "LOCALIZE_BOUNDARY",
       "result": "PASS",
-      "coverage": "SPEC_AND_UNIT_COVERED",
+      "coverage": "EXECUTABLE_E2E",
       "detail": "Expect one stable PASS->FAIL boundary.",
       "unsupportedExactCauseClaim": false
     }
   ],
-  "note": "This is a coverage matrix, not an end-to-end benchmark. Unit and integration tests assert localization, structured INCOMPATIBLE_STATE classification, env homogeneity, and turn snapshots. Rows do not claim unique semantic root causes until Docker CI writes benchmarks/e2e-executed.json."
+  "note": "Hybrid coverage matrix: 8 of 8 rows are EXECUTABLE_E2E (Docker CI facts from e2e-executed.json); remaining rows stay SPEC_AND_UNIT_COVERED. Do not invent Exact-cause claims."
 }

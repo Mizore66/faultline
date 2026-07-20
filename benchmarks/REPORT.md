@@ -1,23 +1,23 @@
 # FaultLine adversarial scenario coverage matrix
 
-This artifact documents expected outcomes covered by **specification + unit/integration tests**. It is **not** an end-to-end Docker benchmark until `benchmarks/e2e-executed.json` is produced by the native Docker CI job.
+Hybrid artifact: **8** rows are `EXECUTABLE_E2E` (real Docker CI executions). Remaining rows are `SPEC_AND_UNIT_COVERED` only — do not call those a benchmark.
 
 - Scenarios: **8**
 - Distinct expected outcomes: **8**
 - Unsupported exact-cause claims: **0**
-- Execution mode: **UNIT_AND_INTEGRATION_COVERAGE**
-- Executable E2E rows in CI: **0**
+- Execution mode: **HYBRID_UNIT_AND_EXECUTABLE_E2E**
+- Executable E2E rows in CI: **8**
 
 | Scenario | Expected | Observed | Result | Coverage |
 | --- | --- | --- | --- | --- |
-| `dirty-codex-turns` | PROVENANCE_GAP | PROVENANCE_GAP | PASS | SPEC_AND_UNIT_COVERED |
-| `flaky-witness` | REFUSE_UNSTABLE | REFUSE_UNSTABLE | PASS | SPEC_AND_UNIT_COVERED |
-| `historical-api-incompatibility` | INAPPLICABLE | INAPPLICABLE | PASS | SPEC_AND_UNIT_COVERED |
-| `lockfile-change` | REQUIRE_ENV_MAPPING | REQUIRE_ENV_MAPPING | PASS | SPEC_AND_UNIT_COVERED |
-| `minimization-budget-exhausted` | ASSOCIATED_NONMINIMAL | ASSOCIATED_NONMINIMAL | PASS | SPEC_AND_UNIT_COVERED |
-| `multi-file-interaction` | ONE_MINIMAL_SET | ONE_MINIMAL_SET | PASS | SPEC_AND_UNIT_COVERED |
-| `repaired-and-reintroduced` | MULTIPLE_TRANSITIONS | MULTIPLE_TRANSITIONS | PASS | SPEC_AND_UNIT_COVERED |
-| `simple-source-regression` | LOCALIZE_BOUNDARY | LOCALIZE_BOUNDARY | PASS | SPEC_AND_UNIT_COVERED |
+| `dirty-codex-turns` | PROVENANCE_GAP | PROVENANCE_GAP | PASS | EXECUTABLE_E2E |
+| `flaky-witness` | REFUSE_UNSTABLE | REFUSE_UNSTABLE | PASS | EXECUTABLE_E2E |
+| `historical-api-incompatibility` | INAPPLICABLE | INAPPLICABLE | PASS | EXECUTABLE_E2E |
+| `lockfile-change` | REQUIRE_ENV_MAPPING | REQUIRE_ENV_MAPPING | PASS | EXECUTABLE_E2E |
+| `minimization-budget-exhausted` | ASSOCIATED_NONMINIMAL | ASSOCIATED_NONMINIMAL | PASS | EXECUTABLE_E2E |
+| `multi-file-interaction` | ONE_MINIMAL_SET | ONE_MINIMAL_SET | PASS | EXECUTABLE_E2E |
+| `repaired-and-reintroduced` | MULTIPLE_TRANSITIONS | MULTIPLE_TRANSITIONS | PASS | EXECUTABLE_E2E |
+| `simple-source-regression` | LOCALIZE_BOUNDARY | LOCALIZE_BOUNDARY | PASS | EXECUTABLE_E2E |
 
 ## Coverage legend
 
