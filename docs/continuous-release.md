@@ -14,39 +14,36 @@ Build Week pins (`v*-buildweek`) stay manual and separate from these npm semver 
 
 ## One-time setup (required)
 
-### 1. npm Automation token
+Prefer **Trusted Publishing** (OIDC). Keep `NPM_TOKEN` only as a fallback.
 
-1. https://www.npmjs.com/settings/~/tokens  
-2. Generate **Granular Access Token** (or classic **Automation**) with:
-   - Read and write for `@mizore66/faultline`
-   - **Bypass 2FA for automation** / CI publish permission enabled  
-3. Copy the token once.
+### 1. Trusted Publishing (recommended)
 
-### 2. GitHub Actions secret
+On https://www.npmjs.com/package/@mizore66/faultline → **Settings** → **Trusted Publisher**:
 
-Repo → **Settings → Secrets and variables → Actions → New repository secret**
-
-| Name | Value |
+| Field | Value |
 | --- | --- |
-| `NPM_TOKEN` | the npm token from step 1 |
+| Provider | GitHub Actions |
+| Organization/user | `Mizore66` |
+| Repository | `faultline` |
+| Workflow filename | `release.yml` |
+| Environment | *(leave empty)* |
 
-Or from a machine with `gh` auth:
+Save. The next workflow run can publish with provenance and no long-lived token.
+
+### 2. Fallback: npm Automation token + GitHub secret
+
+1. https://www.npmjs.com/settings/~/tokens → **Automation** (or granular with publish + **bypass 2FA**)
+2. Repo → **Settings → Secrets and variables → Actions** → `NPM_TOKEN`
 
 ```powershell
 gh secret set NPM_TOKEN --repo Mizore66/faultline
-# paste token, Enter, Ctrl+Z/Enter (Windows) or Ctrl+D (Unix)
 ```
 
-**Do not** commit tokens. Rotate any token that was pasted into chat.
+**Rotate** any token that was pasted into chat — treat it as burned.
 
-### 3. npm package permissions
+### 3. Scope access
 
-On https://www.npmjs.com/package/@mizore66/faultline → **Settings**:
-
-- Require 2FA / trusted publishers as you prefer  
-- Ensure the token’s user can publish the scope `@mizore66`
-
-Optional (stronger): configure **Trusted Publishing** from GitHub Actions so publishes use OIDC instead of a long-lived token (then `NPM_TOKEN` can be removed later).
+The publishing identity (trusted publisher or token owner) must be able to publish `@mizore66/faultline`.
 
 ## Manual release
 

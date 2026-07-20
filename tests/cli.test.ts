@@ -199,9 +199,10 @@ async function createVerifiedRepairBundle(root: string): Promise<{ directory: st
 
 describe("FaultLine CLI workflows", () => {
   it("reports the package version through the installable fl entry point", () => {
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as { version: string };
     const version = runFl(["--version"]);
     expect(version.status).toBe(0);
-    expect(version.stdout.trim()).toBe("FaultLine 0.1.0");
+    expect(version.stdout.trim()).toBe(`FaultLine ${pkg.version}`);
   });
 
   it("requires an explicit confirmation before guided runtime setup can pull Docker images", () => {

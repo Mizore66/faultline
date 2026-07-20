@@ -135,35 +135,37 @@ jobs:
           VERSION: ${{ steps.bump.outputs.version || steps.existing.outputs.version }}
         run: |
           set -euo pipefail
+          echo "Publishing @mizore66/faultline@${VERSION}"
+
+          # 1) Prefer OIDC Trusted Publishing (no long-lived token). Requires package
+          #    Settings → Trusted Publisher → GitHub Actions → workflow release.yml.
+          set +e
+          pnpm publish --access public --no-git-checks --provenance
+          oidc_status=$?
+          set -e
+          if [ "$oidc_status" -eq 0 ]; then
+            echo "Published via OIDC provenance (Trusted Publishing)"
+            exit 0
+          fi
+          echo "OIDC/provenance publish failed (exit ${oidc_status}); trying NPM_TOKEN…"
+
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "NPM_TOKEN secret is missing. Add an Automation/publish token at repo Settings → Secrets."
+            echo "::error::npm publish failed. Configure Trusted Publishing on the package, or set repo secret NPM_TOKEN (Automation token with publish + 2FA bypass)."
             exit 1
           fi
 
-          # setup-node writes an .npmrc that expands NODE_AUTH_TOKEN; also pin explicitly for pnpm.
           {
             echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}"
             echo "registry=https://registry.npmjs.org/"
             echo "always-auth=true"
           } > .npmrc
 
-          echo "Publishing @mizore66/faultline@${VERSION}"
           npm whoami || {
-            echo "npm whoami failed — NPM_TOKEN is invalid or lacks access to registry.npmjs.org"
+            echo "::error::npm whoami failed — NPM_TOKEN is invalid, revoked, or lacks access to @mizore66"
             exit 1
           }
 
-          # Provenance needs Trusted Publishing or a token that allows it; fall back cleanly.
-          set +e
-          pnpm publish --access public --no-git-checks --provenance
-          status=$?
-          set -e
-          if [ "$status" -eq 0 ]; then
-            echo "Published with provenance"
-          else
-            echo "Provenance publish failed (exit ${status}); retrying without provenance"
-            pnpm publish --access public --no-git-checks
-          fi
+          pnpm publish --access public --no-git-checks
 
       - name: Confirm registry (best-effort; CDN can lag)
         env:
