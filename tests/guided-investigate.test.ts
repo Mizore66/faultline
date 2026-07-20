@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { guidedInvestigateFromCiLog, type WaitForGuidedFreeze } from "../src/guided-investigate.js";
+import type { SandboxCommandRunner } from "../src/sandbox.js";
+import { formatWitnessResult } from "../src/witness-result.js";
 import { approveWitnessProposal, freezeApprovedWitness } from "../src/witness-lock.js";
+
+const pinnedImage = `registry.example/faultline-node@sha256:${"a".repeat(64)}`;
 
 function git(repository: string, args: string[]): string {
   const result = spawnSync("git", ["-C", repository, ...args], { encoding: "utf8" });
@@ -33,8 +37,19 @@ function humanFreezeWaiter(): WaitForGuidedFreeze {
   };
 }
 
+function stateReadingRunner(): SandboxCommandRunner {
+  return {
+    async run(invocation) {
+      const state = readFileSync(join(invocation.cwd, "state.txt"), "utf8").trim();
+      return state === "bad"
+        ? { exitCode: 1, stdout: formatWitnessResult("PREDICATE_FAIL"), stderr: "witness failed" }
+        : { exitCode: 0, stdout: formatWitnessResult("PREDICATE_PASS"), stderr: "" };
+    }
+  };
+}
+
 describe("guidedInvestigateFromCiLog Option B", () => {
-  it("runs intake → freeze pause → unsafe-local localization without dropping draft state", async () => {
+  it("runs intake → freeze pause → Docker-shaped localization without dropping draft state", async () => {
     const directory = mkdtempSync(join(tmpdir(), "faultline-guided-investigate-"));
     try {
       const repository = join(directory, "source");
@@ -57,7 +72,8 @@ describe("guidedInvestigateFromCiLog Option B", () => {
         incidentId: "guided-option-b",
         witnessStore: store,
         draftStore,
-        unsafeLocal: true,
+        image: pinnedImage,
+        runner: stateReadingRunner(),
         waitForFreeze: humanFreezeWaiter(),
         onPhase: (phase) => phases.push(phase)
       });
@@ -101,7 +117,8 @@ describe("guidedInvestigateFromCiLog Option B", () => {
         incidentId: "guided-resume",
         witnessStore: store,
         draftStore,
-        unsafeLocal: true,
+        image: pinnedImage,
+        runner: stateReadingRunner(),
         waitForFreeze: humanFreezeWaiter()
       });
       expect(first.status).toBe("GUIDED_INVESTIGATION_NOT_PROOF");
@@ -113,7 +130,8 @@ describe("guidedInvestigateFromCiLog Option B", () => {
         resumeId: "guided-resume",
         witnessStore: store,
         draftStore,
-        unsafeLocal: true,
+        image: pinnedImage,
+        runner: stateReadingRunner(),
         expectDigest: first.retainedFrozenDigest!,
         waitForFreeze: async () => {
           waitCalled = true;

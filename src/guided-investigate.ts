@@ -11,6 +11,7 @@ import { defaultIncidentDraftStore, readIncidentDraft, writeIncidentDraft } from
 import { resolveCuratedRuntime } from "./runtime.js";
 import { startWitnessReviewServer } from "./witness-review-server.js";
 import { proposeWitness, verifyFrozenWitness } from "./witness-lock.js";
+import type { SandboxCommandRunner } from "./sandbox.js";
 
 const INTAKE_SAFE_GIT_CONFIG = [
   "-c", "core.hooksPath=/nonexistent/faultline-hooks",
@@ -265,8 +266,7 @@ async function resolveGuidedRuntimeImage(options: {
   readonly draft: IncidentDraft;
   readonly image?: string;
   readonly runtimeAlias?: string;
-  readonly unsafeLocal: boolean;
-}): Promise<string | undefined> {
+}): Promise<string> {
   if (options.draft.runtime !== undefined) {
     if (options.image !== undefined && options.image !== options.draft.runtime.image) {
       throw new Error("--image must match the digest-pinned runtime recorded in the immutable incident draft.");
@@ -278,9 +278,8 @@ async function resolveGuidedRuntimeImage(options: {
     const resolved = await resolveCuratedRuntime(options.runtimeAlias);
     return resolved.image;
   }
-  if (options.unsafeLocal) return undefined;
   throw new Error(
-    "Guided investigate needs a digest-pinned runtime before localization. Pass --runtime <node|python|go> after pulling the curated tag, or --image <digest-pinned-image>, or use --unsafe-local for non-proof diagnosis only."
+    "Guided investigate needs a digest-pinned runtime before localization. Pass --runtime <node|python|go> after pulling the curated tag, or --image <digest-pinned-image>."
   );
 }
 
@@ -310,7 +309,8 @@ export async function guidedInvestigateFromCiLog(options: {
   readonly runtime?: string;
   readonly image?: string;
   readonly expectDigest?: string;
-  readonly unsafeLocal?: boolean;
+  /** Test and controlled-host seam; injected observations are never proof. */
+  readonly runner?: SandboxCommandRunner;
   readonly ledgerFile?: string;
   readonly maxStates?: number;
   readonly outputDirectory?: string;
@@ -323,7 +323,6 @@ export async function guidedInvestigateFromCiLog(options: {
   readonly signal?: AbortSignal;
 }): Promise<GuidedInvestigateResult> {
   const repository = resolve(options.repository);
-  const unsafeLocal = options.unsafeLocal === true;
   const draftStore = resolve(options.draftStore ?? defaultIncidentDraftStore(repository));
   const witnessStore = resolve(options.witnessStore ?? join(repository, ".faultline", "witnesses"));
   const waitForFreeze = options.waitForFreeze ?? defaultWaitForGuidedFreeze;
@@ -422,13 +421,15 @@ export async function guidedInvestigateFromCiLog(options: {
   const image = await resolveGuidedRuntimeImage({
     draft,
     ...(options.image === undefined ? {} : { image: options.image }),
-    ...(options.runtime === undefined ? {} : { runtimeAlias: options.runtime }),
-    unsafeLocal
+    ...(options.runtime === undefined ? {} : { runtimeAlias: options.runtime })
   });
 
-  if (!unsafeLocal && !proofReady) {
+  // An injected runner is a controlled test/host seam and is classified
+  // INJECTED_RUNNER downstream, which can never yield a proof bundle. Native
+  // execution, including every CLI call, still requires Docker preflight.
+  if (!proofReady && options.runner === undefined) {
     throw new Error(
-      "Proof-grade guided investigate requires a READY Docker investigation preflight. Run `fl doctor --repo .`, start Docker, or pass --unsafe-local for non-proof diagnosis only."
+      "Guided investigate requires a READY Docker investigation preflight. Run `fl doctor --repo .` and start Docker before continuing."
     );
   }
 
@@ -438,8 +439,8 @@ export async function guidedInvestigateFromCiLog(options: {
     repository,
     witnessStore,
     expectedFrozenDigest: retainedFrozenDigest,
-    ...(image === undefined ? {} : { image }),
-    ...(unsafeLocal ? { unsafeLocal: true } : {}),
+    image,
+    ...(options.runner === undefined ? {} : { runner: options.runner }),
     ...(options.ledgerFile === undefined ? {} : { ledgerFile: options.ledgerFile }),
     ...(options.maxStates === undefined ? {} : { maxStates: options.maxStates }),
     ...(options.outputDirectory === undefined ? {} : { outputDirectory: options.outputDirectory })

@@ -11,6 +11,7 @@ import {
   verifyFrozenWitness,
   type FrozenWitness
 } from "./witness-lock.js";
+import type { SandboxCommandRunner } from "./sandbox.js";
 
 export type IncidentContinuationResult =
   | {
@@ -78,7 +79,8 @@ export async function runFrozenIncidentContinuation(options: {
   readonly witnessStore: string;
   readonly expectedFrozenDigest?: string;
   readonly image?: string;
-  readonly unsafeLocal?: boolean;
+  /** Test and controlled-host seam; injected observations are never proof. */
+  readonly runner?: SandboxCommandRunner;
   readonly ledgerFile?: string;
   readonly maxStates?: number;
   readonly outputDirectory?: string;
@@ -125,6 +127,7 @@ export async function runFrozenIncidentContinuation(options: {
     frozenWitness,
     expectedFrozenDigest: options.expectedFrozenDigest ?? frozenWitness.frozenDigest,
     sandbox: { mode: "DOCKER_ISOLATED", image },
+    ...(options.runner === undefined ? {} : { runner: options.runner }),
     ...(options.maxStates === undefined ? {} : { maxStates: options.maxStates })
   });
 
@@ -145,7 +148,7 @@ export async function runFrozenIncidentContinuation(options: {
       proofBundle: null,
       next: [
         "Fix the recorded environment or witness condition, then create a new reviewed incident draft rather than altering this frozen witness.",
-        "Unsafe-local results are intentionally INAPPLICABLE and cannot publish a portable proof bundle."
+        "Only native Docker execution can publish a portable proof bundle."
       ]
     };
   }
