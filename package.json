@@ -1,6 +1,6 @@
 {
   "name": "@mizore66/faultline",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Executable evidence for regressions introduced during Codex-assisted development.",
   "license": "MIT",
   "type": "module",
