@@ -5,7 +5,7 @@ Executable stranger checklist binding **pinned tag → green CI → attested art
 ## Chain
 
 1. **Pinned submission tag**  
-   Checkout `v0.1.4-buildweek` (or the current pin in README).  
+   Checkout `v0.1.5-buildweek` (or the current pin in README).  
    CI job `tag-checkout` runs `fl judge-proof --export-only` on that tag.
 
 2. **Green Verify workflow**  

@@ -26,7 +26,7 @@ if (args.includes("--checklist")) {
   process.stdout.write(JSON.stringify({
     schemaVersion: "faultline.security-chain-checklist.v1",
     steps: [
-      { id: "TAG", action: "Checkout pinned tag (README / v0.1.4-buildweek)" },
+      { id: "TAG", action: "Checkout pinned tag (README / v0.1.5-buildweek)" },
       { id: "CI", action: "Confirm green Verify FaultLine for that commit" },
       { id: "ATTEST", action: "Download faultline-ci-provenance artifact from main push" },
       { id: "PROVENANCE", action: "fl provenance verify --bundle ... --receipt ... --attestation-bundle ... --trust ..." },
