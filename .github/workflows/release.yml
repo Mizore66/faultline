@@ -194,12 +194,14 @@ jobs:
           ' "$OIDC_JWT"
 
           # Direct exchange probe — surfaces Trusted Publisher mismatches with a real HTTP code.
+          # encodeURIComponent("@scope/name") → %40scope%2Fname (must encode @, not leave it raw).
+          PKG_ENC=$(node -e "process.stdout.write(encodeURIComponent('@mizore66/faultline'))")
           EXCHANGE_CODE=$(curl -sS -o /tmp/npm-oidc-exchange.json -w "%{http_code}" -X POST \
             -H "Authorization: Bearer ${OIDC_JWT}" \
             -H "Accept: application/json" \
             -H "Content-Type: application/json" \
-            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/@mizore66%2ffaultline")
-          echo "OIDC token exchange HTTP ${EXCHANGE_CODE}"
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/${PKG_ENC}")
+          echo "OIDC token exchange HTTP ${EXCHANGE_CODE} (package=${PKG_ENC})"
           # Never print the token value — only keys / error text.
           node -e '
             const fs = require("fs");
