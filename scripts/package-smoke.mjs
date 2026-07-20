@@ -86,7 +86,7 @@ function assertDocsLint() {
   const readme = readUtf8("README.md");
   const teleprompter = readUtf8("docs/video-teleprompter.md");
   const impact = readUtf8("docs/impact-validation-external-01.md");
-  const pinnedRef = "v0.1.7-buildweek";
+  const pinnedRef = "v0.1.8-buildweek";
 
   assertSecurityControlTestMatrix();
 

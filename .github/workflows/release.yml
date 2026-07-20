@@ -2,19 +2,23 @@ name: Release and publish
 
 # Auto-release on code pushes to main, then publish @mizore66/faultline to npm.
 # Docs-only / benchmark-only pushes are ignored. Release commits skip re-entry.
+#
+# Build Week submission freeze: push-triggered continuous release is paused so
+# the judging pin stays frozen. Re-enable the push trigger after submission.
+# Manual publish remains available via workflow_dispatch (publish_only).
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "tsconfig.json"
-      - "action.yml"
-      - "actions/**"
-      - "scripts/ci-bump-version.mjs"
-      - ".github/workflows/release.yml"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "src/**"
+  #     - "package.json"
+  #     - "pnpm-lock.yaml"
+  #     - "tsconfig.json"
+  #     - "action.yml"
+  #     - "actions/**"
+  #     - "scripts/ci-bump-version.mjs"
+  #     - ".github/workflows/release.yml"
   workflow_dispatch:
     inputs:
       bump:
@@ -44,13 +48,7 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event_name == 'push' &&
-        github.ref == 'refs/heads/main' &&
-        !startsWith(github.event.head_commit.message, 'chore(release):')
-      )
+    if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:

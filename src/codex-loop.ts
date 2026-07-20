@@ -201,7 +201,7 @@ export type RepairCandidateVerifier = (context: {
   baseCommit: string;
   patchPath: string | null;
   bundleDirectory: string;
-}) => Promise<{ ok: boolean; detail: string }>;
+}) => Promise<{ ok: boolean; detail: string; executionId?: string }>;
 
 /**
  * Default CLI verifier for Codex repair drafts: materialize the frozen witness
@@ -215,6 +215,7 @@ export function createFrozenWitnessRepairVerifier(options?: {
     const { createSandboxPlan, executeSandboxPlan, auditSandboxPlan } = await import("./sandbox.js");
     const { materializeFrozenOverlays } = await import("./safe-overlay.js");
     const { FrozenWitnessSchema } = await import("./witness-lock.js");
+    const { digestJson, sha256 } = await import("./canonical.js");
     const investigation = readInvestigationFromBundle(context.bundleDirectory);
     const frozen = FrozenWitnessSchema.parse(
       JSON.parse(readFileSync(join(resolve(context.bundleDirectory), "witness", "frozen.json"), "utf8"))
@@ -239,7 +240,24 @@ export function createFrozenWitnessRepairVerifier(options?: {
       auditSandboxPlan(plan);
       const execution = await executeSandboxPlan(plan, options?.runner);
       if (execution.verdict === "PASS" && execution.reason === "PREDICATE_PASS") {
-        return { ok: true, detail: `Frozen witness PREDICATE_PASS on repaired worktree (${execution.executor}).` };
+        const executionId = digestJson({
+          kind: "faultline.repair-verify-execution.v1",
+          executor: execution.executor,
+          verdict: execution.verdict,
+          reason: execution.reason,
+          policyDigest: execution.policyDigest,
+          environmentPolicyDigest: execution.environmentPolicyDigest,
+          exitCode: execution.exitCode,
+          stdoutDigest: `sha256:${sha256(execution.stdout)}`,
+          stderrDigest: `sha256:${sha256(execution.stderr)}`,
+          worktree: context.worktreePath,
+          frozenDigest: frozen.frozenDigest
+        });
+        return {
+          ok: true,
+          detail: `Frozen witness PREDICATE_PASS on repaired worktree (${execution.executor}).`,
+          executionId
+        };
       }
       return {
         ok: false,
@@ -320,7 +338,7 @@ export async function repairWithCodex(options: {
     baseCommit: string;
     patchPath: string | null;
     bundleDirectory: string;
-  }) => Promise<{ ok: boolean; detail: string }>;
+  }) => Promise<{ ok: boolean; detail: string; executionId?: string }>;
   verifyBundle: (directory: string, expectRoot?: string) => {
     valid: boolean;
     errors: readonly string[];

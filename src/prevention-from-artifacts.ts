@@ -1,8 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { digestJson, sha256 } from "./canonical.js";
+import { DOCTOR_SAFE_GIT_CONFIG } from "./doctor.js";
 import {
   GitInvestigationResultSchema,
   STABLE_EXECUTION_COUNT,
@@ -325,32 +334,149 @@ export function digestRepairPatchFile(patchPath: string): string {
 /**
  * Create a commit object for the current dirty repaired worktree without
  * advancing the user's branch (orphan commit-tree on top of the repair base).
+ *
+ * Never uses host-side `git add` or `git status` (both can invoke clean filters).
+ * Walks the worktree on disk, hashes bytes via `hash-object --stdin`, and builds
+ * a temporary index under hardened Git config/env.
  */
 export function commitRepairedWorktreeState(worktreePath: string, baseCommit: string): {
   commit: string;
   tree: string;
 } {
+  const root = resolve(worktreePath);
+  const temporaryIndexPath = join(tmpdir(), `faultline-repair-${randomUUID()}.index`);
+  const nullDevice = process.platform === "win32" ? "NUL" : "/dev/null";
+  const hardenedEnv = (): NodeJS.ProcessEnv => ({
+    PATH: process.env.PATH ?? "",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: nullDevice,
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_LFS_SKIP_SMUDGE: "1",
+    GIT_ALLOW_PROTOCOL: "none",
+    GIT_INDEX_FILE: temporaryIndexPath,
+    ...(process.platform === "win32" && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    ...(process.platform === "win32" && process.env.ComSpec ? { ComSpec: process.env.ComSpec } : {}),
+    ...(process.platform === "win32" && process.env.PATHEXT ? { PATHEXT: process.env.PATHEXT } : {})
+  });
+
   const run = (args: string[]) => {
-    const result = spawnSync("git", ["-C", worktreePath, ...args], { encoding: "utf8" });
-    if (result.status !== 0) {
-      throw new Error(result.stderr || result.stdout || `git ${args.join(" ")} failed`);
+    const result = spawnSync(
+      "git",
+      [
+        ...DOCTOR_SAFE_GIT_CONFIG,
+        "-c", "core.attributesFile=/nonexistent/faultline-attributes",
+        "-C",
+        root,
+        ...args
+      ],
+      {
+        encoding: "utf8",
+        shell: false,
+        windowsHide: true,
+        timeout: 120_000,
+        maxBuffer: 32 * 1024 * 1024,
+        env: hardenedEnv()
+      }
+    );
+    if (result.error || result.status !== 0) {
+      throw new Error(result.stderr || result.stdout || result.error?.message || `git ${args.join(" ")} failed`);
     }
     return (result.stdout ?? "").trim();
   };
-  run(["add", "-A"]);
-  const tree = run(["write-tree"]);
-  const commit = run([
-    "commit-tree",
-    tree,
-    "-p",
-    baseCommit,
-    "-m",
-    "faultline: repaired prevention state"
-  ]);
-  if (!/^[a-f0-9]{40}([a-f0-9]{24})?$/.test(commit)) {
-    throw new Error("git commit-tree did not return a Git object id for the repaired state.");
+
+  const hashBlob = (absolutePath: string): string => {
+    const content = readFileSync(absolutePath);
+    const hashResult = spawnSync(
+      "git",
+      [
+        ...DOCTOR_SAFE_GIT_CONFIG,
+        "-c", "core.attributesFile=/nonexistent/faultline-attributes",
+        "-C",
+        root,
+        "hash-object",
+        "-w",
+        "--stdin"
+      ],
+      {
+        encoding: "utf8",
+        shell: false,
+        windowsHide: true,
+        timeout: 120_000,
+        maxBuffer: 32 * 1024 * 1024,
+        env: hardenedEnv(),
+        input: content
+      }
+    );
+    if (hashResult.error || hashResult.status !== 0) {
+      throw new Error(
+        hashResult.stderr || hashResult.stdout || hashResult.error?.message || `git hash-object --stdin failed for ${absolutePath}`
+      );
+    }
+    const blob = (hashResult.stdout ?? "").trim();
+    if (!/^[a-f0-9]{40}([a-f0-9]{24})?$/.test(blob)) {
+      throw new Error(`git hash-object --stdin did not return a blob id for ${absolutePath}`);
+    }
+    return blob;
+  };
+
+  const listWorktreeFiles = (directory: string, out: string[]): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name === ".git") continue;
+      const absolute = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        listWorktreeFiles(absolute, out);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      out.push(absolute);
+    }
+  };
+
+  try {
+    run(["read-tree", baseCommit]);
+    const indexed = new Set(
+      run(["ls-files", "-z"]).split("\0").filter(Boolean).map((path) => path.replace(/\\/g, "/"))
+    );
+    const absoluteFiles: string[] = [];
+    listWorktreeFiles(root, absoluteFiles);
+    const seen = new Set<string>();
+    for (const absolutePath of absoluteFiles) {
+      const relativePath = relative(root, absolutePath).split(sep).join("/");
+      if (relativePath === "" || relativePath.startsWith("..")) continue;
+      const stat = lstatSync(absolutePath);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw new Error(`Repaired worktree path is not a regular file: ${relativePath}`);
+      }
+      const mode = (stat.mode & 0o111) !== 0 ? "100755" : "100644";
+      const blob = hashBlob(absolutePath);
+      run(["update-index", "--add", "--cacheinfo", `${mode},${blob},${relativePath}`]);
+      seen.add(relativePath);
+    }
+    for (const indexedPath of indexed) {
+      if (!seen.has(indexedPath)) {
+        run(["update-index", "--force-remove", "--", indexedPath]);
+      }
+    }
+
+    const tree = run(["write-tree"]);
+    const commit = run([
+      "commit-tree",
+      tree,
+      "-p",
+      baseCommit,
+      "-m",
+      "faultline: repaired prevention state"
+    ]);
+    if (!/^[a-f0-9]{40}([a-f0-9]{24})?$/.test(commit)) {
+      throw new Error("git commit-tree did not return a Git object id for the repaired state.");
+    }
+    return { commit, tree };
+  } finally {
+    rmSync(temporaryIndexPath, { force: true });
   }
-  return { commit, tree };
 }
 
 /**
@@ -379,8 +505,12 @@ export async function collectRepairedPreventionRuns(options: {
         `Repaired-state execution ${attempt}/${STABLE_EXECUTION_COUNT} failed: ${verdict.detail}`
       ]);
     }
-    const executionId = verdict.executionId
-      ?? `sha256:${sha256(`${options.repairedCommit}:${attempt}:${verdict.detail}:${randomUUID()}`)}`;
+    const executionId = verdict.executionId;
+    if (typeof executionId !== "string" || !/^sha256:[a-f0-9]{64}$/.test(executionId)) {
+      return fail([
+        `Repaired-state execution ${attempt}/${STABLE_EXECUTION_COUNT} omitted a content-bound executionId; refusing PREVENTION_VERIFIED placeholder synthesis.`
+      ]);
+    }
     const unsigned = {
       schemaVersion: "faultline.prevention-repaired-run.v1",
       attempt,

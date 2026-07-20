@@ -28,7 +28,7 @@ people/calendar gates.
 | PROD-03 | Runtime mapping generator + persona docs | **done** |
 | CODEX-01 | Hooks-native live-fire + thread bindings | **done** |
 | COH-11 | Publish `@mizore66/faultline` to npm | **done** — `@mizore66/faultline@0.1.1` via Trusted Publishing ([#166](https://github.com/Mizore66/faultline/issues/166)) |
-| SEC-08 | Signed release tag + cold verify transcript | **partial** — SSH-signed `v0.1.7-buildweek` on GitHub; cold-machine stranger transcript pending partner ([#171](https://github.com/Mizore66/faultline/issues/171)) |
+| SEC-08 | Signed release tag + cold verify transcript | **partial** — SSH-signed `v0.1.8-buildweek` is the judging pin; earlier `v0.1.7-buildweek` remains historical; cold-machine stranger transcript pending partner ([#171](https://github.com/Mizore66/faultline/issues/171)) |
 | DEMO-01 | Zero-install / rehearsal | **scaffolding done** — Codespaces + [demo-zero-install.md](demo-zero-install.md) + [demo-rehearsal.md](demo-rehearsal.md); stranger retention still open ([#148](https://github.com/Mizore66/faultline/issues/148)) |
 | DEMO-03 | 20-second comprehension test | **protocol ready** — [demo-comprehension-test.md](demo-comprehension-test.md); needs real cold PASS sheets ([#176](https://github.com/Mizore66/faultline/issues/176)) |
 | CDX-07 | Organic incident farming → PREVENTION_VERIFIED | **open** ([#173](https://github.com/Mizore66/faultline/issues/173)) |
@@ -85,3 +85,5 @@ people/calendar gates.
 - 2026-07-20: **Ledger hygiene** — SEC-01 marked **done** (archive-limit corpus landed);
   open-child table synced; TIME-01 prep runbook published at [soak-runbook.md](soak-runbook.md).
   PR #158 UI chrome is non-blocking for these gates.
+
+- 2026-07-21: Cut judging pin `v0.1.8-buildweek` + `@mizore66/faultline@0.1.2`; paused continuous-release push trigger; SEC P0 repair-git + fingerprint caps.

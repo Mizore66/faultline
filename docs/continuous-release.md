@@ -1,5 +1,7 @@
 # Continuous release + npm publish
 
+> **Build Week submission freeze:** push-triggered continuous release is paused in .github/workflows/release.yml so the judging pin stays frozen. Use workflow_dispatch with publish_only for intentional npm publishes. Re-enable the push trigger after submission.
+
 On every **code** push to `main`, GitHub Actions:
 
 1. Runs typecheck / test / build  

@@ -23,42 +23,34 @@
 open, issue #152). Do not invent soak stats. Attestation / host limits:
 [docs/security-model.md](docs/security-model.md).
 
-## Judges: four commands
+## Judges: one Codespaces click, or six clone commands
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Mizore66/faultline?ref=v0.1.7-buildweek)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Mizore66/faultline?ref=v0.1.8-buildweek)
 
-Zero-install / Codespaces / clone: [docs/demo-zero-install.md](docs/demo-zero-install.md). Rehearsal: [docs/demo-rehearsal.md](docs/demo-rehearsal.md).
-
-```powershell
-git clone https://github.com/Mizore66/faultline.git
-cd faultline
-git checkout v0.1.7-buildweek
-pnpm install --frozen-lockfile
-pnpm fl doctor --proof-ready
-pnpm fl judge-proof
-```
+**Primary:** open Codespaces on the pin above (Node 22, pnpm, Docker-in-Docker via [`.devcontainer`](.devcontainer/devcontainer.json)). Zero-install / rehearsal: [docs/demo-zero-install.md](docs/demo-zero-install.md), [docs/demo-rehearsal.md](docs/demo-rehearsal.md).
 
 ```bash
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.7-buildweek
+git checkout v0.1.8-buildweek
+corepack enable
 pnpm install --frozen-lockfile
-pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
 `pnpm install` runs `prepare` → `pnpm build`, so `pnpm fl` invokes the compiled `node dist/cli.js` entry (not per-invocation `tsx`). Use `pnpm fl:dev` only for local TypeScript iteration.  
-`fl doctor --proof-ready` routes Docker-less machines deliberately: if it is not READY, stay on `judge-proof` / the static preview — do not chase `demo live-git`.  
+Optional proof-ready check: `pnpm fl doctor --proof-ready` — if it is not READY, stay on `judge-proof` / the static preview — do not chase `demo live-git`.  
 `judge-proof` opens a **verified `COMMIT_PROOF` sample** package (disposable live-git sample root `sha256:f85c446d…`) — not the historical self-incident unless you open that package separately.  
 Headless: `FAULTLINE_NO_BROWSER=1 pnpm fl judge-proof --export-only` (clean exit; verified root printed last).  
 Zero-install snapshot: [`docs/self-incident-proof-preview.html`](docs/self-incident-proof-preview.html).  
 Fixture sandbox (not a real incident): `pnpm fl judge-demo`.  
 GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 
-**Install:** `npm i -g @mizore66/faultline` (CI publishes from `main` — [docs/continuous-release.md](docs/continuous-release.md)) or clone + `pnpm fl` (above).  
+**Install:** `npm i -g @mizore66/faultline@0.1.2` ([docs/continuous-release.md](docs/continuous-release.md); Build Week continuous release is paused) or clone + `pnpm fl` (above).  
 **Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux. Docker required for live proof.  
 **Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand.  
-**CI:** green Verify run on the validated pre-tag commit [`2e3522c1f9b56be8fd1d1d72400ac88c6cbd1e00`](https://github.com/Mizore66/faultline/commit/2e3522c1f9b56be8fd1d1d72400ac88c6cbd1e00) ([run](https://github.com/Mizore66/faultline/actions/runs/29734618279)), including the **native Docker proof E2E gate** and its [hybrid Docker E2E coverage-matrix REPORT artifact](https://github.com/Mizore66/faultline/actions/runs/29734618279/artifacts/8457770804). Submission pin / Release: [`v0.1.7-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.7-buildweek).
+**CI:** green Verify on the submission pin [`v0.1.8-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.8-buildweek) (see Actions on that tag/commit). Includes the **native Docker proof E2E gate**; RIG-07 Windows-host Docker rows in the hybrid matrix are a **local Windows + Docker Desktop** retention (not a CI matrix OS), committed under `benchmarks/e2e-executed.json`.  
+**This is the only release intended for judging.** Earlier tags (`v0.1.7-buildweek`, `v0.1.6`, …) are historical; `v0.1.4` is **RETRACTED** (do not cite).
 
 ## Validation
 

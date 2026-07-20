@@ -1,6 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
@@ -391,8 +401,51 @@ function pathIsSnapshotExcluded(relativePath: string, rules: readonly IgnoreRule
   return isIgnoredByRules(relativePath, rules);
 }
 
-function fullFileContentDigest(absolutePath: string): `sha256:${string}` {
-  return `sha256:${createHash("sha256").update(readFileSync(absolutePath)).digest("hex")}`;
+/**
+ * Stream a file into a sha256 digest. Caps are enforced via lstat before any
+ * bytes are read, and again while streaming if the file grows past the limit.
+ */
+export function fullFileContentDigest(
+  absolutePath: string,
+  maxFileBytes: number = TURN_SNAPSHOT_MAX_FILE_BYTES
+): `sha256:${string}` {
+  if (!Number.isInteger(maxFileBytes) || maxFileBytes < 1) {
+    throw new TurnSnapshotError("Turn snapshot max file bytes must be a positive integer.");
+  }
+  let stat;
+  try {
+    stat = lstatSync(absolutePath);
+  } catch {
+    throw new TurnSnapshotError(`FaultLine could not stat ${absolutePath} for content fingerprinting.`);
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new TurnSnapshotError(`Refusing to fingerprint non-regular path: ${absolutePath}`);
+  }
+  if (stat.size > maxFileBytes) {
+    throw new TurnSnapshotError(
+      `Refusing turn-tree fingerprint: ${absolutePath} is ${stat.size} bytes (max ${maxFileBytes} per file).`
+    );
+  }
+  const hash = createHash("sha256");
+  const fd = openSync(absolutePath, "r");
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    let total = 0;
+    for (;;) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > maxFileBytes) {
+        throw new TurnSnapshotError(
+          `Refusing turn-tree fingerprint: ${absolutePath} grew past ${maxFileBytes} bytes while hashing.`
+        );
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return `sha256:${hash.digest("hex")}`;
 }
 
 function ignorePolicyDigest(repositoryRoot: string): string {
@@ -453,10 +506,15 @@ export function parsePorcelainStatusZ(status: string): readonly PorcelainPath[] 
 export function computeDirtyContentFingerprint(
   repositoryRoot: string,
   statusPorcelain: string,
-  options: { trackedFilesOnly?: boolean; ignoreRules?: readonly IgnoreRule[] } = {}
+  options: {
+    trackedFilesOnly?: boolean;
+    ignoreRules?: readonly IgnoreRule[];
+    maxFileBytes?: number;
+  } = {}
 ): DirtyContentFingerprint {
   const ignoreRules = options.ignoreRules ?? loadFaultlineIgnoreRules(repositoryRoot);
   const trackedFilesOnly = options.trackedFilesOnly === true;
+  const maxFileBytes = options.maxFileBytes ?? TURN_SNAPSHOT_MAX_FILE_BYTES;
   const paths: Record<string, { status: string; contentDigest: string }> = {};
   const deletedPaths: string[] = [];
 
@@ -474,9 +532,10 @@ export function computeDirtyContentFingerprint(
       if (stat.isSymbolicLink() || !stat.isFile()) continue;
       paths[entry.path] = {
         status: entry.status,
-        contentDigest: fullFileContentDigest(absolutePath)
+        contentDigest: fullFileContentDigest(absolutePath, maxFileBytes)
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof TurnSnapshotError) throw error;
       deletedPaths.push(entry.path);
     }
   }
@@ -1001,7 +1060,8 @@ export function captureTurnTreeSnapshot(
     const statusBeforeA = sampleStatus();
     const dirtyBefore = computeDirtyContentFingerprint(repositoryRoot, statusBeforeA, {
       trackedFilesOnly,
-      ignoreRules
+      ignoreRules,
+      maxFileBytes
     });
 
     if (
@@ -1016,7 +1076,8 @@ export function captureTurnTreeSnapshot(
       const headAfterCache = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();
       const dirtyAfter = computeDirtyContentFingerprint(repositoryRoot, statusAfterCache, {
         trackedFilesOnly,
-        ignoreRules
+        ignoreRules,
+        maxFileBytes
       });
       if (
         headAfterCache === headBefore
@@ -1049,7 +1110,8 @@ export function captureTurnTreeSnapshot(
     }
     const dirtyAfterA = computeDirtyContentFingerprint(repositoryRoot, statusAfterA, {
       trackedFilesOnly,
-      ignoreRules
+      ignoreRules,
+      maxFileBytes
     });
     if (dirtyAfterA.contentFingerprint !== dirtyBefore.contentFingerprint) {
       continue;
@@ -1080,7 +1142,8 @@ export function captureTurnTreeSnapshot(
     }
     const dirtyAfterB = computeDirtyContentFingerprint(repositoryRoot, statusAfterB, {
       trackedFilesOnly,
-      ignoreRules
+      ignoreRules,
+      maxFileBytes
     });
     if (dirtyAfterB.contentFingerprint !== dirtyBefore.contentFingerprint) {
       continue;

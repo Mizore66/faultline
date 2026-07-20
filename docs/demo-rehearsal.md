@@ -5,7 +5,7 @@ Run this before camera / judge sessions. Artifact-backed — see linked docs.
 ## Paths
 
 - [ ] [Zero-install / Codespaces](demo-zero-install.md) — A, B, or C works on the machine you’ll use  
-- [ ] Pin checkout: `git checkout v0.1.7-buildweek` (or Codespaces `ref=v0.1.7-buildweek`)  
+- [ ] Pin checkout: `git checkout v0.1.8-buildweek` (or Codespaces `ref=v0.1.8-buildweek`)  
 - [ ] `pnpm fl doctor --proof-ready` understood (READY vs stay on `judge-proof`)  
 - [ ] `FAULTLINE_NO_BROWSER=1 pnpm fl judge-proof --export-only` prints verified root  
 
@@ -23,8 +23,8 @@ Run this before camera / judge sessions. Artifact-backed — see linked docs.
 | COMMIT_PROOF sample | `judge-proof` or HTML preview |
 | GPT-5.6 propose | `docs/samples/gpt-5.6/` or live `--live` |
 | External later-turn | MUMBCS summary docs (permissioned honesty) |
-| npm install | `npm i -g @mizore66/faultline@0.1.1` |
-| Signed pin | `git verify-tag v0.1.7-buildweek` |
+| npm install | `npm i -g @mizore66/faultline@0.1.2` |
+| Signed pin | `git verify-tag v0.1.8-buildweek` |
 
 ## Honesty gates
 
