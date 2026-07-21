@@ -4,7 +4,8 @@
 **Reviewer:** Chang Kai Zhe (independent external reviewer; same partner responsible for the MUMBCS external turn-path validation)  
 **Review date:** 2026-07-21  
 **Reviewed `main` commit:** `faa98c0757e14250edb4a27dbada94fac9fa5d21`  
-**Signed judging release in scope:** `v0.1.9-buildweek` → `3ca1bb8adaebf163fe633642a0a4ba20dfb7810a`
+**Signed judging release in scope at review time:** `v0.1.9-buildweek` → `3ca1bb8adaebf163fe633642a0a4ba20dfb7810a`  
+**Current judging pin (post-disposition):** `v0.1.10-buildweek` — re-cut so judges receive FL-SEC-001/002/003 fixes (`14ad89d` and follow-ons). `v0.1.9-buildweek` is retained historical and must not move.
 
 This page is the retained public-safe summary and disposition record. Full private review artifacts (command log, threat model, PoC fixtures) stay with the reviewer/maintainer handoff and are not required to cite the findings below.
 

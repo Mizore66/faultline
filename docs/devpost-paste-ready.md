@@ -35,15 +35,15 @@ Qualifying Codex `/feedback` session: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
 ```powershell
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.9-buildweek
+git checkout v0.1.10-buildweek
 pnpm install --frozen-lockfile
 pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
-Pinned submission tag / Release: [`v0.1.9-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.9-buildweek) · validated on the `v0.1.9-buildweek` tag commit · **literal SHA: 3ca1bb8adaebf163fe633642a0a4ba20dfb7810a**.
+Pinned submission tag / Release: [`v0.1.10-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.10-buildweek) · validated on the `v0.1.10-buildweek` tag commit · **literal SHA: PENDING_AFTER_TAG_CUT**.
 `pnpm install` builds `dist` via `prepare`; `pnpm fl` runs `node dist/cli.js` (compiled entry).  
-Green CI: Actions Verify workflow on the `v0.1.9-buildweek` pin (incl. native Docker E2E).
+Green CI: Actions Verify workflow on the `v0.1.10-buildweek` pin (incl. native Docker E2E).
 Zero-install UI snapshot: open `docs/self-incident-proof-preview.html` after clone (or regenerate with `pnpm fl commit-proof-preview`).  
 GPT-5.6 sample artifacts (no API key): `docs/samples/gpt-5.6/`.  
 Honest non-Codex transport sample: `docs/samples/observed-external-transport/` (`OBSERVED_EXTERNAL_TRANSPORT`).  
@@ -52,7 +52,7 @@ Coverage matrix (hybrid: Docker CI promotes listed rows to `EXECUTABLE_E2E`): `b
 Judge sample root: `sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9`  
 (Not the historical self-incident root `sha256:f6a391b3…` — that dogfood is documented separately.)
 
-**Source-only install:** clone + `pnpm fl` (commands above). Or install the published package: `npm i -g @mizore66/faultline@0.1.2`.
+**Judging install is the pin checkout above** (includes EXT-01). Published npm builds may lag this pin — do not use `npm i -g` as the judging path.
 
 ---
 

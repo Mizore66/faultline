@@ -6,14 +6,15 @@ Record with product on screen. Prefer PowerShell: `pnpm.cmd fl …` if Execution
 
 **Hard rules:** no cold-open on `judge-demo`; do not say `judge-proof` is root `f6a391…`; do not invent time-saved metrics; external-01 is `completed` — say **protocol validation** / **`EXPERIMENTAL_TURN`**, not a naturally occurring production bug. Cut any beat whose feature is not green (no signed-release / soak / stranger). Prefer `fl demo full` when Docker is up; only say PREVENTION_VERIFIED / AGENTS.md if that run emitted them.
 
-**Pinned checkout for the video:** `git checkout v0.1.9-buildweek`
+**Pinned checkout for the video:** `git checkout v0.1.10-buildweek`  
+(Must be this pin — includes EXT-01. Do **not** record from `v0.1.9-buildweek`.)
 
 **Machine rehearsal (do this before the human sits down):**
 
 ```bash
-node scripts/rehearse-teleprompter.mjs
+FAULTLINE_REHEARSE_TAG=v0.1.10-buildweek node scripts/rehearse-teleprompter.mjs
 # scheduled in .github/workflows/teleprompter-rehearsal.yml
-node scripts/capture-fallback-footage.mjs   # docs/fallback-footage/
+FAULTLINE_REHEARSE_TAG=v0.1.10-buildweek node scripts/capture-fallback-footage.mjs   # docs/fallback-footage/
 node scripts/capture-devpost-gallery.mjs    # docs/devpost-gallery/
 node scripts/lint-devpost-claims.mjs
 ```
