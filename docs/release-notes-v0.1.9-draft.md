@@ -1,8 +1,10 @@
-# Release notes — v0.1.9-buildweek
+# Release notes — v0.1.9-buildweek (HISTORICAL)
 
-> **Judging pin.** SSH-signed annotated tag. Do **not** move or delete `v0.1.8-buildweek` (historical previous pin).
+> **No longer the judging pin.** Retained SSH-signed annotated tag — do **not** move or delete.  
+> **Current judging pin:** [`v0.1.10-buildweek`](release-notes-v0.1.10-buildweek.md) (includes EXT-01 security fixes).  
+> Do **not** move or delete `v0.1.8-buildweek` either (historical previous pin).
 
-## This is the only release intended for judging
+## This was the judging release before EXT-01
 
 Independent review identified a **restored-clean staleness bug** in incremental dirty-tree staging (`cf11326`): when the temp index was seeded from a previous accepted dirty turn tree, a tracked file restored to HEAD bytes was neither in `dirtyPaths` nor absent from the stale base, so prior-turn bytes were retained. Fixed by always seeding dirty staging from `HEAD^{tree}`, with an oracle equivalence property test that kills the class. Executable mode is included in the dirty content fingerprint / session-cache schema so mode-only changes cannot reuse a stale tree.
 
@@ -16,19 +18,16 @@ Independent review identified a **restored-clean staleness bug** in incremental 
 - Experimental non-blocking macOS Colima Docker E2E job (does not claim macOS coverage unless an artifact is produced).
 - Experimental Codex plugin packaging scaffold under `plugin/` (not live-fire verified).
 
+### Why judges should not use this tag anymore
+
+EXT-01 found FL-SEC-001 (Critical) in `fl record` checkpoint capture on unhardened Git. Fixes landed in `14ad89d` **after** this tag. Practical judge-flow risk on the documented demo path was nil, but the signed judging artifact still shipped the known Critical — corrected by `v0.1.10-buildweek`.
+
 ### Historical / not for judging
 
 | Tag | Status |
 | --- | --- |
+| `v0.1.10-buildweek` | **Current** judging pin |
+| `v0.1.9-buildweek` | This tag — historical (lacks EXT-01) |
 | `v0.1.8-buildweek` | Historical previous pin (retain; do not move) |
 | `v0.1.7-buildweek` and earlier buildweek tags | Historical |
 | `v0.1.4` | **RETRACTED** — do not cite |
-
-### Still human-gated (do not claim)
-
-- Cold stranger Codespaces / comprehension scoresheet
-- Demo video / `YOUTUBE_URL`
-- TIME-01 / TIME-03 soak and `TURN_PROOF` promotion
-- Plugin live-fire (CDX-08)
-- External security review
-- Create `SUBMISSION_FROZEN` when freezing submission

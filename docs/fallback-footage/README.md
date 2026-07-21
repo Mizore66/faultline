@@ -1,6 +1,6 @@
 # Fallback footage (machine-captured)
 
-Pin: `v0.1.9-buildweek`  
+Pin: `v0.1.10-buildweek`  
 Generator: `node scripts/capture-fallback-footage.mjs`
 
 | Asset | Purpose |

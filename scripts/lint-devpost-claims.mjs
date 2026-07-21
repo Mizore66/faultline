@@ -64,45 +64,57 @@ if (!sampleRoot.startsWith("sha256:f85c446d")) {
 }
 
 // npm install claims must match the *judging pin* package version, not main.
-// main may bump ahead of the frozen pin (e.g. 0.1.3) while paste-ready cites
-// the published pin package (e.g. 0.1.2 on v0.1.9-buildweek).
+// Prefer clone-pin judging language; versioned npm claims are optional.
+// Tag may not exist yet during a pin-surface PR.
 let pinVersion = pkg.version;
+let pinPackageReadable = false;
 if (pinnedRef) {
   const pinPkg = spawnSync("git", ["show", `${pinnedRef}:package.json`], {
     cwd: REPO,
     encoding: "utf8"
   });
   if (pinPkg.status === 0) {
+    pinPackageReadable = true;
     try {
       pinVersion = JSON.parse(pinPkg.stdout).version;
     } catch {
       fail(`cannot parse ${pinnedRef}:package.json`);
     }
-  } else {
-    fail(`cannot read ${pinnedRef}:package.json: ${pinPkg.stderr.trim()}`);
   }
 }
 const version = pinVersion;
-if (docs["docs/devpost-paste-ready.md"].includes(`@mizore66/faultline@`) &&
-    !docs["docs/devpost-paste-ready.md"].includes(`@mizore66/faultline@${version}`)) {
+if (
+  pinPackageReadable &&
+  docs["docs/devpost-paste-ready.md"].includes(`@mizore66/faultline@`) &&
+  !docs["docs/devpost-paste-ready.md"].includes(`@mizore66/faultline@${version}`)
+) {
   fail(`devpost-paste-ready npm version must match pin ${pinnedRef} package.json ${version}`);
 }
 
-// Literal SHA for pin (paste-ready) must resolve to the tag
+// Literal SHA for pin (paste-ready) must resolve to the tag once cut.
+const pendingSha = /literal SHA:\s*`?PENDING_AFTER_TAG_CUT`?/i.test(
+  docs["docs/devpost-paste-ready.md"]
+);
 const shaMatch = docs["docs/devpost-paste-ready.md"].match(/literal SHA:\s*`?([0-9a-f]{40})`?/i);
-if (shaMatch) {
+const peeled = spawnSync("git", ["rev-parse", `${pinnedRef}^{commit}`], {
+  cwd: REPO,
+  encoding: "utf8"
+});
+if (peeled.status !== 0) {
+  if (!pendingSha) {
+    fail(
+      `cannot resolve ${pinnedRef}^{commit}; set literal SHA: PENDING_AFTER_TAG_CUT until the signed tag exists`
+    );
+  }
+} else if (pendingSha) {
+  fail(
+    `paste-ready still has PENDING_AFTER_TAG_CUT but ${pinnedRef} resolves to ${peeled.stdout.trim()}`
+  );
+} else if (shaMatch) {
   const listed = shaMatch[1];
-  const peeled = spawnSync("git", ["rev-parse", `${pinnedRef}^{commit}`], {
-    cwd: REPO,
-    encoding: "utf8"
-  });
-  if (peeled.status !== 0) {
-    fail(`cannot resolve ${pinnedRef}^{commit}: ${peeled.stderr}`);
-  } else {
-    const actual = peeled.stdout.trim();
-    if (actual !== listed) {
-      fail(`paste-ready literal SHA ${listed} !== ${pinnedRef}^{commit} ${actual}`);
-    }
+  const actual = peeled.stdout.trim();
+  if (actual !== listed) {
+    fail(`paste-ready literal SHA ${listed} !== ${pinnedRef}^{commit} ${actual}`);
   }
 } else {
   fail("docs/devpost-paste-ready.md missing literal SHA for pin commit");

@@ -11,7 +11,7 @@
  *
  * Usage:
  *   node scripts/rehearse-teleprompter.mjs
- *   FAULTLINE_REHEARSE_TAG=v0.1.9-buildweek node scripts/rehearse-teleprompter.mjs
+ *   FAULTLINE_REHEARSE_TAG=v0.1.10-buildweek node scripts/rehearse-teleprompter.mjs
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..");
-const PIN = process.env.FAULTLINE_REHEARSE_TAG ?? "v0.1.9-buildweek";
+const PIN = process.env.FAULTLINE_REHEARSE_TAG ?? "v0.1.10-buildweek";
 const SAMPLE_ROOT =
   "sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9";
 const FULL = process.env.FAULTLINE_REHEARSE_FULL === "1";

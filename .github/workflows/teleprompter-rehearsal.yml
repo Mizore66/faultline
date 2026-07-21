@@ -34,7 +34,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Rehearse teleprompter commands
         env:
-          FAULTLINE_REHEARSE_TAG: v0.1.9-buildweek
+          FAULTLINE_REHEARSE_TAG: v0.1.10-buildweek
           # Full suite already runs in Verify; keep rehearsal focused on demo commands.
           FAULTLINE_REHEARSE_SKIP_TEST: "1"
         run: node scripts/rehearse-teleprompter.mjs

@@ -28,12 +28,12 @@ people/calendar gates.
 | PROD-03 | Runtime mapping generator + persona docs | **done** |
 | CODEX-01 | Hooks-native live-fire + thread bindings | **done** |
 | COH-11 | Publish `@mizore66/faultline` to npm | **done** — `@mizore66/faultline@0.1.1` via Trusted Publishing ([#166](https://github.com/Mizore66/faultline/issues/166)) |
-| SEC-08 | Signed release tag + cold verify transcript | **done** — SSH-signed `v0.1.8`/`v0.1.7` + macOS full-chain cold-reader in [security-chain.md](security-chain.md) ([#171](https://github.com/Mizore66/faultline/issues/171)); judging pin advancing to signed `v0.1.9-buildweek` |
+| SEC-08 | Signed release tag + cold verify transcript | **done** — SSH-signed `v0.1.8`/`v0.1.7` + macOS full-chain cold-reader in [security-chain.md](security-chain.md) ([#171](https://github.com/Mizore66/faultline/issues/171)); judging pin advancing to signed `v0.1.10-buildweek` |
 | DEMO-01 | Zero-install / rehearsal | **scaffolding done** — Codespaces + [demo-zero-install.md](demo-zero-install.md) + [demo-rehearsal.md](demo-rehearsal.md); stranger retention still open ([#148](https://github.com/Mizore66/faultline/issues/148)) |
 | DEMO-03 | 20-second comprehension test | **protocol ready** — [demo-comprehension-test.md](demo-comprehension-test.md); needs real cold PASS sheets ([#176](https://github.com/Mizore66/faultline/issues/176)) |
 | CDX-07 | Organic incident farming → PREVENTION_VERIFIED | **open** ([#173](https://github.com/Mizore66/faultline/issues/173)) |
 | CDX-09 | Codex thread bindings in proof-package provenance | **done** (`e35ab80`) — optional `codex.witnessDraftThreadId` / `codex.repairThreadId` on git/turn manifests |
-| C-1 | Submission freeze CI guard | **active** — `SUBMISSION_FROZEN` on main; `scripts/submission-freeze-guard.mjs` + verify job; docs/tests/scripts-only on main until human lifts freeze |
+| C-1 | Submission freeze CI guard | **re-assert after v0.1.10 pin cut** — briefly lifted only to land EXT-01 into the judging artifact; see [release-notes-v0.1.10-buildweek.md](release-notes-v0.1.10-buildweek.md) |
 | RIG-staging | HEAD-base dirty staging + restored-clean oracle | **done** (`e35ab80`) — removed `preferredBaseTree`; `tests/turn-snapshot-oracle.test.ts` |
 | CDX-08 | Plugin-native install behind live-fire gate | **open** ([#174](https://github.com/Mizore66/faultline/issues/174)) — packaging scaffold only under `plugin/` |
 
@@ -92,4 +92,6 @@ people/calendar gates.
 - 2026-07-21: Cut judging pin `v0.1.8-buildweek` + `@mizore66/faultline@0.1.2`; paused continuous-release push trigger; SEC P0 repair-git + fingerprint caps.
 - 2026-07-21: Cut judging pin `v0.1.9-buildweek` (SSH-signed); `v0.1.8-buildweek` retained historical.
 - 2026-07-21 (`e35ab80`): Restored-clean staleness fix (HEAD-base staging); oracle property test; C-1 freeze guard; CDX-09 thread bindings; plugin packaging scaffold (not live-fire). Pin draft: `docs/release-notes-v0.1.9-draft.md` (human cuts tag).
-- 2026-07-21: **Submission freeze active** — `SUBMISSION_FROZEN` on main. Bucket 1 de-risk: teleprompter rehearsal harness + scheduled CI, fallback asciinema cast, Devpost gallery screenshots, claims linter, Colima triage, tag-run CI evidence under `docs/ci-evidence/`. `v0.1.9-buildweek` untouchable; Bucket 2 (`src/`) parked on post-submission branches.
+- 2026-07-21: EXT-01 independent security review (FL-SEC-001 Critical / 002 High / 003 Medium) — disposition in [ext-01-security-review.md](ext-01-security-review.md); fixes on `14ad89d`.
+- 2026-07-21: **Re-cut judging pin `v0.1.10-buildweek`** so judges receive EXT-01 fixes; `v0.1.9-buildweek` retained historical (do not move). Video + rehearsal retargeted to the new pin. See [release-notes-v0.1.10-buildweek.md](release-notes-v0.1.10-buildweek.md).
+- 2026-07-21: Bucket 1 de-risk on main (teleprompter rehearsal, fallback footage, gallery, claims linter, CI evidence). Freeze re-asserted after the `v0.1.10` pin cut; Bucket 2 parked under `docs/post-submission/`.
