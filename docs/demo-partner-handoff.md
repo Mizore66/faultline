@@ -66,7 +66,7 @@ Never: “FaultLine is security audited.”
 ## Pre-camera checks
 
 - [ ] Checkout is exactly `v0.1.10-buildweek`
-- [ ] Confirm CI for commit `ea1e244…` / tag `v0.1.10-buildweek` (Actions run URL + screenshot) — do not rely only on a badge. Note: the pin was retargeted to current `main` on 2026-07-21 (includes narration cleanup + package `0.1.4`). Earlier tip `ce99a793` remains in history. Capture the successful required jobs you will cite on camera.
+- [ ] Confirm CI for commit `89b8e23…` / tag `v0.1.10-buildweek` (Actions run URL + screenshot) — do not rely only on a badge. Note: the pin was retargeted to current `main` on 2026-07-21 (includes narration cleanup + package `0.1.4`). Earlier tip `ce99a793` remains in history. Capture the successful required jobs you will cite on camera.
 - [ ] `FAULTLINE_REHEARSE_TAG=v0.1.10-buildweek node scripts/rehearse-teleprompter.mjs`
 - [ ] `node scripts/lint-devpost-claims.mjs`
 - [ ] Docker up only if you will show `fl demo full` / live proof

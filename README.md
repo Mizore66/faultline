@@ -103,7 +103,7 @@ Help is tiered: `fl` / `fl quickstart` for the short surface; `fl advanced` for 
 - **Docker** required only for live proof (`demo full` / investigate), not for `judge-proof`
 - **Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand
 - **npm:** published package may lag the pin — do not treat npm as the EXT-01 judging artifact ([docs/continuous-release.md](docs/continuous-release.md))
-- **CI evidence:** See Actions on [`v0.1.10-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.10-buildweek) / commit `ea1e244…` (pin retargeted 2026-07-21 to current `main`, package `0.1.4`). Prefer linking exact successful required jobs rather than an aggregate badge alone.
+- **CI evidence:** See Actions on [`v0.1.10-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.10-buildweek) / commit `89b8e23…` (pin retargeted 2026-07-21 to current `main`, package `0.1.4`). Prefer linking exact successful required jobs rather than an aggregate badge alone.
 
 ## Docs by audience
 
