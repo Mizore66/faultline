@@ -54,7 +54,14 @@ jobs:
             echo "Event ${EVENT_NAME} on ${REF} — freeze guard not enforced."
             exit 0
           fi
-          mapfile -t PATHS < <(git diff --name-only "${BASE}" "${HEAD}" || true)
+          mapfile -t PATHS < <(
+            if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+              # Three-dot: only commits unique to the PR tip (not unrelated main src/ churn).
+              git diff --name-only "${BASE}...${HEAD}" || true
+            else
+              git diff --name-only "${BASE}" "${HEAD}" || true
+            fi
+          )
           if [[ ${#PATHS[@]} -eq 0 ]]; then
             echo "No changed paths."
             exit 0
