@@ -20,7 +20,7 @@ if git rev-parse "$PIN" >/dev/null 2>&1; then
 fi
 
 # Prefer the pin-surfaces commit message marker if present on HEAD history.
-PIN_COMMIT="${1:-}"
+PIN_COMMIT="${1:-ce99a793af0b020bf1b9cf21114f8d7897b37207}"
 if [[ -z "$PIN_COMMIT" ]]; then
   PIN_COMMIT=$(git log origin/main --oneline --grep='Pin submission surfaces to v0.1.10-buildweek' -1 --format=%H || true)
 fi

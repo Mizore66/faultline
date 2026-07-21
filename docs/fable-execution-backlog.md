@@ -33,7 +33,7 @@ people/calendar gates.
 | DEMO-03 | 20-second comprehension test | **protocol ready** — [demo-comprehension-test.md](demo-comprehension-test.md); needs real cold PASS sheets ([#176](https://github.com/Mizore66/faultline/issues/176)) |
 | CDX-07 | Organic incident farming → PREVENTION_VERIFIED | **open** ([#173](https://github.com/Mizore66/faultline/issues/173)) |
 | CDX-09 | Codex thread bindings in proof-package provenance | **done** (`e35ab80`) — optional `codex.witnessDraftThreadId` / `codex.repairThreadId` on git/turn manifests |
-| C-1 | Submission freeze CI guard | **re-assert after v0.1.10 pin cut** — briefly lifted only to land EXT-01 into the judging artifact; see [release-notes-v0.1.10-buildweek.md](release-notes-v0.1.10-buildweek.md) |
+| C-1 | Submission freeze CI guard | **active** — `SUBMISSION_FROZEN` re-asserted after `v0.1.10-buildweek` pin cut; docs/tests/scripts-only until human lifts freeze |
 | RIG-staging | HEAD-base dirty staging + restored-clean oracle | **done** (`e35ab80`) — removed `preferredBaseTree`; `tests/turn-snapshot-oracle.test.ts` |
 | CDX-08 | Plugin-native install behind live-fire gate | **open** ([#174](https://github.com/Mizore66/faultline/issues/174)) — packaging scaffold only under `plugin/` |
 
