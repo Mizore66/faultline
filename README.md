@@ -2,7 +2,7 @@
 
 > Freeze one reviewed executable question. Replay it over recorded Git or Codex turn states. Prove only what the executions support — without trusting model intent.
 
-**Track:** Developer Tools (CI / DevOps / agentic debugging evidence).
+**Track:** Developer Tools (CI / DevOps / agentic debugging evidence)
 
 **Break → Find → Prove → Fix → Prevent**
 
@@ -12,22 +12,22 @@
 | Portable offline-verifiable packages (`COMMIT_PROOF` on Git path) | Private Codex interception |
 | Structured `PREDICATE_*` outcomes (compile ≠ FAIL) | That one Docker image fits every lockfile era |
 
-| Path | Grade | Role |
-| --- | --- | --- |
-| `fl investigate git` / `judge-proof` | **`COMMIT_PROOF`** | Mature portable proof — lead demos here |
-| `fl investigate turns` | **`EXPERIMENTAL_TURN`** | Codex-native First Bad Turn — remains experimental until the criteria below |
-| `fl judge-demo` | Sample | Evidence-model UI only |
+## Start here (about 2 minutes)
 
-`EXPERIMENTAL_TURN` stays until promotion criteria are met (honest scoreboard in
-[src/turn-proof-promotion.ts](src/turn-proof-promotion.ts) — multi-OS soak still
-open, issue #152). Do not invent soak stats. Attestation / host limits:
-[docs/security-model.md](docs/security-model.md).
+**Judging pin only:** `v0.1.10-buildweek`  
+This is the only release intended for judging. Do not evaluate from `main`, npm, or older tags (`v0.1.9-buildweek` lacks EXT-01; `v0.1.4` is **RETRACTED**).
 
-## Judges: one Codespaces click, or six clone commands
+### Option A — Codespaces (fastest)
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Mizore66/faultline?ref=v0.1.10-buildweek)
 
-**Primary:** open Codespaces on the pin above (Node 22, pnpm, Docker-in-Docker via [`.devcontainer`](.devcontainer/devcontainer.json)). Zero-install / rehearsal: [docs/demo-zero-install.md](docs/demo-zero-install.md), [docs/demo-rehearsal.md](docs/demo-rehearsal.md).
+Then run:
+
+```bash
+pnpm fl judge-proof
+```
+
+### Option B — clone (six commands)
 
 ```bash
 git clone https://github.com/Mizore66/faultline.git
@@ -38,66 +38,85 @@ pnpm install --frozen-lockfile
 pnpm fl judge-proof
 ```
 
-`pnpm install` runs `prepare` → `pnpm build`, so `pnpm fl` invokes the compiled `node dist/cli.js` entry (not per-invocation `tsx`). Use `pnpm fl:dev` only for local TypeScript iteration.  
-Optional proof-ready check: `pnpm fl doctor --proof-ready` — if it is not READY, stay on `judge-proof` / the static preview — do not chase `demo live-git`.  
-`judge-proof` opens a **verified `COMMIT_PROOF` sample** package (disposable live-git sample root `sha256:f85c446d…`) — not the historical self-incident unless you open that package separately.  
-Headless: `FAULTLINE_NO_BROWSER=1 pnpm fl judge-proof --export-only` (clean exit; verified root printed last).  
-Zero-install snapshot: [`docs/self-incident-proof-preview.html`](docs/self-incident-proof-preview.html).  
-Fixture sandbox (not a real incident): `pnpm fl judge-demo`.  
-GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
+`pnpm install` builds the CLI (`prepare` → `pnpm build`). Use `pnpm fl:dev` only for local TypeScript iteration.
 
-**Install for judging:** clone `v0.1.10-buildweek` + `pnpm fl` (above). Published npm may lag the pin (continuous release paused — [docs/continuous-release.md](docs/continuous-release.md)); do not treat npm as the EXT-01-fixed judging artifact.  
-**Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux. Docker required for live proof.  
-**Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand.  
-**CI:** green Verify on the submission pin [`v0.1.10-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.10-buildweek) (see Actions on that tag/commit). Includes the **native Docker proof E2E gate**; RIG-07 Windows-host Docker rows in the hybrid matrix are a **local Windows + Docker Desktop** retention (not a CI matrix OS), committed under `benchmarks/e2e-executed.json`.  
-**This is the only release intended for judging.** `v0.1.9-buildweek` is historical (lacks EXT-01); earlier tags (`v0.1.8-buildweek`, …) are historical; `v0.1.4` is **RETRACTED** (do not cite).
+### What you should see
 
-## Validation
+- A **verified `COMMIT_PROOF` sample** package (root `sha256:f85c446d…`)
+- Not the historical self-incident unless you open that package separately
+- No Docker and no API key required for this path
 
-- **Dogfood (published):** Git self-incident at `97c3290` — [docs/faultline-self-incident.md](docs/faultline-self-incident.md)
-- **External protocol validation (permissioned, landed):** consented MUMBCS run (`monashblockchain/MUMBCS`) — offline-verified turn package root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1`, Turn 3 `PASS_TO_FAIL` under `EXPERIMENTAL_TURN` — [docs/publishable-summary-mumbcs.md](docs/publishable-summary-mumbcs.md), [docs/external-case-study-mumbcs.md](docs/external-case-study-mumbcs.md), [docs/impact-validation-external-01.md](docs/impact-validation-external-01.md) (`Status: completed`), handoff mirror [docs/partners/mumbcs-later-turn-handoff/](docs/partners/mumbcs-later-turn-handoff/)
+**Headless:** `FAULTLINE_NO_BROWSER=1 pnpm fl judge-proof --export-only`  
+**Static preview:** [`docs/self-incident-proof-preview.html`](docs/self-incident-proof-preview.html)  
+**Offline verify the sample:**
 
-This is **protocol / interoperability validation** (freeze → replay → locate → verify) that localized a production-code regression under a frozen witness importing `src/lib/slugify.ts`. It is **not** a claim that FaultLine caught a naturally occurring production bug, agent intent, unique root cause, prevention, or deployed live-site impact. The recorded later-turn sample under `docs/samples/later-turn-ledger/` remains a CI fixture, not the MUMBCS case.
+```bash
+pnpm fl verify docs/samples/self-incident-commit-proof --expect-root sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9
+```
 
-**Re-verification path:** FaultLine publishes digests + consent + redacted narrative (and the partner handoff mirror). Byte-level re-verify of the turn package requires MUMBCS collaborator access or a private redacted handoff (MUMBCS is private). No full proof-bundle fixture is shipped in this repo for that root.
+More install detail: [docs/demo-zero-install.md](docs/demo-zero-install.md) · persona guide: [docs/personas/judge.md](docs/personas/judge.md)
+
+## Which path am I looking at?
+
+| Command | Grade | Use it for |
+| --- | --- | --- |
+| `fl investigate git` / `judge-proof` | **`COMMIT_PROOF`** | Mature portable proof — lead here |
+| `fl investigate turns` | **`EXPERIMENTAL_TURN`** | Codex-native First Bad Turn — experimental until promotion criteria |
+| `fl judge-demo` | Sample UI | Evidence-model sandbox only — not a real incident |
+
+`EXPERIMENTAL_TURN` stays experimental until the scoreboard in [`src/turn-proof-promotion.ts`](src/turn-proof-promotion.ts) is met (multi-OS soak still open, issue #152). Do not invent soak stats.
+
+**Optional live Docker** (only if `pnpm fl doctor --proof-ready` says READY):
+
+```bash
+pnpm fl demo full
+```
+
+If doctor is not READY, stay on `judge-proof` / the static preview — do not chase live proof.
+
+## Evidence in this repo
+
+**Self-incident (published dogfood):** Git regression at `97c3290` — [docs/faultline-self-incident.md](docs/faultline-self-incident.md)
+
+**External protocol validation (permissioned, completed):** consented MUMBCS run — Turn 3 earliest stable `PASS_TO_FAIL` under `EXPERIMENTAL_TURN`, package root `sha256:831885ed72814e3c2e68dd3366060f88ee94d1b0e533c4571246efd6957326b1`.
+
+- Summary: [docs/publishable-summary-mumbcs.md](docs/publishable-summary-mumbcs.md)
+- Case study: [docs/external-case-study-mumbcs.md](docs/external-case-study-mumbcs.md)
+
+This is **protocol / interoperability validation**, not a claim that FaultLine caught a naturally occurring production bug, agent intent, unique root cause, or live-site impact. Byte-level re-verify of that turn package needs MUMBCS collaborator access (private repo); public readers use digests + consent + redacted narrative.
 
 ## Codex + GPT-5.6
 
-- **Codex (build):** implementation, adversarial tests, hardening. Qualifying `/feedback`: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09`
-- **Codex (runtime):** opt-in sidecar records public hooks + dirty turn-tree snapshots
-- **GPT-5.6:** blinded witness proposal + evidence-cited repair brief only — never PASS/FAIL. Inspect redacted samples in [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/) without an API key; use `--live` on camera when a key is available.
+| Role | What it does here |
+| --- | --- |
+| **Codex (build)** | Implementation, adversarial tests, hardening. Qualifying `/feedback`: `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` |
+| **Codex (runtime)** | Opt-in sidecar records public lifecycle hooks + dirty turn-tree snapshots |
+| **GPT-5.6** | Blinded witness proposal + evidence-cited repair brief only — **never** PASS/FAIL |
 
-Continuous product arc (turn path still experimental):  
-`investigate turns` → `--minimize` / `fl prove transition` → repair → `fl prevention verify` (grounded path: Prevention verified; otherwise evidence summary)
+GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/). On camera with a key: `fl witness propose --live`.
 
 Help is tiered: `fl` / `fl quickstart` for the short surface; `fl advanced` for the full command list.
 
-## Learn more
+## Platform notes
 
-| Doc | Contents |
+- **Node.js 22+**, pnpm 10, Windows / macOS / Linux
+- **Docker** required only for live proof (`demo full` / investigate), not for `judge-proof`
+- **Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand
+- **npm:** published package may lag the pin — do not treat npm as the EXT-01 judging artifact ([docs/continuous-release.md](docs/continuous-release.md))
+- **CI:** green Verify on [`v0.1.10-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.10-buildweek), including the native Docker proof E2E gate
+
+## Docs by audience
+
+| If you are… | Start with |
 | --- | --- |
-| [docs/demo-zero-install.md](docs/demo-zero-install.md) | npm / Codespaces / clone (DEMO-01) |
-| [docs/demo-rehearsal.md](docs/demo-rehearsal.md) | Pre-camera checklist |
-| [docs/demo-comprehension-test.md](docs/demo-comprehension-test.md) | 20s cold-viewer protocol (DEMO-03) |
-| [docs/demo-qa.md](docs/demo-qa.md) | Artifact-backed Q&A |
-| [docs/demo-fallback.md](docs/demo-fallback.md) | Live-fail switch artifacts |
-| [docs/concepts.md](docs/concepts.md) | Grades, promotion criteria, claim boundaries |
-| [docs/first-incident.md](docs/first-incident.md) | Guided first incident (`fl tutorial --yes`) |
-| [docs/personas/judge.md](docs/personas/judge.md) | Judge / evaluator entry |
-| [docs/personas/new-user.md](docs/personas/new-user.md) | New-user entry |
-| [docs/personas/forensics.md](docs/personas/forensics.md) | Forensics entry |
-| [docs/distribution.md](docs/distribution.md) | Pack / tarball / publish |
-| [docs/security-chain.md](docs/security-chain.md) | Tag → CI → attestation chain |
-| [docs/proof-bundles.md](docs/proof-bundles.md) | Verify / serve / minimize / prevention |
-| [docs/codex-sidecar.md](docs/codex-sidecar.md) | Sidecar install / status |
-| [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md) | Video run of show |
-| [docs/publishable-summary-mumbcs.md](docs/publishable-summary-mumbcs.md) | Permissioned MUMBCS external protocol summary |
-| [docs/external-case-study-mumbcs.md](docs/external-case-study-mumbcs.md) | Full MUMBCS structured case study |
-| [docs/partners/mumbcs-faultline-guide.md](docs/partners/mumbcs-faultline-guide.md) | External partner runbook (MUMBCS) |
-| [SECURITY.md](SECURITY.md) | Vulnerability reporting |
-| [docs/differentiation.md](docs/differentiation.md) | vs bisect / CI / repro |
+| A judge / evaluator | [docs/personas/judge.md](docs/personas/judge.md), [docs/concepts.md](docs/concepts.md) |
+| A new user | [docs/personas/new-user.md](docs/personas/new-user.md), [docs/first-incident.md](docs/first-incident.md) |
+| Doing forensics / proof work | [docs/personas/forensics.md](docs/personas/forensics.md), [docs/proof-bundles.md](docs/proof-bundles.md) |
+| Checking security / chain | [SECURITY.md](SECURITY.md), [docs/security-chain.md](docs/security-chain.md), [docs/security-model.md](docs/security-model.md) |
+| Comparing to bisect / CI | [docs/differentiation.md](docs/differentiation.md) |
+| Recording / submitting | [docs/demo-partner-handoff.md](docs/demo-partner-handoff.md), [docs/build-week-submission-kit.md](docs/build-week-submission-kit.md) |
 
-Ops (runtime images, attestations, Actions, witness protocol): see `docs/` — not required to understand the product.
+Demo helpers: [zero-install](docs/demo-zero-install.md) · [rehearsal](docs/demo-rehearsal.md) · [Q&A](docs/demo-qa.md) · [fallback](docs/demo-fallback.md) · [sidecar](docs/codex-sidecar.md)
 
 ## Development
 
@@ -110,4 +129,4 @@ pnpm coverage-matrix
 
 On Windows, the same commands work via `pnpm.cmd` if ExecutionPolicy blocks `pnpm`.
 
-`pnpm coverage-matrix` writes an **adversarial scenario coverage matrix** (spec/unit coverage — not an E2E benchmark).
+`pnpm coverage-matrix` writes an adversarial scenario coverage matrix (spec/unit coverage — not an E2E benchmark).
