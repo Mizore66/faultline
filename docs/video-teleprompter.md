@@ -2,9 +2,11 @@
 
 **You must record this video** from a fresh pinned checkout and upload it yourself — this file is a script only. Do **not** invent or paste a placeholder `YOUTUBE_URL` into [devpost-paste-ready.md](devpost-paste-ready.md) until the public YouTube link exists.
 
+**Partner source of truth for narration:** use the consolidated handoff [demo-partner-handoff.md](demo-partner-handoff.md). Keep this teleprompter as the shot list; if wording conflicts, the handoff wins.
+
 Record with product on screen. Prefer PowerShell: `pnpm.cmd fl …` if ExecutionPolicy blocks `pnpm`.
 
-**Hard rules:** no cold-open on `judge-demo`; do not say `judge-proof` is root `f6a391…`; do not invent time-saved metrics; external-01 is `completed` — say **protocol validation** / **`EXPERIMENTAL_TURN`**, not a naturally occurring production bug. Cut any beat whose feature is not green (no signed-release / soak / stranger). Prefer `fl demo full` when Docker is up; only say PREVENTION_VERIFIED / AGENTS.md if that run emitted them.
+**Hard rules:** no cold-open on `judge-demo`; do not say `judge-proof` is root `f6a391…`; do not invent time-saved metrics; external-01 is `completed` — say **protocol validation** / **`EXPERIMENTAL_TURN`**, not a naturally occurring production bug. Cut any beat whose feature is not green (no signed-release / soak / stranger). Prefer `fl demo full` when Docker is up; only say PREVENTION_VERIFIED if that run emitted it. Treat `AGENTS.md` as guidance recorded by the demo, not as enforcement.
 
 **Pinned checkout for the video:** `git checkout v0.1.10-buildweek`  
 (Must be this pin — includes EXT-01. Do **not** record from `v0.1.9-buildweek`.)
@@ -62,7 +64,7 @@ Watch phases: intake/freeze/Docker localize → offline verify → minimize (fil
 
 **Say:**
 
-> One command runs the arc: freeze a human-reviewed witness, replay it in Docker across real Git states, minimize the failure-inducing change, then emit a grounded PREVENTION_VERIFIED package and write digest-only invariants into AGENTS.md — never speculative.
+> One command runs the arc: freeze a human-reviewed witness, replay it in Docker across real Git states, minimize the failure-inducing change, then emit a grounded PREVENTION_VERIFIED package. Executable tests and guards enforce the invariant; AGENTS.md records it as guidance for future agents — never speculative.
 
 ---
 
@@ -76,16 +78,18 @@ pnpm fl verify .\docs\samples\self-incident-commit-proof --expect-root sha256:f8
 
 **Say:**
 
-> A teammate — or a judge — verifies this package offline without re-running our code. Judges: README three-command path, no Docker, no API key.
+> A teammate — or a judge — verifies the package offline without rerunning repository code, using Docker, or trusting the UI. Judges: README six-command clone path on the pin, then `pnpm fl judge-proof` — no Docker, no API key.
 
 ---
 
 ## 1:55–2:30 — Codex build story + close
 
-**Screen:** `/feedback` ID `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` and `pnpm test`. Optional: open the demo `AGENTS.md` FaultLine block from `fl demo full`.
+**Screen (preferred Codex beat):** Primary `/feedback` session ID `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` → public lifecycle hook / sidecar ledger → recorded Codex turn ID → immutable turn snapshot tree → Turn 3 FAIL (MUMBCS publishable summary). Optional: `pnpm test`. Do **not** invent repair footage.
 
 **Say (novelty):**
 
-> FaultLine freezes one human-reviewed executable check, replays those exact bytes across immutable Git and Codex-turn states in a locked-down sandbox, and emits a portable evidence package that a stranger can re-derive offline — it refuses every claim the executions don't support.
+> Codex was load-bearing in building FaultLine, and its public lifecycle hooks power the turn recorder. FaultLine binds an observed turn to an immutable source tree, then independently executes the frozen witness across those states. The portable COMMIT_PROOF package is what a stranger re-derives offline — and FaultLine refuses every claim the executions don't support.
 
-**Claims to avoid:** “real production incident,” “root cause,” “prevention verified” for the turn arc without artifacts, “invisible overhead,” or upgrading the MUMBCS beat beyond protocol validation / `EXPERIMENTAL_TURN`.
+**Do not say** (unless exact footage/artifact is on screen): “Codex generated this repair”; “Codex fixed the regression”; “Here is the Codex repair thread.”
+
+**Claims to avoid:** “real production incident,” “root cause,” “prevention verified” for the turn arc without artifacts, “invisible overhead,” “security audited,” or upgrading the MUMBCS beat beyond protocol validation / `EXPERIMENTAL_TURN`.

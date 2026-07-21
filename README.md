@@ -101,18 +101,13 @@ Ops (runtime images, attestations, Actions, witness protocol): see `docs/` — n
 
 ## Development
 
-```powershell
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm coverage-matrix
-```
-
 ```bash
 pnpm typecheck
 pnpm test
 pnpm build
 pnpm coverage-matrix
 ```
+
+On Windows, the same commands work via `pnpm.cmd` if ExecutionPolicy blocks `pnpm`.
 
 `pnpm coverage-matrix` writes an **adversarial scenario coverage matrix** (spec/unit coverage — not an E2E benchmark).
