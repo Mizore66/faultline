@@ -39,7 +39,7 @@ Use newline-delimited `--stdin-paths --no-filters` for the common case; fall bac
 
 Preconditions - every relative path in the batch must:
 
-- contain no `U+000A` (LF) and no `U+000D` (CR)
+- contain no `U+0009` (TAB), no `U+000A` (LF), and no `U+000D` (CR)
 - not begin with `-` (or be passed after `--` / as `./-name` consistently with oracle)
 - be a regular file (not symlink, not directory) after the existing plan/secret-scan gates
 
@@ -61,11 +61,12 @@ Then:
    ```
 
    using the mode already determined by existing `lstat` / executable logic.
+   Because `--index-info` uses TAB as the pathname delimiter, any path containing TAB is unsafe for this fast path and must use the fallback below.
 5. Removals: keep today's `update-index --force-remove` loop, **or** fold deletes into `--index-info` with mode `0` if that stays oracle-equivalent.
 
 #### Fallback path (required)
 
-If **any** update path fails the preconditions above, do **not** use `--stdin-paths` for that staging call. Use the existing per-file:
+If **any** update path fails the preconditions above (including TAB / LF / CR in the relative path, leading `-`, or non-regular file), do **not** use `--stdin-paths` / `--index-info` for that staging call. Use the existing per-file:
 
 ```text
 git hash-object -w --stdin --no-filters
@@ -88,12 +89,13 @@ Stream each file's bytes to `hash-object --stdin --no-filters`, preserve a deter
 | SHA-1 vs SHA-256 repos | Work in both; object IDs are whatever `hash-object` returns for the repo |
 | Output ordering | OID lines must map 1:1 to input path order; mismatch -> hard error, no partial index write |
 | Bounded I/O | Cap stdout/stderr buffers; refuse unbounded capture |
-| Partial command failure | Non-zero exit, truncated OID list, or malformed OID -> abort staging; leave no half-applied index update for that throwaway index |
+| Partial command failure | Non-zero exit, truncated OID list, or malformed OID -> abort staging; discard the temporary index; quarantine any incomplete staging result; never continue to `write-tree`; leave no half-applied index update for that throwaway index |
 | Windows paths | Absolute paths must round-trip through the same Git used for the repo; no silent path rewrite |
 | Paths beginning with `-` | Detected as unsafe for bare `--stdin-paths` lists; use fallback (or `./` prefix only if oracle proves equivalence) |
-| Newline / CR in filenames | Detected; force fallback |
+| TAB / LF / CR in filenames | Detected (`U+0009` / `U+000A` / `U+000D`) and forced to the safe per-file fallback (`--stdin` + `--cacheinfo`). Fast path must never emit `--index-info` lines for TAB-containing paths because TAB is the pathname delimiter. A future PR may investigate `-z --index-info`; not for v1. |
 | `--no-filters` | Always pass on both fast and fallback hash paths so attribute clean filters cannot change bytes |
 | Oracle comparison | Digests must match current implementation for identical worktrees |
+| Partial-index cleanup | On any hashing, output-count, parse, or `update-index` failure, discard the temporary index and quarantine the incomplete staging result. Never continue to `write-tree`. |
 
 ## Hard gates (ship blockers)
 

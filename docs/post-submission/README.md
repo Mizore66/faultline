@@ -29,7 +29,7 @@ After freeze lifts: **do not merge this umbrella wholesale**. Rebase this roadma
 - No fabricated evidence / no `TURN_PROOF` promotion machinery
 - No plugin live-fire claims without retained artifacts
 - No merge to `main` while `SUBMISSION_FROZEN` exists
-- Specs must stay plain UTF-8 (no bidi override/isolate controls); CI rejects those controls in source and specification files
+- Specs must stay plain UTF-8 (no bidi override/isolate controls). Implementation PRs must pass the repository bidi-control guard introduced by #200, or add an equivalent guard before merge. (After #200 lands and this branch is rebased, present tense becomes accurate.)
 
 ## Relationship to Bucket 1 / submission
 

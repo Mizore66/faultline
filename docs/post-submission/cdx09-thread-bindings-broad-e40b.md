@@ -60,8 +60,9 @@ Unify on the Git/turn IdentifierSchema unless a documented exception is required
 ### 5. Privacy and redaction
 
 - Identifiers only - no prompts, messages, tool payloads, diffs, or stdout/stderr previews in manifests.
+- Thread IDs are not treated as authentication credentials, but they are potentially sensitive correlation metadata. Store and log them minimally; never retain prompts, messages, payload previews, or account-linked context.
 - Do not log full thread payloads in CI artifacts.
-- Redaction scanners continue to apply to any adjacent text channels; IDs themselves are not secrets but must not become a vehicle for smuggling content.
+- Redaction scanners continue to apply to any adjacent text channels; IDs must not become a vehicle for smuggling content.
 
 ### 6. Tamper semantics
 
