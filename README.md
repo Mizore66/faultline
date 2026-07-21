@@ -25,14 +25,14 @@ open, issue #152). Do not invent soak stats. Attestation / host limits:
 
 ## Judges: one Codespaces click, or six clone commands
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Mizore66/faultline?ref=v0.1.8-buildweek)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Mizore66/faultline?ref=v0.1.9-buildweek)
 
 **Primary:** open Codespaces on the pin above (Node 22, pnpm, Docker-in-Docker via [`.devcontainer`](.devcontainer/devcontainer.json)). Zero-install / rehearsal: [docs/demo-zero-install.md](docs/demo-zero-install.md), [docs/demo-rehearsal.md](docs/demo-rehearsal.md).
 
 ```bash
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.8-buildweek
+git checkout v0.1.9-buildweek
 corepack enable
 pnpm install --frozen-lockfile
 pnpm fl judge-proof
@@ -49,7 +49,7 @@ GPT-5.6 shapes without a key: [`docs/samples/gpt-5.6/`](docs/samples/gpt-5.6/).
 **Install:** `npm i -g @mizore66/faultline@0.1.2` ([docs/continuous-release.md](docs/continuous-release.md); Build Week continuous release is paused) or clone + `pnpm fl` (above).  
 **Platforms:** Node.js 22+, pnpm 10, Windows / macOS / Linux. Docker required for live proof.  
 **Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand.  
-**CI:** green Verify on the submission pin [`v0.1.8-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.8-buildweek) (see Actions on that tag/commit). Includes the **native Docker proof E2E gate**; RIG-07 Windows-host Docker rows in the hybrid matrix are a **local Windows + Docker Desktop** retention (not a CI matrix OS), committed under `benchmarks/e2e-executed.json`.  
+**CI:** green Verify on the submission pin [`v0.1.9-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.9-buildweek) (see Actions on that tag/commit). Includes the **native Docker proof E2E gate**; RIG-07 Windows-host Docker rows in the hybrid matrix are a **local Windows + Docker Desktop** retention (not a CI matrix OS), committed under `benchmarks/e2e-executed.json`.  
 **This is the only release intended for judging.** Earlier tags (`v0.1.7-buildweek`, `v0.1.6`, …) are historical; `v0.1.4` is **RETRACTED** (do not cite).
 
 ## Validation

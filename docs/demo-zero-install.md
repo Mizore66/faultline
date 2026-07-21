@@ -2,7 +2,7 @@
 
 Three ways to touch FaultLine without building the world from scratch. Prefer the pinned Build Week tag for judges.
 
-**Pin:** `v0.1.8-buildweek` (SSH-signed — [SEC-08](security-chain.md))  
+**Pin:** `v0.1.9-buildweek` (SSH-signed — [SEC-08](security-chain.md))  
 **Package:** `@mizore66/faultline@0.1.2` on npm
 
 ## A. npm global (fastest CLI)
@@ -25,9 +25,9 @@ Global `fl` does **not** ship the repo’s committed sample bundles. For the jud
 
 ## B. GitHub Codespaces (one-click workspace)
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Mizore66/faultline?ref=v0.1.8-buildweek)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Mizore66/faultline?ref=v0.1.9-buildweek)
 
-Or: repo → **Code** → **Codespaces** → **Create codespace on `v0.1.8-buildweek`**.
+Or: repo → **Code** → **Codespaces** → **Create codespace on `v0.1.9-buildweek`**.
 
 The [`.devcontainer/devcontainer.json`](../.devcontainer/devcontainer.json) image:
 
@@ -49,7 +49,7 @@ Static HTML without CLI: open [`docs/self-incident-proof-preview.html`](self-inc
 ```bash
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
-git checkout v0.1.8-buildweek
+git checkout v0.1.9-buildweek
 pnpm install --frozen-lockfile
 pnpm fl doctor --proof-ready
 pnpm fl judge-proof

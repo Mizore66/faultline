@@ -5,12 +5,12 @@ Executable stranger checklist binding **signed tag → green CI → attested art
 ## Chain
 
 1. **Pinned submission tag (prefer signed)**  
-   Checkout the current pin in README (e.g. `v0.1.8-buildweek`).  
+   Checkout the current pin in README (e.g. `v0.1.9-buildweek`).  
    Prefer a GPG- or SSH-signed annotated tag:
    ```zsh
    git fetch --tags
-   git verify-tag v0.1.8-buildweek
-   # or: git tag -v v0.1.8-buildweek
+   git verify-tag v0.1.9-buildweek
+   # or: git tag -v v0.1.9-buildweek
    ```
    CI job `tag-checkout` runs `fl judge-proof --export-only` on that tag.
 
@@ -31,7 +31,7 @@ Executable stranger checklist binding **signed tag → green CI → attested art
 # After downloading the provenance artifact + proof bundle:
 node scripts/verify-security-chain.mjs --checklist
 node scripts/verify-security-chain.mjs \
-  --tag v0.1.8-buildweek \
+  --tag v0.1.9-buildweek \
   --bundle <git-proof-bundle-directory> \
   --receipt <ci-receipt.json> \
   --attestation <sigstore-bundle.json> \
@@ -86,6 +86,6 @@ macOS arm64 cold reader (zsh 5.9); public `allowed_signers` only; fingerprint `S
 
 ## Honesty
 
-- Tag pin is a Git ref; cryptographic tag *signing* is present for `v0.1.8-buildweek` / `v0.1.7-buildweek` (SSH ED25519). GitHub artifact attestation covers the CI-produced receipt/subject separately.
+- Tag pin is a Git ref; cryptographic tag *signing* is present for `v0.1.9-buildweek` (and historical `v0.1.8-buildweek` / `v0.1.7-buildweek`, SSH ED25519). GitHub artifact attestation covers the CI-produced receipt/subject separately.
 - Trust file is an allowlist example; strangers must review issuer identity.
-- Judging pin in README remains signed `v0.1.8-buildweek` until the human cuts `v0.1.9-buildweek`.
+- Judging pin in README is signed `v0.1.9-buildweek`. Cold-reader full-chain evidence above was recorded against signed `v0.1.8-buildweek` before this pin advanced.
