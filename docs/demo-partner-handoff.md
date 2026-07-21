@@ -57,11 +57,11 @@ Never: “FaultLine is security audited.”
 
 ## Forbidden unless artifact is on screen
 
-- “Codex generated this repair” / “Codex fixed the regression” / “Here is the Codex repair thread”
-- “Real production incident” / “root cause” / organic bug (MUMBCS is scripted protocol validation)
-- “Invisible overhead”
-- Invented time-saved or soak metrics
-- Equating `judge-proof` with historical root `f6a391…`
+- Do not say: “Codex generated this repair” / “Codex fixed the regression” / “Here is the Codex repair thread”
+- Do not say: “real production incident” / “root cause” / organic bug (MUMBCS is scripted protocol validation)
+- Do not say: “invisible overhead”
+- Do not invent time-saved or soak metrics
+- Do not equate `judge-proof` with historical root `f6a391…`
 
 ## Pre-camera checks
 
