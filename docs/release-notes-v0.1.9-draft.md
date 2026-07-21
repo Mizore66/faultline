@@ -1,6 +1,6 @@
 # Draft release notes — v0.1.9-buildweek
 
-> **Draft only.** Do not cut or move tags from this file. The human cuts and SSH-signs `v0.1.9-buildweek` after CI is green on the pin commit. `v0.1.8-buildweek` remains historical and must not be moved or deleted.
+> **Draft only.** Do not cut or move tags from this file. The human cuts and SSH-signs `v0.1.9-buildweek` after CI is green on the pin commit. Until then, enforceable pin surfaces (`README`, `package-smoke`, `tag-checkout`, CLI quickstart) remain on signed `v0.1.8-buildweek`. `v0.1.8-buildweek` remains historical and must not be moved or deleted.
 
 ## This is the only release intended for judging (once cut)
 

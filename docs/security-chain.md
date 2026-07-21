@@ -5,12 +5,12 @@ Executable stranger checklist binding **signed tag → green CI → attested art
 ## Chain
 
 1. **Pinned submission tag (prefer signed)**  
-   Checkout the current pin in README (e.g. `v0.1.9-buildweek`).  
+   Checkout the current pin in README (e.g. `v0.1.8-buildweek`).  
    Prefer a GPG- or SSH-signed annotated tag:
    ```powershell
    git fetch --tags
-   git verify-tag v0.1.9-buildweek
-   # or: git tag -v v0.1.9-buildweek
+   git verify-tag v0.1.8-buildweek
+   # or: git tag -v v0.1.8-buildweek
    ```
    CI job `tag-checkout` runs `fl judge-proof --export-only` on that tag.
 
@@ -31,7 +31,7 @@ Executable stranger checklist binding **signed tag → green CI → attested art
 # After downloading the provenance artifact + proof bundle:
 node scripts/verify-security-chain.mjs --checklist
 node scripts/verify-security-chain.mjs `
-  --tag v0.1.9-buildweek `
+  --tag v0.1.8-buildweek `
   --bundle <git-proof-bundle-directory> `
   --receipt <ci-receipt.json> `
   --attestation <sigstore-bundle.json> `
@@ -72,4 +72,4 @@ Partner cold reader ([#171 comment](https://github.com/Mizore66/faultline/issues
 - Tag pin is a Git ref; cryptographic tag *signing* may still be absent — GitHub
   artifact attestation covers the CI-produced receipt/subject.
 - Trust file is an allowlist example; strangers must review issuer identity.
-- Current judging pin in README may be a drafted `v0.1.9-buildweek` ahead of tag cut; cold-reader evidence above is for the **signed** pins `v0.1.8-buildweek` / `v0.1.7-buildweek`.
+- Current judging pin in README may be a drafted `v0.1.8-buildweek` ahead of tag cut; cold-reader evidence above is for the **signed** pins `v0.1.8-buildweek` / `v0.1.7-buildweek`.

@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { chmodSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -723,6 +722,32 @@ describe("Turn tree snapshot capture", () => {
   });
 
   describe("restored-clean staleness (preferredBaseTree P0)", () => {
+    it("invalidates session cache when only the executable bit changes", () => {
+      const repository = repositoryFixture();
+      const cachePath = join(tmpdir(), `faultline-cache-mode-only-${Date.now()}.json`);
+      try {
+        git(repository, ["config", "core.filemode", "true"]);
+        writeFileSync(join(repository, "second.txt"), "edited-1\n", "utf8");
+        const afterEdit = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        rmSync(join(repository, "tracked.txt"), { force: true });
+        const afterDelete = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(afterDelete.treeDigest).not.toBe(afterEdit.treeDigest);
+
+        chmodSync(join(repository, "second.txt"), 0o755);
+        const modeBits = lstatSync(join(repository, "second.txt")).mode & 0o111;
+        if (modeBits === 0) {
+          // Windows often cannot record +x; Linux CI is the load-bearing check.
+          return;
+        }
+        const afterMode = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(afterMode.treeDigest).not.toBe(afterDelete.treeDigest);
+        expect(git(repository, ["ls-tree", afterMode.treeDigest, "second.txt"]).slice(0, 6)).toBe("100755");
+      } finally {
+        rmSync(repository, { recursive: true, force: true });
+        rmSync(cachePath, { force: true });
+      }
+    });
+
     it("restores a previously dirty tracked file to HEAD bytes when another file stays dirty", () => {
       const repository = repositoryFixture();
       const cachePath = join(tmpdir(), `faultline-cache-restore-${Date.now()}.json`);

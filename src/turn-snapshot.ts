@@ -347,7 +347,7 @@ type TurnSnapshotSessionCache = z.infer<typeof TurnSnapshotSessionCacheSchema>;
 type DirtyContentFingerprint = {
   readonly contentFingerprint: string;
   readonly deletedPaths: readonly string[];
-  readonly paths: Readonly<Record<string, { status: string; contentDigest: string }>>;
+  readonly paths: Readonly<Record<string, { status: string; contentDigest: string; mode: "100644" | "100755" }>>;
 };
 
 type IgnoreRule = {
@@ -545,7 +545,7 @@ export function computeDirtyContentFingerprint(
   const ignoreRules = options.ignoreRules ?? loadFaultlineIgnoreRules(repositoryRoot);
   const trackedFilesOnly = options.trackedFilesOnly === true;
   const maxFileBytes = options.maxFileBytes ?? TURN_SNAPSHOT_MAX_FILE_BYTES;
-  const paths: Record<string, { status: string; contentDigest: string }> = {};
+  const paths: Record<string, { status: string; contentDigest: string; mode: "100644" | "100755" }> = {};
   const deletedPaths: string[] = [];
 
   for (const entry of parsePorcelainStatusZ(statusPorcelain)) {
@@ -562,7 +562,10 @@ export function computeDirtyContentFingerprint(
       if (stat.isSymbolicLink() || !stat.isFile()) continue;
       paths[entry.path] = {
         status: entry.status,
-        contentDigest: fullFileContentDigest(absolutePath, maxFileBytes)
+        contentDigest: fullFileContentDigest(absolutePath, maxFileBytes),
+        // Executable mode must invalidate the session cache: mode-only changes
+        // leave content digests unchanged and would otherwise reuse a stale tree.
+        mode: (stat.mode & 0o111) !== 0 ? "100755" : "100644"
       };
     } catch (error) {
       if (error instanceof TurnSnapshotError) throw error;
