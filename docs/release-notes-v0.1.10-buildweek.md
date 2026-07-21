@@ -4,7 +4,7 @@
 
 ## This is the only release intended for judging
 
-**Current tip (2026-07-21 retarget):** `ea1e244c4d05e51192f4f8a18ad6c6d40312d71e` (syncs pin to `main` including narration cleanup #200 and package `@mizore66/faultline@0.1.4`). Prior tip `ce99a793af0b020bf1b9cf21114f8d7897b37207` remains in history.
+**Current tip (2026-07-21 retarget):** `89b8e2348037ece69faf47b6e230a78c3bab6f44` (syncs pin to `main` including narration cleanup #200 and package `@mizore66/faultline@0.1.4`). Prior tip `ce99a793af0b020bf1b9cf21114f8d7897b37207` remains in history.
 
 Originally re-cut so judges receive the **EXT-01** security fixes. Independent external review (Chang Kai Zhe) found a Critical in an off-path Git capture entry point that missed the hardening sweep; fixes shipped same-day with regression tests and an honest disposition ([docs/ext-01-security-review.md](ext-01-security-review.md)).
 

@@ -17,5 +17,5 @@ work stays on feature branches (see Bucket 2 / `docs/post-submission/` when
 present) until a human lifts the freeze.
 
 Re-asserted: 2026-07-21 after retargeting `v0.1.10-buildweek` to
-`ea1e244c4d05e51192f4f8a18ad6c6d40312d71e` (main tip including #200 +
+`89b8e2348037ece69faf47b6e230a78c3bab6f44` (main tip including #200 +
 `@mizore66/faultline@0.1.4`).
