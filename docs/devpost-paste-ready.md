@@ -41,7 +41,7 @@ pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
 
-Pinned submission tag / Release: [`v0.1.9-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.9-buildweek) · validated on the `v0.1.9-buildweek` tag commit · **literal SHA: a6a1393c7142cbee65ce70b62d8e6ecb5c8ffe75**.
+Pinned submission tag / Release: [`v0.1.9-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.9-buildweek) · validated on the `v0.1.9-buildweek` tag commit · **literal SHA: 3ca1bb8adaebf163fe633642a0a4ba20dfb7810a**.
 `pnpm install` builds `dist` via `prepare`; `pnpm fl` runs `node dist/cli.js` (compiled entry).  
 Green CI: Actions Verify workflow on the `v0.1.9-buildweek` pin (incl. native Docker E2E).
 Zero-install UI snapshot: open `docs/self-incident-proof-preview.html` after clone (or regenerate with `pnpm fl commit-proof-preview`).  
