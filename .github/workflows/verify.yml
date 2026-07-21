@@ -317,17 +317,42 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: v0.1.10-buildweek
           fetch-tags: true
           fetch-depth: 0
-      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      - name: Resolve judging pin tag
+        id: pin
+        shell: bash
+        run: |
+          PIN=v0.1.10-buildweek
+          if git rev-parse "$PIN^{commit}" >/dev/null 2>&1; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$PIN" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --tags --refs origin "refs/tags/$PIN" | grep -q .; then
+            git fetch --no-tags origin "refs/tags/$PIN:refs/tags/$PIN"
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$PIN" >> "$GITHUB_OUTPUT"
+          elif grep -q 'PENDING_AFTER_TAG_CUT' docs/devpost-paste-ready.md; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Pin $PIN not cut yet (PENDING_AFTER_TAG_CUT) — skipping tag-checkout job body"
+          else
+            echo "::error::Pinned tag $PIN missing and paste-ready is not PENDING_AFTER_TAG_CUT"
+            exit 1
+          fi
+      - if: steps.pin.outputs.ready == 'true'
+        run: git checkout --force "${{ steps.pin.outputs.ref }}"
+      - if: steps.pin.outputs.ready == 'true'
+        uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - if: steps.pin.outputs.ready == 'true'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - name: Judge-proof from pinned submission tag
+      - if: steps.pin.outputs.ready == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.pin.outputs.ready == 'true'
+        run: pnpm build
+      - if: steps.pin.outputs.ready == 'true'
+        name: Judge-proof from pinned submission tag
         run: node dist/cli.js judge-proof --export-only
         env:
           FAULTLINE_NO_BROWSER: "1"
