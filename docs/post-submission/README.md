@@ -1,8 +1,8 @@
-# Bucket 2 — post-submission product queue
+# Bucket 2 - post-submission product queue
 
-**Status:** documentation-only roadmap · **do not merge while `SUBMISSION_FROZEN` is active**  
-**Build Week judging pin (untouchable):** `v0.1.10-buildweek` → `ce99a793af0b020bf1b9cf21114f8d7897b37207`  
-**Historical previous pin (retain; do not move):** `v0.1.9-buildweek` → `3ca1bb8adaebf163fe633642a0a4ba20dfb7810a`  
+**Status:** documentation-only roadmap | **do not merge while `SUBMISSION_FROZEN` is active**  
+**Build Week judging pin (untouchable):** `v0.1.10-buildweek` -> `ce99a793af0b020bf1b9cf21114f8d7897b37207`  
+**Historical previous pin (retain; do not move):** `v0.1.9-buildweek` -> `3ca1bb8adaebf163fe633642a0a4ba20dfb7810a`  
 **Why this PR exists:** park the next honest engineering work *after* Devpost submit so the backlog is reviewable without polluting the frozen submission surface.
 
 ## What this is
@@ -38,7 +38,7 @@ After freeze lifts: **do not merge this umbrella wholesale**. Rebase this roadma
 | Pin `v0.1.10-buildweek` | What judges run (Build Week judging pin; includes EXT-01) |
 | Pin `v0.1.9-buildweek` | Historical previous pin (lacks EXT-01; retain; do not move) |
 | Bucket 1 on `main` | Submission freeze + de-risk tooling (docs/scripts/CI only) |
-| **This PR (Bucket 2)** | Post-submit product backlog — reviewable now, merge later via split PRs |
+| **This PR (Bucket 2)** | Post-submit product backlog - reviewable now, merge later via split PRs |
 
 ## Prior split PRs (superseded drafts)
 

@@ -1,4 +1,4 @@
-# Post-submission — Broaden CDX-09 thread ID provenance
+# Post-submission - Broaden CDX-09 thread ID provenance
 
 **Status:** parked until Devpost is submitted and `SUBMISSION_FROZEN` is lifted.  
 **Rule:** touches `src/**` (and tests). Must not merge to `main` while freeze is active.  
@@ -6,7 +6,7 @@
 
 ## Intent
 
-CDX-09 already binds **optional** Codex thread identifiers into Git proof manifests and prevention packages (identifiers only — never transcripts). Broaden that provenance so turn-proof packages and primary investigation CLI paths can carry the same digest-bound IDs consistently, with tamper tests and clear optional-vs-required semantics.
+CDX-09 already binds **optional** Codex thread identifiers into Git proof manifests and prevention packages (identifiers only - never transcripts). Broaden that provenance so turn-proof packages and primary investigation CLI paths can carry the same digest-bound IDs consistently, with tamper tests and clear optional-vs-required semantics.
 
 ## Current baseline (do not regress)
 
@@ -20,9 +20,9 @@ CDX-09 already binds **optional** Codex thread identifiers into Git proof manife
 
 Existing tests to preserve:
 
-- `tests/git-proof-bundle.test.ts` — optional IDs bind; tamper fails closed; no transcript/prompt/messages text
-- `tests/prevention-proof.test.ts` — `codexThreadId` round-trip + tamper
-- `tests/backlog-closures.test.ts` — IDs may exist without transcript bodies
+- `tests/git-proof-bundle.test.ts` - optional IDs bind; tamper fails closed; no transcript/prompt/messages text
+- `tests/prevention-proof.test.ts` - `codexThreadId` round-trip + tamper
+- `tests/backlog-closures.test.ts` - IDs may exist without transcript bodies
 
 ## Spec (implementation must define and enforce)
 
@@ -47,7 +47,7 @@ Do **not** embed thread IDs into `hashes.txt` as separate artifacts. Do **not** 
 
 Unify on the Git/turn IdentifierSchema unless a documented exception is required:
 
-- Length: 1..160 code units (prevention may keep max 256 only if already shipped — prefer documenting the asymmetry or converging in a follow-up)
+- Length: 1..160 code units (prevention may keep max 256 only if already shipped - prefer documenting the asymmetry or converging in a follow-up)
 - Pattern: `^[A-Za-z0-9][A-Za-z0-9._:-]*$`
 - Reject empty string, whitespace, path separators, quotes, control characters
 
@@ -59,7 +59,7 @@ Unify on the Git/turn IdentifierSchema unless a documented exception is required
 
 ### 5. Privacy and redaction
 
-- Identifiers only — no prompts, messages, tool payloads, diffs, or stdout/stderr previews in manifests.
+- Identifiers only - no prompts, messages, tool payloads, diffs, or stdout/stderr previews in manifests.
 - Do not log full thread payloads in CI artifacts.
 - Redaction scanners continue to apply to any adjacent text channels; IDs themselves are not secrets but must not become a vehicle for smuggling content.
 

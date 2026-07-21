@@ -1,4 +1,4 @@
-# Post-submission — Batch turn-snapshot staging (oracle-gated)
+# Post-submission - Batch turn-snapshot staging (oracle-gated)
 
 **Status:** parked until Devpost is submitted and `SUBMISSION_FROZEN` is lifted.  
 **Rule:** touches `src/**` (and tests). Must not merge to `main` while freeze is active.  
@@ -31,13 +31,13 @@ with NUL-separated paths. That is incorrect:
 - Filenames containing newline (or CR) cannot be represented safely with newline-delimited `--stdin-paths`.
 - Implicit filter behavior is weaker than passing `--no-filters` explicitly for raw file bytes.
 
-### Chosen approach: Option A — restricted fast path
+### Chosen approach: Option A - restricted fast path
 
 Use newline-delimited `--stdin-paths --no-filters` for the common case; fall back to the existing safe per-file `--stdin` path when a filename is unsafe for that protocol.
 
 #### Fast path (allowed only when every update path is safe)
 
-Preconditions — every relative path in the batch must:
+Preconditions - every relative path in the batch must:
 
 - contain no `U+000A` (LF) and no `U+000D` (CR)
 - not begin with `-` (or be passed after `--` / as `./-name` consistently with oracle)
@@ -72,11 +72,11 @@ git hash-object -w --stdin --no-filters
 git update-index --add --cacheinfo ...
 ```
 
-Fallback may be whole-batch (simpler, preferred for v1) or per-unsafe-path mixed with a safe sub-batch — either is fine if the oracle gate passes.
+Fallback may be whole-batch (simpler, preferred for v1) or per-unsafe-path mixed with a safe sub-batch - either is fine if the oracle gate passes.
 
 ### Option B (deferred alternative)
 
-Stream each file's bytes to `hash-object --stdin --no-filters`, preserve a deterministic path→OID map, and batch index updates separately. Prefer Option A first; document any later switch as a new PR with the same oracle gate.
+Stream each file's bytes to `hash-object --stdin --no-filters`, preserve a deterministic path->OID map, and batch index updates separately. Prefer Option A first; document any later switch as a new PR with the same oracle gate.
 
 ## Must cover (acceptance criteria)
 
@@ -86,9 +86,9 @@ Stream each file's bytes to `hash-object --stdin --no-filters`, preserve a deter
 | Symlinks | Remain rejected / excluded by existing plan gates; never hashed as file bytes via this fast path |
 | Deletions | Oracle-equivalent to current `--force-remove` behavior |
 | SHA-1 vs SHA-256 repos | Work in both; object IDs are whatever `hash-object` returns for the repo |
-| Output ordering | OID lines must map 1:1 to input path order; mismatch → hard error, no partial index write |
+| Output ordering | OID lines must map 1:1 to input path order; mismatch -> hard error, no partial index write |
 | Bounded I/O | Cap stdout/stderr buffers; refuse unbounded capture |
-| Partial command failure | Non-zero exit, truncated OID list, or malformed OID → abort staging; leave no half-applied index update for that throwaway index |
+| Partial command failure | Non-zero exit, truncated OID list, or malformed OID -> abort staging; leave no half-applied index update for that throwaway index |
 | Windows paths | Absolute paths must round-trip through the same Git used for the repo; no silent path rewrite |
 | Paths beginning with `-` | Detected as unsafe for bare `--stdin-paths` lists; use fallback (or `./` prefix only if oracle proves equivalence) |
 | Newline / CR in filenames | Detected; force fallback |
@@ -101,7 +101,7 @@ Stream each file's bytes to `hash-object --stdin --no-filters`, preserve a deter
 - Restored-clean regression suite green (HEAD-base staging; restored-clean + one dirty)
 - `pnpm measure:turn-snapshot` regenerates `docs/turn-snapshot-overhead.md` with **honest** remeasured numbers (no invented speedups)
 - No reintroduction of `preferredBaseTree`
-- Cache-key fields change only if required for correctness already on main — prefer no cache-key churn
+- Cache-key fields change only if required for correctness already on main - prefer no cache-key churn
 
 ## Non-goals
 
@@ -112,7 +112,7 @@ Stream each file's bytes to `hash-object --stdin --no-filters`, preserve a deter
 
 ## Implementation sketch (when freeze lifts)
 
-Primary touchpoint: `src/turn-snapshot.ts` → `writeThrowawayTreeDigest` update loop (~`updatePaths`).
+Primary touchpoint: `src/turn-snapshot.ts` -> `writeThrowawayTreeDigest` update loop (~`updatePaths`).
 
 Suggested split for review:
 

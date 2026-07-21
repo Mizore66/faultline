@@ -1,4 +1,4 @@
-# Post-submission — Hostile-verifier corpus parity for turn packages
+# Post-submission - Hostile-verifier corpus parity for turn packages
 
 **Status:** parked until Devpost is submitted and `SUBMISSION_FROZEN` is lifted.  
 **Rule:** primarily tests (+ small verifier fixes if gaps are real bugs). Must not merge to `main` while freeze is active if the change is product code; test-only PRs may follow freeze policy.  
@@ -62,9 +62,9 @@ Create `tests/hostile-turn-verifier-corpus.test.ts` (name may vary) with explici
 | 9 | Root mismatch (`ROOT.sha256` vs hashes body; external `--expect-root`) | fail closed |
 | 10 | Run-ID reuse / metadata contradiction (same run id, different sealed tree) | fail closed |
 | 11 | Contradictory outcomes (PASS/FAIL labels disagree with sealed observations) | fail closed |
-| 12 | Git pack / object tampering if turn bundles embed git objects — else N/A with note | fail closed or N/A |
+| 12 | Git pack / object tampering if turn bundles embed git objects - else N/A with note | fail closed or N/A |
 | 13 | Downgrade attempts (strip grade fields / rename to imply COMMIT_PROOF) | fail closed |
-| 14 | Archive / compression bombs if archives are accepted — else N/A (directory verifier only) | fail closed or N/A |
+| 14 | Archive / compression bombs if archives are accepted - else N/A (directory verifier only) | fail closed or N/A |
 | 15 | Malformed JSON in manifest / investigation / frozen witness metadata | fail closed |
 
 Parity requirement: every **applicable** Git hostile case has a turn analogue, or an explicit N/A justification in this doc and the test file header.

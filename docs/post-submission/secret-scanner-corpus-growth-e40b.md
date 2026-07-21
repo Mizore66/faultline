@@ -1,4 +1,4 @@
-# Post-submission — Grow secret-scanner corpus past 151 cases
+# Post-submission - Grow secret-scanner corpus past 151 cases
 
 **Status:** parked until Devpost is submitted and `SUBMISSION_FROZEN` is lifted.  
 **Rule:** corpus/scripts/tests primarily; scanner `src/**` only if new categories need detectors. Must not merge product code to `main` while freeze is active.  
@@ -32,12 +32,12 @@ Extend generators/labels for at least:
 - High-entropy token shapes relevant to snapshot scanning (synthetic only)
 - Additional provider-shaped **synthetic** tokens only when a detector exists or is added in the same PR
 
-Each case must declare: `kind` (or expected miss), `label` ∈ {true_secret, false_positive, should_miss}, and rationale.
+Each case must declare: `kind` (or expected miss), `label`  in  {true_secret, false_positive, should_miss}, and rationale.
 
 ### 2. True-positive and false-positive corpora
 
 - Grow **true_secret** with diverse encodings (JSON, env, YAML-ish, URL query) without live credentials
-- Grow **false_positive** with docs placeholders, UUIDs, example.com tokens, clearly fake `sk-` lookalikes that policy should not treat as secrets if currently benign — match detector behavior honestly
+- Grow **false_positive** with docs placeholders, UUIDs, example.com tokens, clearly fake `sk-` lookalikes that policy should not treat as secrets if currently benign - match detector behavior honestly
 - Do not silently reclassify known misses as true positives to improve recall optics
 
 ### 3. Unicode and multiline secrets
@@ -46,7 +46,7 @@ Add labeled cases for:
 
 - Multiline PEM / continued lines
 - Unicode confusable punctuation around assignments (fullwidth equals, etc.) where behavior is defined
-- Secrets split across lines (expected miss today unless detector gains capability — label `should_miss` until then)
+- Secrets split across lines (expected miss today unless detector gains capability - label `should_miss` until then)
 
 ### 4. Split secrets
 
@@ -100,13 +100,13 @@ Turn snapshot must continue to secret-scan **before** `hash-object` / `write-tre
 
 ## Target size (guidance, not vanity)
 
-Aim for roughly **200–300** labeled cases in the first growth PR, biased toward FP characterization and known-miss documentation rather than recall theater.
+Aim for roughly **200-300** labeled cases in the first growth PR, biased toward FP characterization and known-miss documentation rather than recall theater.
 
 ## Non-goals
 
 - Claiming perfect secret detection
 - Shipping real credential samples "for realism"
-- Quietly flipping `LIMITED` → stronger without evidence
+- Quietly flipping `LIMITED` -> stronger without evidence
 - Merging `src/**` under `SUBMISSION_FROZEN`
 
 ## Rollback
