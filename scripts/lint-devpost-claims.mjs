@@ -63,11 +63,29 @@ if (!sampleRoot.startsWith("sha256:f85c446d")) {
   fail(`unexpected sample root artifact: ${sampleRoot}`);
 }
 
-// Package version consistency when npm install is claimed
-const version = pkg.version;
+// npm install claims must match the *judging pin* package version, not main.
+// main may bump ahead of the frozen pin (e.g. 0.1.3) while paste-ready cites
+// the published pin package (e.g. 0.1.2 on v0.1.9-buildweek).
+let pinVersion = pkg.version;
+if (pinnedRef) {
+  const pinPkg = spawnSync("git", ["show", `${pinnedRef}:package.json`], {
+    cwd: REPO,
+    encoding: "utf8"
+  });
+  if (pinPkg.status === 0) {
+    try {
+      pinVersion = JSON.parse(pinPkg.stdout).version;
+    } catch {
+      fail(`cannot parse ${pinnedRef}:package.json`);
+    }
+  } else {
+    fail(`cannot read ${pinnedRef}:package.json: ${pinPkg.stderr.trim()}`);
+  }
+}
+const version = pinVersion;
 if (docs["docs/devpost-paste-ready.md"].includes(`@mizore66/faultline@`) &&
     !docs["docs/devpost-paste-ready.md"].includes(`@mizore66/faultline@${version}`)) {
-  fail(`devpost-paste-ready npm version must match package.json ${version}`);
+  fail(`devpost-paste-ready npm version must match pin ${pinnedRef} package.json ${version}`);
 }
 
 // Literal SHA for pin (paste-ready) must resolve to the tag
