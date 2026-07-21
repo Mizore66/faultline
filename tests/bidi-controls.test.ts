@@ -81,7 +81,7 @@ describe("bidi / Trojan Source controls", () => {
     for (const root of SCAN_ROOTS) {
       walk(join(REPO_ROOT, root), files);
     }
-    // Also scan top-level policy / entry docs and config
+    // Also scan top-level policy / entry docs and config when present
     for (const top of [
       "SUBMISSION_FROZEN",
       "README.md",
@@ -91,7 +91,12 @@ describe("bidi / Trojan Source controls", () => {
       "tsconfig.json",
       "vitest.config.ts"
     ]) {
-      files.push(join(REPO_ROOT, top));
+      const absolute = join(REPO_ROOT, top);
+      try {
+        if (statSync(absolute).isFile()) files.push(absolute);
+      } catch {
+        // Optional top-level files (e.g. SUBMISSION_FROZEN) may be absent.
+      }
     }
 
     expect(files.length).toBeGreaterThan(50);
