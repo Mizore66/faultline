@@ -1,17 +1,114 @@
-# Post-submission queue — Grow secret-scanner corpus past 151 cases
+# Post-submission — Grow secret-scanner corpus past 151 cases
 
-**Status:** parked until Devpost is submitted and `SUBMISSION_FROZEN` is lifted.
-
-**Rule:** touches `src/**` (and possibly tests). Must not merge to main while freeze is active.
+**Status:** parked until Devpost is submitted and `SUBMISSION_FROZEN` is lifted.  
+**Rule:** corpus/scripts/tests primarily; scanner `src/**` only if new categories need detectors. Must not merge product code to `main` while freeze is active.  
+**Judging pin context:** implement against post-freeze `main`; never retarget or move `v0.1.10-buildweek`.
 
 ## Intent
-Grow secret-scanner corpus past 151 cases
 
-## Gate
-- Oracle equivalence (`tests/turn-snapshot-oracle.test.ts`) for any staging/perf change
-- No pin/tag moves
-- No evidence-grade / TURN_PROOF promotion machinery
-- No plugin live-fire claims
+Grow the synthetic secret-scanner efficacy corpus past the current **151** labeled cases while keeping coverage honesty (`LIMITED`), improving false-positive characterization, and never storing real active credentials.
 
-## Next engineering steps
-See parent note in PR / issue body when work begins.
+## Current baseline
+
+| Item | Value |
+|------|-------|
+| Cases | 151 |
+| Digest | `sha256:2083c387235d0afc4a6972ef76e63cf628d6167eddfc60e548b215b2551928c1` (see `docs/secret-scanner-efficacy.md`) |
+| Generator | `scripts/expand-secret-scanner-corpus.mjs` |
+| Measurer | `scripts/measure-secret-scanner.mjs` |
+| Labels | `benchmarks/secret-scanner-corpus/labels.json` |
+| Layout | `true_secret/`, `false_positive/`, `should_miss/` |
+| Detector kinds (`src/redaction.ts`) | `OPENAI_API_KEY`, `GITHUB_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AUTHORIZATION_BEARER`/`BASIC`, `PRIVATE_KEY_BLOCK`, `GENERIC_SECRET_ASSIGNMENT` |
+| Snapshot extra | `HIGH_ENTROPY_TOKEN` in `src/turn-snapshot.ts` (first 256 KiB; skips binary-looking buffers) |
+| Allowlist | `.faultline-secret-allowlist.json` via `src/secret-allowlist.ts` (path + kind + occurrenceDigest [+ optional fileDigest]) |
+
+## Spec requirements
+
+### 1. Token categories (corpus must label explicitly)
+
+Extend generators/labels for at least:
+
+- Existing true-positive families (OpenAI, GitHub, AWS key id/secret, Bearer, Basic, PEM, generic assignment)
+- High-entropy token shapes relevant to snapshot scanning (synthetic only)
+- Additional provider-shaped **synthetic** tokens only when a detector exists or is added in the same PR
+
+Each case must declare: `kind` (or expected miss), `label` ∈ {true_secret, false_positive, should_miss}, and rationale.
+
+### 2. True-positive and false-positive corpora
+
+- Grow **true_secret** with diverse encodings (JSON, env, YAML-ish, URL query) without live credentials
+- Grow **false_positive** with docs placeholders, UUIDs, example.com tokens, clearly fake `sk-` lookalikes that policy should not treat as secrets if currently benign — match detector behavior honestly
+- Do not silently reclassify known misses as true positives to improve recall optics
+
+### 3. Unicode and multiline secrets
+
+Add labeled cases for:
+
+- Multiline PEM / continued lines
+- Unicode confusable punctuation around assignments (fullwidth equals, etc.) where behavior is defined
+- Secrets split across lines (expected miss today unless detector gains capability — label `should_miss` until then)
+
+### 4. Split secrets
+
+Keep and expand split-line / wrapped base64 **should_miss** cases. Document that split secrets are a known limitation until a deliberate detector change ships with tests.
+
+### 5. Binary files
+
+- Snapshot scanner skips binary-looking buffers: add corpus/unit coverage that binary fixtures are not scanned as text (or are skipped safely)
+- Do not store large binaries in-repo; tiny synthetic headers suffice
+
+### 6. Allowlist semantics
+
+Corpus growth must not bypass allowlist rules:
+
+- Allowlist entries require path + kind + occurrenceDigest (+ fileDigest when present)
+- Tests continue to reject unsafe allowlist paths and wrong digests
+- New corpus files should generally **not** rely on allowlist; allowlist remains for reviewed in-tree probes (e.g. `src/doctor.ts`)
+
+### 7. Maximum scan cost
+
+Preserve existing caps unless explicitly changed with measurement:
+
+- Snapshot: first 256 KiB per file
+- Allowlist file: max 256 KiB, max 2048 entries
+- Corpus expansion script must finish in CI-reasonable time (target: seconds, not minutes)
+
+If raising corpus size substantially, gate full measure behind an env flag for local/CI optional jobs, but keep a minimum regression subset always on.
+
+### 8. Detection before Git-object creation
+
+Turn snapshot must continue to secret-scan **before** `hash-object` / `write-tree`. Any corpus-driven regression test should assert refusal happens prior to object quarantine writes (existing `tests/turn-snapshot.test.ts` patterns).
+
+### 9. Corpus provenance
+
+- All secrets **synthetic** and generated by `scripts/expand-secret-scanner-corpus.mjs` (or successor)
+- Commit regenerated `labels.json`, efficacy JSON/MD, and corpus digest
+- Record generator seed/version in efficacy metadata when available
+
+### 10. Prohibition on real active credentials
+
+**Hard rule:** never store real, live, or previously-live credentials. No production `.env` imports. No partner secrets. Synthetic strings only. If a contributor pastes a real secret, rotate it out-of-band and purge history.
+
+## Acceptance criteria
+
+1. Corpus case count **> 151** with regenerated digest and docs
+2. `pnpm` measure script updates `benchmarks/secret-scanner-efficacy.json` + `docs/secret-scanner-efficacy.md`
+3. Coverage label remains honest (`LIMITED` until a deliberate policy change)
+4. Existing redaction / turn-snapshot secret tests stay green
+5. New Unicode/multiline/split/binary cases are labeled and asserted
+6. CI does not introduce real credentials (scanner + review)
+
+## Target size (guidance, not vanity)
+
+Aim for roughly **200–300** labeled cases in the first growth PR, biased toward FP characterization and known-miss documentation rather than recall theater.
+
+## Non-goals
+
+- Claiming perfect secret detection
+- Shipping real credential samples "for realism"
+- Quietly flipping `LIMITED` → stronger without evidence
+- Merging `src/**` under `SUBMISSION_FROZEN`
+
+## Rollback
+
+Revert corpus/script/test PR; restore previous digest and 151-case docs if needed.
