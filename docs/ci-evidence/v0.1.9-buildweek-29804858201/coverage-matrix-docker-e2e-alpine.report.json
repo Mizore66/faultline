@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "faultline.coverage-matrix.v1",
+  "title": "FaultLine adversarial scenario coverage matrix",
+  "generatedAt": "2026-07-21T05:45:43.991Z",
+  "kind": "COVERAGE_MATRIX",
+  "executionMode": "HYBRID_UNIT_AND_EXECUTABLE_E2E",
+  "incidents": 8,
+  "expectedLocalizationOutcomes": 8,
+  "unsupportedExactCauseClaims": 0,
+  "executableE2ERows": 8,
+  "counterfactuallyValidated": 1,
+  "correctlyMarkedUnstable": 1,
+  "correctlyMarkedIncompatible": 1,
+  "rows": [
+    {
+      "id": "dirty-codex-turns",
+      "scenario": "Codex Stop events occur on dirty worktrees before a commit.",
+      "expected": "PROVENANCE_GAP",
+      "observed": "PROVENANCE_GAP",
+      "result": "PASS",
+      "coverage": "EXECUTABLE_E2E",
+      "detail": "Turn tree snapshots exist; clean checkpoints may be skipped.",
+      "unsupportedExactCauseClaim": false
+    },
+    {
+      "id": "flaky-witness",
+      "scenario": "Witness returns inconsistent verdicts across three reruns.",
+      "expected": "REFUSE_UNSTABLE",
+      "observed": "REFUSE_UNSTABLE",
+      "result": "PASS",
+      "coverage": "EXECUTABLE_E2E",
+      "detail": "No stable state and no A-grade proof.",
+      "unsupportedExactCauseClaim": false
+    },
+    {
+      "id": "historical-api-incompatibility",
+      "scenario": "Older states cannot compile or import the witness harness.",
+      "expected": "INAPPLICABLE",
+      "observed": "INAPPLICABLE",
+      "result": "PASS",
+      "coverage": "EXECUTABLE_E2E",
+      "detail": "INCOMPATIBLE_STATE must not become FAIL.",
+      "unsupportedExactCauseClaim": false
+    },
+    {
+      "id": "lockfile-change",
+      "scenario": "pnpm-lock.yaml changes inside the investigated range.",
+      "expected": "REQUIRE_ENV_MAPPING",
+      "observed": "REQUIRE_ENV_MAPPING",
+      "result": "PASS",
+      "coverage": "EXECUTABLE_E2E",
+      "detail": "Heterogeneous environment fingerprints refuse single-image proof.",
+      "unsupportedExactCauseClaim": false
+    },
+    {
+      "id": "minimization-budget-exhausted",
+      "scenario": "Execution budget ends before a 1-minimal set is certified.",
+      "expected": "ASSOCIATED_NONMINIMAL",
+      "observed": "ASSOCIATED_NONMINIMAL",
+      "result": "PASS",
+      "coverage": "EXECUTABLE_E2E",
+      "detail": "Return associated set without unsupported exact-cause claims.",
+      "unsupportedExactCauseClaim": false
+    },
+    {
+      "id": "multi-file-interaction",
+      "scenario": "Two changed files together are necessary and sufficient for failure (minimal failure-inducing file set).",
+      "expected": "ONE_MINIMAL_SET",
+      "observed": "ONE_MINIMAL_SET",
+      "result": "PASS",
+      "coverage": "EXECUTABLE_E2E",
+      "detail": "Bidirectional counterfactual validation at file-level Git patch units.",
+      "unsupportedExactCauseClaim": false
+    },
+    {
+      "id": "repaired-and-reintroduced",
+      "scenario": "Failure is repaired then reintroduced later in history.",
+      "expected": "MULTIPLE_TRANSITIONS",
+      "observed": "MULTIPLE_TRANSITIONS",
+      "result": "PASS",
+      "coverage": "EXECUTABLE_E2E",
+      "detail": "Non-monotonic PASS/FAIL transitions must remain visible.",
+      "unsupportedExactCauseClaim": false
+    },
+    {
+      "id": "simple-source-regression",
+      "scenario": "Single-file source change flips a structured witness from pass to fail.",
+      "expected": "LOCALIZE_BOUNDARY",
+      "observed": "LOCALIZE_BOUNDARY",
+      "result": "PASS",
+      "coverage": "EXECUTABLE_E2E",
+      "detail": "Expect one stable PASS->FAIL boundary.",
+      "unsupportedExactCauseClaim": false
+    }
+  ],
+  "note": "Hybrid coverage matrix: 8 of 8 rows are EXECUTABLE_E2E (Docker CI facts from e2e-executed.json); remaining rows stay SPEC_AND_UNIT_COVERED. Do not invent Exact-cause claims."
+}

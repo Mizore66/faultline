@@ -8,7 +8,16 @@ Record with product on screen. Prefer PowerShell: `pnpm.cmd fl …` if Execution
 
 **Pinned checkout for the video:** `git checkout v0.1.9-buildweek`
 
----
+**Machine rehearsal (do this before the human sits down):**
+
+```bash
+node scripts/rehearse-teleprompter.mjs
+# scheduled in .github/workflows/teleprompter-rehearsal.yml
+node scripts/capture-fallback-footage.mjs   # docs/fallback-footage/
+node scripts/capture-devpost-gallery.mjs    # docs/devpost-gallery/
+node scripts/lint-devpost-claims.mjs
+```
+
 
 ## 0:00–0:20 — Cold open (prefer external later-turn, then sample)
 

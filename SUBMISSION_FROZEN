@@ -1,0 +1,12 @@
+# Submission freeze marker (C-1)
+
+Presence of this file activates `.github/workflows/verify.yml` job
+`submission-freeze`: pushes/PRs to `main` that touch `src/**`, `package.json`,
+or `pnpm-lock.yaml` fail unless `workflow_dispatch` sets `unfreeze_override=true`.
+
+Docs, tests, scripts, workflows, and this file itself remain allowed.
+
+Created: 2026-07-21 — bind main to docs/scripts-only changes through Devpost
+submission. Do **not** re-cut `v0.1.9-buildweek` for routine improvements.
+Post-submission `src/` work lands on feature branches and merges only after
+the freeze is lifted by a human.
