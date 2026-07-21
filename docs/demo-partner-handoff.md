@@ -8,7 +8,7 @@ Use this document — not the repository teleprompter verbatim — when recordin
 
 ## Locked claim
 
-FaultLine proves the earliest stable PASS→FAIL boundary under a frozen witness. It does **not** prove model intent, unique semantic root cause, private Codex interception, or one universal runtime.
+FaultLine’s mature `COMMIT_PROOF` path proves the earliest stable PASS→FAIL boundary under a frozen witness. Its Codex-turn path applies the same evidence model but remains experimental. It does **not** prove model intent, unique semantic root cause, private Codex interception, or one universal runtime.
 
 | Path | What you may say |
 | --- | --- |
@@ -29,7 +29,7 @@ FaultLine proves the earliest stable PASS→FAIL boundary under a frozen witness
 
 **Offline verify**
 
-> Verifies the package offline without rerunning repository code, using Docker, or trusting the UI.
+> Verifies the package offline—without rerunning repository code, without Docker, and without trusting the UI.
 
 (The verifier is FaultLine code shipped in the package path — do not say “without re-running our code.”)
 

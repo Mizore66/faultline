@@ -18,7 +18,7 @@ const BIDI_CONTROL_RE = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-const SCAN_ROOTS = ["src", "tests", "scripts", "docs", ".github"];
+const SCAN_ROOTS = ["src", "tests", "scripts", "docs", ".github", "plugin", "actions"];
 
 const SKIP_DIR_NAMES = new Set([
   "node_modules",
@@ -55,7 +55,13 @@ function shouldScanFile(absolutePath: string): boolean {
 }
 
 function walk(directory: string, out: string[]): void {
-  for (const entry of readdirSync(directory)) {
+  let entries: string[];
+  try {
+    entries = readdirSync(directory);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
     if (SKIP_DIR_NAMES.has(entry)) continue;
     const absolute = join(directory, entry);
     const st = statSync(absolute);
@@ -75,8 +81,16 @@ describe("bidi / Trojan Source controls", () => {
     for (const root of SCAN_ROOTS) {
       walk(join(REPO_ROOT, root), files);
     }
-    // Also scan top-level policy / entry docs
-    for (const top of ["SUBMISSION_FROZEN", "README.md", "SECURITY.md", "action.yml"]) {
+    // Also scan top-level policy / entry docs and config
+    for (const top of [
+      "SUBMISSION_FROZEN",
+      "README.md",
+      "SECURITY.md",
+      "action.yml",
+      "package.json",
+      "tsconfig.json",
+      "vitest.config.ts"
+    ]) {
       files.push(join(REPO_ROOT, top));
     }
 

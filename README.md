@@ -103,7 +103,7 @@ Help is tiered: `fl` / `fl quickstart` for the short surface; `fl advanced` for 
 - **Docker** required only for live proof (`demo full` / investigate), not for `judge-proof`
 - **Windows:** use `pnpm.cmd` if ExecutionPolicy blocks `pnpm`. Do not insert `--` between `fl` and the subcommand
 - **npm:** published package may lag the pin — do not treat npm as the EXT-01 judging artifact ([docs/continuous-release.md](docs/continuous-release.md))
-- **CI:** green Verify on [`v0.1.10-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.10-buildweek), including the native Docker proof E2E gate
+- **CI evidence:** See the linked successful native Docker E2E and required product jobs for [`v0.1.10-buildweek`](https://github.com/Mizore66/faultline/releases/tag/v0.1.10-buildweek). The full tag-push Verify matrix includes a known post-tag Devpost-SHA metadata failure (claims-linter while Devpost still had `PENDING_AFTER_TAG_CUT`); post-tag main commit `c2628fd` completed that submission metadata step (documented in [docs/demo-partner-handoff.md](docs/demo-partner-handoff.md)). Do not describe the aggregate tag-push workflow as green unless an exact successful rerun on that tag can be linked.
 
 ## Docs by audience
 

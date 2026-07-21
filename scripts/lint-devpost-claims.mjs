@@ -173,7 +173,11 @@ if (all.includes("831885ed") && !all.includes(extRoot) && !all.includes("831885e
       );
     }
   }
-  if (!/without rerunning repository code, using Docker, or trusting the UI/i.test(narration)) {
+  if (
+    !/without rerunning repository code, without Docker, and without trusting the UI/i.test(
+      narration
+    )
+  ) {
     fail("teleprompter/handoff missing accurate offline-verify wording");
   }
   if (!/six-command/i.test(narration)) {

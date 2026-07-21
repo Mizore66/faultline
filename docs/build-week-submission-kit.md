@@ -6,7 +6,7 @@ This is a recording and submission checklist, not evidence that a submission has
 
 ## Idea claim (say this once, then follow it)
 
-**Locked claim:** FaultLine produces a portable, offline-verifiable evidence package for one human-frozen predicate — another engineer verifies “where does *this* reviewed witness first go bad?” **offline without rerunning repository code, using Docker, or trusting the UI**, and without trusting model intent. Partner narration source of truth: [demo-partner-handoff.md](demo-partner-handoff.md).
+**Locked claim:** FaultLine’s mature `COMMIT_PROOF` path produces a portable, offline-verifiable evidence package for one human-frozen predicate — another engineer verifies “where does *this* reviewed witness first go bad?” **offline—without rerunning repository code, without Docker, and without trusting the UI**, and without trusting model intent. The Codex-turn path applies the same evidence model but remains experimental. Partner narration source of truth: [demo-partner-handoff.md](demo-partner-handoff.md).
 
 **Default sequence (external-01 is `completed` — lead with permissioned later-turn, then mature sample):**
 

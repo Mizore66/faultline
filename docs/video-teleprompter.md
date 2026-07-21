@@ -78,7 +78,7 @@ pnpm fl verify .\docs\samples\self-incident-commit-proof --expect-root sha256:f8
 
 **Say:**
 
-> A teammate — or a judge — verifies the package offline without rerunning repository code, using Docker, or trusting the UI. Judges: README six-command clone path on the pin, then `pnpm fl judge-proof` — no Docker, no API key.
+> A teammate — or a judge — verifies the package offline—without rerunning repository code, without Docker, and without trusting the UI. Judges: README six-command clone path on the pin, then `pnpm fl judge-proof` — no Docker, no API key.
 
 ---
 
