@@ -326,7 +326,8 @@ export type CaptureTurnTreeSnapshotOptions = {
 
 const PathCacheEntrySchema = z.object({
   status: z.string().min(1).max(8),
-  contentDigest: HashSchema
+  contentDigest: HashSchema,
+  mode: z.enum(["100644", "100755"])
 }).strict();
 
 /** v2: content-aware cache; v1 caches are ignored (status-only was unsafe). */
