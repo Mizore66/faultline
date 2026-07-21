@@ -41,7 +41,7 @@ people/calendar gates.
 
 | ID | Task | Required evidence | Issue |
 | --- | --- | --- | --- |
-| EXT-01 | Independent security review | Reviewer identity/role, findings, disposition | [#149](https://github.com/Mizore66/faultline/issues/149) |
+| EXT-01 | Independent security review | **done** — Chang Kai Zhe 2026-07-21; [ext-01-security-review.md](ext-01-security-review.md); fixes on `fix/security-review-fl-sec-001-003` | [#149](https://github.com/Mizore66/faultline/issues/149) |
 | EXT-02 | 3–5 unassisted new-user runs | Consent, friction, fixes, retest | [#150](https://github.com/Mizore66/faultline/issues/150) |
 | EXT-03 | Second external turn-path validation | Permissioned package + boundary | [#151](https://github.com/Mizore66/faultline/issues/151) |
 
