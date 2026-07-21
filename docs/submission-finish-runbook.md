@@ -6,7 +6,8 @@ Related artifacts:
 
 | Artifact | Purpose |
 | --- | --- |
-| [video-teleprompter.md](video-teleprompter.md) | Exact cold-open + full shot script |
+| [demo-partner-handoff.md](demo-partner-handoff.md) | **Narration source of truth** for the recording partner |
+| [video-teleprompter.md](video-teleprompter.md) | Shot list / teleprompter (handoff wins on claim wording) |
 | [external-participant-invite.md](external-participant-invite.md) | Copy-paste invite for N=1 |
 | [impact-validation-external-01.md](impact-validation-external-01.md) | Fill during external session |
 | [devpost-paste-ready.md](devpost-paste-ready.md) | Paste into Devpost after YouTube URL |
@@ -34,9 +35,9 @@ Related artifacts:
 
 ## Phase 1 — Video (you record)
 
-1. Open [video-teleprompter.md](video-teleprompter.md) and record **under 3 minutes**.
-2. Cold-open **only** on `pnpm fl judge-proof` (not `judge-demo`).
-3. Speak **Codex** and **GPT-5.6** by name.
+1. Narrate from [demo-partner-handoff.md](demo-partner-handoff.md); use [video-teleprompter.md](video-teleprompter.md) as the shot list. Record **under 3 minutes** (target 2:30–2:40).
+2. Cold-open on the external MUMBCS protocol beat when available, then `pnpm fl judge-proof` (never `judge-demo`).
+3. Speak **Codex** and **GPT-5.6** by name; show Codex via build session + lifecycle/turn evidence (do not invent repair footage).
 4. Upload YouTube as **public**.
 5. Paste URL into [devpost-paste-ready.md](devpost-paste-ready.md) field `YOUTUBE_URL`.
 
