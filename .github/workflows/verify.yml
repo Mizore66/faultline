@@ -54,7 +54,14 @@ jobs:
             echo "Event ${EVENT_NAME} on ${REF} — freeze guard not enforced."
             exit 0
           fi
-          mapfile -t PATHS < <(git diff --name-only "${BASE}" "${HEAD}" || true)
+          mapfile -t PATHS < <(
+            if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+              # Three-dot: only commits unique to the PR tip (not unrelated main src/ churn).
+              git diff --name-only "${BASE}...${HEAD}" || true
+            else
+              git diff --name-only "${BASE}" "${HEAD}" || true
+            fi
+          )
           if [[ ${#PATHS[@]} -eq 0 ]]; then
             echo "No changed paths."
             exit 0
@@ -231,21 +238,65 @@ jobs:
         shell: bash
         run: |
           set +e
-          brew install colima docker 2>&1
-          colima start --cpu 2 --memory 4 2>&1
-          docker version 2>&1
-          docker pull node:22-alpine 2>&1
-          if [[ $? -eq 0 ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "Colima/Docker unavailable on this macOS runner; experimental gate skipped."
+          AVAILABLE=false
+          if ! command -v brew >/dev/null 2>&1; then
+            echo "Homebrew missing; experimental Colima gate skipped."
+            echo "available=${AVAILABLE}" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          brew install colima docker 2>&1 | tail -n 50
+          if ! command -v colima >/dev/null 2>&1; then
+            echo "colima not on PATH after brew install; skipped."
+            echo "available=${AVAILABLE}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          colima delete --force 2>/dev/null || true
+          if ! colima start --cpu 2 --memory 4 --network-address 2>&1; then
+            echo "colima start failed; experimental gate skipped."
+            echo "available=${AVAILABLE}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if docker info >/dev/null 2>&1; then
+              break
+            fi
+            sleep 3
+          done
+          if ! docker info >/dev/null 2>&1; then
+            echo "docker info failed after colima start; skipped."
+            colima stop 2>/dev/null || true
+            echo "available=${AVAILABLE}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! docker pull node:22-alpine 2>&1; then
+            echo "docker pull node:22-alpine failed; skipped."
+            colima stop 2>/dev/null || true
+            echo "available=${AVAILABLE}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          AVAILABLE=true
+          echo "available=${AVAILABLE}" >> "$GITHUB_OUTPUT"
+          echo "Colima Docker ready."
           exit 0
       - name: Native Docker E2E on macOS Colima
         if: steps.colima.outputs.available == 'true'
         shell: bash
-        run: pnpm exec vitest run tests/docker-integration.test.ts -t "eight coverage-matrix"
+        run: |
+          set -euo pipefail
+          pnpm exec vitest run tests/docker-integration.test.ts -t "eight coverage-matrix"
+          # Stamp an honest macOS kernel fact only when executions actually ran.
+          if [[ -f benchmarks/e2e-executed.json ]]; then
+            node -e "
+              const fs = require('fs');
+              const p = 'benchmarks/e2e-executed.json';
+              const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+              j.osFamily = 'macos';
+              j.runner = 'macos-colima';
+              j.note = (j.note || '') + ' Experimental Colima CI kernel; continue-on-error job.';
+              j.generatedAt = new Date().toISOString();
+              fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            "
+          fi
         env:
           FAULTLINE_DOCKER_INTEGRATION: "1"
           FAULTLINE_DOCKER_NODE_TAG: "node:22-alpine"
