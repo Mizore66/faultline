@@ -44,7 +44,8 @@ const surfaces = [
   "docs/devpost-description-draft.md",
   "README.md",
   "docs/video-teleprompter.md",
-  "docs/build-week-submission-kit.md"
+  "docs/build-week-submission-kit.md",
+  "docs/demo-partner-handoff.md"
 ];
 
 const docs = Object.fromEntries(surfaces.map((s) => [s, read(s)]));
@@ -143,6 +144,50 @@ if (all.includes("831885ed") && !all.includes(extRoot) && !all.includes("831885e
   }
 }
 
+// Teleprompter / handoff accuracy gates (review P0-2)
+{
+  const narration = [
+    docs["docs/video-teleprompter.md"],
+    docs["docs/demo-partner-handoff.md"]
+  ].join("\n");
+  for (const line of narration.split(/\r?\n/)) {
+    if (/do\s+\*\*not\*\*|do not say|never say|avoid|incorrect|do not present|banned|forbidden/i.test(line)) {
+      continue;
+    }
+    if (/without re-?running our code/i.test(line)) {
+      fail(
+        "narration must not say 'without re-running our code' (verifier is FaultLine code): " +
+          line.trim().slice(0, 120)
+      );
+    }
+    if (/README three-command path/i.test(line) || /\bthree-command path\b/i.test(line)) {
+      fail(
+        "narration must not say 'three-command path' (README is six clone/install commands): " +
+          line.trim().slice(0, 120)
+      );
+    }
+    if (/write digest-only invariants into AGENTS\.md/i.test(line) && /never speculative/i.test(line)) {
+      fail(
+        "narration must not imply AGENTS.md is enforcement; prefer tests/guards enforce, AGENTS.md is guidance: " +
+          line.trim().slice(0, 120)
+      );
+    }
+  }
+  if (
+    !/without rerunning repository code, without Docker, and without trusting the UI/i.test(
+      narration
+    )
+  ) {
+    fail("teleprompter/handoff missing accurate offline-verify wording");
+  }
+  if (!/six-command/i.test(narration)) {
+    fail("teleprompter/handoff must describe README six-command clone path");
+  }
+  if (!/AGENTS\.md records it as guidance/i.test(narration)) {
+    fail("teleprompter/handoff must describe AGENTS.md as guidance, not enforcement");
+  }
+}
+
 // Banned phrases (case-insensitive) — submission-facing surfaces only
 const banned = [
   /\bsecurity audited\b/i,
@@ -153,7 +198,8 @@ const banned = [
 const lintSurfaces = [
   "docs/devpost-paste-ready.md",
   "docs/devpost-description-draft.md",
-  "docs/video-teleprompter.md"
+  "docs/video-teleprompter.md",
+  "docs/demo-partner-handoff.md"
 ];
 for (const s of lintSurfaces) {
   const text = docs[s];
