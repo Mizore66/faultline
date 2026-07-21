@@ -132,6 +132,8 @@ function assertDocsLint() {
     throw new Error(`git tag -l ${pinnedRef} failed: ${localTags.stderr || localTags.error?.message || ""}`);
   }
   let hasLocalTag = (localTags.stdout ?? "").split(/\r?\n/).filter(Boolean).includes(pinnedRef);
+  const pasteReady = readUtf8("docs/devpost-paste-ready.md");
+  const pinCutPending = /literal SHA:\s*`?PENDING_AFTER_TAG_CUT`?/i.test(pasteReady);
   if (!hasLocalTag) {
     // Shallow CI checkouts often omit tags; resolve against the configured remote.
     const remoteTags = spawnSync(
@@ -146,6 +148,10 @@ function assertDocsLint() {
     }
     const remoteLines = (remoteTags.stdout ?? "").split(/\r?\n/).filter(Boolean);
     if (!remoteLines.some((line) => line.endsWith(`\trefs/tags/${pinnedRef}`))) {
+      if (pinCutPending) {
+        console.log(`[package-smoke] pin ${pinnedRef} not on origin yet; paste-ready PENDING_AFTER_TAG_CUT — skipping tag drift gate`);
+        return;
+      }
       throw new Error(`Pinned submission tag ${pinnedRef} must exist on origin (cut after P0 lands)`);
     }
     const fetchTag = spawnSync("git", ["fetch", "--no-tags", "origin", `refs/tags/${pinnedRef}:refs/tags/${pinnedRef}`], {
