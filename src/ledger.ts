@@ -15,6 +15,7 @@ import { basename, dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { z } from "zod";
 import { digestJson } from "./canonical.js";
+import { HOST_COMMAND_SAFE_GIT_CONFIG } from "./doctor.js";
 import { TurnTreeSnapshotSchema, verifyTurnTreeSnapshot } from "./turn-snapshot.js";
 
 /**
@@ -248,8 +249,36 @@ export function verifyGitCheckpoint(value: unknown): string[] {
   return digest === digestJson(unsigned) ? [] : ["Git checkpoint digest does not match its contents"];
 }
 
-function defaultGitRunner(repository: string, args: readonly string[]): string {
-  const result = spawnSync("git", ["-C", repository, ...args], { encoding: "utf8" });
+/**
+ * Checkpoint capture runs against untrusted repository config. Match the
+ * doctor / sidecar hardened Git policy so local hooks, fsmonitor, filters,
+ * and replace-refs cannot execute host commands during `fl record`.
+ */
+function hardenedCheckpointGitEnvironment(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH ?? "",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_NO_REPLACE_OBJECTS: "1",
+    GIT_LFS_SKIP_SMUDGE: "1",
+    GIT_ALLOW_PROTOCOL: "none",
+    ...(process.platform === "win32" && process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+    ...(process.platform === "win32" && process.env.ComSpec ? { ComSpec: process.env.ComSpec } : {}),
+    ...(process.platform === "win32" && process.env.PATHEXT ? { PATHEXT: process.env.PATHEXT } : {})
+  };
+}
+
+function defaultHardenedGitRunner(repository: string, args: readonly string[]): string {
+  const result = spawnSync("git", [...HOST_COMMAND_SAFE_GIT_CONFIG, "-C", repository, ...args], {
+    encoding: "utf8",
+    shell: false,
+    windowsHide: true,
+    timeout: 60_000,
+    env: hardenedCheckpointGitEnvironment()
+  });
   if (result.error || result.status !== 0) {
     const detail = `${result.stderr ?? ""}${result.error ? result.error.message : ""}`.trim();
     throw new Error(`Git checkpoint capture failed for ${args.join(" ")}: ${detail || `exit ${result.status ?? "unknown"}`}`);
@@ -259,14 +288,18 @@ function defaultGitRunner(repository: string, args: readonly string[]): string {
 
 /**
  * Captures a factual, clean Git worktree checkpoint.  The runner can be
- * injected for integration adapters, but the default path invokes Git itself.
+ * injected for integration adapters; the default path always uses hardened Git.
  */
 export function captureGitCleanCheckpoint(repository: string, options: CaptureGitCheckpointOptions = {}): GitCheckpoint {
   const requestedRoot = resolve(repository);
-  const runGit = options.runGit ?? defaultGitRunner;
+  const runGit = options.runGit ?? defaultHardenedGitRunner;
   const repositoryRoot = resolve(runGit(requestedRoot, ["rev-parse", "--show-toplevel"]));
-  const status = runGit(repositoryRoot, ["status", "--porcelain=v1", "--untracked-files=all"]);
-  if (status) {
+  // Nulling GIT_CONFIG_GLOBAL drops a Windows user's autocrlf=true, which makes
+  // porcelain status report CRLF-only "modifications". diff-index with
+  // --ignore-cr-at-eol still catches real content drift; ls-files catches extras.
+  const trackedDrift = runGit(repositoryRoot, ["diff-index", "--ignore-cr-at-eol", "HEAD"]);
+  const untracked = runGit(repositoryRoot, ["ls-files", "--others", "--exclude-standard"]);
+  if (trackedDrift || untracked) {
     throw new LedgerIntegrityError("Git checkpoint capture requires a clean worktree.");
   }
   const headCommit = runGit(repositoryRoot, ["rev-parse", "HEAD"]);

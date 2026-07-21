@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 const files = [
   new URL("../.github/workflows/verify.yml", import.meta.url),
   new URL("../.github/workflows/action-smoke.yml", import.meta.url),
-  new URL("../actions/proof/action.yml", import.meta.url)
+  new URL("../actions/proof/action.yml", import.meta.url),
+  new URL("../action.yml", import.meta.url)
 ];
 
 describe("GitHub Actions supply-chain pins", () => {

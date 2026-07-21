@@ -18,18 +18,18 @@ export const DOCTOR_COMMAND_TIMEOUT_MS = 5_000;
 export const DOCTOR_MAX_OUTPUT_BYTES = 64 * 1024;
 
 /**
- * Repository configuration is executable input at this pre-Docker boundary.
- * Keep the doctor aligned with the hardened Git inspection path: every Git
- * invocation receives these fixed overrides before it touches a worktree.
+ * Disable Git features that can execute host commands from repository-local
+ * config (hooks, fsmonitor, filters, transports). Intentionally omits
+ * `core.autocrlf` so clean-worktree checks still match the repo's line-ending
+ * policy on Windows.
  */
-export const DOCTOR_SAFE_GIT_CONFIG = Object.freeze([
+export const HOST_COMMAND_SAFE_GIT_CONFIG = Object.freeze([
   "-c", "core.hooksPath=/nonexistent/faultline-hooks",
   // core.fsmonitor can hold a repository-local command.
   "-c", "core.fsmonitor=false",
   "-c", "core.useBuiltinFSMonitor=false",
   "-c", "core.untrackedCache=false",
   "-c", "core.preloadIndex=false",
-  "-c", "core.autocrlf=false",
   "-c", "filter.lfs.process=",
   "-c", "filter.lfs.smudge=",
   "-c", "filter.lfs.required=false",
@@ -43,6 +43,17 @@ export const DOCTOR_SAFE_GIT_CONFIG = Object.freeze([
   "-c", "protocol.ssh.allow=never",
   "-c", "protocol.http.allow=never",
   "-c", "protocol.https.allow=never"
+]);
+
+/**
+ * Repository configuration is executable input at this pre-Docker boundary.
+ * Keep the doctor aligned with the hardened Git inspection path: every Git
+ * invocation receives these fixed overrides before it touches a worktree.
+ * Doctor also forces autocrlf=false for deterministic diagnostic text.
+ */
+export const DOCTOR_SAFE_GIT_CONFIG = Object.freeze([
+  ...HOST_COMMAND_SAFE_GIT_CONFIG,
+  "-c", "core.autocrlf=false"
 ]);
 
 export type DoctorCommandExecutable = "git" | "node" | "docker";
