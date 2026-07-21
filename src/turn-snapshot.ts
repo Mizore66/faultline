@@ -40,10 +40,11 @@ import {
  * `GIT_OBJECT_DIRECTORY` so the user's primary `.git/objects` database is not
  * polluted. Every path is filtered before any Git object write.
  *
- * Dirty trees are staged incrementally: the temporary index is seeded from the
- * previous accepted turn tree (same HEAD + policy) or `HEAD^{tree}`, then only
- * modified, newly untracked, deleted, and policy-removed paths are updated —
- * never a full-repo `git add` of every eligible file.
+ * Dirty trees are staged incrementally: the temporary index is always seeded
+ * from `HEAD^{tree}`, then only modified, newly untracked, deleted, and
+ * policy-removed paths are updated — never a full-repo `git add`, and never
+ * from a previous dirty turn tree (restored-clean paths must inherit HEAD
+ * bytes/mode via `read-tree`, not a stale preferred base).
  */
 
 /** Relative to the repository `.git` directory. */
@@ -325,7 +326,8 @@ export type CaptureTurnTreeSnapshotOptions = {
 
 const PathCacheEntrySchema = z.object({
   status: z.string().min(1).max(8),
-  contentDigest: HashSchema
+  contentDigest: HashSchema,
+  mode: z.enum(["100644", "100755"])
 }).strict();
 
 /** v2: content-aware cache; v1 caches are ignored (status-only was unsafe). */
@@ -346,7 +348,7 @@ type TurnSnapshotSessionCache = z.infer<typeof TurnSnapshotSessionCacheSchema>;
 type DirtyContentFingerprint = {
   readonly contentFingerprint: string;
   readonly deletedPaths: readonly string[];
-  readonly paths: Readonly<Record<string, { status: string; contentDigest: string }>>;
+  readonly paths: Readonly<Record<string, { status: string; contentDigest: string; mode: "100644" | "100755" }>>;
 };
 
 type IgnoreRule = {
@@ -544,7 +546,7 @@ export function computeDirtyContentFingerprint(
   const ignoreRules = options.ignoreRules ?? loadFaultlineIgnoreRules(repositoryRoot);
   const trackedFilesOnly = options.trackedFilesOnly === true;
   const maxFileBytes = options.maxFileBytes ?? TURN_SNAPSHOT_MAX_FILE_BYTES;
-  const paths: Record<string, { status: string; contentDigest: string }> = {};
+  const paths: Record<string, { status: string; contentDigest: string; mode: "100644" | "100755" }> = {};
   const deletedPaths: string[] = [];
 
   for (const entry of parsePorcelainStatusZ(statusPorcelain)) {
@@ -561,7 +563,10 @@ export function computeDirtyContentFingerprint(
       if (stat.isSymbolicLink() || !stat.isFile()) continue;
       paths[entry.path] = {
         status: entry.status,
-        contentDigest: fullFileContentDigest(absolutePath, maxFileBytes)
+        contentDigest: fullFileContentDigest(absolutePath, maxFileBytes),
+        // Executable mode must invalidate the session cache: mode-only changes
+        // leave content digests unchanged and would otherwise reuse a stale tree.
+        mode: (stat.mode & 0o111) !== 0 ? "100755" : "100644"
       };
     } catch (error) {
       if (error instanceof TurnSnapshotError) throw error;
@@ -985,8 +990,6 @@ function writeThrowawayTreeDigest(
     allowlistDigest: string;
     previousPathDigests?: Readonly<Record<string, string>>;
     previousAllowlistDigest?: string;
-    /** Prefer this tree as the incremental base when it still exists under quarantine. */
-    preferredBaseTree?: string;
   },
   statusPorcelain: string
 ): WriteThrowawayResult {
@@ -1041,17 +1044,12 @@ function writeThrowawayTreeDigest(
   });
   const dirtyPaths = new Set(Object.keys(dirty.paths));
 
-  const headTree = runGit(repositoryRoot, ["rev-parse", "HEAD^{tree}"]).trim();
-  if (!GitObjectIdSchema.safeParse(headTree).success) {
+  // Always seed from HEAD^{tree}. A previous dirty turn tree must never be the
+  // base: restored-clean paths are absent from dirtyPaths but still present in
+  // that stale tree, and would otherwise retain prior-turn bytes.
+  const baseTree = runGit(repositoryRoot, ["rev-parse", "HEAD^{tree}"]).trim();
+  if (!GitObjectIdSchema.safeParse(baseTree).success) {
     throw new TurnSnapshotError("Git did not return a valid HEAD tree object id for incremental turn staging.");
-  }
-  let baseTree = headTree;
-  if (
-    typeof scanContext.preferredBaseTree === "string"
-    && GitObjectIdSchema.safeParse(scanContext.preferredBaseTree).success
-    && gitTreeObjectExists(runGit, repositoryRoot, scanContext.preferredBaseTree)
-  ) {
-    baseTree = scanContext.preferredBaseTree;
   }
 
   const basePaths = listTreePaths(runGit, repositoryRoot, baseTree);
@@ -1131,8 +1129,8 @@ function writeThrowawayTreeDigest(
  * 3. Caps filter (count / per-file / total size via lstat)
  * 4. Secret scan (regex + entropy on eligible buffers; incremental when a
  *    session cache is supplied)
- * Only then: temporary-index incremental staging (`read-tree` + delta
- * `hash-object` / `update-index`) + `write-tree`.
+ * Only then: temporary-index incremental staging (`read-tree HEAD^{tree}` +
+ * delta `hash-object` / `update-index`) + `write-tree`.
  *
  * Quiescence is proven by dual tree capture with status brackets and bounded
  * retries; exhaustion fails closed rather than returning a torn snapshot.
@@ -1236,14 +1234,6 @@ export function captureTurnTreeSnapshot(
       }
     }
 
-    const preferredBaseTree =
-      previousCache !== null
-      && previousCache.headCommit === headBefore
-      && previousCache.policyDigest === policyDigest
-      && gitTreeObjectExists(runGit, repositoryRoot, previousCache.treeDigest)
-        ? previousCache.treeDigest
-        : undefined;
-
     const first = writeThrowawayTreeDigest(runGit, repositoryRoot, options, {
       allowlist,
       allowlistDigest,
@@ -1252,8 +1242,7 @@ export function captureTurnTreeSnapshot(
         : {
           previousPathDigests: previousCache.pathDigests,
           previousAllowlistDigest: previousCache.allowlistDigest
-        }),
-      ...(preferredBaseTree === undefined ? {} : { preferredBaseTree })
+        })
     }, statusBeforeA);
     const statusAfterA = sampleStatus();
     if (statusBeforeA !== statusAfterA) {
@@ -1275,11 +1264,7 @@ export function captureTurnTreeSnapshot(
       allowlist,
       allowlistDigest,
       previousPathDigests: first.pathDigests,
-      previousAllowlistDigest: allowlistDigest,
-      // Second capture of the same quiescence attempt must use the same base as
-      // the first (HEAD or prior accepted tree) — never the first's new tree —
-      // so mid-write drift cannot be laundered into a false dual-tree match.
-      ...(preferredBaseTree === undefined ? {} : { preferredBaseTree })
+      previousAllowlistDigest: allowlistDigest
     }, statusBeforeB);
     const statusAfterB = sampleStatus();
     const headAfter = runGit(repositoryRoot, ["rev-parse", "HEAD"]).trim();

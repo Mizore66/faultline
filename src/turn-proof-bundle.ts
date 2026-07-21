@@ -118,6 +118,11 @@ export const TurnProofBundleManifestSchema = z.object({
   frozenDigest: DigestSchema,
   witnessDigest: DigestSchema,
   lifecycle: LifecycleBoundSchema,
+  /** Optional Codex thread identifiers only — never transcripts (CDX-09). */
+  codex: z.object({
+    witnessDraftThreadId: z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(),
+    repairThreadId: z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional()
+  }).strict().optional(),
   artifacts: z.object({
     investigation: z.literal("investigation.json"),
     frozenWitness: z.literal("witness/frozen.json"),
@@ -141,6 +146,14 @@ export interface TurnProofBundleWriteOptions {
   readonly lifecycleLedger: CodexLifecycleLedger;
   /** Host repository used only to export tree objects into the portable pack. */
   readonly repository: string;
+  /**
+   * Optional Codex thread identifiers (CDX-09). Identifier strings only —
+   * never transcript content. Bound into manifest.json → package root.
+   */
+  readonly codex?: {
+    readonly witnessDraftThreadId?: string;
+    readonly repairThreadId?: string;
+  };
 }
 
 export interface WrittenTurnProofBundle {
@@ -680,8 +693,16 @@ function makeManifest(
   result: TurnInvestigationResult,
   frozenWitness: FrozenWitness,
   generatedAt: string,
-  lifecycle: z.infer<typeof LifecycleBoundSchema>
+  lifecycle: z.infer<typeof LifecycleBoundSchema>,
+  codex?: TurnProofBundleWriteOptions["codex"]
 ): TurnProofBundleManifest {
+  const codexSection =
+    codex === undefined
+      ? undefined
+      : {
+        ...(codex.witnessDraftThreadId === undefined ? {} : { witnessDraftThreadId: codex.witnessDraftThreadId }),
+        ...(codex.repairThreadId === undefined ? {} : { repairThreadId: codex.repairThreadId })
+      };
   return TurnProofBundleManifestSchema.parse({
     schemaVersion: TURN_PROOF_BUNDLE_SCHEMA_VERSION,
     generatedAt,
@@ -690,6 +711,7 @@ function makeManifest(
     frozenDigest: frozenWitness.frozenDigest,
     witnessDigest: frozenWitness.witnessDigest,
     lifecycle,
+    ...(codexSection !== undefined && Object.keys(codexSection).length > 0 ? { codex: codexSection } : {}),
     artifacts: expectedManifestArtifacts(result)
   });
 }
@@ -736,7 +758,7 @@ export async function writeTurnInvestigationProofBundle(
         bytes: packBytes.length
       }
     });
-    manifest = makeManifest(result, frozenWitness, generatedAt, lifecycle.binding);
+    manifest = makeManifest(result, frozenWitness, generatedAt, lifecycle.binding, options.codex);
     const artifacts = new Map<string, Buffer>();
     const put = (path: string, bytes: Buffer): void => {
       if (!isSafeRelativeArtifactPath(path)) throw new Error(`Unsafe generated artifact path: ${path}`);

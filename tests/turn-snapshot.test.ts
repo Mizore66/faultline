@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -719,5 +719,173 @@ describe("Turn tree snapshot capture", () => {
       rmSync(repository, { recursive: true, force: true });
       rmSync(cachePath, { force: true });
     }
+  });
+
+  describe("restored-clean staleness (preferredBaseTree P0)", () => {
+    it("invalidates session cache when only the executable bit changes", () => {
+      const repository = repositoryFixture();
+      const cachePath = join(tmpdir(), `faultline-cache-mode-only-${Date.now()}.json`);
+      try {
+        git(repository, ["config", "core.filemode", "true"]);
+        writeFileSync(join(repository, "second.txt"), "edited-1\n", "utf8");
+        const afterEdit = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        rmSync(join(repository, "tracked.txt"), { force: true });
+        const afterDelete = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(afterDelete.treeDigest).not.toBe(afterEdit.treeDigest);
+
+        chmodSync(join(repository, "second.txt"), 0o755);
+        const modeBits = lstatSync(join(repository, "second.txt")).mode & 0o111;
+        if (modeBits === 0) {
+          // Windows often cannot record +x; Linux CI is the load-bearing check.
+          return;
+        }
+        const afterMode = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(afterMode.treeDigest).not.toBe(afterDelete.treeDigest);
+        expect(git(repository, ["ls-tree", afterMode.treeDigest, "second.txt"]).slice(0, 6)).toBe("100755");
+      } finally {
+        rmSync(repository, { recursive: true, force: true });
+        rmSync(cachePath, { force: true });
+      }
+    });
+
+    it("restores a previously dirty tracked file to HEAD bytes when another file stays dirty", () => {
+      const repository = repositoryFixture();
+      const cachePath = join(tmpdir(), `faultline-cache-restore-${Date.now()}.json`);
+      try {
+        const headBytes = "stable\n";
+        expect(readFileSync(join(repository, "tracked.txt"), "utf8")).toBe(headBytes);
+        writeFileSync(join(repository, "tracked.txt"), "dirty at turn N\n", "utf8");
+        writeFileSync(join(repository, "other.txt"), "other dirty\n", "utf8");
+        const turnN = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(git(repository, ["show", `${turnN.treeDigest}:tracked.txt`])).toBe("dirty at turn N");
+
+        writeFileSync(join(repository, "tracked.txt"), headBytes, "utf8");
+        writeFileSync(join(repository, "other.txt"), "other still dirty\n", "utf8");
+        const turnN1 = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(git(repository, ["show", `${turnN1.treeDigest}:tracked.txt`])).toBe("stable");
+        expect(git(repository, ["show", `${turnN1.treeDigest}:other.txt`])).toBe("other still dirty");
+        expect(turnN1.treeDigest).not.toBe(turnN.treeDigest);
+      } finally {
+        rmSync(repository, { recursive: true, force: true });
+        rmSync(cachePath, { force: true });
+      }
+    });
+
+    it("restores file A to HEAD while file B remains dirty", () => {
+      const repository = repositoryFixture();
+      const cachePath = join(tmpdir(), `faultline-cache-restore-ab-${Date.now()}.json`);
+      try {
+        writeFileSync(join(repository, "a.txt"), "a-head\n", "utf8");
+        writeFileSync(join(repository, "b.txt"), "b-head\n", "utf8");
+        git(repository, ["add", "a.txt", "b.txt"]);
+        git(repository, ["commit", "-m", "a and b"]);
+
+        writeFileSync(join(repository, "a.txt"), "a-dirty\n", "utf8");
+        writeFileSync(join(repository, "b.txt"), "b-dirty\n", "utf8");
+        const turnN = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(git(repository, ["show", `${turnN.treeDigest}:a.txt`])).toBe("a-dirty");
+        expect(git(repository, ["show", `${turnN.treeDigest}:b.txt`])).toBe("b-dirty");
+
+        writeFileSync(join(repository, "a.txt"), "a-head\n", "utf8");
+        writeFileSync(join(repository, "b.txt"), "b-still-dirty\n", "utf8");
+        const turnN1 = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(git(repository, ["show", `${turnN1.treeDigest}:a.txt`])).toBe("a-head");
+        expect(git(repository, ["show", `${turnN1.treeDigest}:b.txt`])).toBe("b-still-dirty");
+      } finally {
+        rmSync(repository, { recursive: true, force: true });
+        rmSync(cachePath, { force: true });
+      }
+    });
+
+    it("restores executable bit to HEAD mode after a dirty turn", () => {
+      const repository = repositoryFixture();
+      const cachePath = join(tmpdir(), `faultline-cache-restore-mode-${Date.now()}.json`);
+      try {
+        writeFileSync(join(repository, "script.sh"), "#!/bin/sh\necho ok\n", "utf8");
+        git(repository, ["add", "script.sh"]);
+        git(repository, ["commit", "-m", "script"]);
+        const headMode = git(repository, ["ls-tree", "HEAD", "script.sh"]).slice(0, 6);
+        expect(headMode).toBe("100644");
+
+        writeFileSync(join(repository, "script.sh"), "#!/bin/sh\necho dirty\n", "utf8");
+        chmodSync(join(repository, "script.sh"), 0o755);
+        writeFileSync(join(repository, "other.txt"), "anchor dirty\n", "utf8");
+        const turnN = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        const modeN = git(repository, ["ls-tree", turnN.treeDigest, "script.sh"]).slice(0, 6);
+
+        writeFileSync(join(repository, "script.sh"), "#!/bin/sh\necho ok\n", "utf8");
+        chmodSync(join(repository, "script.sh"), 0o644);
+        writeFileSync(join(repository, "other.txt"), "anchor still dirty\n", "utf8");
+        const turnN1 = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(git(repository, ["show", `${turnN1.treeDigest}:script.sh`])).toBe("#!/bin/sh\necho ok");
+        expect(git(repository, ["ls-tree", turnN1.treeDigest, "script.sh"]).slice(0, 6)).toBe("100644");
+        if (modeN === "100755") {
+          expect(turnN1.treeDigest).not.toBe(turnN.treeDigest);
+        }
+      } finally {
+        rmSync(repository, { recursive: true, force: true });
+        rmSync(cachePath, { force: true });
+      }
+    });
+
+    it("records distinct trees across PASS → FAIL → PASS content revert", () => {
+      const repository = repositoryFixture();
+      const cachePath = join(tmpdir(), `faultline-cache-pfp-${Date.now()}.json`);
+      try {
+        writeFileSync(join(repository, "noise.tmp"), "noise\n", "utf8");
+        git(repository, ["add", "noise.tmp"]);
+        git(repository, ["commit", "-m", "noise"]);
+        writeFileSync(join(repository, ".faultlineignore"), "noise.tmp\n", "utf8");
+        git(repository, ["add", ".faultlineignore"]);
+        git(repository, ["commit", "-m", "ignore noise"]);
+
+        const baseline = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(git(repository, ["show", `${baseline.treeDigest}:tracked.txt`])).toBe("stable");
+
+        writeFileSync(join(repository, "tracked.txt"), "breaking edit\n", "utf8");
+        const fail = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(fail.treeDigest).not.toBe(baseline.treeDigest);
+        expect(git(repository, ["show", `${fail.treeDigest}:tracked.txt`])).toBe("breaking edit");
+
+        writeFileSync(join(repository, "tracked.txt"), "stable\n", "utf8");
+        expect(git(repository, ["status", "--porcelain"])).toBe("");
+        const pass = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(git(repository, ["show", `${pass.treeDigest}:tracked.txt`])).toBe("stable");
+        expect(pass.treeDigest).not.toBe(fail.treeDigest);
+        // HEAD content under the same ignore policy: tracked.txt only (noise.tmp omitted).
+        expect(pass.treeDigest).toBe(baseline.treeDigest);
+      } finally {
+        rmSync(repository, { recursive: true, force: true });
+        rmSync(cachePath, { force: true });
+      }
+    });
+
+    it("restores cleaned tracked bytes when porcelain is clean but ignore-filtered tracked paths force the slow path", () => {
+      const repository = repositoryFixture();
+      const cachePath = join(tmpdir(), `faultline-cache-ignore-slow-${Date.now()}.json`);
+      try {
+        writeFileSync(join(repository, "noise.tmp"), "noise\n", "utf8");
+        git(repository, ["add", "noise.tmp"]);
+        git(repository, ["commit", "-m", "noise"]);
+        writeFileSync(join(repository, ".faultlineignore"), "noise.tmp\n", "utf8");
+        git(repository, ["add", ".faultlineignore"]);
+        git(repository, ["commit", "-m", "ignore noise"]);
+
+        writeFileSync(join(repository, "tracked.txt"), "dirty turn N\n", "utf8");
+        const turnN = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(git(repository, ["show", `${turnN.treeDigest}:tracked.txt`])).toBe("dirty turn N");
+        expect(git(repository, ["ls-tree", "-r", "--name-only", turnN.treeDigest])).not.toContain("noise.tmp");
+
+        writeFileSync(join(repository, "tracked.txt"), "stable\n", "utf8");
+        // Porcelain is fully clean; ignored tracked noise.tmp forces non-RIG-09 staging.
+        expect(git(repository, ["status", "--porcelain"])).toBe("");
+        const turnN1 = capture(repository, { sessionCachePath: cachePath, sleep: () => {} });
+        expect(git(repository, ["show", `${turnN1.treeDigest}:tracked.txt`])).toBe("stable");
+        expect(turnN1.treeDigest).not.toBe(turnN.treeDigest);
+      } finally {
+        rmSync(repository, { recursive: true, force: true });
+        rmSync(cachePath, { force: true });
+      }
+    });
   });
 });

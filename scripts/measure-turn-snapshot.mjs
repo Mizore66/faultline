@@ -175,6 +175,25 @@ function measureWarmAndModified(labelPrefix, fileCount, trials, captureTurnTreeS
       hundredFileSamples.push(Number(process.hrtime.bigint() - t0) / 1e6);
     }
 
+    // Restored-clean: reset worktree to HEAD, then dirty one anchor while
+    // leaving f00000 at HEAD bytes (exercises HEAD-base restored-clean path).
+    git(repoPath, ["reset", "--hard", "HEAD"]);
+    git(repoPath, ["clean", "-fd"]);
+    writeFileSync(join(repoPath, "f00001.txt"), `anchor-dirty-prime\n${"z".repeat(64)}\n`, "utf8");
+    captureTurnTreeSnapshot(repoPath, { sleep, sessionCachePath: cachePath, maxQuiescenceAttempts: 4 });
+    const restoredSamples = [];
+    let restoredOracleOk = true;
+    for (let i = 0; i < trials; i += 1) {
+      git(repoPath, ["checkout", "HEAD", "--", "f00000.txt"]);
+      writeFileSync(join(repoPath, "f00001.txt"), `anchor-dirty-${i}\n${"z".repeat(64)}\n`, "utf8");
+      const t0 = process.hrtime.bigint();
+      const snap = captureTurnTreeSnapshot(repoPath, { sleep, sessionCachePath: cachePath, maxQuiescenceAttempts: 4 });
+      restoredSamples.push(Number(process.hrtime.bigint() - t0) / 1e6);
+      const treeBlob = git(repoPath, ["rev-parse", `${snap.snapshot.treeDigest}:f00000.txt`]);
+      const headBlob = git(repoPath, ["rev-parse", "HEAD:f00000.txt"]);
+      if (treeBlob !== headBlob) restoredOracleOk = false;
+    }
+
     return [
       {
         repository: `${labelPrefix} warm unchanged`,
@@ -208,6 +227,18 @@ function measureWarmAndModified(labelPrefix, fileCount, trials, captureTurnTreeS
         secretScanRejections: 0,
         quiescenceRetryHints: null,
         planWarnings: 0
+      },
+      {
+        repository: `${labelPrefix} restored-clean + one dirty`,
+        mode: "restored-clean",
+        filesEligible: fileCount,
+        ...summarizeSamples(restoredSamples),
+        blobsAddedTotal: null,
+        bytesStoredTotal: null,
+        secretScanRejections: 0,
+        quiescenceRetryHints: null,
+        planWarnings: 0,
+        restoredCleanOracleOk: restoredOracleOk
       }
     ];
   } finally {
@@ -332,18 +363,33 @@ async function main() {
   mkdirSync(join(root, "benchmarks"), { recursive: true });
   writeFileSync(join(root, "benchmarks", "turn-snapshot-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
+  const restored = rows.find((row) => row.mode === "restored-clean");
   const md = [
     "# Turn-tree snapshot overhead",
     "",
     "Measured with `pnpm measure:turn-snapshot` (`scripts/measure-turn-snapshot.mjs`).",
     "",
-    "**Does recording slow Codex?** Each Stop that captures a turn tree pays this cost once. Unchanged dirty trees can reuse a content-fingerprint session cache; porcelain status alone is never enough for reuse.",
+    "**Does recording slow Codex?** Each Stop that captures a turn tree pays this cost once. FaultLine snapshots at turn boundaries with **bounded overhead** — it is not claimed to be invisible.",
+    "",
+    "**Staging model:** dirty trees seed a temporary index from `HEAD^{tree}`, then update only modified / newly untracked / deleted / policy-removed paths via `hash-object --stdin` + `update-index`. Full-cache hits (HEAD + policy + content fingerprint) still reuse the previous tree wholesale.",
     "",
     "**CLI entrypoint:** production `pnpm fl` runs `node dist/cli.js` (compiled). `pnpm fl:dev` keeps `tsx` for local TypeScript. Judge blocks run `pnpm install` (prepare builds `dist`) then `pnpm fl`.",
     "",
     `| Repository | Mode | Eligible files | Snapshot p50 (ms) | Snapshot p95 (ms) | Blobs added (sum) | Bytes stored (sum) | Secret rejections |`,
     `| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |`,
     ...rows.map((row) => `| ${row.repository} | ${row.mode ?? "cold"} | ${row.filesEligible ?? "n/a"} | ${row.snapshotP50Ms?.toFixed(1) ?? "n/a"} | ${row.snapshotP95Ms?.toFixed(1) ?? "n/a"} | ${row.blobsAddedTotal ?? "n/a"} | ${row.bytesStoredTotal ?? "n/a"} | ${row.secretScanRejections} |`),
+    "",
+    "## Restored-clean correctness",
+    "",
+    restored
+      ? [
+        `Measured mode \`restored-clean\`: one file restored to HEAD bytes while another file stays dirty.`,
+        "",
+        `- p50: ${restored.snapshotP50Ms?.toFixed(1)} ms`,
+        `- p95: ${restored.snapshotP95Ms?.toFixed(1)} ms`,
+        `- HEAD-blob equivalence for the restored path held during measurement: **${restored.restoredCleanOracleOk ? "yes" : "NO — FAIL"}**`
+      ].join("\n")
+      : "_Restored-clean row not present in this run._",
     "",
     "## Method",
     "",
@@ -352,7 +398,7 @@ async function main() {
     "- Quiescence: up to 4 dual-tree attempts with 50 ms delay",
     "- Object quarantine: snapshot blobs land in `.git/faultline/objects` via `GIT_OBJECT_DIRECTORY` + Git alternates (not primary `.git/objects`)",
     "- Cold: no `sessionCachePath`",
-    "- Warm unchanged / one-file / 100-file modified: content-fingerprint cache (`faultline.turn-snapshot-cache.v2`)",
+    "- Warm unchanged / one-file / 100-file / restored-clean: content-fingerprint session cache (`faultline.turn-snapshot-cache.v2`)",
     "- Cold CLI invocation: process wall time for `--help` / `judge-proof --export-only` via `node dist/cli.js` (and `tsx` baseline for `--help`)",
     "- FaultLine row uses this checkout with default ignore rules plus reviewed `.faultlineignore` (fixture paths only; lockfiles remain eligible)",
     `- Generated at: ${report.generatedAt}`,

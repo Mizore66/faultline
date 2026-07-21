@@ -55,8 +55,21 @@ node scripts/verify-security-chain.mjs --help
 
 Cold-machine transcript: retain the stdout of the commands above on a machine that never held the signing key.
 
+## Cold-reader transcript (SEC-08 / #182) — 2026-07-21
+
+Partner cold reader ([#171 comment](https://github.com/Mizore66/faultline/issues/171#issuecomment-5028147284)): public `allowed_signers` only; **no private signing key** on that machine.
+
+| Command | Result |
+| --- | --- |
+| `git verify-tag v0.1.8-buildweek` | Good ED25519 signature |
+| `node scripts/verify-security-chain.mjs --tag v0.1.8-buildweek --require-signed` | `tagStatus: VERIFIED` (exit 0) |
+| Same pair for historical pin `v0.1.7-buildweek` | Good ED25519 + `tagStatus: VERIFIED` (exit 0) |
+
+**Not exercised on that pass** (still required for full SEC-08 accept on #171): CI provenance artifact download, receipt, attestation bundle, `fl provenance verify`, and sample-root `fl verify` / `fl judge-proof`.
+
 ## Honesty
 
 - Tag pin is a Git ref; cryptographic tag *signing* may still be absent — GitHub
   artifact attestation covers the CI-produced receipt/subject.
 - Trust file is an allowlist example; strangers must review issuer identity.
+- Current judging pin in README may be a drafted `v0.1.8-buildweek` ahead of tag cut; cold-reader evidence above is for the **signed** pins `v0.1.8-buildweek` / `v0.1.7-buildweek`.

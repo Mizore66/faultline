@@ -449,4 +449,52 @@ describe("portable Git investigation proof bundles", () => {
       rmSync(repository.root, { recursive: true, force: true });
     }
   });
+
+  it("binds optional Codex thread ids into the manifest and fails closed on tamper (CDX-09)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "faultline-git-proof-thread-"));
+    const store = join(root, "witness-lock");
+    const repository = createRepository();
+    try {
+      const frozen = createFrozenWitness(store);
+      const observed = await investigateGitRange({
+        repository: repository.root,
+        range: { ancestor: "HEAD~2", descendant: "HEAD" },
+        frozenWitness: frozen,
+        expectedFrozenDigest: frozen.frozenDigest,
+        sandbox: { mode: "DOCKER_ISOLATED", image: pinnedImage },
+        runner: deterministicDockerRunner()
+      });
+      const result = nativeDockerFixture(observed);
+      const output = join(root, "proofs", "thread-bound");
+      const written = writeGitInvestigationProofBundle(output, result, frozen, {
+        proofRoot: join(root, "proofs"),
+        generatedAt: "2026-07-16T11:05:00.000Z",
+        codex: {
+          witnessDraftThreadId: "thread_witness_draft_001",
+          repairThreadId: "thread_repair_001"
+        }
+      });
+      const verified = verifyGitInvestigationProofBundle(written.directory, written.rootDigest);
+      expect(verified.valid).toBe(true);
+      expect(verified.manifest?.codex).toEqual({
+        witnessDraftThreadId: "thread_witness_draft_001",
+        repairThreadId: "thread_repair_001"
+      });
+      expect(JSON.stringify(verified.manifest)).not.toMatch(/transcript|promptText|messages/i);
+
+      const manifestPath = join(output, "manifest.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+        codex?: { repairThreadId?: string };
+      };
+      if (!manifest.codex) throw new Error("expected codex section");
+      manifest.codex.repairThreadId = "thread_repair_TAMPERED";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
+      const tampered = verifyGitInvestigationProofBundle(output, written.rootDigest);
+      expect(tampered.valid).toBe(false);
+      expect(tampered.errors.join("\n")).toMatch(/digest|root|hash|mismatch/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(repository.root, { recursive: true, force: true });
+    }
+  });
 });

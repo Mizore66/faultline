@@ -148,6 +148,11 @@ export const GitProofBundleManifestSchema = z.object({
     ancestor: GitCommitStateSchema,
     descendant: GitCommitStateSchema
   }).strict(),
+  /** Optional Codex thread identifiers only — never transcripts (CDX-09). */
+  codex: z.object({
+    witnessDraftThreadId: z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional(),
+    repairThreadId: z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/).optional()
+  }).strict().optional(),
   artifacts: z.object({
     investigation: z.literal("investigation.json"),
     frozenWitness: z.literal("witness/frozen.json"),
@@ -176,6 +181,14 @@ export interface GitProofBundleWriteOptions {
    * investigated Git state. It never claims native Codex interception.
    */
   readonly lifecycleLedger?: CodexLifecycleLedger;
+  /**
+   * Optional Codex thread identifiers (CDX-09). Identifier strings only —
+   * never transcript content. Bound into manifest.json → package root.
+   */
+  readonly codex?: {
+    readonly witnessDraftThreadId?: string;
+    readonly repairThreadId?: string;
+  };
 }
 
 export interface WrittenGitProofBundle {
@@ -785,9 +798,17 @@ function makeManifest(
   result: GitInvestigationResult,
   frozenWitness: FrozenWitness,
   generatedAt: string,
-  lifecycle: LifecycleBinding
+  lifecycle: LifecycleBinding,
+  codex?: GitProofBundleWriteOptions["codex"]
 ): GitProofBundleManifest {
   if (result.resolvedRange === null) throw new Error("Cannot create a manifest without a resolved Git range.");
+  const codexSection =
+    codex === undefined
+      ? undefined
+      : {
+        ...(codex.witnessDraftThreadId === undefined ? {} : { witnessDraftThreadId: codex.witnessDraftThreadId }),
+        ...(codex.repairThreadId === undefined ? {} : { repairThreadId: codex.repairThreadId })
+      };
   return GitProofBundleManifestSchema.parse({
     schemaVersion: GIT_PROOF_BUNDLE_SCHEMA_VERSION,
     generatedAt,
@@ -797,6 +818,7 @@ function makeManifest(
     witnessDigest: frozenWitness.witnessDigest,
     lifecycle,
     resolvedRange: result.resolvedRange,
+    ...(codexSection !== undefined && Object.keys(codexSection).length > 0 ? { codex: codexSection } : {}),
     artifacts: {
       investigation: "investigation.json",
       frozenWitness: "witness/frozen.json",
@@ -1060,7 +1082,7 @@ export function writeGitInvestigationProofBundle(
         format: "git-diff --binary --full-index --no-ext-diff --no-textconv --no-renames"
       }
     });
-    manifest = makeManifest(result, frozenWitness, generatedAt, lifecycle.binding);
+    manifest = makeManifest(result, frozenWitness, generatedAt, lifecycle.binding, options.codex);
     const artifacts = new Map<string, Buffer>();
     const put = (path: string, bytes: Buffer): void => {
       if (!isSafeRelativeArtifactPath(path)) throw new Error(`Unsafe generated artifact path: ${path}`);

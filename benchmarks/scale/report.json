@@ -1,19 +1,19 @@
 {
   "schemaVersion": "faultline.scale-benchmark.v1",
-  "generatedAt": "2026-07-20T18:04:28.339Z",
+  "generatedAt": "2026-07-20T23:16:38.933Z",
   "protocol": "docs/scale-benchmark-protocol.md",
   "fixture": {
     "fileCountRequested": 10000,
     "filesWalked": 10018,
-    "head": "317fa0686c77ab6b8dd2c13b233c7587755e97f4",
+    "head": "fc9f5e0b05db4ff6cf6e77985ad2038e5b75d8f2",
     "worktree": "ephemeral (not retained)",
     "mode": "trackedFilesOnly + clean HEAD^{tree} reuse"
   },
   "timingsMs": {
-    "generate": 7339.709,
-    "walk": 213.024,
-    "gitCommit": 7260.337,
-    "turnSnapshotAttempt": 1826.925
+    "generate": 4740.9,
+    "walk": 297.926,
+    "gitCommit": 7441.071,
+    "turnSnapshotAttempt": 1701.442
   },
   "turnSnapshot": {
     "status": "CAPTURED"

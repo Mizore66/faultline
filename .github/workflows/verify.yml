@@ -4,8 +4,70 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      unfreeze_override:
+        description: "Allow src/package.json/pnpm-lock.yaml changes while SUBMISSION_FROZEN exists"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
+  submission-freeze:
+    name: submission freeze guard (C-1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          # Classifier is plain node — do not require pnpm from packageManager.
+          package-manager-cache: false
+      - name: Classify changed paths under SUBMISSION_FROZEN
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          UNFREEZE: ${{ github.event_name == 'workflow_dispatch' && inputs.unfreeze_override || false }}
+        run: |
+          set -euo pipefail
+          if [[ ! -f SUBMISSION_FROZEN ]]; then
+            echo "SUBMISSION_FROZEN absent — freeze guard inactive."
+            exit 0
+          fi
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" && "${UNFREEZE}" == "true" ]]; then
+            echo "unfreeze_override=true — freeze guard skipped for this dispatch."
+            exit 0
+          fi
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          elif [[ "${EVENT_NAME}" == "push" && "${REF}" == "refs/heads/main" ]]; then
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+            if [[ "${BASE}" == "0000000000000000000000000000000000000000" ]]; then
+              echo "Initial push — freeze guard inactive."
+              exit 0
+            fi
+          else
+            echo "Event ${EVENT_NAME} on ${REF} — freeze guard not enforced."
+            exit 0
+          fi
+          mapfile -t PATHS < <(git diff --name-only "${BASE}" "${HEAD}" || true)
+          if [[ ${#PATHS[@]} -eq 0 ]]; then
+            echo "No changed paths."
+            exit 0
+          fi
+          set +e
+          node scripts/submission-freeze-guard.mjs --classify "${PATHS[@]}"
+          STATUS=$?
+          set -e
+          if [[ "${STATUS}" -eq 2 ]]; then
+            echo "::error::SUBMISSION_FROZEN blocks changes under src/**, package.json, or pnpm-lock.yaml. Docs/tests-only changes are allowed. Override via workflow_dispatch unfreeze_override=true."
+            exit 1
+          fi
+          exit "${STATUS}"
   test:
     name: ${{ matrix.os }} · Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
@@ -139,6 +201,59 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: faultline-coverage-matrix-docker-e2e-windows-host
+          if-no-files-found: warn
+          path: |
+            benchmarks/REPORT.md
+            benchmarks/report.json
+            benchmarks/e2e-executed.json
+
+  # Experimental second-kernel Docker gate via Colima on macOS.
+  # continue-on-error: never red-blocks the pipeline. Do not claim macOS
+  # coverage in docs unless this job produced an e2e-executed.json artifact.
+  docker-integration-macos-colima:
+    name: experimental native Docker E2E (macos-colima)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Start Colima (experimental)
+        id: colima
+        shell: bash
+        run: |
+          set +e
+          brew install colima docker 2>&1
+          colima start --cpu 2 --memory 4 2>&1
+          docker version 2>&1
+          docker pull node:22-alpine 2>&1
+          if [[ $? -eq 0 ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Colima/Docker unavailable on this macOS runner; experimental gate skipped."
+          fi
+          exit 0
+      - name: Native Docker E2E on macOS Colima
+        if: steps.colima.outputs.available == 'true'
+        shell: bash
+        run: pnpm exec vitest run tests/docker-integration.test.ts -t "eight coverage-matrix"
+        env:
+          FAULTLINE_DOCKER_INTEGRATION: "1"
+          FAULTLINE_DOCKER_NODE_TAG: "node:22-alpine"
+      - name: Upload experimental macOS E2E coverage facts
+        if: steps.colima.outputs.available == 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: faultline-coverage-matrix-docker-e2e-macos-colima
           if-no-files-found: warn
           path: |
             benchmarks/REPORT.md
