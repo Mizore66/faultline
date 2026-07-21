@@ -156,7 +156,7 @@ describe("FaultLine frozen-witness sandbox plans", () => {
     })).toMatchObject({ verdict: "ERROR", reason: "SANDBOX_UNAVAILABLE" });
   });
 
-  it("classifies structured witness-result outcomes independently of exit code", () => {
+  it("classifies structured witness-result outcomes with exit-code consistency for PASS/FAIL", () => {
     const plan = createSandboxPlan(dockerRequest({ limits: { maxOutputBytes: 4_096 } }));
 
     expect(classifySandboxResult(plan, {
@@ -178,13 +178,19 @@ describe("FaultLine frozen-witness sandbox plans", () => {
       stderr: "touch: cannot touch 'sealed.txt': Permission denied\n"
     })).toMatchObject({ verdict: "PASS", reason: "PREDICATE_PASS" });
 
-    // A structured outcome wins even against an exit code that would
-    // otherwise imply the opposite legacy verdict.
+    // Proof-bearing PASS/FAIL must agree with the process exit code so
+    // repository stdout cannot forge a PASS after a failing run.
+    expect(classifySandboxResult(plan, {
+      exitCode: 1,
+      stdout: `${formatWitnessResult("PREDICATE_PASS")}\n`,
+      stderr: "real test failure\n"
+    })).toMatchObject({ verdict: "ERROR", reason: "HARNESS_ERROR" });
+
     expect(classifySandboxResult(plan, {
       exitCode: 0,
       stdout: `${formatWitnessResult("PREDICATE_FAIL")}\n`,
       stderr: ""
-    })).toMatchObject({ verdict: "FAIL", reason: "PREDICATE_FAIL" });
+    })).toMatchObject({ verdict: "ERROR", reason: "HARNESS_ERROR" });
 
     expect(classifySandboxResult(plan, {
       exitCode: 1,
@@ -203,6 +209,12 @@ describe("FaultLine frozen-witness sandbox plans", () => {
       stdout: `${formatWitnessResult("INFRASTRUCTURE_ERROR")}\n`,
       stderr: ""
     })).toMatchObject({ verdict: "ERROR", reason: "SANDBOX_UNAVAILABLE" });
+
+    expect(classifySandboxResult(plan, {
+      exitCode: 1,
+      stdout: `${formatWitnessResult("PREDICATE_PASS")}\n${formatWitnessResult("PREDICATE_FAIL")}\n`,
+      stderr: ""
+    })).toMatchObject({ verdict: "ERROR", reason: "HARNESS_ERROR" });
   });
 
   it("classifies compile/setup incompatibility signatures as inapplicable rather than a predicate failure", () => {

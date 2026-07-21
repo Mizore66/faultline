@@ -41,7 +41,7 @@ people/calendar gates.
 
 | ID | Task | Required evidence | Issue |
 | --- | --- | --- | --- |
-| EXT-01 | Independent security review | Reviewer identity/role, findings, disposition | [#149](https://github.com/Mizore66/faultline/issues/149) |
+| EXT-01 | Independent security review | **done** — Chang Kai Zhe 2026-07-21; [ext-01-security-review.md](ext-01-security-review.md); fixes on `fix/security-review-fl-sec-001-003` | [#149](https://github.com/Mizore66/faultline/issues/149) |
 | EXT-02 | 3–5 unassisted new-user runs | Consent, friction, fixes, retest | [#150](https://github.com/Mizore66/faultline/issues/150) |
 | EXT-03 | Second external turn-path validation | Permissioned package + boundary | [#151](https://github.com/Mizore66/faultline/issues/151) |
 
@@ -61,7 +61,7 @@ people/calendar gates.
 | [#171](https://github.com/Mizore66/faultline/issues/171) | SEC-08 | partner / cold machine | **done** — macOS full-chain cold-reader 2026-07-21 (see security-chain.md) |
 | [#148](https://github.com/Mizore66/faultline/issues/148) | DEMO-01 | people / demo | scaffolding landed; retain stranger Codespaces/npm run |
 | [#176](https://github.com/Mizore66/faultline/issues/176) | DEMO-03 | people / demo | protocol landed; need cold PASS sheet(s) |
-| [#149](https://github.com/Mizore66/faultline/issues/149) | EXT-01 | people | independent security review |
+| [#149](https://github.com/Mizore66/faultline/issues/149) | EXT-01 | people | **done** — see [ext-01-security-review.md](ext-01-security-review.md) |
 | [#150](https://github.com/Mizore66/faultline/issues/150) | EXT-02 | people | 3–5 unassisted new-user runs |
 | [#151](https://github.com/Mizore66/faultline/issues/151) | EXT-03 | people | second external turn-path |
 | [#152](https://github.com/Mizore66/faultline/issues/152) | TIME-01 | calendar / multi-OS soak | blocks TIME-03 |

@@ -4,7 +4,11 @@ import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, parse, resolve } from "node:path";
 import { digestJson, sha256 } from "./canonical.js";
 import type { Witness } from "./domain.js";
-import { classifyFromWitnessResult, parseWitnessResult } from "./witness-result.js";
+import {
+  classifyFromWitnessResult,
+  resolveWitnessResultFromStdout,
+  witnessResultConsistentWithExitCode
+} from "./witness-result.js";
 
 /**
  * The sandbox boundary is intentionally conservative. A plan is evidence only
@@ -774,7 +778,11 @@ export function classifySandboxResult(
   if (result.exitCode === 126 || result.exitCode === 127) {
     return { ...base, verdict: "ERROR", reason: "WITNESS_SETUP_ERROR" };
   }
-  const witnessResultEarly = parseWitnessResult(result.stdout);
+  const resolvedWitness = resolveWitnessResultFromStdout(result.stdout);
+  if (!resolvedWitness.ok) {
+    return { ...base, verdict: "ERROR", reason: "HARNESS_ERROR" };
+  }
+  const witnessResultEarly = resolvedWitness.result;
   if (
     result.exitCode !== 0
     && witnessResultEarly === null
@@ -782,12 +790,15 @@ export function classifySandboxResult(
   ) {
     return { ...base, verdict: "ERROR", reason: "WITNESS_SETUP_ERROR" };
   }
-  // A witness that opts into the structured witness-result protocol is
-  // classified from that outcome alone; its exit code is not consulted.
-  // This is what keeps a compile/setup incompatibility that happens to exit
-  // nonzero from ever being reported as a behavioral predicate failure.
+  // Structured outcomes classify harness / incompatibility / infrastructure
+  // without consulting exit code. Proof-bearing PASS/FAIL additionally require
+  // exit-code consistency so repository stdout cannot forge PREDICATE_PASS
+  // after a failing run (or PREDICATE_FAIL after exit 0).
   const witnessResult = witnessResultEarly;
   if (witnessResult) {
+    if (!witnessResultConsistentWithExitCode(witnessResult.outcome, result.exitCode)) {
+      return { ...base, verdict: "ERROR", reason: "HARNESS_ERROR" };
+    }
     const classified = classifyFromWitnessResult(witnessResult.outcome);
     return { ...base, verdict: classified.verdict, reason: classified.reason as SandboxReason };
   }

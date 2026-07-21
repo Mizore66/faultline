@@ -98,7 +98,6 @@ describe("FaultLine doctor", () => {
       "-c", "core.useBuiltinFSMonitor=false",
       "-c", "core.untrackedCache=false",
       "-c", "core.preloadIndex=false",
-      "-c", "core.autocrlf=false",
       "-c", "filter.lfs.process=",
       "-c", "filter.lfs.smudge=",
       "-c", "filter.lfs.required=false",
@@ -111,7 +110,8 @@ describe("FaultLine doctor", () => {
       "-c", "protocol.git.allow=never",
       "-c", "protocol.ssh.allow=never",
       "-c", "protocol.http.allow=never",
-      "-c", "protocol.https.allow=never"
+      "-c", "protocol.https.allow=never",
+      "-c", "core.autocrlf=false"
     ]);
     const gitCalls = fake.calls.filter((command) => command.executable === "git");
     expect(gitCalls).toHaveLength(3);

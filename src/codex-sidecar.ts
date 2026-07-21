@@ -16,7 +16,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { canonicalJson, digestJson, sha256 } from "./canonical.js";
-import { DOCTOR_SAFE_GIT_CONFIG } from "./doctor.js";
+import { HOST_COMMAND_SAFE_GIT_CONFIG } from "./doctor.js";
 import {
   appendLifecycleEvent,
   captureGitCleanCheckpoint,
@@ -231,7 +231,7 @@ function hardenedGitEnvironment(): NodeJS.ProcessEnv {
 }
 
 function runHardenedGit(repository: string, args: readonly string[]): string {
-  const result = spawnSync("git", [...DOCTOR_SAFE_GIT_CONFIG, "-C", repository, ...args], {
+  const result = spawnSync("git", [...HOST_COMMAND_SAFE_GIT_CONFIG, "-C", repository, ...args], {
     encoding: "utf8",
     shell: false,
     windowsHide: true,
