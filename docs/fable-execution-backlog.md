@@ -28,7 +28,7 @@ people/calendar gates.
 | PROD-03 | Runtime mapping generator + persona docs | **done** |
 | CODEX-01 | Hooks-native live-fire + thread bindings | **done** |
 | COH-11 | Publish `@mizore66/faultline` to npm | **done** — `@mizore66/faultline@0.1.1` via Trusted Publishing ([#166](https://github.com/Mizore66/faultline/issues/166)) |
-| SEC-08 | Signed release tag + cold verify transcript | **partial** — `v0.1.8`/`v0.1.7` SSH-signed + cold-reader `git verify-tag` retained ([#182](https://github.com/Mizore66/faultline/issues/182)); full attestation→sample-root stranger walk still open ([#171](https://github.com/Mizore66/faultline/issues/171)); `v0.1.9-buildweek` drafted not cut |
+| SEC-08 | Signed release tag + cold verify transcript | **done** — SSH-signed `v0.1.8`/`v0.1.7`; macOS cold-reader full chain (tag → CI attest → provenance verify → sample root) retained in [security-chain.md](security-chain.md) ([#171](https://github.com/Mizore66/faultline/issues/171)); `v0.1.9-buildweek` drafted not cut |
 | DEMO-01 | Zero-install / rehearsal | **scaffolding done** — Codespaces + [demo-zero-install.md](demo-zero-install.md) + [demo-rehearsal.md](demo-rehearsal.md); stranger retention still open ([#148](https://github.com/Mizore66/faultline/issues/148)) |
 | DEMO-03 | 20-second comprehension test | **protocol ready** — [demo-comprehension-test.md](demo-comprehension-test.md); needs real cold PASS sheets ([#176](https://github.com/Mizore66/faultline/issues/176)) |
 | CDX-07 | Organic incident farming → PREVENTION_VERIFIED | **open** ([#173](https://github.com/Mizore66/faultline/issues/173)) |
@@ -58,7 +58,7 @@ people/calendar gates.
 
 | Issue | Backlog ID | Gate | Notes |
 | --- | --- | --- | --- |
-| [#171](https://github.com/Mizore66/faultline/issues/171) | SEC-08 | partner / cold machine | Tag cold-reader done (#182); need full provenance/attestation/sample-root stranger walk |
+| [#171](https://github.com/Mizore66/faultline/issues/171) | SEC-08 | partner / cold machine | **done** — macOS full-chain cold-reader 2026-07-21 (see security-chain.md) |
 | [#148](https://github.com/Mizore66/faultline/issues/148) | DEMO-01 | people / demo | scaffolding landed; retain stranger Codespaces/npm run |
 | [#176](https://github.com/Mizore66/faultline/issues/176) | DEMO-03 | people / demo | protocol landed; need cold PASS sheet(s) |
 | [#149](https://github.com/Mizore66/faultline/issues/149) | EXT-01 | people | independent security review |
@@ -77,7 +77,7 @@ people/calendar gates.
 - 2026-07-21: DEMO-01/03 scaffolding — `.devcontainer`, `docs/demo-zero-install.md`,
   `docs/demo-rehearsal.md`, `docs/demo-comprehension-test.md` (no fabricated subjects).
 - 2026-07-21: COH-11 — published `@mizore66/faultline@0.1.1` via npm Trusted Publishing (OIDC).
-- 2026-07-21: SEC-08 — cold-reader transcript for `v0.1.8-buildweek` / `v0.1.7-buildweek` retained in `docs/security-chain.md` (#182 closable); full attestation chain on #171 still open.
+- 2026-07-21: SEC-08 — tag-only cold-reader (#182) then **full-chain** macOS cold-reader (tag → CI attest → `fl provenance verify` → sample-root verify/judge-proof) retained in `docs/security-chain.md`; #171 closable.
 - 2026-07-20: RIG-07 Windows-host Docker E2E — eight coverage-matrix rows executed;
   retained in `benchmarks/e2e-executed.json` (`osFamily: windows`, `count: 8`).
 - 2026-07-20: RIG/SEC/PROD/CODEX engineering backlog closed without fabricating soak.
