@@ -91,8 +91,11 @@ const opArbitrary: fc.Arbitrary<Op> = fc.oneof(
 );
 
 describe("turn-snapshot oracle equivalence", () => {
+  // ~5–7s/case on Windows; scale timeout with FAULTLINE_ORACLE_RUNS (default 200).
+  const numRuns = Number(process.env.FAULTLINE_ORACLE_RUNS ?? "200");
+  const timeoutMs = Math.max(3_600_000, Math.ceil(numRuns * 12_000) + 300_000);
+
   it("matches from-scratch staging across random edit/revert sequences", () => {
-    const numRuns = Number(process.env.FAULTLINE_ORACLE_RUNS ?? "200");
     expect(Number.isInteger(numRuns) && numRuns >= 1).toBe(true);
 
     fc.assert(
@@ -119,5 +122,5 @@ describe("turn-snapshot oracle equivalence", () => {
       }),
       { numRuns }
     );
-  }, 3_600_000);
+  }, timeoutMs);
 });
