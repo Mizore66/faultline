@@ -49,6 +49,8 @@ Facilitator:
 
 Retain filled sheets under `docs/samples/comprehension/` only when real (do not fabricate). Example filename: `2026-07-21-subject-a.md`.
 
+**Retained:** [samples/comprehension/2026-07-21-subject-b.md](samples/comprehension/2026-07-21-subject-b.md) — cold **PASS** on `judge-proof` (2026-07-21).
+
 ## Facilitator tips
 
 - Prefer subjects outside the Build Week team.  
