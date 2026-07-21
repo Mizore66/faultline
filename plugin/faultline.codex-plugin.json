@@ -1,0 +1,45 @@
+{
+  "name": "faultline-codex-sidecar",
+  "version": "0.1.2",
+  "description": "Experimental FaultLine Codex plugin packaging scaffold for public lifecycle hooks.",
+  "experimental": true,
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${FAULTLINE_CLI:-fl} codex sidecar hook --quiet",
+            "timeout": 30,
+            "statusMessage": "FaultLine observes this Codex session"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${FAULTLINE_CLI:-fl} codex sidecar hook --quiet",
+            "timeout": 30,
+            "statusMessage": "FaultLine records an observed Codex turn"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${FAULTLINE_CLI:-fl} codex sidecar hook --quiet",
+            "timeout": 30,
+            "statusMessage": "FaultLine captures a clean observed checkpoint when available"
+          }
+        ]
+      }
+    ]
+  }
+}
