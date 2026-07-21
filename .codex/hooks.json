@@ -1,0 +1,70 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node 'C:\\Users\\User\\Documents\\Codex Build Week Project\\dist\\cli.js' codex sidecar hook --quiet",
+            "commandWindows": "node \"C:\\Users\\User\\Documents\\Codex Build Week Project\\dist\\cli.js\" codex sidecar hook --quiet",
+            "timeout": 30,
+            "statusMessage": "FaultLine observes this Codex session"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node 'C:\\Users\\User\\Documents\\Codex Build Week Project\\dist\\cli.js' codex sidecar hook --quiet",
+            "commandWindows": "node \"C:\\Users\\User\\Documents\\Codex Build Week Project\\dist\\cli.js\" codex sidecar hook --quiet",
+            "timeout": 30,
+            "statusMessage": "FaultLine records an observed Codex turn"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node 'C:\\Users\\User\\Documents\\Codex Build Week Project\\dist\\cli.js' codex sidecar hook --quiet",
+            "commandWindows": "node \"C:\\Users\\User\\Documents\\Codex Build Week Project\\dist\\cli.js\" codex sidecar hook --quiet",
+            "timeout": 30,
+            "statusMessage": "FaultLine records tool-use attribution (digests only)"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node 'C:\\Users\\User\\Documents\\Codex Build Week Project\\dist\\cli.js' codex sidecar hook --quiet",
+            "commandWindows": "node \"C:\\Users\\User\\Documents\\Codex Build Week Project\\dist\\cli.js\" codex sidecar hook --quiet",
+            "timeout": 30,
+            "statusMessage": "FaultLine records tool-use completion (digests only)"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node 'C:\\Users\\User\\Documents\\Codex Build Week Project\\dist\\cli.js' codex sidecar hook --quiet",
+            "commandWindows": "node \"C:\\Users\\User\\Documents\\Codex Build Week Project\\dist\\cli.js\" codex sidecar hook --quiet",
+            "timeout": 30,
+            "statusMessage": "FaultLine captures a clean observed checkpoint when available"
+          }
+        ]
+      }
+    ]
+  }
+}

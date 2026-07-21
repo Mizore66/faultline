@@ -19,7 +19,7 @@ This is a recording and submission checklist, not evidence that a submission has
 
 **Fallback** if you skip the external beat: cold-open on the COMMIT_PROOF sample only.
 
-Pinned recording checkout: `git checkout v0.1.9-buildweek`. Teleprompter: [video-teleprompter.md](video-teleprompter.md).
+Pinned recording checkout: `git checkout v0.1.8-buildweek`. Teleprompter: [video-teleprompter.md](video-teleprompter.md).
 
 Do not insert `--` between `fl` and the subcommand (`pnpm fl judge-demo`, never `pnpm fl -- judge-demo`).
 
@@ -162,7 +162,7 @@ We published a multi-OS SIDE_CAR soak sample that was fabricated by a generator 
 | Qualifying Codex `/feedback` session | README + this kit | `019f66bd-0ac1-78f3-8dc1-5968e4f2fa09` |
 | Zero-install proof page snapshot | `docs/self-incident-proof-preview.html` | Visual aid for sample; not a substitute for `fl verify` |
 | GPT-5.6 redacted samples (no API key) | `docs/samples/gpt-5.6/` | Proposal / repair-brief shapes |
-| Pinned submission checkout | README + `package-smoke` pin | `v0.1.9-buildweek` |
+| Pinned submission checkout | README + `package-smoke` pin | `v0.1.8-buildweek` |
 | Security control → test traceability | `docs/security-model.md` appendix | Smoke-grepped by `scripts/package-smoke.mjs` |
 | Flagship `fl demo full` arc (Docker) | CLI: `fl demo full` | Ends with `PREVENTION_VERIFIED` + demo-repo `AGENTS.md` only when artifacts verify; requires Docker |
 
