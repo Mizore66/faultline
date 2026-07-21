@@ -28,7 +28,7 @@ people/calendar gates.
 | PROD-03 | Runtime mapping generator + persona docs | **done** |
 | CODEX-01 | Hooks-native live-fire + thread bindings | **done** |
 | COH-11 | Publish `@mizore66/faultline` to npm | **done** — `@mizore66/faultline@0.1.1` via Trusted Publishing ([#166](https://github.com/Mizore66/faultline/issues/166)) |
-| SEC-08 | Signed release tag + cold verify transcript | **done** — SSH-signed `v0.1.8`/`v0.1.7`; macOS cold-reader full chain (tag → CI attest → provenance verify → sample root) retained in [security-chain.md](security-chain.md) ([#171](https://github.com/Mizore66/faultline/issues/171)); `v0.1.9-buildweek` drafted not cut |
+| SEC-08 | Signed release tag + cold verify transcript | **done** — SSH-signed `v0.1.8`/`v0.1.7` + macOS full-chain cold-reader in [security-chain.md](security-chain.md) ([#171](https://github.com/Mizore66/faultline/issues/171)); judging pin advancing to signed `v0.1.9-buildweek` |
 | DEMO-01 | Zero-install / rehearsal | **scaffolding done** — Codespaces + [demo-zero-install.md](demo-zero-install.md) + [demo-rehearsal.md](demo-rehearsal.md); stranger retention still open ([#148](https://github.com/Mizore66/faultline/issues/148)) |
 | DEMO-03 | 20-second comprehension test | **protocol ready** — [demo-comprehension-test.md](demo-comprehension-test.md); needs real cold PASS sheets ([#176](https://github.com/Mizore66/faultline/issues/176)) |
 | CDX-07 | Organic incident farming → PREVENTION_VERIFIED | **open** ([#173](https://github.com/Mizore66/faultline/issues/173)) |
@@ -90,4 +90,5 @@ people/calendar gates.
   PR #158 UI chrome is non-blocking for these gates.
 
 - 2026-07-21: Cut judging pin `v0.1.8-buildweek` + `@mizore66/faultline@0.1.2`; paused continuous-release push trigger; SEC P0 repair-git + fingerprint caps.
+- 2026-07-21: Cut judging pin `v0.1.9-buildweek` (SSH-signed); `v0.1.8-buildweek` retained historical.
 - 2026-07-21 (`e35ab80`): Restored-clean staleness fix (HEAD-base staging); oracle property test; C-1 freeze guard; CDX-09 thread bindings; plugin packaging scaffold (not live-fire). Pin draft: `docs/release-notes-v0.1.9-draft.md` (human cuts tag).

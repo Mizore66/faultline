@@ -1168,7 +1168,7 @@ describe("FaultLine CLI workflows", () => {
 
     const quickstart = runFl(["quickstart"]);
     expect(quickstart.status).toBe(0);
-    expect(quickstart.stdout).toMatch(/v0\.1\.8-buildweek/);
+    expect(quickstart.stdout).toMatch(/v0\.1\.9-buildweek/);
     expect(quickstart.stdout).toMatch(/judge-proof/);
   });
 
