@@ -83,3 +83,28 @@ func RandomFloat(r *rand.Rand) float64 {
 		}
 	}
 }
+
+const asciiKeyAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./:@ +#$%&*()[]{}!?,;=~^'\"<>|\\`"
+
+var latin1Extras = []rune("éÉèàçñöÖüßøÆ¡¿ª·")
+
+// RandomKeys returns 2–7 distinct keys; about a quarter include Latin-1 letters.
+func RandomKeys(r *rand.Rand) []string {
+	seen := map[string]bool{}
+	var keys []string
+	for count := 2 + r.IntN(6); len(keys) < count; {
+		var b strings.Builder
+		for n := 1 + r.IntN(12); n > 0; n-- {
+			if r.IntN(4) == 0 {
+				b.WriteRune(latin1Extras[r.IntN(len(latin1Extras))])
+			} else {
+				b.WriteByte(asciiKeyAlphabet[r.IntN(len(asciiKeyAlphabet))])
+			}
+		}
+		if k := b.String(); !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}

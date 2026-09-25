@@ -1872,7 +1872,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: `jsjson.*`, `jsstr.ToUTF8`.
 - Produces: `canonical.LocaleCompare(a, b string) int`, `canonical.SortLocale([]string) []string` (stable, returns a new slice), `canonical.CanonicalJSON(jsjson.Value) (string, error)`, `canonical.SHA256Hex(s string) string` (hashes `jsstr.ToUTF8(s)`), `canonical.SHA256HexBytes([]byte) string`, `canonical.DigestJSON(jsjson.Value) (string, error)` (`"sha256:" + hex`). `gen.RandomKeys(r *rand.Rand) []string`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Expected values were produced by frozen TS `canonicalJson`/`digestJson`. Note `"9"` before `"10"`: TS rebuilds each object, and JS objects put array-index keys first in numeric order, so only non-index keys follow `localeCompare`.
 
@@ -1922,12 +1922,12 @@ func TestSortLocale(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/canonical/`
 Expected: FAIL (undefined: CanonicalJSON).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```bash
 go get golang.org/x/text@v0.42.0
@@ -2048,12 +2048,12 @@ func DigestJSON(v jsjson.Value) (string, error) {
 }
 ```
 
-- [ ] **Step 4: Run unit tests**
+- [x] **Step 4: Run unit tests**
 
 Run: `go test ./internal/canonical/`
 Expected: PASS.
 
-- [ ] **Step 5: Add oracle ops, key generator, and live tests**
+- [x] **Step 5: Add oracle ops, key generator, and live tests**
 
 Add to the imports and `handlers` of `difftest/gen/node-oracle.ts`:
 
@@ -2176,12 +2176,12 @@ func TestLiveCanonical(t *testing.T) {
 }
 ```
 
-- [ ] **Step 6: Run live tests**
+- [x] **Step 6: Run live tests**
 
 Run: `FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run 'TestLive(SortLocale|Canonical)' -v`
 Expected: PASS. ASCII and Latin-1 keys must match with zero mismatches (a pre-plan spike found 0 mismatches in 20,000 ASCII key sets with x/text v0.42.0). If a Latin-1 mismatch appears, try `collate.New(language.AmericanEnglish, collate.Force)`. If it still differs, stop and report the failing keys; do not paper over it.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add go.mod go.sum internal/canonical difftest

@@ -1,6 +1,7 @@
 // Long-running oracle over frozen TS. One JSON request per stdin line,
 // one JSON response per stdout line. Run: pnpm exec tsx difftest/gen/node-oracle.ts
 import { createInterface } from "node:readline";
+import { canonicalJson, digestJson } from "../../src/canonical.js";
 
 type Handler = (args: any) => unknown;
 export const handlers: Record<string, Handler> = {
@@ -17,6 +18,15 @@ export const handlers: Record<string, Handler> = {
     const view = new DataView(new ArrayBuffer(8));
     view.setBigUint64(0, BigInt(`0x${hex}`));
     return String(view.getFloat64(0));
+  },
+  sort: ({ keys }: { keys: string[] }) => [...keys].sort((left, right) => left.localeCompare(right)),
+  canonical: ({ text }: { text: string }) => {
+    try {
+      const value = JSON.parse(text);
+      return { ok: true, canonical: canonicalJson(value), digest: digestJson(value) };
+    } catch (error) {
+      return { ok: false, message: (error as Error).message };
+    }
   },
 };
 
