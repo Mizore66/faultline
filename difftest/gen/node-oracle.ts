@@ -8,7 +8,7 @@ import {
   GitCommitStateSchema, GitInvestigationResultSchema, GitInvestigationRunFactSchema, StableGitStateSchema, StableGitTransitionSchema
 } from "../../src/git-investigation.js";
 import { GitProofBundleManifestSchema, GitProofSourceMetadataSchema } from "../../src/git-proof-bundle.js";
-import { FrozenWitnessSchema } from "../../src/witness-lock.js";
+import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witness-lock.js";
 import { EnvironmentFingerprintSchema } from "../../src/environment-fingerprint.js";
 import { MaterializedOverlaySchema } from "../../src/safe-overlay.js";
 
@@ -72,6 +72,8 @@ export const handlers: Record<string, Handler> = {
       return { success: true, canonical: `ERROR:${(error as Error).message}` };
     }
   },
+  verifyFrozenWitnessRecord: ({ text, expected }: { text: string; expected?: string }) =>
+    canonicalJson(verifyFrozenWitnessRecord(JSON.parse(text), expected)),
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });

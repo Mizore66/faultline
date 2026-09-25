@@ -6578,7 +6578,7 @@ Transcribe `src/witness-lock.ts`: `byteDigest`/`commandDigest`/`overlayDigest` (
 - `witnessPayload` builds a new object with exactly the keys listed at 171–182 (order is irrelevant after canonicalization).
 - On schema failure, the single error is `frozen witness schema validation failed: <ZodError.message>` and status is `NOT_PROVIDED` or `MISMATCH` depending on whether an expected digest was supplied.
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 `internal/bundle/gitproof/witness_test.go`:
 
@@ -6600,13 +6600,13 @@ func TestCommittedFrozenWitnessVerifies(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure, then implement**
+- [x] **Step 2: Run to verify failure, then implement**
 
 Run: `go test ./internal/bundle/gitproof/ -run Witness`
 Expected: FAIL (undefined: VerifyFrozenWitnessRecord). Transcribe the listed functions into `witness.go`, then rerun.
 Expected: PASS.
 
-- [ ] **Step 3: Add the oracle op and live test**
+- [x] **Step 3: Add the oracle op and live test**
 
 Oracle (import `verifyFrozenWitnessRecord` from `../../src/witness-lock.js`):
 
@@ -6705,7 +6705,7 @@ func TestLiveWitness(t *testing.T) {
 Run: `FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run TestLiveWitness -v`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/bundle/gitproof difftest
