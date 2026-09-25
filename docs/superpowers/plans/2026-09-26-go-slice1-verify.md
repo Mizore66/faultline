@@ -60,7 +60,7 @@ difftest/KNOWN_DIFFERENCES.md, difftest/BENCHMARK.md
 **Interfaces:**
 - Produces: `jsstr.FromUTF16([]uint16) string`, `jsstr.ToUTF16(string) []uint16`, `jsstr.Length(string) int`, `jsstr.ToUTF8(string) string`, `jsstr.IsWhitespace(uint16) bool`, `jsstr.Trim(string) string`; `cli.Run(args []string, stdout, stderr io.Writer) int`; in package `cli`: `type env struct{ stdout, stderr io.Writer; exitCode int }`, `func (e *env) out(s string)`, `func fail(format string, a ...any) error`, `func hasFlag([]string, string) bool`, `func option([]string, string) (string, bool)`, `func verifyCommand(e *env, args []string) error`.
 
-- [ ] **Step 1: Create the module and entry point**
+- [x] **Step 1: Create the module and entry point**
 
 ```bash
 go mod init github.com/Mizore66/faultline
@@ -89,7 +89,7 @@ Append to `.gitattributes` (golden bundles must keep exact bytes on Windows):
 difftest/testdata/** -text
 ```
 
-- [ ] **Step 2: Write failing jsstr tests**
+- [x] **Step 2: Write failing jsstr tests**
 
 `internal/jsstr/jsstr_test.go`:
 
@@ -138,12 +138,12 @@ func TestTrimMatchesJavaScript(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `go test ./internal/jsstr/`
 Expected: FAIL (build error: undefined: FromUTF16).
 
-- [ ] **Step 4: Implement jsstr**
+- [x] **Step 4: Implement jsstr**
 
 `internal/jsstr/jsstr.go`:
 
@@ -242,12 +242,12 @@ func Trim(s string) string {
 }
 ```
 
-- [ ] **Step 5: Run jsstr tests**
+- [x] **Step 5: Run jsstr tests**
 
 Run: `go test ./internal/jsstr/`
 Expected: PASS.
 
-- [ ] **Step 6: Write failing CLI tests**
+- [x] **Step 6: Write failing CLI tests**
 
 The expected strings below were captured from `node dist/cli.js` at `faa98c0`.
 
@@ -314,12 +314,12 @@ func TestOption(t *testing.T) {
 }
 ```
 
-- [ ] **Step 7: Run to verify failure**
+- [x] **Step 7: Run to verify failure**
 
 Run: `go test ./internal/cli/`
 Expected: FAIL (undefined: Run).
 
-- [ ] **Step 8: Implement the CLI shell**
+- [x] **Step 8: Implement the CLI shell**
 
 `internal/cli/args.go`:
 
@@ -486,12 +486,12 @@ func verifyCommand(e *env, args []string) error {
 }
 ```
 
-- [ ] **Step 9: Run all tests**
+- [x] **Step 9: Run all tests**
 
 Run: `go vet ./... && go test ./...`
 Expected: PASS.
 
-- [ ] **Step 10: Add the Go CI workflow**
+- [x] **Step 10: Add the Go CI workflow**
 
 `.github/workflows/go.yml`:
 
@@ -519,7 +519,7 @@ jobs:
       - run: go test ./...
 ```
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add go.mod cmd internal .github/workflows/go.yml .gitattributes
