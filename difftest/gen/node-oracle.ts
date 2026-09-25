@@ -5,6 +5,19 @@ import { createInterface } from "node:readline";
 type Handler = (args: any) => unknown;
 export const handlers: Record<string, Handler> = {
   echo: (args) => args,
+  parse: ({ text }: { text: string }) => {
+    try {
+      const value = JSON.parse(text);
+      return { ok: true, compact: JSON.stringify(value), pretty: JSON.stringify(value, null, 2) };
+    } catch (error) {
+      return { ok: false, message: (error as Error).message };
+    }
+  },
+  formatNumber: ({ hex }: { hex: string }) => {
+    const view = new DataView(new ArrayBuffer(8));
+    view.setBigUint64(0, BigInt(`0x${hex}`));
+    return String(view.getFloat64(0));
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });

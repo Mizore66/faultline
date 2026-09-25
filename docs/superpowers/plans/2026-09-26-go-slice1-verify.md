@@ -724,7 +724,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: `jsstr.FromUTF16`, `jsstr.ToUTF16`.
 - Produces (package `jsjson`): `type Kind` with constants `Undefined` (zero value), `Null`, `Bool`, `Number`, `String`, `Array`, `Object`; `type Value` with `MakeNull()`, `MakeBool(bool)`, `MakeNumber(float64)`, `MakeString(string)`, `MakeArray([]Value)`, `MakeObject(*Obj)`, methods `Kind()`, `Bool()`, `Num()`, `Str()`, `Items()`, `Obj()`, `Get(keys ...string) Value` (JS property access; Undefined when any step is missing or not an object); `type Obj` with `NewObj()`, `Len()`, `Keys() []string` (JS property order), `Get(k) (Value, bool)`, `Field(k) Value` (Undefined when absent), `Set(k, v)`, `Delete(k)`; `type SyntaxError struct{ Message string }`; `Parse(text string) (Value, error)`; `FormatNumber(float64) string`; `Quote(string) string`; `Stringify(Value) string`; `StringifyIndent(Value, indent string) string`. Package `gen` (under `difftest/gen`, Go files beside the TS generators): `RandomJSONText(r *rand.Rand) string`, `RandomFloat(r *rand.Rand) float64`.
 
-- [ ] **Step 1: Write failing unit tests**
+- [x] **Step 1: Write failing unit tests**
 
 Every expected error string below was captured from Node v22.23.2.
 
@@ -824,12 +824,12 @@ func TestStringify(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/jsjson/`
 Expected: FAIL (undefined: Parse).
 
-- [ ] **Step 3: Implement the value model**
+- [x] **Step 3: Implement the value model**
 
 `internal/jsjson/value.go`:
 
@@ -955,7 +955,7 @@ func arrayIndex(k string) (uint32, bool) {
 }
 ```
 
-- [ ] **Step 4: Implement the parser**
+- [x] **Step 4: Implement the parser**
 
 This is a transcription of V8 12.4.254 `src/json/json-parser.cc` (`ParseJsonValue` 1480–1760, `ParseJsonNumber` 1771–1864, `ScanJsonString` 1996–2090) and `json-parser.h` (`Expect`, `ExpectNext`, `Check`, `ScanLiteral`, lines 238–283). Positions are indexes into the UTF-16 source.
 
@@ -1343,7 +1343,7 @@ func (p *parser) scanString() (string, bool) {
 }
 ```
 
-- [ ] **Step 5: Implement V8 error reporting**
+- [x] **Step 5: Implement V8 error reporting**
 
 Templates are verbatim from V8 12.4.254 `src/common/message-template.h:518–564`; selection logic from `json-parser.cc:375–491`.
 
@@ -1470,7 +1470,7 @@ func (p *parser) withEllipses() string {
 }
 ```
 
-- [ ] **Step 6: Implement number formatting and stringify**
+- [x] **Step 6: Implement number formatting and stringify**
 
 `internal/jsjson/number.go`:
 
@@ -1653,12 +1653,12 @@ func write(b *strings.Builder, v Value, indent, current string) {
 }
 ```
 
-- [ ] **Step 7: Run unit tests**
+- [x] **Step 7: Run unit tests**
 
 Run: `go test ./internal/jsjson/`
 Expected: PASS. If a V8 case fails, re-read the cited V8 lines. Do not change the expected strings; they came from Node.
 
-- [ ] **Step 8: Add oracle ops and random generators**
+- [x] **Step 8: Add oracle ops and random generators**
 
 Add to `handlers` in `difftest/gen/node-oracle.ts`:
 
@@ -1768,7 +1768,7 @@ func RandomFloat(r *rand.Rand) float64 {
 }
 ```
 
-- [ ] **Step 9: Write the live property tests**
+- [x] **Step 9: Write the live property tests**
 
 `difftest/jsjson_live_test.go`:
 
@@ -1846,12 +1846,12 @@ func TestLiveFormatNumber(t *testing.T) {
 }
 ```
 
-- [ ] **Step 10: Run live tests**
+- [x] **Step 10: Run live tests**
 
 Run: `FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run 'TestLive(Parse|FormatNumber)' -v`
 Expected: PASS with 10,000 cases each. Any failure prints the input; fix the Go code to match Node, re-reading the V8 source for parser failures.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add internal/jsjson difftest
