@@ -541,7 +541,7 @@ The oracle lets Go tests ask frozen TS for ground truth. Later tasks add operati
 - Consumes: nothing from earlier Go tasks (the client transports JSON source text; decoding into `jsjson.Value` is added in Task 3).
 - Produces: `oracle.Start(t testing.TB) *Client` (skips the test unless `FAULTLINE_NODE_ORACLE=1`), `(*Client).Call(op string, args string) (string, error)` where `args` and the returned string are JSON source text; `(*Client).Close()`. Node side: request line `{"id":N,"op":"...","args":<json>}`, response line `{"id":N,"ok":true,"result":<json>}` or `{"id":N,"ok":false,"error":"<message>"}`.
 
-- [ ] **Step 1: Write the oracle**
+- [x] **Step 1: Write the oracle**
 
 `difftest/gen/node-oracle.ts`:
 
@@ -570,7 +570,7 @@ rl.on("line", (line) => {
 });
 ```
 
-- [ ] **Step 2: Write the failing client test**
+- [x] **Step 2: Write the failing client test**
 
 `difftest/oracle/client_test.go`:
 
@@ -592,12 +592,12 @@ func TestEchoRoundTripsLoneSurrogate(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run to verify failure**
+- [x] **Step 3: Run to verify failure**
 
 Run: `FAULTLINE_NODE_ORACLE=1 go test ./difftest/oracle/`
 Expected: FAIL (undefined: Start).
 
-- [ ] **Step 4: Implement the client**
+- [x] **Step 4: Implement the client**
 
 The client finds the repo root by walking up to `go.mod`, starts `pnpm exec tsx difftest/gen/node-oracle.ts` there, and extracts `result` by scanning the response text so no Go JSON decoding is involved.
 
@@ -699,12 +699,12 @@ func (c *Client) Close() {
 }
 ```
 
-- [ ] **Step 5: Run the test**
+- [x] **Step 5: Run the test**
 
 Run: `pnpm install --frozen-lockfile && FAULTLINE_NODE_ORACLE=1 go test ./difftest/oracle/`
 Expected: PASS. Also run `go test ./difftest/oracle/` without the variable. Expected: `SKIP`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add difftest/gen/node-oracle.ts difftest/oracle
