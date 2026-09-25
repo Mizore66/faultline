@@ -4,11 +4,28 @@ import { createInterface } from "node:readline";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { buildZod } from "./schema-dsl.js";
 import { PreventionProofBodySchema, PreventionProofManifestSchema, PreventionRepairedRunsArtifactSchema } from "../../src/prevention-proof.js";
+import {
+  GitCommitStateSchema, GitInvestigationResultSchema, GitInvestigationRunFactSchema, StableGitStateSchema, StableGitTransitionSchema
+} from "../../src/git-investigation.js";
+import { GitProofBundleManifestSchema, GitProofSourceMetadataSchema } from "../../src/git-proof-bundle.js";
+import { FrozenWitnessSchema } from "../../src/witness-lock.js";
+import { EnvironmentFingerprintSchema } from "../../src/environment-fingerprint.js";
+import { MaterializedOverlaySchema } from "../../src/safe-overlay.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
   PreventionProofManifestSchema,
   PreventionRepairedRunsArtifactSchema,
+  GitCommitStateSchema,
+  GitInvestigationRunFactSchema,
+  StableGitStateSchema,
+  StableGitTransitionSchema,
+  GitInvestigationResultSchema,
+  EnvironmentFingerprintSchema,
+  MaterializedOverlaySchema,
+  FrozenWitnessSchema,
+  GitProofSourceMetadataSchema,
+  GitProofBundleManifestSchema,
 };
 
 type Handler = (args: any) => unknown;

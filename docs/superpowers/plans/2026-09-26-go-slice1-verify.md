@@ -6354,7 +6354,7 @@ Transcribe these TS ranges 1:1, keeping field order, strictness, and every custo
 - `EVIDENCE_LOG_PREVIEW_BYTES * 2` = 32768.
 - The request/sandbox schemas with `.default` (`git-investigation.ts:80-122`) are not used by any verifier and are not ported.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 `internal/bundle/gitproof/schemas_test.go`:
 
@@ -6415,12 +6415,12 @@ func TestCanonicalBase64(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/bundle/gitproof/`
 Expected: FAIL (undefined schemas).
 
-- [ ] **Step 3: Implement matchers**
+- [x] **Step 3: Implement matchers**
 
 `internal/bundle/gitproof/matchers.go`:
 
@@ -6479,7 +6479,7 @@ func isCanonicalBase64(value string) bool {
 func canonicalBase64Value(v jsjson.Value) bool { return isCanonicalBase64(v.Str()) }
 ```
 
-- [ ] **Step 4: Transcribe the schemas**
+- [x] **Step 4: Transcribe the schemas**
 
 Write `schemas.go` and `witness_schemas.go` per the table. Example of the expected style (this is `src/git-proof-bundle.ts:74-113` in full; transcribe every other schema the same way):
 
@@ -6519,12 +6519,12 @@ var (
 
 `DiscriminatedUnion` finds the discriminator by looking up the `status` field of each option. It needs `(*ObjectSchema).field` to see extended fields, which `Extend` already provides.
 
-- [ ] **Step 5: Run unit tests**
+- [x] **Step 5: Run unit tests**
 
 Run: `go test ./internal/bundle/gitproof/`
 Expected: PASS.
 
-- [ ] **Step 6: Extend the named-schema oracle check**
+- [x] **Step 6: Extend the named-schema oracle check**
 
 Add to the oracle's `namedSchemas` (with imports from `../../src/git-investigation.js`, `../../src/git-proof-bundle.js`, `../../src/witness-lock.js`, `../../src/environment-fingerprint.js`, `../../src/safe-overlay.js`): `GitCommitStateSchema`, `GitInvestigationRunFactSchema`, `StableGitStateSchema`, `StableGitTransitionSchema`, `GitInvestigationResultSchema`, `EnvironmentFingerprintSchema`, `MaterializedOverlaySchema`, `FrozenWitnessSchema`, `GitProofSourceMetadataSchema`, `GitProofBundleManifestSchema`.
 
@@ -6541,7 +6541,9 @@ Add the same names to `namedSchemas` in `difftest/named_live_test.go` (mapping t
 
 For `GitInvestigationRunFactSchema`, add a helper `firstRunArtifact(base string) string` that returns `base + "/runs/" + <first file name in that directory>`. For `GitCommitStateSchema`, `StableGitStateSchema`, `EnvironmentFingerprintSchema`, and `MaterializedOverlaySchema`, seed with a JSON sub-document instead: extend the test so a seed of the form `"git-unbound/investigation.json#states.0"` means "parse the file and follow the dotted path (numeric segments index arrays)". Use `#states.0`, `#stableStates.0`, `#environment.fingerprints.0.fingerprint`, and `#runs.0.overlays.0`. If `git-unbound` has an empty `environment.fingerprints`, pick the first base that has one.
 
-- [ ] **Step 7: Run live test and commit**
+> **Amendment (during execution):** with the `git-sha256` base dropped (Task 7), the unit test and seeds use `git-two-states` in its place.
+
+- [x] **Step 7: Run live test and commit**
 
 Run: `FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run TestLiveNamedSchemas -v`
 Expected: PASS for every schema.
