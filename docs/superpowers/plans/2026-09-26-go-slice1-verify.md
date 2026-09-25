@@ -7171,7 +7171,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: everything.
 - Produces: the spec §6 done criteria, all satisfied.
 
-- [ ] **Step 1: Write KNOWN_DIFFERENCES.md**
+- [x] **Step 1: Write KNOWN_DIFFERENCES.md**
 
 `difftest/KNOWN_DIFFERENCES.md`:
 
@@ -7199,7 +7199,7 @@ None. (Add entries here, with the issue kind and a reason, if any are ever exclu
 
 If any Latin-1 or non-ASCII collation mismatches were recorded in Task 4, add a section for them with the failing characters.
 
-- [ ] **Step 2: Write the benchmark**
+- [x] **Step 2: Write the benchmark**
 
 `difftest/benchmark_test.go`:
 
@@ -7245,7 +7245,7 @@ hyperfine --warmup 2 'node dist/cli.js verify difftest/testdata/bases/git-fully-
 
 If `hyperfine` is not installed, run each TS command 20 times under `time` in a shell loop and divide by 20. Record both results in `difftest/BENCHMARK.md` with the machine (CPU, OS), Go and Node versions, and the date. This is evidence for the performance goal, not a gate.
 
-- [ ] **Step 3: Add the live CI job**
+- [x] **Step 3: Add the live CI job**
 
 Append to `jobs:` in `.github/workflows/go.yml`:
 
@@ -7275,7 +7275,7 @@ Append to `jobs:` in `.github/workflows/go.yml`:
         run: FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run TestLive -v -timeout 30m
 ```
 
-- [ ] **Step 4: Run the done check (spec §6)**
+- [x] **Step 4: Run the done check (spec §6)**
 
 Run each and confirm:
 
@@ -7299,7 +7299,7 @@ Expected: PASS, with 10,000 cases per property.
 
 Push the branch and confirm both CI jobs (`go` on three OSes, `difftest-live`) pass before calling slice 1 done.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add difftest .github/workflows/go.yml

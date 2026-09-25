@@ -19,3 +19,27 @@ jobs:
           go-version: "1.27"
       - run: go vet ./...
       - run: go test ./...
+
+  difftest-live:
+    name: difftest live (frozen TS oracle)
+    runs-on: ubuntu-latest
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Regenerate goldens and require no drift
+        run: |
+          pnpm exec tsx difftest/gen/gen-goldens.ts
+          git diff --exit-code difftest/testdata
+      - name: Live property tests
+        run: FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run TestLive -v -timeout 30m
