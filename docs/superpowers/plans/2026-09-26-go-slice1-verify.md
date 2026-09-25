@@ -2202,7 +2202,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: `jsstr`.
 - Produces: `nodefs.DecodeUTF8([]byte) string` (Buffer.toString("utf8")); `nodefs.ReadBytes(path) ([]byte, error)` (readFileSync); `nodefs.ReadText(path) (string, error)` (readFileSync utf8); `nodefs.Lstat(path) (fs.FileInfo, error)` (lstatSync); `nodefs.Exists(path) bool` (existsSync); `nodefs.ReadDirNames(path) ([]string, error)` (readdirSync, byte-sorted); `type nodefs.Error struct{ Code, Syscall, Path string; NoPath bool }` whose `Error()` is Node's message; `nodefs.Resolve(p ...string) string`, `nodefs.Join(p ...string) string`, `nodefs.Relative(from, to string) string` (`""` when equal), `nodefs.IsAbsolute(string) bool`, `nodefs.MkdirTemp(prefix string) (string, error)` (mkdtempSync(join(tmpdir(), prefix))), `nodefs.RemoveAll(string)`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Decoding expectations were captured from `Buffer.from(bytes).toString("utf8")` on Node 22.
 
@@ -2290,12 +2290,12 @@ func TestRelative(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/nodefs/`
 Expected: FAIL (undefined: DecodeUTF8).
 
-- [ ] **Step 3: Implement decoding**
+- [x] **Step 3: Implement decoding**
 
 WHATWG Encoding Standard §9.1.1 "UTF-8 decoder", which V8 follows.
 
@@ -2362,7 +2362,7 @@ func DecodeUTF8(b []byte) string {
 }
 ```
 
-- [ ] **Step 4: Implement fs and path helpers**
+- [x] **Step 4: Implement fs and path helpers**
 
 Errors are derived from file types first, then from errno, so every OS yields the Linux/Node message (goldens come from Linux). Descriptions are libuv's `uv_strerror` strings.
 
@@ -2567,12 +2567,12 @@ func Relative(from, to string) string {
 }
 ```
 
-- [ ] **Step 5: Run unit tests**
+- [x] **Step 5: Run unit tests**
 
 Run: `go test ./internal/nodefs/`
 Expected: PASS.
 
-- [ ] **Step 6: Add the decode oracle op and live test**
+- [x] **Step 6: Add the decode oracle op and live test**
 
 Add to `handlers`:
 
@@ -2617,7 +2617,7 @@ func TestLiveDecodeUTF8(t *testing.T) {
 }
 ```
 
-- [ ] **Step 7: Run live test and commit**
+- [x] **Step 7: Run live test and commit**
 
 Run: `FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run TestLiveDecodeUTF8 -v`
 Expected: PASS.

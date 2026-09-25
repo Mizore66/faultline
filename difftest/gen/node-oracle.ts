@@ -28,6 +28,7 @@ export const handlers: Record<string, Handler> = {
       return { ok: false, message: (error as Error).message };
     }
   },
+  decodeUtf8: ({ hex }: { hex: string }) => Buffer.from(hex, "hex").toString("utf8"),
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
