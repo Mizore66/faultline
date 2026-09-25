@@ -4902,7 +4902,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - `new Map(entries)` keeps the last duplicate; `new Set(array)` keeps the first.
 - JS truthiness where TS uses it (`expectedRoot ? …`) versus `=== undefined` where TS uses that. Check each site.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `internal/bundle/demo/verify_test.go`:
 
@@ -4935,12 +4935,12 @@ func TestVerifiesCommittedRerunBase(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/bundle/demo/`
 Expected: FAIL (undefined: Verify).
 
-- [ ] **Step 3: Implement shared bundle helpers**
+- [x] **Step 3: Implement shared bundle helpers**
 
 `internal/bundle/bundle.go`:
 
@@ -5058,7 +5058,7 @@ func DistinctCount(values []string) int {
 }
 ```
 
-- [ ] **Step 4: Port the schemas**
+- [x] **Step 4: Port the schemas**
 
 Port of `src/domain.ts` (whole file) and `src/proof-bundle.ts:10-37`.
 
@@ -5185,7 +5185,7 @@ var (
 )
 ```
 
-- [ ] **Step 5: Port the verifier**
+- [x] **Step 5: Port the verifier**
 
 Port of `src/proof-bundle.ts`: `verifyProofBundle` (439–532), `collectFiles` (425–437), `assertNoLinksOrSpecialFiles` (57–70), `validateAnalysisCoverage` (202–211), `readJsonArtifact` (213–220), `stableExecutedRuns` (226–234), `validateSemanticEvidence` (236–338), `requiredDeclaredFiles` (183–186), `referencedRunIds` (188–200), `safeRunFileName`/`runPaths` (134–141).
 
@@ -5652,7 +5652,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 }
 ```
 
-- [ ] **Step 6: Wire verify dispatch and output**
+- [x] **Step 6: Wire verify dispatch and output**
 
 Replace `internal/cli/verify.go` (port of `src/cli-app.ts:2903-2945`):
 
@@ -5736,12 +5736,12 @@ func (e *env) printBundle(label string, r bundle.Result) {
 
 In `difftest/replay_test.go` set `var portedTypes = map[string]bool{"demo": true}`.
 
-- [ ] **Step 7: Run tests**
+- [x] **Step 7: Run tests**
 
 Run: `go test ./internal/bundle/... ./internal/cli/ && go test ./difftest/ -run TestGoldenReplay`
 Expected: PASS, with every `demo-*` case matching its golden. For each failing case the test prints Go and TS output side by side. Find the TS line that produced the differing text and correct the port; never edit goldens.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add internal/bundle internal/cli difftest/replay_test.go
