@@ -12,6 +12,7 @@ import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witnes
 import { EnvironmentFingerprintSchema } from "../../src/environment-fingerprint.js";
 import { MaterializedOverlaySchema } from "../../src/safe-overlay.js";
 import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../src/ledger.js";
+import { validateSandboxPlanAudit } from "../../src/sandbox.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -77,6 +78,13 @@ export const handlers: Record<string, Handler> = {
   verifyFrozenWitnessRecord: ({ text, expected }: { text: string; expected?: string }) =>
     canonicalJson(verifyFrozenWitnessRecord(JSON.parse(text), expected)),
   verifyCodexLifecycleLedger: ({ text }: { text: string }) => canonicalJson(verifyCodexLifecycleLedger(JSON.parse(text))),
+  validateSandboxPlanAudit: ({ text }: { text: string }) => {
+    try {
+      return canonicalJson(validateSandboxPlanAudit(JSON.parse(text)));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });

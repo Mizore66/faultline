@@ -91,3 +91,28 @@ func TestLiveLedger(t *testing.T) {
 		return `{"text":` + jsjson.Quote(text) + "}", canonicalOf(gitproof.VerifyCodexLifecycleLedger(value).JSON())
 	})
 }
+func TestLiveSandbox(t *testing.T) {
+	dir := filepath.Join(oracle.RepoRoot(t), "difftest", "testdata", "bases", "git-unbound", "runs")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seeds []string
+	for _, e := range entries {
+		raw, _ := os.ReadFile(filepath.Join(dir, e.Name()))
+		run, _ := jsjson.Parse(string(raw))
+		seeds = append(seeds, jsjson.Stringify(run.Get("sandbox")))
+	}
+	liveCompare(t, "validateSandboxPlanAudit", func(r *rand.Rand, i int) (string, string) {
+		text := seeds[r.IntN(len(seeds))]
+		if i >= len(seeds) {
+			text = gen.CorruptLeaf(r, text)
+		}
+		value, _ := jsjson.Parse(text)
+		var items []jsjson.Value
+		for _, e := range gitproof.ValidateSandboxPlanAudit(value) {
+			items = append(items, jsjson.MakeString(e))
+		}
+		return `{"text":` + jsjson.Quote(text) + "}", canonicalOf(jsjson.MakeArray(items))
+	})
+}

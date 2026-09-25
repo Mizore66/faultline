@@ -6833,7 +6833,7 @@ Transcribe `src/sandbox.ts`: `SANDBOX_POLICY_VERSION`, `LEGACY_SANDBOX_POLICY_VE
 - `ENVIRONMENT_NAME` is `^[A-Z_][A-Z0-9_]*$`.
 - `runtime.image ?? ""` passes `""` when image is null.
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 `internal/bundle/gitproof/sandbox_test.go`:
 
@@ -6861,12 +6861,12 @@ func TestCommittedRunAuditsValidate(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure, implement, rerun**
+- [x] **Step 2: Run to verify failure, implement, rerun**
 
 Run: `go test ./internal/bundle/gitproof/ -run Audit`
 Expected: FAIL first; after transcription, PASS.
 
-- [ ] **Step 3: Add the oracle op, leaf corruption, and live test**
+- [x] **Step 3: Add the oracle op, leaf corruption, and live test**
 
 Oracle (import `validateSandboxPlanAudit` from `../../src/sandbox.js`):
 
@@ -6958,7 +6958,7 @@ func TestLiveSandbox(t *testing.T) {
 Run: `FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run TestLiveSandbox -v`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/bundle/gitproof difftest
