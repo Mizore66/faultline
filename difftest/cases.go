@@ -253,8 +253,10 @@ func treeDigest(root string) string {
 			info, _ := os.Lstat(path)
 			switch {
 			case info.Mode()&os.ModeSymlink != 0:
+				// Windows reports the link target with backslashes; the tree
+				// digest records the logical target as TS wrote it.
 				target, _ := os.Readlink(path)
-				lines = append(lines, "L "+r+" "+target)
+				lines = append(lines, "L "+r+" "+filepath.ToSlash(target))
 			case info.IsDir():
 				lines = append(lines, "D "+r)
 				walk(r)
