@@ -2,6 +2,7 @@
 // one JSON response per stdout line. Run: pnpm exec tsx difftest/gen/node-oracle.ts
 import { createInterface } from "node:readline";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
+import { buildZod } from "./schema-dsl.js";
 
 type Handler = (args: any) => unknown;
 export const handlers: Record<string, Handler> = {
@@ -29,6 +30,15 @@ export const handlers: Record<string, Handler> = {
     }
   },
   decodeUtf8: ({ hex }: { hex: string }) => Buffer.from(hex, "hex").toString("utf8"),
+  zodDsl: ({ schema, text }: { schema: unknown; text: string }) => {
+    const result = buildZod(schema).safeParse(JSON.parse(text));
+    if (!result.success) return { success: false, message: result.error.message };
+    try {
+      return { success: true, canonical: canonicalJson(result.data) };
+    } catch (error) {
+      return { success: true, canonical: `ERROR:${(error as Error).message}` };
+    }
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });

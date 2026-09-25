@@ -2692,7 +2692,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 `positive()` is `too_small`, minimum 0, inclusive false. `nonnegative()` and `Gte(n)` are inclusive true. `Length(n)` sets `exact:true`, and failures report `too_small` or `too_big` with the same exact wording.
 
-- [ ] **Step 1: Write failing tests from captured zod output**
+- [x] **Step 1: Write failing tests from captured zod output**
 
 `internal/schema/schema_test.go`:
 
@@ -2773,12 +2773,12 @@ func TestRecordDropsProtoKey(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/schema/`
 Expected: FAIL (undefined: Object).
 
-- [ ] **Step 3: Implement the core and issue construction**
+- [x] **Step 3: Implement the core and issue construction**
 
 `internal/schema/schema.go`:
 
@@ -2971,7 +2971,7 @@ func (c *ctx) tooBig(path []any, kind string, maximum float64, inclusive, exact 
 }
 ```
 
-- [ ] **Step 4: Implement scalars and patterns**
+- [x] **Step 4: Implement scalars and patterns**
 
 `internal/schema/patterns.go`:
 
@@ -3227,7 +3227,7 @@ func (s *enumSchema) parse(c *ctx, v jsjson.Value, path []any) (jsjson.Value, st
 
 ```
 
-- [ ] **Step 5: Implement composites**
+- [x] **Step 5: Implement composites**
 
 `internal/schema/composite.go`:
 
@@ -3484,12 +3484,12 @@ func (d *defaultSchema) parse(c *ctx, v jsjson.Value, path []any) (jsjson.Value,
 }
 ```
 
-- [ ] **Step 6: Run unit tests**
+- [x] **Step 6: Run unit tests**
 
 Run: `go test ./internal/schema/`
 Expected: PASS. If a captured message differs, the captured text wins. Fix the field order or status logic.
 
-- [ ] **Step 7: Build the schema DSL on both sides**
+- [x] **Step 7: Build the schema DSL on both sides**
 
 The DSL describes a schema as JSON so the oracle and Go build equivalent schemas. Regexes are named, not free-form, so both sides use known-equivalent patterns.
 
@@ -3720,7 +3720,7 @@ func buildObject(dsl jsjson.Value) *schema.ObjectSchema {
 
 In the TS builder, `dsl.shape` is also a list of pairs; `Object.fromEntries` keeps that order.
 
-- [ ] **Step 8: Write the random DSL generator and live test**
+- [x] **Step 8: Write the random DSL generator and live test**
 
 Append to `difftest/gen/random.go` (add `"github.com/Mizore66/faultline/internal/jsjson"` to its imports):
 
@@ -3869,12 +3869,12 @@ func TestLiveSchemaDSL(t *testing.T) {
 }
 ```
 
-- [ ] **Step 9: Run live test**
+- [x] **Step 9: Run live test**
 
 Run: `FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run TestLiveSchemaDSL -v`
 Expected: PASS for 10,000 cases. Every mismatch is a zod behavior the Go code misses (issue order, abort vs dirty, message text). Fix `internal/schema`, add the failing case to `schema_test.go` as a regression test, and rerun.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add internal/schema difftest
