@@ -18,7 +18,8 @@ jobs:
         with:
           go-version: "1.27"
       - run: go vet ./...
-      - run: go test ./...
+      # Golden replay spawns git ~15k times; Windows needs more than the 10m default.
+      - run: go test -timeout 45m ./...
 
   difftest-live:
     name: difftest live (frozen TS oracle)
