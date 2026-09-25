@@ -7003,7 +7003,7 @@ Transcribe `src/git-proof-bundle.ts`:
 - Output assembly: when `manifest` failed to parse, TS returns `valid: false` with `checkedFiles: catalog.size`; in the outer catch, `checkedFiles: 0`.
 - In `verifyGitInvestigationProofBundle`, `expectedRoot` uses `=== undefined` semantics (so `""` counts as provided and fails the sha256 test).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 The expected lines were captured from `node dist/cli.js verify docs/samples/self-incident-commit-proof`.
 
@@ -7029,12 +7029,12 @@ func TestVerifiesCommittedSample(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/bundle/gitproof/ -run TestVerifiesCommittedSample`
 Expected: FAIL (undefined: Verify).
 
-- [ ] **Step 3: Implement the git helpers**
+- [x] **Step 3: Implement the git helpers**
 
 `internal/bundle/gitproof/git.go` starts with the process layer below; transcribe the remaining `git.go` functions from the table on top of it.
 
@@ -7133,7 +7133,7 @@ func gitText(repository, label string, args ...string) string {
 
 `runGit(undefined, …)` in TS maps to `repository == ""` here; the verifier only passes `undefined` or a temp directory, never an empty path.
 
-- [ ] **Step 4: Transcribe semantics and the verifier; wire dispatch**
+- [x] **Step 4: Transcribe semantics and the verifier; wire dispatch**
 
 Write `semantics.go` and `verify.go` per the table and gotchas, using the porting rules from Task 8. In `internal/cli/verify.go` replace the git case with:
 
@@ -7145,12 +7145,12 @@ Write `semantics.go` and `verify.go` per the table and gotchas, using the portin
 
 (import `github.com/Mizore66/faultline/internal/bundle/gitproof`). Set `portedTypes` to `{"demo": true, "prevention": true, "git": true}`.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `go test ./internal/... && go test ./difftest/ -run TestGoldenReplay`
 Expected: PASS, including every `git-*` golden. Git-heavy cases take a few minutes. Work through failures one at a time, starting with the smallest case id.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal difftest/replay_test.go

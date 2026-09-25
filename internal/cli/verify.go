@@ -6,6 +6,7 @@ import (
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/bundle/demo"
+	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/bundle/prevention"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
@@ -32,7 +33,8 @@ func verifyCommand(e *env, args []string) error {
 	case "faultline.turn-proof-bundle.v1":
 		return fail("not yet ported: turn proof bundle verification")
 	case "faultline.git-proof-bundle.v1":
-		return fail("not yet ported: git proof bundle verification")
+		e.printBundle("Git proof", gitproof.Verify(root, expectedRoot, rootProvided))
+		return nil
 	}
 	e.printBundle("Bundle", demo.Verify(root, expectedRoot, rootProvided))
 	return nil

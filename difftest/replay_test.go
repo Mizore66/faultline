@@ -14,7 +14,7 @@ import (
 )
 
 // portedTypes gates golden replay per bundle type; verifier tasks add entries.
-var portedTypes = map[string]bool{"demo": true, "prevention": true}
+var portedTypes = map[string]bool{"demo": true, "prevention": true, "git": true}
 
 func TestMain(m *testing.M) {
 	home, _ := os.MkdirTemp("", "faultline-difftest-home-")
