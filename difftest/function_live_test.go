@@ -80,3 +80,14 @@ func TestLiveWitness(t *testing.T) {
 		return args + "}", canonicalOf(gitproof.VerifyFrozenWitnessRecord(value, expected, provided).JSON())
 	})
 }
+func TestLiveLedger(t *testing.T) {
+	seeds := seedTexts(t, "git-partially-bound/lifecycle/ledger.json", "git-fully-bound/lifecycle/ledger.json")
+	liveCompare(t, "verifyCodexLifecycleLedger", func(r *rand.Rand, i int) (string, string) {
+		text := seeds[r.IntN(len(seeds))]
+		if i >= len(seeds) {
+			text = gen.CorruptDeep(r, text)
+		}
+		value, _ := jsjson.Parse(text)
+		return `{"text":` + jsjson.Quote(text) + "}", canonicalOf(gitproof.VerifyCodexLifecycleLedger(value).JSON())
+	})
+}

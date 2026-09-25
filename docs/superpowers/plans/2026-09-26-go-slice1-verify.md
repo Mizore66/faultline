@@ -6728,12 +6728,14 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 Transcribe `src/ledger.ts`: constants and schemas (27–220, including `StrictObject`, `IdentifierSchema`, `HashSchema`/`GitObjectIdSchema` with their custom messages, `CanonicalTimestampSchema`, all payload schemas, and both discriminated unions), `ledgerGenesisHash` (222–231), `hashLifecycleEvent` (233–235), `verifyGitCheckpoint` and its signing digest (237–249), `validateLifecycleState` (351–503), and `verifyCodexLifecycleLedger` (505–564). Read the `LedgerVerification` type definition in `ledger.ts` to get the exact result fields.
 
+> **Amendment (during execution):** `validateLifecycleState` also depends on `src/turn-snapshot.ts` (`UnsignedTurnTreeSnapshotSchema`/`TurnTreeSnapshotSchema` 56–78 and `verifyTurnTreeSnapshot` 295–302). Both are pure (schema + digest check) and are ported into `ledger.go`. `canonicalTimestamp` validates the canonical shape and field ranges directly (equivalent to the round-trip, since any rollover changes the output); a one-off check against V8 on 200k edge-heavy inputs found 0 mismatches.
+
 **Gotchas:**
 - `CanonicalTimestampSchema` is `refine(value => new Date(value).toISOString() === value, "Expected a canonical ISO-8601 UTC timestamp")`. Implement `canonicalTimestamp(s string) bool` as: match `^([+-]\d{6}|\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$`, reject `-000000`, compute epoch milliseconds with ECMAScript `MakeDay`/`MakeTime` arithmetic (month 1–12 and day 1–31 accepted by V8's ISO parser, hour 0–24, minute and second 0–59, with rollover), require `|ms| ≤ 8.64e15`, and require that formatting the milliseconds back as `toISOString` (`YYYY` for years 0–9999, else `±YYYYYY`) returns the input. Unit-test it with the V8 results captured during planning: `2021-02-30T00:00:00.000Z` → false (V8 rolls it to March 2), `2021-02-28T24:00:00.000Z` → false, `+275760-09-13T00:00:00.000Z` → true, `0000-01-01T00:00:00.000Z` → true, `2021-04-31T00:00:00.000Z` → false.
 - Hash chains use `digestJson` exactly as TS composes the objects; keep key sets identical.
 - Error strings and their order must match; the golden cases under `git-*-bound` exercise them.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 `internal/bundle/gitproof/ledger_test.go`:
 
@@ -6769,12 +6771,12 @@ func TestCommittedLedgersVerify(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure, implement, rerun**
+- [x] **Step 2: Run to verify failure, implement, rerun**
 
 Run: `go test ./internal/bundle/gitproof/ -run 'Timestamp|Ledger'`
 Expected: FAIL first; after transcription, PASS.
 
-- [ ] **Step 3: Add the oracle op and live test**
+- [x] **Step 3: Add the oracle op and live test**
 
 Oracle (import `verifyCodexLifecycleLedger` from `../../src/ledger.js`):
 
@@ -6801,7 +6803,7 @@ func TestLiveLedger(t *testing.T) {
 Run: `FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run 'TestLive(Ledger|NamedSchemas)' -v`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/bundle/gitproof difftest

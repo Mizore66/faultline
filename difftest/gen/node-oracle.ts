@@ -11,6 +11,7 @@ import { GitProofBundleManifestSchema, GitProofSourceMetadataSchema } from "../.
 import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witness-lock.js";
 import { EnvironmentFingerprintSchema } from "../../src/environment-fingerprint.js";
 import { MaterializedOverlaySchema } from "../../src/safe-overlay.js";
+import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../src/ledger.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -26,6 +27,7 @@ export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   FrozenWitnessSchema,
   GitProofSourceMetadataSchema,
   GitProofBundleManifestSchema,
+  CodexLifecycleLedgerSchema,
 };
 
 type Handler = (args: any) => unknown;
@@ -74,6 +76,7 @@ export const handlers: Record<string, Handler> = {
   },
   verifyFrozenWitnessRecord: ({ text, expected }: { text: string; expected?: string }) =>
     canonicalJson(verifyFrozenWitnessRecord(JSON.parse(text), expected)),
+  verifyCodexLifecycleLedger: ({ text }: { text: string }) => canonicalJson(verifyCodexLifecycleLedger(JSON.parse(text))),
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });

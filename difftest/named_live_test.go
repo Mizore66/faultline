@@ -32,6 +32,7 @@ var namedSchemas = map[string]schema.Schema{
 	"FrozenWitnessSchema":                  gitproof.FrozenWitnessSchema,
 	"GitProofSourceMetadataSchema":         gitproof.GitProofSourceMetadataSchema,
 	"GitProofBundleManifestSchema":         gitproof.GitProofBundleManifestSchema,
+	"CodexLifecycleLedgerSchema":           gitproof.CodexLifecycleLedgerSchema,
 }
 
 // namedSeeds lists base files (relative to difftest/testdata/bases) that satisfy each schema.
@@ -49,6 +50,7 @@ var namedSeeds = map[string][]string{
 	"StableGitStateSchema":                 {"git-unbound/investigation.json#stableStates.0"},
 	"EnvironmentFingerprintSchema":         {"git-unbound/investigation.json#environment.fingerprints.0.fingerprint"},
 	"MaterializedOverlaySchema":            {"git-unbound/investigation.json#runs.0.overlays.0"},
+	"CodexLifecycleLedgerSchema":           {"git-partially-bound/lifecycle/ledger.json", "git-fully-bound/lifecycle/ledger.json"},
 }
 
 // firstRunArtifact returns base + "/runs/" + the first file name in that directory.
