@@ -5761,7 +5761,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: `bundle.*`, `schema.*`, `canonical.*`, `nodefs.*`.
 - Produces: `prevention.Verify(directory, expectedRoot string, rootProvided bool) bundle.Result` (sets `Classification` when the manifest parsed); exported schemas `prevention.BodySchema`, `prevention.ManifestSchema`, `prevention.RepairedRunsSchema`; `(e *env) printPrevention(bundle.Result)`; oracle op `zodNamed {name, text}` → `{success, canonical}` or `{success:false, message}`; Go `gen.CorruptDeep(r *rand.Rand, text string) string`; `difftest.namedSchemas map[string]schema.Schema` (registry each later task extends).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `internal/bundle/prevention/verify_test.go`:
 
@@ -5789,12 +5789,12 @@ func TestVerifiesCommittedBases(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/bundle/prevention/`
 Expected: FAIL (undefined: Verify).
 
-- [ ] **Step 3: Port the schemas**
+- [x] **Step 3: Port the schemas**
 
 Port of `src/prevention-proof.ts:26-107`. zod's `.extend` keeps strictness.
 
@@ -5875,7 +5875,7 @@ var (
 )
 ```
 
-- [ ] **Step 4: Port the verifier**
+- [x] **Step 4: Port the verifier**
 
 Port of `src/prevention-proof.ts`: `assertNoLinksOrSpecialFiles` (140–153), `readJson` (225–232), `validatePreventionProofSemantics` (235–270), `validateRepairedRunsArtifact` (272–293), `verifyPreventionProof` (296–378).
 
@@ -6103,7 +6103,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 
 In `validateRepairedRuns`, TS compares `run.tree !== body.repaired.tree`. When `repaired.tree` is absent (undefined), a string never equals it, which is what the `tree.Kind() != jsjson.String` term reproduces.
 
-- [ ] **Step 5: Wire dispatch and output**
+- [x] **Step 5: Wire dispatch and output**
 
 In `internal/cli/verify.go` replace the prevention `case` with:
 
@@ -6135,7 +6135,7 @@ func (e *env) printPrevention(r bundle.Result) {
 
 Set `portedTypes` to `{"demo": true, "prevention": true}`.
 
-- [ ] **Step 6: Add named-schema oracle checks**
+- [x] **Step 6: Add named-schema oracle checks**
 
 Add to the oracle's imports and handlers:
 
@@ -6305,12 +6305,12 @@ func TestLiveNamedSchemas(t *testing.T) {
 }
 ```
 
-- [ ] **Step 7: Run tests**
+- [x] **Step 7: Run tests**
 
 Run: `go test ./internal/bundle/prevention/ && go test ./difftest/ -run TestGoldenReplay && FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run TestLiveNamedSchemas`
 Expected: PASS; all `prevention-*` goldens match.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add internal/bundle/prevention internal/cli difftest

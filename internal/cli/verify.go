@@ -6,6 +6,7 @@ import (
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/bundle/demo"
+	"github.com/Mizore66/faultline/internal/bundle/prevention"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
@@ -26,7 +27,8 @@ func verifyCommand(e *env, args []string) error {
 	expectedRoot, rootProvided := option(args, "--expect-root")
 	switch schemaVersion {
 	case "faultline.prevention-proof.v1":
-		return fail("not yet ported: prevention proof verification")
+		e.printPrevention(prevention.Verify(root, expectedRoot, rootProvided))
+		return nil
 	case "faultline.turn-proof-bundle.v1":
 		return fail("not yet ported: turn proof bundle verification")
 	case "faultline.git-proof-bundle.v1":
@@ -71,5 +73,21 @@ func (e *env) printBundle(label string, r bundle.Result) {
 	}
 	e.out(first + ": " + verdictWord(r.Valid) + "\n")
 	e.out(fmt.Sprintf("Declared files checked: %d\nBundle root: %s\nExternal root: %s\n", r.CheckedFiles, orUnavailable(r.RootDigest), r.ExternalRootStatus))
+	e.printErrorsAndExit(r)
+}
+
+// printPrevention ports the prevention branch of the TS verify case.
+func (e *env) printPrevention(r bundle.Result) {
+	first := "Integrity"
+	if r.ExternalRootStatus == "NOT_PROVIDED" {
+		first = "Prevention proof self-consistency"
+	}
+	e.out(first + ": " + verdictWord(r.Valid) + "\n")
+	e.out("Classification: " + orUnavailable(r.Classification) + "\nBundle root: " + orUnavailable(r.RootDigest) + "\nExternal root: " + r.ExternalRootStatus + "\n")
+	if r.Valid && r.Classification != nil && *r.Classification == "PREVENTION_VERIFIED" {
+		e.out("Prevention verified\n")
+	} else if r.Valid {
+		e.out("Prevention evidence summary\n")
+	}
 	e.printErrorsAndExit(r)
 }

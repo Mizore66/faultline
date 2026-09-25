@@ -3,6 +3,13 @@
 import { createInterface } from "node:readline";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { buildZod } from "./schema-dsl.js";
+import { PreventionProofBodySchema, PreventionProofManifestSchema, PreventionRepairedRunsArtifactSchema } from "../../src/prevention-proof.js";
+
+export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
+  PreventionProofBodySchema,
+  PreventionProofManifestSchema,
+  PreventionRepairedRunsArtifactSchema,
+};
 
 type Handler = (args: any) => unknown;
 export const handlers: Record<string, Handler> = {
@@ -32,6 +39,15 @@ export const handlers: Record<string, Handler> = {
   decodeUtf8: ({ hex }: { hex: string }) => Buffer.from(hex, "hex").toString("utf8"),
   zodDsl: ({ schema, text }: { schema: unknown; text: string }) => {
     const result = buildZod(schema).safeParse(JSON.parse(text));
+    if (!result.success) return { success: false, message: result.error.message };
+    try {
+      return { success: true, canonical: canonicalJson(result.data) };
+    } catch (error) {
+      return { success: true, canonical: `ERROR:${(error as Error).message}` };
+    }
+  },
+  zodNamed: ({ name, text }: { name: string; text: string }) => {
+    const result = namedSchemas[name]!.safeParse(JSON.parse(text));
     if (!result.success) return { success: false, message: result.error.message };
     try {
       return { success: true, canonical: canonicalJson(result.data) };
