@@ -77,3 +77,15 @@ func TestRelative(t *testing.T) {
 		t.Fatal("Relative")
 	}
 }
+
+// A name Windows rejects outright (ERROR_INVALID_NAME) must still read as
+// ENOENT, as Node reports it there and as Linux reports it for the same name.
+func TestInvalidWindowsNameIsENOENT(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "frozen.json\v")
+	if _, err := Lstat(path); err == nil || err.Error() != "ENOENT: no such file or directory, lstat '"+path+"'" {
+		t.Fatalf("Lstat error = %v", err)
+	}
+	if _, err := ReadText(path); err == nil || err.Error() != "ENOENT: no such file or directory, open '"+path+"'" {
+		t.Fatalf("ReadText error = %v", err)
+	}
+}

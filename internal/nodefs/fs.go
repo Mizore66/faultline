@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"runtime"
 	"sort"
 	"syscall"
 )
@@ -39,6 +40,16 @@ func (e *Error) Error() string {
 func codeOf(err error) string {
 	var errno syscall.Errno
 	if errors.As(err, &errno) {
+		if runtime.GOOS == "windows" {
+			// libuv (uv_translate_sys_error) maps these Win32 errors the way
+			// Node reports them; Linux reports ENOENT for the same names.
+			switch uintptr(errno) {
+			case 123, 161: // ERROR_INVALID_NAME, ERROR_BAD_PATHNAME
+				return "ENOENT"
+			case 206: // ERROR_FILENAME_EXCED_RANGE
+				return "ENAMETOOLONG"
+			}
+		}
 		switch errno {
 		case syscall.ENOENT:
 			return "ENOENT"
