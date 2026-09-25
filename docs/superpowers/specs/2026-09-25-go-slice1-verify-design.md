@@ -9,7 +9,7 @@
 
 ### Delivers
 
-- A Go module with the foundation packages: canonical JSON, digests, JS-compatible JSON parsing, a zod-subset schema library, and safe-path checks.
+- A Go module with the foundation packages: canonical JSON, digests, JS-compatible JSON parsing, a zod-subset schema library, and Node-compatible file reading.
 - `fl verify` in Go for three bundle types:
   - `faultline.proof-bundle.v2` (demo), TS `verifyProofBundle` (`src/proof-bundle.ts:439`)
   - `faultline.git-proof-bundle.v1`, TS `verifyGitInvestigationProofBundle` (`src/git-proof-bundle.ts:1142`)
@@ -23,7 +23,6 @@ Only schemas and pure verification logic. No execution, writing, or process-spaw
 | TS module | What is ported |
 | --- | --- |
 | `canonical.ts` | `canonicalJson`, `sha256`, `digestJson` |
-| `safe-directory.ts` | `resolveSafeDirectorySegment`, `relativeTrustedSystemPath` |
 | `domain.ts`, `engine.ts` | Schemas used by the demo verifier; `analysisDigest` |
 | `proof-bundle.ts` | `verifyProofBundle` and its schemas |
 | `git-proof-bundle.ts` | `verifyGitInvestigationProofBundle`, `bindLifecycleLedger` (`:581`), manifest/source schemas |
@@ -38,6 +37,7 @@ Estimated size: 3–4k lines of TS logic.
 
 ### Deferred
 
+- `safe-directory.ts`: none of the three verifiers call it (only bundle writers do), so it moves to the Git-path slice.
 - `faultline.turn-proof-bundle.v1` verification (turn slice). Its verifier depends on `git-materialization` and `sandbox` execution code.
 - Every other command, all bundle writing, releases, the npm wrapper, and the Action.
 
@@ -50,7 +50,6 @@ internal/jsjson/             JSON.parse / JSON.stringify clone (Section 2)
 internal/canonical/          canonicalJson, sha256, digestJson
 internal/nodefs/             file reading with Node semantics; Node-format fs errors
 internal/schema/             zod-subset schema library (Section 3)
-internal/safepath/           port of safe-directory.ts
 internal/bundle/demo/        faultline.proof-bundle.v2 verifier
 internal/bundle/gitproof/    faultline.git-proof-bundle.v1 verifier + ported dependencies
 internal/bundle/prevention/  faultline.prevention-proof.v1 verifier
@@ -76,6 +75,11 @@ A strict clone of `JSON.parse`:
 - Strings are stored UTF-16-faithfully (WTF-8 internally) so lone surrogates such as `\ud800` survive a round trip.
 - Duplicate keys: last value wins.
 - Objects keep JavaScript property order: integer-like keys (canonical array indices, `0`…`2^32−2`) first in ascending numeric order, then other keys in first-insertion order.
+- **Syntax errors reproduce V8 12.4 (Node 22) messages exactly**, because verifiers print `error.message` (e.g. `manifest validation failed: Expected ',' or '}' after property value in JSON at position 13 (line 3 column 3)`). Positions, line, and column count UTF-16 code units; `\r\n` counts as one line break. Message selection follows `src/json/json-parser.cc` at V8 tag `12.4.254` (`ReportUnexpectedToken`, `LookUpErrorMessageForJsonToken`, `GetErrorMessageWithEllipses`: 10 characters of context, context only when the source is at least 21 code units long, whole-source special cases `[object Object]`, `undefined`, `Infinity`, `NaN`). Templates come from `src/common/message-template.h` at the same tag.
+
+### 2.1a Output encoding
+
+TS writes strings with `process.stdout.write`, which encodes UTF-8 and replaces lone surrogates with `U+FFFD`. Go converts its internal WTF-8 strings the same way before writing. Wherever TS hashes a JS string (`sha256(string)`, `Buffer.from(string, "utf8")`), Go hashes that same UTF-8 conversion, not the original file bytes.
 
 ### 2.2 Canonicalization (`internal/canonical`)
 
@@ -92,6 +96,8 @@ Port of `normalize` + `JSON.stringify`:
 - Text reads reproduce `readFileSync(path, "utf8")`: WHATWG UTF-8 decoding, invalid sequences replaced with `U+FFFD` using the maximal-subpart rule, BOM kept (so `JSON.parse` then fails, as in TS).
 - `trim()` follows JavaScript: strips ECMAScript WhiteSpace and LineTerminator code points, including `U+FEFF`.
 - String comparisons that TS performs on decoded text (e.g. `stdout.log` vs catalog in `proof-bundle.ts:282`) compare UTF-16 code-unit sequences.
+- Directory listings are sorted by byte order, matching Node's `readdirSync` on Linux and macOS (libuv sorts `scandir` results with `strcmp`). Node on Windows returns filesystem order instead; Go keeps byte order on every OS and this is recorded as a known difference.
+- Filesystem errors that reach output use Node's format `<CODE>: <libuv description>, <syscall> '<path>'` with Node's syscall names (`open`, `lstat`, `scandir`, `realpath`), and `EISDIR: illegal operation on a directory, read` (no path) when a directory is read as a file.
 
 ### 2.4 Known TS bug, not reproduced
 
@@ -115,6 +121,8 @@ Go must produce the same normalized value, so plain `encoding/json` struct decod
 - `Parse(value) → (normalized jsjson.Value, []Issue)`. Verifier logic then decodes the normalized value into typed Go structs.
 - Each Go schema is a 1:1 transcription with a comment naming the TS file and line it came from.
 - Object output key order follows zod (schema shape order); canonicalization sorts it anyway.
+- String length checks (`min`, `max`) and regex quantifiers count UTF-16 code units, as JS does without the `u` flag. JS regexes are translated to Go by hand; constructs RE2 lacks (the lookahead in `SAFE_GIT_REVISION`, `/^(?!-)[^\0\r\n]{1,512}$/`) and length-counted classes become Go functions over UTF-16. zod's own regexes (`datetime` with `offset: true`, `uuid`) are copied from `node_modules/zod/v3/types.js` (zod 3.25.76).
+- `CanonicalTimestampSchema` (`ledger.ts:40`) reproduces `new Date(value).toISOString() === value`: V8 accepts out-of-range days and hours and rolls them over (`2021-02-30T…` → `2021-03-02T…`), so Go computes the date arithmetic the same way and compares the formatted result.
 
 ### 3.3 Issues and error text
 
@@ -129,23 +137,26 @@ Go must produce the same normalized value, so plain `encoding/json` struct decod
 
 - `difftest/testdata/bases/<base-id>/` holds valid bundles for all three types:
   - `docs/samples/self-incident-commit-proof` (git) and `.faultline/bundles/judge-demo` (demo), copied in.
-  - Synthetic bundles from `difftest/gen/gen-bases.mjs`, which imports frozen `dist/` modules with synthetic inputs, as the existing vitest suites do. Variations: one run and many runs; lifecycle ledger present and absent; non-ASCII, lone-surrogate, and invalid-UTF-8 stdout; keys that exercise collation (punctuation, case, digits).
+  - Synthetic bundles from `difftest/gen/gen-bases.ts` (run with `tsx`), which imports the frozen `src/` modules with synthetic inputs, as the existing vitest suites do. Variations: one run and many runs; lifecycle ledger present and absent; non-ASCII, lone-surrogate, and invalid-UTF-8 stdout; keys that exercise collation (punctuation, case, digits).
 - `difftest/testdata/mutations.json` lists tampering steps as data. Operations:
   - `flip-byte` (file, offset)
   - `delete-file`, `add-file` (path, content)
   - `replace-text` (file, find, replace), for text files such as the demo bundle's hash list
-  - `json-set` (file, path, value), `json-add-key` (file, path, key, value), `json-retype` (file, path, type)
+  - `json-add-key` (file, key, value), `json-retype` (file: first key becomes `12345`, or `"retyped"` if it was a number), `json-drop-first` (file)
+  - `strip-trailing-newline` (file), `prepend-bytes` (file, hex): BOMs and invalid UTF-8
   - `rename` (from, to), within the bundle
   - `symlink` (path, target), including targets outside the bundle
+  - `make-dir` (path): replaces a file with an empty directory
+  - `rehash`: after any of the above, recompute `hashes.txt` and `ROOT.sha256` (git and demo) or `rootDigest` (prevention), simulating an editor who updates the mutable checksums
 
-  Traversal cases (`../x`, `a/../../x`, absolute paths, backslashes, NUL) are expressed as `json-set` or `replace-text` on declared file paths, since that is where verifiers read them. The initial list covers the two hostile cases in `tests/hostile-git-verifier-corpus.test.ts`. The generator then applies every applicable operation to every file of every base.
+  Traversal cases (`../x`, `a/../../x`, absolute paths, backslashes, NUL) are expressed as `replace-text` on declared file paths, since that is where verifiers read them. The initial list covers the two hostile cases in `tests/hostile-git-verifier-corpus.test.ts`. The generator then applies every applicable operation to every file of every base.
 - Each case runs three invocations: no option (`plain`), `--expect-root <base root digest>` (`root-ok`), and `--expect-root sha256:` followed by 64 zeros (`root-bad`).
 - `difftest/testdata/golden/<base-id>.jsonl` holds one line per invocation: `{case, inv, treeDigest, stdout, stderr, exit}`. Case ids are `<base-id>` or `<base-id>__<mutation-id>__<target>`.
 
 ### 4.2 Generators (Node, frozen TS)
 
-- `difftest/gen/gen-bases.mjs`: writes synthetic bases.
-- `difftest/gen/gen-goldens.mjs`: for each case, copies the base to a temp directory, applies the mutation with the Node applier, records `treeDigest` (sha256 over the byte-sorted list of `/`-separated relative paths, each with its entry type and its contents, or its link target for symlinks), runs `node dist/cli.js verify <dir>` for each of the three invocations, normalizes (4.5), and writes the golden lines.
+- `difftest/gen/gen-bases.ts`: writes synthetic bases. Generators are TypeScript run with the existing `tsx` dev dependency, so they import the same frozen `src/` code that `dist/` is built from.
+- `difftest/gen/gen-goldens.ts`: for each case, copies the base to a temp directory, applies the mutation with the Node applier, records `treeDigest` (sha256 over the byte-sorted list of `/`-separated relative paths, each with its entry type and its contents, or its link target for symlinks), runs `node dist/cli.js verify <dir>` for each of the three invocations, normalizes (4.5), and writes the golden lines.
 
 ### 4.3 Go test
 
@@ -158,7 +169,7 @@ This suite needs no Node and remains the regression oracle after TS is deleted.
 
 ### 4.4 Live property tests (need Node)
 
-- `difftest/gen/node-oracle.mjs` is a long-running process that reads JSON-line requests and exposes `canonicalJson`, `localeCompare` sort, and every ported zod schema.
+- `difftest/gen/node-oracle.ts` is a long-running process that reads JSON-line requests and exposes `canonicalJson`, `localeCompare` sort, `JSON.parse` errors, UTF-8 decoding, number formatting, the exported zod schemas, a small schema DSL that builds equivalent zod and Go schemas for combinator tests (non-exported schemas are covered by the golden corpus), and the exported pure verification functions (`verifyFrozenWitnessRecord`, `verifyCodexLifecycleLedger`, `validateSandboxPlanAudit`).
 - Go property tests (run when `FAULTLINE_NODE_ORACLE=1`) send random inputs and compare:
   - key sets → sort order
   - arbitrary JSON values → `canonicalJson` output and `digestJson`
@@ -168,9 +179,13 @@ This suite needs no Node and remains the regression oracle after TS is deleted.
 ### 4.5 Normalizations (the complete list)
 
 1. The temp bundle root path is replaced with `<BUNDLE>`. On Windows, backslashes in the replaced root and in the path that follows it (up to the next quote, whitespace, or end of line) are converted to `/`.
-2. Messages of zod issue kinds excluded under Section 3.3.
+2. The git verifier's temporary repository path (`<tmpdir>/faultline-git-proof-verify-XXXXXX`) is replaced with `<GITTMP>`.
+3. Text that `git` itself wrote after one of the verifier's git labels (`Git bundle head listing failed: `, `Git bundle verification failed: `, `Git bundle extraction failed: `, `Git commit resolution failed: `, `Git tree resolution failed: `, `Git bundle range enumeration failed: `, `Git binary range patch creation failed: `, `Git bundle object-format resolution failed: `, `Temporary Git verifier initialization failed: `) is replaced with `<GIT-DETAIL>` up to the end of that error entry. Git's wording varies by git version; FaultLine's own text around it is still compared exactly.
+4. Messages of zod issue kinds excluded under Section 3.3.
 
 Any other difference fails the test.
+
+Golden generation and Go tests both run git with an isolated configuration (`HOME` set to an empty temp directory, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` pointing at an empty file), so user settings such as `diff.noprefix` cannot change the reproduced range patch.
 
 ### 4.6 CI
 
