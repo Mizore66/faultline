@@ -8,7 +8,7 @@
       "id": "attempt-empty",
       "subset": [],
       "outcome": "PASS",
-      "runId": "sha256:57c11f70fc21842bdc5017816acdfb627fcef95b30260b5e28bfae67338aea8e",
+      "runId": "sha256:1b0f8715535ea2b6a6c6575c81f3a4efc02437ae3089b79460057d5d61faf988",
       "note": "No implicated edits preserve the witness."
     },
     {
@@ -17,7 +17,7 @@
         "settlement-display-default"
       ],
       "outcome": "PASS",
-      "runId": "sha256:b18d166501ecbfec668dcbced10448b18a1eb05082caf7231e523b5805f8e493",
+      "runId": "sha256:49c109ebc2cbb034830878b0b5e7a694f3b5e81a5c5aed2de499b18df29fe18c",
       "note": "The display default alone does not change settlement currency."
     },
     {
@@ -26,7 +26,7 @@
         "settlement-display-boundary"
       ],
       "outcome": "PASS",
-      "runId": "sha256:522729e7dc784a51498c72160ae631b5b053466dfbc848f1763ffa7b2a7bf688",
+      "runId": "sha256:1a4c1ac36087dfa19ae2531efc41c022f14ea0c81f2fcd2d37731a4a1814f128",
       "note": "The boundary assignment alone receives USD."
     },
     {
@@ -35,7 +35,7 @@
         "partial-renderer-hunk"
       ],
       "outcome": "UNRESOLVED",
-      "runId": "sha256:b1ebd020a84e4a804f353ee8b574d01b30866f696852405e1e5ba9a447777081",
+      "runId": "sha256:c4a404f69e2c2d2f59e3f98e408458e8f173f5302f1feb898d83a7a7324caa6b",
       "note": "The partial patch cannot compile and is unresolved, not evidence."
     },
     {
@@ -45,7 +45,7 @@
         "settlement-display-boundary"
       ],
       "outcome": "FAIL",
-      "runId": "sha256:1f5ba6076500f97e2a05540603243dfa8043d1743789af299ebd76bf983e9c43",
+      "runId": "sha256:433c7870f4d803be25b383e9d5c428ae4ff61c3817e4348219b0e35de1f763bf",
       "note": "Applying the two edits to last-good reproduces the frozen witness failure."
     },
     {
@@ -55,7 +55,7 @@
         "settlement-display-boundary"
       ],
       "outcome": "PASS",
-      "runId": "sha256:bb98faf0bd1dccc7e4a3f4f717ab361857a616f811d8caea4e77e6dfebfd65d3",
+      "runId": "sha256:dc4aa2fbd42913fc1a1b9e28d822f5868b10699308311a1beb0ce64705d77ad2",
       "note": "Removing the two edits from first-bad restores the frozen witness pass."
     }
   ],
@@ -64,7 +64,7 @@
     "settlement-display-boundary"
   ],
   "sufficiency": {
-    "id": "sha256:1f5ba6076500f97e2a05540603243dfa8043d1743789af299ebd76bf983e9c43",
+    "id": "sha256:433c7870f4d803be25b383e9d5c428ae4ff61c3817e4348219b0e35de1f763bf",
     "stateId": "candidate-two-hunks",
     "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
     "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -72,12 +72,12 @@
     "reasonCode": "PREDICATE_FAIL",
     "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
     "stderr": "expected settlement USD; received EUR\n",
-    "durationMs": 35,
+    "durationMs": 36,
     "executionKind": "EXECUTED",
-    "executedAt": "2026-09-25T17:12:17.698Z"
+    "executedAt": "2026-09-25T17:20:56.299Z"
   },
   "necessity": {
-    "id": "sha256:bb98faf0bd1dccc7e4a3f4f717ab361857a616f811d8caea4e77e6dfebfd65d3",
+    "id": "sha256:dc4aa2fbd42913fc1a1b9e28d822f5868b10699308311a1beb0ce64705d77ad2",
     "stateId": "candidate-remove-two-hunks",
     "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
     "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -85,9 +85,9 @@
     "reasonCode": "PREDICATE_PASS",
     "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
     "stderr": "",
-    "durationMs": 37,
+    "durationMs": 39,
     "executionKind": "EXECUTED",
-    "executedAt": "2026-09-25T17:12:17.735Z"
+    "executedAt": "2026-09-25T17:20:56.339Z"
   },
   "termination": "BIDIRECTIONALLY_VALIDATED"
 }

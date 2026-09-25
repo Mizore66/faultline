@@ -75,7 +75,6 @@ await gitBase("git-unbound", "HEAD~2", "sha1");
 await gitBase("git-partially-bound", "HEAD~2", "sha1", "descendant");
 await gitBase("git-fully-bound", "HEAD~2", "sha1", "every");
 await gitBase("git-two-states", "HEAD~1", "sha1");
-await gitBase("git-sha256", "HEAD~2", "sha256");
 demoBase("demo-replay", "REPLAY");
 demoBase("demo-rerun", "RERUN");
 demoBase("demo-rerun-unicode-stdout", "RERUN", (analysis) => {

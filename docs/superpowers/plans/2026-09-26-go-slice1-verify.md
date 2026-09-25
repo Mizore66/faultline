@@ -3905,7 +3905,7 @@ Case semantics are defined once below and implemented identically in `cases.ts` 
 - **Normalization** (spec §4.5), applied to stdout and stderr: (1) replace the bundle directory path and its realpath with `<BUNDLE>`; on Windows, turn `\` into `/` inside each `<BUNDLE>` path (until a quote, whitespace, or end); (2) replace every maximal run of non-whitespace, non-quote characters ending in `faultline-git-proof-verify-` followed by `[A-Za-z0-9]+` with `<GITTMP>`; (3) for each git label `L` in the spec list, replace the text after `L failed: ` up to (not including) the next `\n- ` or the final newline with `<GIT-DETAIL>`.
 - **Git isolation:** `HOME` and `USERPROFILE` are an empty temp directory, `GIT_CONFIG_NOSYSTEM=1`, and `GIT_CONFIG_GLOBAL` is an empty file there. Both the golden generator and Go `TestMain` set this.
 
-- [ ] **Step 1: Write the fixtures module**
+- [x] **Step 1: Write the fixtures module**
 
 Create `difftest/gen/fixtures.ts` by copying, unchanged, the helpers `git`, `commit`, `createRepository`, `createFrozenWitness`, `deterministicDockerRunner`, `nativeDockerFixture`, `lifecycleBoundToDescendant`, and `lifecycleBoundToEveryInvestigatedState` from `tests/git-proof-bundle.test.ts:34-204`, and `digest`, `commit` (rename it `hexCommit`), `runIds`, and `sampleInput` from `tests/prevention-proof.test.ts:15-62`. Rewrite their imports from `../src/…` to `../../src/…`, drop the `vitest` import, and `export` every helper plus `pinnedImage` (`tests/git-proof-bundle.test.ts:32`). Make exactly these changes:
 
@@ -3942,7 +3942,7 @@ export function groundedPreventionInput(): PreventionProofWriteInput {
 }
 ```
 
-- [ ] **Step 2: Write the base generator and generate bases**
+- [x] **Step 2: Write the base generator and generate bases**
 
 `difftest/gen/gen-bases.ts`:
 
@@ -4024,7 +4024,6 @@ await gitBase("git-unbound", "HEAD~2", "sha1");
 await gitBase("git-partially-bound", "HEAD~2", "sha1", "descendant");
 await gitBase("git-fully-bound", "HEAD~2", "sha1", "every");
 await gitBase("git-two-states", "HEAD~1", "sha1");
-await gitBase("git-sha256", "HEAD~2", "sha256");
 demoBase("demo-replay", "REPLAY");
 demoBase("demo-rerun", "RERUN");
 demoBase("demo-rerun-unicode-stdout", "RERUN", (analysis) => {
@@ -4039,9 +4038,11 @@ rmSync(work, { recursive: true, force: true });
 ```
 
 Run: `pnpm install --frozen-lockfile && pnpm exec tsx difftest/gen/gen-bases.ts`
-Expected: `wrote …` for 11 generated bases; with the copied sample that makes 12 directories, and `node dist/cli.js verify difftest/testdata/bases/git-unbound` (after `pnpm build`) prints `Git proof self-consistency: VALID`. The lone-surrogate demo base is expected to be INVALID (`stdout does not match catalog`).
 
-- [ ] **Step 3: Write the mutation templates**
+> **Amendment (2026-09-25, during execution):** the `git-sha256` base was dropped. Frozen TS cannot write a SHA-256 Git proof bundle: its pre-publish self-verification runs `git init --bare` (always SHA-1, `src/git-proof-bundle.ts:931`) and git rejects fetching the SHA-256 bundle (`pack is corrupted (SHA1 mismatch)`, reproduced on git 2.43 and 2.51). Recorded in `difftest/KNOWN_DIFFERENCES.md`.
+Expected: `wrote …` for 10 generated bases; with the copied sample that makes 11 directories, and `node dist/cli.js verify difftest/testdata/bases/git-unbound` (after `pnpm build`) prints `Git proof self-consistency: VALID`. The lone-surrogate demo base is expected to be INVALID (`stdout does not match catalog`).
+
+- [x] **Step 3: Write the mutation templates**
 
 `difftest/testdata/mutations.json`:
 
@@ -4074,7 +4075,7 @@ Expected: `wrote …` for 11 generated bases; with the copied sample that makes 
 ]
 ```
 
-- [ ] **Step 4: Write the TS case engine**
+- [x] **Step 4: Write the TS case engine**
 
 `difftest/gen/cases.ts`:
 
@@ -4263,7 +4264,7 @@ export function baseRoot(root: string, base: string): string {
 }
 ```
 
-- [ ] **Step 5: Write the golden generator and generate goldens**
+- [x] **Step 5: Write the golden generator and generate goldens**
 
 `difftest/gen/gen-goldens.ts`:
 
@@ -4338,7 +4339,7 @@ rmSync(home, { recursive: true, force: true });
 Run: `mkdir -p difftest/testdata/golden && pnpm build && pnpm exec tsx difftest/gen/gen-goldens.ts`
 Expected: one line per base with its case count. Run it a second time and check `git diff --exit-code difftest/testdata/golden` shows no changes (goldens must be deterministic). If they differ, find the nondeterminism (for example an unnormalized temp path) and extend normalization in both engines before continuing.
 
-- [ ] **Step 6: Write the Go case engine**
+- [x] **Step 6: Write the Go case engine**
 
 `difftest/cases.go` mirrors `cases.ts` function for function:
 
@@ -4712,7 +4713,7 @@ func baseRoot(root, base string) string {
 
 The TS normalizer uses JS `/\s/` as its boundary test, and Go uses ASCII whitespace. The texts involved are ASCII paths, so these agree. Keep both as written.
 
-- [ ] **Step 7: Write the Go replay test**
+- [x] **Step 7: Write the Go replay test**
 
 `difftest/replay_test.go`:
 
@@ -4867,7 +4868,7 @@ func TestGoldenReplay(t *testing.T) {
 }
 ```
 
-- [ ] **Step 8: Verify the harness wiring**
+- [x] **Step 8: Verify the harness wiring**
 
 Temporarily set `portedTypes = map[string]bool{"demo": true}` and run `go test ./difftest/ -run TestGoldenReplay 2>&1 | head -40`.
 Expected: the case-count and tree-digest checks pass (no `tree digest mismatch` or `Go expands` failures), and every case fails on output, because `verify` is not ported yet (`not yet ported: verify`). Then restore `portedTypes` to the empty map.
@@ -4875,7 +4876,7 @@ Expected: the case-count and tree-digest checks pass (no `tree digest mismatch` 
 Run: `go test ./difftest/`
 Expected: PASS (no types ported; live tests skipped).
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add difftest

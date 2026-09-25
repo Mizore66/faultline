@@ -1,7 +1,7 @@
 {
   "schemaVersion": "faultline.demo.v1",
   "mode": "RERUN",
-  "generatedAt": "2026-09-25T17:12:19.295Z",
+  "generatedAt": "2026-09-25T17:20:57.979Z",
   "fixture": {
     "id": "parallel-settlement-regression",
     "title": "Parallel settlement-currency regression",
@@ -37,7 +37,7 @@
   },
   "contributionRuns": [
     {
-      "id": "sha256:35d8aa1f05a40a89b01d0d5b6e91e2808729c9c7b4792f33569b70f7c2d65067",
+      "id": "sha256:e78bf956dd878e0ae68014f58132e8fbcb3c6d9965be0cf2fa6076387d90010c",
       "stateId": "contribution-atlas",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -47,10 +47,10 @@
       "stderr": "",
       "durationMs": 39,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:17.929Z"
+      "executedAt": "2026-09-25T17:20:56.542Z"
     },
     {
-      "id": "sha256:65448b94517b86b35f0a543c8c86385c3356cb3c2fb4de2fc5a1cf5ad6aee72e",
+      "id": "sha256:f3a4361dbd2700a4ec11af534650a9825eff215680eff981508485edd72154ac",
       "stateId": "contribution-birch",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -58,12 +58,12 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 35,
+      "durationMs": 39,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:17.964Z"
+      "executedAt": "2026-09-25T17:20:56.581Z"
     },
     {
-      "id": "sha256:e06a3e5e972975bf4dbf781e17e670f5325091d62e6644b0d8a9014976b18047",
+      "id": "sha256:3e0af465da2cfbdb6fba42a31e6d123edf1401f5271e001d543144ac36c5b3d2",
       "stateId": "contribution-cedar",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -71,12 +71,12 @@
       "reasonCode": "PREDICATE_FAIL",
       "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
       "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 39,
+      "durationMs": 35,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.004Z"
+      "executedAt": "2026-09-25T17:20:56.617Z"
     },
     {
-      "id": "sha256:82deed8d45aecccd35da93e744433364ceb2b189692e750e6c608cd4f748fd2d",
+      "id": "sha256:5c8756ad09d2d4633feca0fd57baade4fec477fa00022e2c3af6ce788bebaf2d",
       "stateId": "contribution-delta",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -84,14 +84,14 @@
       "reasonCode": "PREDICATE_FAIL",
       "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
       "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 32,
+      "durationMs": 37,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.037Z"
+      "executedAt": "2026-09-25T17:20:56.656Z"
     }
   ],
   "timelineRuns": [
     {
-      "id": "sha256:1dc527d104c16e86a0a1343dee37b6f5d05211bfcd553d74904890d88341bf28",
+      "id": "sha256:d5bb87c6e6736977a945e9064c86d005218ba15b7578c86730b84743cb417502",
       "stateId": "cedar-turn-1",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -99,12 +99,12 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 33,
+      "durationMs": 44,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.071Z"
+      "executedAt": "2026-09-25T17:20:56.700Z"
     },
     {
-      "id": "sha256:6a5325242243871dfce70680639986c05d7e0a79a8bc96aeecd571acf2f499d9",
+      "id": "sha256:97815a085845a3829b179694f73b7b22660fc4b835bb652bdf92f6b2e085daf6",
       "stateId": "cedar-turn-2",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -112,12 +112,12 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 32,
+      "durationMs": 42,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.104Z"
+      "executedAt": "2026-09-25T17:20:56.743Z"
     },
     {
-      "id": "sha256:fd40f8f14e2293b66a484e74165ed03f1bdb8eb218307de5f7c06ead5ca1af5d",
+      "id": "sha256:a8689dd027f4b8100d1005e26e76906aaadcb19354fab032ec85f0bc51195e98",
       "stateId": "cedar-turn-3",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -125,12 +125,12 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 32,
+      "durationMs": 38,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.136Z"
+      "executedAt": "2026-09-25T17:20:56.782Z"
     },
     {
-      "id": "sha256:a85eb3900b4cf91c483f9b98c5a3ec17bad022e5143bbc71ca3aab208faf84f5",
+      "id": "sha256:dc4c1a185a6527c2f77d02074f5ea9031df71a522273996aa32b9546746f97a4",
       "stateId": "cedar-turn-4",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -138,12 +138,12 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 34,
+      "durationMs": 40,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.171Z"
+      "executedAt": "2026-09-25T17:20:56.823Z"
     },
     {
-      "id": "sha256:fbec9aee6c5855064598d3a507ab539868b1e191a704df96eee361e1b41e566d",
+      "id": "sha256:7bef767f2e8d59b6aed038ca5faee3478a9518dd50c55709348b8bd9dd86e0cb",
       "stateId": "cedar-turn-5",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -151,12 +151,12 @@
       "reasonCode": "PREDICATE_FAIL",
       "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
       "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 33,
+      "durationMs": 36,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.205Z"
+      "executedAt": "2026-09-25T17:20:56.859Z"
     },
     {
-      "id": "sha256:99a5a49b6785887fbfbcee80888de17adebfb8b5ba0ff99fc56c58448db53c41",
+      "id": "sha256:f4580f35c9e016dcf578c47748b74ce0be5b9ed9a1366038ecfb299304e2c4ef",
       "stateId": "cedar-turn-6",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -164,12 +164,12 @@
       "reasonCode": "PREDICATE_FAIL",
       "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
       "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 35,
+      "durationMs": 38,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.240Z"
+      "executedAt": "2026-09-25T17:20:56.898Z"
     },
     {
-      "id": "sha256:3b16a0c7ca5bacf1552ee311fc69a7b82f0ed7bc7c5a47f7ead5883cc9ad4b8c",
+      "id": "sha256:83986dc989462e96186300cbebdb056bbe519f04b789d9f44baa50276faae541",
       "stateId": "cedar-turn-7",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -177,12 +177,12 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 33,
+      "durationMs": 37,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.274Z"
+      "executedAt": "2026-09-25T17:20:56.936Z"
     },
     {
-      "id": "sha256:491a56cdae879c9ae911a633922bd204947d160080abd8f74e7bf1230227d62e",
+      "id": "sha256:eb4c1b77e2eb668cc87bbe3bbd69214a9ccae9f9255cd6ea1de828463290c704",
       "stateId": "cedar-turn-8",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -190,9 +190,9 @@
       "reasonCode": "PREDICATE_FAIL",
       "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
       "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 32,
+      "durationMs": 37,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.307Z"
+      "executedAt": "2026-09-25T17:20:56.974Z"
     }
   ],
   "transitions": [
@@ -204,12 +204,12 @@
       "stable": true,
       "kind": "PASS_TO_FAIL",
       "boundaryRunIds": [
-        "sha256:dbd3971124e7991267e3910df8c0b2d33eda14bad0dcf398532ff17edd826e00",
-        "sha256:2fbed91659f499f9eeb0da60d0fbe78bbbbb65465bd36093c06b425259c415ee",
-        "sha256:f0f8f94391c86cb07e6f7e4a376767503071601da84de5d93bec7211715fdf3d",
-        "sha256:3222738306cdd1d5d3544cc06c3fc7f0c807dac553f1b69bc4c0d04a02668fc1",
-        "sha256:ba0d4ed082b40fb9066f31c4a3915766f317bb995bd3272bd978e2b93c65694c",
-        "sha256:bd2a464b356dd02dcfc5291098c7c7900f379f876df410dc27338eefda999cce"
+        "sha256:7b003c45ad330dfe912f1a1dbaa779dd1336674a005b14d7c1431648498146d4",
+        "sha256:965073c3eed2cdf67344b921d1c0657efe5eaab2d19c4b40547e9188818af1c4",
+        "sha256:90afe831f0ab99d3da53e1a811cec93787cdc1dc993aa0f10191ea03a5c17a0e",
+        "sha256:4475f109d0d6de6b93d215c8b541d622f6338c4c8f50ebcac77ff349bd0996d4",
+        "sha256:3f96b74aca9479ae74ea8fff4bc7a3ba215d6d2fd7764ae5aaa77efc52b021ad",
+        "sha256:55d1bc6d581ec106ddd4eb06b5851278a1cb6735ddab484ee9088102f68575c3"
       ]
     },
     {
@@ -220,12 +220,12 @@
       "stable": true,
       "kind": "FAIL_TO_PASS",
       "boundaryRunIds": [
-        "sha256:e9eff7a0e3a794ca2e2bddfb2424a0c875c0091e1c7dfe1d32c91069a0236ce5",
-        "sha256:267adbd6325ea42864c3d01ae3c740e0398c6d1953782b8d498cf3dadfe81091",
-        "sha256:216fe41131c31e15a2c3ab069d583636f15f74606c7b5f04a5285e9d2eb7a73c",
-        "sha256:a73337db41a290629822a534a8fca8c7628169ff19f417f5a3f4843b0e2de476",
-        "sha256:6490b013bb9dc4004569051ba632069a251be083d079944dc3bf7a5890642e3f",
-        "sha256:5e15e390b5982ac152f8325fc20d312059a9b24905d65c305d50fea0122a8db4"
+        "sha256:ddd99ecbf1e1359b3688a7d14960d7f37c0ade69e572cae9dd38b14c00142dcd",
+        "sha256:c03d46d6660aaa715d2781913025b880d61e732807ab2ed5bde1375af4152a59",
+        "sha256:7231480b5025109f790a288c796e21cd43f5d8ab6201e8c0533d04517e728606",
+        "sha256:b9eb591805a1faeff6a3351e6dcab708d048b7a8ecf985073b764f259035914a",
+        "sha256:03872f7792812e1976fa0f315339a68f0ca9dc6b8c5a7f5c57fe68b4d3d24caf",
+        "sha256:285149cc4bc0efd6c970c42120c4c505f68adbc7d469ec6da54e10fe87bb7098"
       ]
     },
     {
@@ -236,291 +236,31 @@
       "stable": true,
       "kind": "PASS_TO_FAIL",
       "boundaryRunIds": [
-        "sha256:117c9ddb79e236970b0c25a992375e25db87f46f5e517fe5774872d82b2a7f7e",
-        "sha256:f2cee96e69ebf383f6db60a05c0408d9484215967d332debc1d0e543de1fd7ae",
-        "sha256:7213997700619232773bd268fb195334f2c90d17f4d1be8df0820b9c1197e9ec",
-        "sha256:d9a73db4e1d80784f7fb719186b0854b856c9210308897646b2a57d086618c6d",
-        "sha256:238d7fab85f1ef86cab14461ca8802aaf7a63a525e46400de303513a3f733b9c",
-        "sha256:b66699d84ec9b013668dc532aae95180fd4faf35878e5f29fc4743e327c2ab25"
+        "sha256:578a790753c65c4d32f84dbf91b83bd7ba840d85ce9c14769701e5d08ce02f7e",
+        "sha256:9a724f976049b89dfabc16a89d0e61302857178cd374a28fea74b26605ceaa4f",
+        "sha256:bcc796e17737475656eaec7205c9c4e3ec6dbbb533b4956e25f45b165fe8d34c",
+        "sha256:b0cf3a8f0f14e6fc9f591cafd0ee41c3f8b0fd7b6ee0c26858ffde3490945cc3",
+        "sha256:bb3f118f155f67b0fb9feea65653c7806a8d30a772c976953eea4e6026a9ca5e",
+        "sha256:ae07daf133b667fcfe59db5bf920005cff258234b8801e3f623114260cec4a51"
       ]
     }
   ],
   "runCatalog": [
     {
-      "id": "sha256:02e6c7703b5fbb074945fc908eb3fae81b386c84481de5505e3290bd96c32c55",
-      "stateId": "candidate-remove-two-hunks",
+      "id": "sha256:03872f7792812e1976fa0f315339a68f0ca9dc6b8c5a7f5c57fe68b4d3d24caf",
+      "stateId": "cedar-turn-7",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
       "verdict": "PASS",
       "reasonCode": "PREDICATE_PASS",
       "stdout": "héllo 😀\nsecond line\n",
       "stderr": "",
-      "durationMs": 36,
+      "durationMs": 40,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.162Z"
+      "executedAt": "2026-09-25T17:20:57.396Z"
     },
     {
-      "id": "sha256:076a1cb5c6336f6664bb801b9af66a8c31da8130e991379adb5775000c069b1c",
-      "stateId": "repair-worktree",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 32,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.295Z"
-    },
-    {
-      "id": "sha256:117c9ddb79e236970b0c25a992375e25db87f46f5e517fe5774872d82b2a7f7e",
-      "stateId": "cedar-turn-7",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 39,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.789Z"
-    },
-    {
-      "id": "sha256:1ba754703b2ce482bb30df93ca82b44595e9c464dcc7f57cd88121617a94841e",
-      "stateId": "candidate-unresolved",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "ERROR",
-      "reasonCode": "FIXTURE_COMPILE_ERROR",
-      "stdout": "",
-      "stderr": "file:///tmp/faultline-sample/candidate-unresolved-11900-1790356339060-bac17e4c503c4/reconcile.mjs:1\nexport const broken = ;\n                      ^\n\nSyntaxError: Unexpected token ';'\n    at compileSourceTextModule (node:internal/modules/esm/utils:346:16)\n    at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:107:18)\n    at #translate (node:internal/modules/esm/loader:546:20)\n    at afterLoad (node:internal/modules/esm/loader:596:29)\n    at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:601:12)\n    at #createModuleJob (node:internal/modules/esm/loader:624:36)\n    at #getJobFromResolveResult (node:internal/modules/esm/loader:343:34)\n    at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:311:41)\n\nNode.js v22.22.2\n",
-      "durationMs": 31,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.091Z"
-    },
-    {
-      "id": "sha256:1dc527d104c16e86a0a1343dee37b6f5d05211bfcd553d74904890d88341bf28",
-      "stateId": "cedar-turn-1",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 33,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.071Z"
-    },
-    {
-      "id": "sha256:216fe41131c31e15a2c3ab069d583636f15f74606c7b5f04a5285e9d2eb7a73c",
-      "stateId": "cedar-turn-6",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "FAIL",
-      "reasonCode": "PREDICATE_FAIL",
-      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
-      "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 43,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.636Z"
-    },
-    {
-      "id": "sha256:238d7fab85f1ef86cab14461ca8802aaf7a63a525e46400de303513a3f733b9c",
-      "stateId": "cedar-turn-8",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "FAIL",
-      "reasonCode": "PREDICATE_FAIL",
-      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
-      "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 34,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.957Z"
-    },
-    {
-      "id": "sha256:266b8a046bbaef6f23237b464c180622dec7520f8071ae8173446324f95792f3",
-      "stateId": "prevention-first-bad",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "FAIL",
-      "reasonCode": "PREDICATE_FAIL",
-      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
-      "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 32,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.262Z"
-    },
-    {
-      "id": "sha256:267adbd6325ea42864c3d01ae3c740e0398c6d1953782b8d498cf3dadfe81091",
-      "stateId": "cedar-turn-6",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "FAIL",
-      "reasonCode": "PREDICATE_FAIL",
-      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
-      "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 39,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.592Z"
-    },
-    {
-      "id": "sha256:2fbed91659f499f9eeb0da60d0fbe78bbbbb65465bd36093c06b425259c415ee",
-      "stateId": "cedar-turn-4",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 35,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.378Z"
-    },
-    {
-      "id": "sha256:3222738306cdd1d5d3544cc06c3fc7f0c807dac553f1b69bc4c0d04a02668fc1",
-      "stateId": "cedar-turn-5",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "FAIL",
-      "reasonCode": "PREDICATE_FAIL",
-      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
-      "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 35,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.445Z"
-    },
-    {
-      "id": "sha256:35d8aa1f05a40a89b01d0d5b6e91e2808729c9c7b4792f33569b70f7c2d65067",
-      "stateId": "contribution-atlas",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 39,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:17.929Z"
-    },
-    {
-      "id": "sha256:3b16a0c7ca5bacf1552ee311fc69a7b82f0ed7bc7c5a47f7ead5883cc9ad4b8c",
-      "stateId": "cedar-turn-7",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 33,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.274Z"
-    },
-    {
-      "id": "sha256:491a56cdae879c9ae911a633922bd204947d160080abd8f74e7bf1230227d62e",
-      "stateId": "cedar-turn-8",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "FAIL",
-      "reasonCode": "PREDICATE_FAIL",
-      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
-      "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 32,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.307Z"
-    },
-    {
-      "id": "sha256:5210bc6a3d8c821c4c7f846422d8fc3aedab8710791bafa65d2c1819318bd627",
-      "stateId": "candidate-two-hunks",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "FAIL",
-      "reasonCode": "PREDICATE_FAIL",
-      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
-      "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 34,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.126Z"
-    },
-    {
-      "id": "sha256:5e15e390b5982ac152f8325fc20d312059a9b24905d65c305d50fea0122a8db4",
-      "stateId": "cedar-turn-7",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 38,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.749Z"
-    },
-    {
-      "id": "sha256:6490b013bb9dc4004569051ba632069a251be083d079944dc3bf7a5890642e3f",
-      "stateId": "cedar-turn-7",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 36,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.711Z"
-    },
-    {
-      "id": "sha256:65448b94517b86b35f0a543c8c86385c3356cb3c2fb4de2fc5a1cf5ad6aee72e",
-      "stateId": "contribution-birch",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 35,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:17.964Z"
-    },
-    {
-      "id": "sha256:6a5325242243871dfce70680639986c05d7e0a79a8bc96aeecd571acf2f499d9",
-      "stateId": "cedar-turn-2",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 32,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.104Z"
-    },
-    {
-      "id": "sha256:7213997700619232773bd268fb195334f2c90d17f4d1be8df0820b9c1197e9ec",
-      "stateId": "cedar-turn-7",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 50,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.881Z"
-    },
-    {
-      "id": "sha256:82deed8d45aecccd35da93e744433364ceb2b189692e750e6c608cd4f748fd2d",
-      "stateId": "contribution-delta",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "FAIL",
-      "reasonCode": "PREDICATE_FAIL",
-      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
-      "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 32,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.037Z"
-    },
-    {
-      "id": "sha256:872cde6a0d86dcde6e9cd0de94fc3b1796a7b45cef47fbbf82c80ebc9164f13c",
+      "id": "sha256:148693e969eca8fe003764dbc0232b72c531d8fc0293f3cd5aaa30085fc14b65",
       "stateId": "prevention-last-good",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -528,13 +268,13 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 32,
+      "durationMs": 35,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.229Z"
+      "executedAt": "2026-09-25T17:20:57.874Z"
     },
     {
-      "id": "sha256:99a5a49b6785887fbfbcee80888de17adebfb8b5ba0ff99fc56c58448db53c41",
-      "stateId": "cedar-turn-6",
+      "id": "sha256:22843414709fc3a59c312130c2016b223392490bad709162ee7f1a6ff5299f3e",
+      "stateId": "prevention-first-bad",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
       "verdict": "FAIL",
@@ -543,10 +283,10 @@
       "stderr": "expected settlement USD; received EUR\n",
       "durationMs": 35,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.240Z"
+      "executedAt": "2026-09-25T17:20:57.944Z"
     },
     {
-      "id": "sha256:a73337db41a290629822a534a8fca8c7628169ff19f417f5a3f4843b0e2de476",
+      "id": "sha256:285149cc4bc0efd6c970c42120c4c505f68adbc7d469ec6da54e10fe87bb7098",
       "stateId": "cedar-turn-7",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -556,24 +296,11 @@
       "stderr": "",
       "durationMs": 37,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.674Z"
+      "executedAt": "2026-09-25T17:20:57.434Z"
     },
     {
-      "id": "sha256:a85eb3900b4cf91c483f9b98c5a3ec17bad022e5143bbc71ca3aab208faf84f5",
-      "stateId": "cedar-turn-4",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 34,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.171Z"
-    },
-    {
-      "id": "sha256:b66699d84ec9b013668dc532aae95180fd4faf35878e5f29fc4743e327c2ab25",
-      "stateId": "cedar-turn-8",
+      "id": "sha256:3e0af465da2cfbdb6fba42a31e6d123edf1401f5271e001d543144ac36c5b3d2",
+      "stateId": "contribution-cedar",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
       "verdict": "FAIL",
@@ -582,23 +309,10 @@
       "stderr": "expected settlement USD; received EUR\n",
       "durationMs": 35,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.992Z"
+      "executedAt": "2026-09-25T17:20:56.617Z"
     },
     {
-      "id": "sha256:b854840c88dfb58f9cde8b71c43241dfb2a9f44a791641877a7e6f8015725588",
-      "stateId": "candidate-renderer-only",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 33,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.060Z"
-    },
-    {
-      "id": "sha256:ba0d4ed082b40fb9066f31c4a3915766f317bb995bd3272bd978e2b93c65694c",
+      "id": "sha256:3f96b74aca9479ae74ea8fff4bc7a3ba215d6d2fd7764ae5aaa77efc52b021ad",
       "stateId": "cedar-turn-5",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -608,10 +322,23 @@
       "stderr": "expected settlement USD; received EUR\n",
       "durationMs": 36,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.481Z"
+      "executedAt": "2026-09-25T17:20:57.160Z"
     },
     {
-      "id": "sha256:bd2a464b356dd02dcfc5291098c7c7900f379f876df410dc27338eefda999cce",
+      "id": "sha256:439511d2e72c980880a721317e1a60cf084209df40d5c73d2701ba3766bb9919",
+      "stateId": "candidate-two-hunks",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "FAIL",
+      "reasonCode": "PREDICATE_FAIL",
+      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
+      "stderr": "expected settlement USD; received EUR\n",
+      "durationMs": 33,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.798Z"
+    },
+    {
+      "id": "sha256:4475f109d0d6de6b93d215c8b541d622f6338c4c8f50ebcac77ff349bd0996d4",
       "stateId": "cedar-turn-5",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -621,50 +348,11 @@
       "stderr": "expected settlement USD; received EUR\n",
       "durationMs": 35,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.516Z"
+      "executedAt": "2026-09-25T17:20:57.123Z"
     },
     {
-      "id": "sha256:cf80f64ab8112af6cbc3ead220b5f8b1820d0075f7816dac15880e35aeae6b1a",
-      "stateId": "candidate-source-only",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 33,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.026Z"
-    },
-    {
-      "id": "sha256:d9a73db4e1d80784f7fb719186b0854b856c9210308897646b2a57d086618c6d",
-      "stateId": "cedar-turn-8",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "FAIL",
-      "reasonCode": "PREDICATE_FAIL",
-      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
-      "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 40,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.922Z"
-    },
-    {
-      "id": "sha256:dbd3971124e7991267e3910df8c0b2d33eda14bad0dcf398532ff17edd826e00",
-      "stateId": "cedar-turn-4",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 34,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.341Z"
-    },
-    {
-      "id": "sha256:e06a3e5e972975bf4dbf781e17e670f5325091d62e6644b0d8a9014976b18047",
-      "stateId": "contribution-cedar",
+      "id": "sha256:55d1bc6d581ec106ddd4eb06b5851278a1cb6735ddab484ee9088102f68575c3",
+      "stateId": "cedar-turn-5",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
       "verdict": "FAIL",
@@ -673,11 +361,219 @@
       "stderr": "expected settlement USD; received EUR\n",
       "durationMs": 39,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.004Z"
+      "executedAt": "2026-09-25T17:20:57.200Z"
     },
     {
-      "id": "sha256:e9eff7a0e3a794ca2e2bddfb2424a0c875c0091e1c7dfe1d32c91069a0236ce5",
+      "id": "sha256:578a790753c65c4d32f84dbf91b83bd7ba840d85ce9c14769701e5d08ce02f7e",
+      "stateId": "cedar-turn-7",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 35,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.470Z"
+    },
+    {
+      "id": "sha256:5c8756ad09d2d4633feca0fd57baade4fec477fa00022e2c3af6ce788bebaf2d",
+      "stateId": "contribution-delta",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "FAIL",
+      "reasonCode": "PREDICATE_FAIL",
+      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
+      "stderr": "expected settlement USD; received EUR\n",
+      "durationMs": 37,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:56.656Z"
+    },
+    {
+      "id": "sha256:64be65edde2523d0b8394ea89446b1209d9844b9800398f80f42b324521e5b39",
+      "stateId": "candidate-renderer-only",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 35,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.729Z"
+    },
+    {
+      "id": "sha256:7231480b5025109f790a288c796e21cd43f5d8ab6201e8c0533d04517e728606",
       "stateId": "cedar-turn-6",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "FAIL",
+      "reasonCode": "PREDICATE_FAIL",
+      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
+      "stderr": "expected settlement USD; received EUR\n",
+      "durationMs": 37,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.315Z"
+    },
+    {
+      "id": "sha256:7b003c45ad330dfe912f1a1dbaa779dd1336674a005b14d7c1431648498146d4",
+      "stateId": "cedar-turn-4",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 38,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.013Z"
+    },
+    {
+      "id": "sha256:7bef767f2e8d59b6aed038ca5faee3478a9518dd50c55709348b8bd9dd86e0cb",
+      "stateId": "cedar-turn-5",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "FAIL",
+      "reasonCode": "PREDICATE_FAIL",
+      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
+      "stderr": "expected settlement USD; received EUR\n",
+      "durationMs": 36,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:56.859Z"
+    },
+    {
+      "id": "sha256:83986dc989462e96186300cbebdb056bbe519f04b789d9f44baa50276faae541",
+      "stateId": "cedar-turn-7",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 37,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:56.936Z"
+    },
+    {
+      "id": "sha256:85f4b3ea673658dd12f616e1048d34c2851ee3a542e6f5b6c033948af0db49c4",
+      "stateId": "candidate-remove-two-hunks",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 39,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.838Z"
+    },
+    {
+      "id": "sha256:90afe831f0ab99d3da53e1a811cec93787cdc1dc993aa0f10191ea03a5c17a0e",
+      "stateId": "cedar-turn-4",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 37,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.087Z"
+    },
+    {
+      "id": "sha256:965073c3eed2cdf67344b921d1c0657efe5eaab2d19c4b40547e9188818af1c4",
+      "stateId": "cedar-turn-4",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 36,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.049Z"
+    },
+    {
+      "id": "sha256:97815a085845a3829b179694f73b7b22660fc4b835bb652bdf92f6b2e085daf6",
+      "stateId": "cedar-turn-2",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 42,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:56.743Z"
+    },
+    {
+      "id": "sha256:9a724f976049b89dfabc16a89d0e61302857178cd374a28fea74b26605ceaa4f",
+      "stateId": "cedar-turn-7",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 37,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.508Z"
+    },
+    {
+      "id": "sha256:a8689dd027f4b8100d1005e26e76906aaadcb19354fab032ec85f0bc51195e98",
+      "stateId": "cedar-turn-3",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 38,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:56.782Z"
+    },
+    {
+      "id": "sha256:a913d520e06d4693bba689c38c663c826ecdeaaa3f5d6460c472309440e03248",
+      "stateId": "candidate-unresolved",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "ERROR",
+      "reasonCode": "FIXTURE_COMPILE_ERROR",
+      "stdout": "",
+      "stderr": "file:///tmp/faultline-sample/candidate-unresolved-14114-1790356857729-606ae69576ad8/reconcile.mjs:1\nexport const broken = ;\n                      ^\n\nSyntaxError: Unexpected token ';'\n    at compileSourceTextModule (node:internal/modules/esm/utils:346:16)\n    at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:107:18)\n    at #translate (node:internal/modules/esm/loader:546:20)\n    at afterLoad (node:internal/modules/esm/loader:596:29)\n    at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:601:12)\n    at #createModuleJob (node:internal/modules/esm/loader:624:36)\n    at #getJobFromResolveResult (node:internal/modules/esm/loader:343:34)\n    at ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:311:41)\n\nNode.js v22.22.2\n",
+      "durationMs": 34,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.764Z"
+    },
+    {
+      "id": "sha256:ac300e14fa064cad1cbd5c534b313d7de7a8c6cadf208f8a40119b88d52bc349",
+      "stateId": "repair-worktree",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 34,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.979Z"
+    },
+    {
+      "id": "sha256:ae07daf133b667fcfe59db5bf920005cff258234b8801e3f623114260cec4a51",
+      "stateId": "cedar-turn-8",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "FAIL",
+      "reasonCode": "PREDICATE_FAIL",
+      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
+      "stderr": "expected settlement USD; received EUR\n",
+      "durationMs": 38,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.658Z"
+    },
+    {
+      "id": "sha256:b0cf3a8f0f14e6fc9f591cafd0ee41c3f8b0fd7b6ee0c26858ffde3490945cc3",
+      "stateId": "cedar-turn-8",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
       "verdict": "FAIL",
@@ -686,23 +582,10 @@
       "stderr": "expected settlement USD; received EUR\n",
       "durationMs": 35,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.552Z"
+      "executedAt": "2026-09-25T17:20:57.581Z"
     },
     {
-      "id": "sha256:f0f8f94391c86cb07e6f7e4a376767503071601da84de5d93bec7211715fdf3d",
-      "stateId": "cedar-turn-4",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "PASS",
-      "reasonCode": "PREDICATE_PASS",
-      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
-      "stderr": "",
-      "durationMs": 31,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.409Z"
-    },
-    {
-      "id": "sha256:f2cee96e69ebf383f6db60a05c0408d9484215967d332debc1d0e543de1fd7ae",
+      "id": "sha256:b9eb591805a1faeff6a3351e6dcab708d048b7a8ecf985073b764f259035914a",
       "stateId": "cedar-turn-7",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -710,12 +593,51 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 41,
+      "durationMs": 39,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.830Z"
+      "executedAt": "2026-09-25T17:20:57.355Z"
     },
     {
-      "id": "sha256:f53e0605e74c67617fa8b86500f9f494eda832f6010c83d85eadeabb90e674ff",
+      "id": "sha256:bb3f118f155f67b0fb9feea65653c7806a8d30a772c976953eea4e6026a9ca5e",
+      "stateId": "cedar-turn-8",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "FAIL",
+      "reasonCode": "PREDICATE_FAIL",
+      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
+      "stderr": "expected settlement USD; received EUR\n",
+      "durationMs": 37,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.619Z"
+    },
+    {
+      "id": "sha256:bcc796e17737475656eaec7205c9c4e3ec6dbbb533b4956e25f45b165fe8d34c",
+      "stateId": "cedar-turn-7",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 37,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.545Z"
+    },
+    {
+      "id": "sha256:c03d46d6660aaa715d2781913025b880d61e732807ab2ed5bde1375af4152a59",
+      "stateId": "cedar-turn-6",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "FAIL",
+      "reasonCode": "PREDICATE_FAIL",
+      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
+      "stderr": "expected settlement USD; received EUR\n",
+      "durationMs": 38,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.278Z"
+    },
+    {
+      "id": "sha256:cb877bb1bfa23da552cd3b53e7ca178c2ec5d0dcba05af25e1cb28268b7353a4",
       "stateId": "prevention-last-good",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -723,35 +645,113 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 33,
+      "durationMs": 34,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.196Z"
+      "executedAt": "2026-09-25T17:20:57.909Z"
     },
     {
-      "id": "sha256:fbec9aee6c5855064598d3a507ab539868b1e191a704df96eee361e1b41e566d",
-      "stateId": "cedar-turn-5",
-      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
-      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
-      "verdict": "FAIL",
-      "reasonCode": "PREDICATE_FAIL",
-      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
-      "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 33,
-      "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.205Z"
-    },
-    {
-      "id": "sha256:fd40f8f14e2293b66a484e74165ed03f1bdb8eb218307de5f7c06ead5ca1af5d",
-      "stateId": "cedar-turn-3",
+      "id": "sha256:d5bb87c6e6736977a945e9064c86d005218ba15b7578c86730b84743cb417502",
+      "stateId": "cedar-turn-1",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
       "verdict": "PASS",
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 32,
+      "durationMs": 44,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:18.136Z"
+      "executedAt": "2026-09-25T17:20:56.700Z"
+    },
+    {
+      "id": "sha256:dc4c1a185a6527c2f77d02074f5ea9031df71a522273996aa32b9546746f97a4",
+      "stateId": "cedar-turn-4",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 40,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:56.823Z"
+    },
+    {
+      "id": "sha256:ddd99ecbf1e1359b3688a7d14960d7f37c0ade69e572cae9dd38b14c00142dcd",
+      "stateId": "cedar-turn-6",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "FAIL",
+      "reasonCode": "PREDICATE_FAIL",
+      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
+      "stderr": "expected settlement USD; received EUR\n",
+      "durationMs": 38,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.239Z"
+    },
+    {
+      "id": "sha256:e78bf956dd878e0ae68014f58132e8fbcb3c6d9965be0cf2fa6076387d90010c",
+      "stateId": "contribution-atlas",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 39,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:56.542Z"
+    },
+    {
+      "id": "sha256:eb4c1b77e2eb668cc87bbe3bbd69214a9ccae9f9255cd6ea1de828463290c704",
+      "stateId": "cedar-turn-8",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "FAIL",
+      "reasonCode": "PREDICATE_FAIL",
+      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
+      "stderr": "expected settlement USD; received EUR\n",
+      "durationMs": 37,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:56.974Z"
+    },
+    {
+      "id": "sha256:f0a6c94a5a7efb0aa32a13d53c1d479492bd5aed3623efb1f56b5006f541ab82",
+      "stateId": "candidate-source-only",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 35,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:57.694Z"
+    },
+    {
+      "id": "sha256:f3a4361dbd2700a4ec11af534650a9825eff215680eff981508485edd72154ac",
+      "stateId": "contribution-birch",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "PASS",
+      "reasonCode": "PREDICATE_PASS",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+      "stderr": "",
+      "durationMs": 39,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:56.581Z"
+    },
+    {
+      "id": "sha256:f4580f35c9e016dcf578c47748b74ce0be5b9ed9a1366038ecfb299304e2c4ef",
+      "stateId": "cedar-turn-6",
+      "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+      "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+      "verdict": "FAIL",
+      "reasonCode": "PREDICATE_FAIL",
+      "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
+      "stderr": "expected settlement USD; received EUR\n",
+      "durationMs": 38,
+      "executionKind": "EXECUTED",
+      "executedAt": "2026-09-25T17:20:56.898Z"
     }
   ],
   "minimization": {
@@ -764,7 +764,7 @@
         "id": "attempt-empty",
         "subset": [],
         "outcome": "PASS",
-        "runId": "sha256:f53e0605e74c67617fa8b86500f9f494eda832f6010c83d85eadeabb90e674ff",
+        "runId": "sha256:148693e969eca8fe003764dbc0232b72c531d8fc0293f3cd5aaa30085fc14b65",
         "note": "No implicated edits preserve the witness."
       },
       {
@@ -773,7 +773,7 @@
           "settlement-display-default"
         ],
         "outcome": "PASS",
-        "runId": "sha256:cf80f64ab8112af6cbc3ead220b5f8b1820d0075f7816dac15880e35aeae6b1a",
+        "runId": "sha256:f0a6c94a5a7efb0aa32a13d53c1d479492bd5aed3623efb1f56b5006f541ab82",
         "note": "The display default alone does not change settlement currency."
       },
       {
@@ -782,7 +782,7 @@
           "settlement-display-boundary"
         ],
         "outcome": "PASS",
-        "runId": "sha256:b854840c88dfb58f9cde8b71c43241dfb2a9f44a791641877a7e6f8015725588",
+        "runId": "sha256:64be65edde2523d0b8394ea89446b1209d9844b9800398f80f42b324521e5b39",
         "note": "The boundary assignment alone receives USD."
       },
       {
@@ -791,7 +791,7 @@
           "partial-renderer-hunk"
         ],
         "outcome": "UNRESOLVED",
-        "runId": "sha256:1ba754703b2ce482bb30df93ca82b44595e9c464dcc7f57cd88121617a94841e",
+        "runId": "sha256:a913d520e06d4693bba689c38c663c826ecdeaaa3f5d6460c472309440e03248",
         "note": "The partial patch cannot compile and is unresolved, not evidence."
       },
       {
@@ -801,7 +801,7 @@
           "settlement-display-boundary"
         ],
         "outcome": "FAIL",
-        "runId": "sha256:5210bc6a3d8c821c4c7f846422d8fc3aedab8710791bafa65d2c1819318bd627",
+        "runId": "sha256:439511d2e72c980880a721317e1a60cf084209df40d5c73d2701ba3766bb9919",
         "note": "Applying the two edits to last-good reproduces the frozen witness failure."
       },
       {
@@ -811,7 +811,7 @@
           "settlement-display-boundary"
         ],
         "outcome": "PASS",
-        "runId": "sha256:02e6c7703b5fbb074945fc908eb3fae81b386c84481de5505e3290bd96c32c55",
+        "runId": "sha256:85f4b3ea673658dd12f616e1048d34c2851ee3a542e6f5b6c033948af0db49c4",
         "note": "Removing the two edits from first-bad restores the frozen witness pass."
       }
     ],
@@ -820,7 +820,7 @@
       "settlement-display-boundary"
     ],
     "sufficiency": {
-      "id": "sha256:5210bc6a3d8c821c4c7f846422d8fc3aedab8710791bafa65d2c1819318bd627",
+      "id": "sha256:439511d2e72c980880a721317e1a60cf084209df40d5c73d2701ba3766bb9919",
       "stateId": "candidate-two-hunks",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -828,28 +828,28 @@
       "reasonCode": "PREDICATE_FAIL",
       "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
       "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 34,
+      "durationMs": 33,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.126Z"
+      "executedAt": "2026-09-25T17:20:57.798Z"
     },
     "necessity": {
-      "id": "sha256:02e6c7703b5fbb074945fc908eb3fae81b386c84481de5505e3290bd96c32c55",
+      "id": "sha256:85f4b3ea673658dd12f616e1048d34c2851ee3a542e6f5b6c033948af0db49c4",
       "stateId": "candidate-remove-two-hunks",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
       "verdict": "PASS",
       "reasonCode": "PREDICATE_PASS",
-      "stdout": "héllo 😀\nsecond line\n",
+      "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 36,
+      "durationMs": 39,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.162Z"
+      "executedAt": "2026-09-25T17:20:57.838Z"
     },
     "termination": "BIDIRECTIONALLY_VALIDATED"
   },
   "prevention": {
     "lastGood": {
-      "id": "sha256:872cde6a0d86dcde6e9cd0de94fc3b1796a7b45cef47fbbf82c80ebc9164f13c",
+      "id": "sha256:cb877bb1bfa23da552cd3b53e7ca178c2ec5d0dcba05af25e1cb28268b7353a4",
       "stateId": "prevention-last-good",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -857,12 +857,12 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 32,
+      "durationMs": 34,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.229Z"
+      "executedAt": "2026-09-25T17:20:57.909Z"
     },
     "firstBad": {
-      "id": "sha256:266b8a046bbaef6f23237b464c180622dec7520f8071ae8173446324f95792f3",
+      "id": "sha256:22843414709fc3a59c312130c2016b223392490bad709162ee7f1a6ff5299f3e",
       "stateId": "prevention-first-bad",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -870,12 +870,12 @@
       "reasonCode": "PREDICATE_FAIL",
       "stdout": "{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_FAIL\"}\n",
       "stderr": "expected settlement USD; received EUR\n",
-      "durationMs": 32,
+      "durationMs": 35,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.262Z"
+      "executedAt": "2026-09-25T17:20:57.944Z"
     },
     "repaired": {
-      "id": "sha256:076a1cb5c6336f6664bb801b9af66a8c31da8130e991379adb5775000c069b1c",
+      "id": "sha256:ac300e14fa064cad1cbd5c534b313d7de7a8c6cadf208f8a40119b88d52bc349",
       "stateId": "repair-worktree",
       "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
       "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
@@ -883,9 +883,9 @@
       "reasonCode": "PREDICATE_PASS",
       "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
       "stderr": "",
-      "durationMs": 32,
+      "durationMs": 34,
       "executionKind": "EXECUTED",
-      "executedAt": "2026-09-25T17:12:19.295Z"
+      "executedAt": "2026-09-25T17:20:57.979Z"
     },
     "verified": true
   },
@@ -912,31 +912,31 @@
       "kind": "DERIVED",
       "statement": "Session Cedar / turn 5 is the first stable pass-to-fail transition in recorded order.",
       "evidenceIds": [
-        "sha256:dbd3971124e7991267e3910df8c0b2d33eda14bad0dcf398532ff17edd826e00",
-        "sha256:2fbed91659f499f9eeb0da60d0fbe78bbbbb65465bd36093c06b425259c415ee",
-        "sha256:f0f8f94391c86cb07e6f7e4a376767503071601da84de5d93bec7211715fdf3d",
-        "sha256:3222738306cdd1d5d3544cc06c3fc7f0c807dac553f1b69bc4c0d04a02668fc1",
-        "sha256:ba0d4ed082b40fb9066f31c4a3915766f317bb995bd3272bd978e2b93c65694c",
-        "sha256:bd2a464b356dd02dcfc5291098c7c7900f379f876df410dc27338eefda999cce"
+        "sha256:7b003c45ad330dfe912f1a1dbaa779dd1336674a005b14d7c1431648498146d4",
+        "sha256:965073c3eed2cdf67344b921d1c0657efe5eaab2d19c4b40547e9188818af1c4",
+        "sha256:90afe831f0ab99d3da53e1a811cec93787cdc1dc993aa0f10191ea03a5c17a0e",
+        "sha256:4475f109d0d6de6b93d215c8b541d622f6338c4c8f50ebcac77ff349bd0996d4",
+        "sha256:3f96b74aca9479ae74ea8fff4bc7a3ba215d6d2fd7764ae5aaa77efc52b021ad",
+        "sha256:55d1bc6d581ec106ddd4eb06b5851278a1cb6735ddab484ee9088102f68575c3"
       ]
     },
     {
       "kind": "DERIVED",
       "statement": "The two-edit candidate is sufficient on last-good and necessary to preserve the sample failure.",
       "evidenceIds": [
-        "sha256:f53e0605e74c67617fa8b86500f9f494eda832f6010c83d85eadeabb90e674ff",
-        "sha256:cf80f64ab8112af6cbc3ead220b5f8b1820d0075f7816dac15880e35aeae6b1a",
-        "sha256:b854840c88dfb58f9cde8b71c43241dfb2a9f44a791641877a7e6f8015725588",
-        "sha256:1ba754703b2ce482bb30df93ca82b44595e9c464dcc7f57cd88121617a94841e",
-        "sha256:5210bc6a3d8c821c4c7f846422d8fc3aedab8710791bafa65d2c1819318bd627",
-        "sha256:02e6c7703b5fbb074945fc908eb3fae81b386c84481de5505e3290bd96c32c55"
+        "sha256:148693e969eca8fe003764dbc0232b72c531d8fc0293f3cd5aaa30085fc14b65",
+        "sha256:f0a6c94a5a7efb0aa32a13d53c1d479492bd5aed3623efb1f56b5006f541ab82",
+        "sha256:64be65edde2523d0b8394ea89446b1209d9844b9800398f80f42b324521e5b39",
+        "sha256:a913d520e06d4693bba689c38c663c826ecdeaaa3f5d6460c472309440e03248",
+        "sha256:439511d2e72c980880a721317e1a60cf084209df40d5c73d2701ba3766bb9919",
+        "sha256:85f4b3ea673658dd12f616e1048d34c2851ee3a542e6f5b6c033948af0db49c4"
       ]
     },
     {
       "kind": "INFERRED",
       "statement": "Settlement and display-currency invariants were mixed at the boundary.",
       "evidenceIds": [
-        "sha256:266b8a046bbaef6f23237b464c180622dec7520f8071ae8173446324f95792f3"
+        "sha256:22843414709fc3a59c312130c2016b223392490bad709162ee7f1a6ff5299f3e"
       ]
     },
     {
