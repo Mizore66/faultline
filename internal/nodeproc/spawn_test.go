@@ -15,11 +15,13 @@ case "$1" in
 both) /usr/bin/head -c "$2" /dev/zero; /usr/bin/head -c "$3" /dev/zero >&2 ;;
 abort) echo partial >&2; /bin/kill -ABRT $$ ;;
 code) echo oops >&2; exit "$2" ;;
+env) printf "%s" "$FOO" | /usr/bin/od -An -tx1 | /usr/bin/tr -d " \n"; [ -S /dev/stdin ] && printf " sock"; [ -S /dev/stdout ] && printf " osock"; echo ;;
 *) echo "ran $0" ;;
 esac
 `
 
-// Expectations were captured from Node 22's spawnSync with the same script.
+// Expectations were captured from Node 22's spawnSync (Linux) with the same
+// scripts and PATH values.
 func TestSpawnSyncMatchesNode(t *testing.T) {
 	dir := t.TempDir()
 	write := func(path string, mode os.FileMode) {
@@ -29,7 +31,15 @@ func TestSpawnSyncMatchesNode(t *testing.T) {
 		}
 	}
 	bin, noexec, cwd := filepath.Join(dir, "bin"), filepath.Join(dir, "noexec"), filepath.Join(dir, "cwd")
+	badint, eaccint := filepath.Join(dir, "badint"), filepath.Join(dir, "eaccint")
 	write(filepath.Join(bin, "git"), 0o755)
+	os.MkdirAll(badint, 0o755)
+	os.MkdirAll(eaccint, 0o755)
+	os.WriteFile(filepath.Join(badint, "git"), []byte("#!/nonexistent/interp\n"), 0o755)
+	os.WriteFile(filepath.Join(eaccint, "git"), []byte("#!/etc/hosts\n"), 0o755)
+	longComponent := "/" + strings.Repeat("a", 300)
+	skipped := strings.Repeat("/aa", pathMax/3+10)         // >= PATH_MAX: libuv skips it
+	tooLong := strings.Repeat("/aa", (pathMax-2)/3) + "/a" // PATH_MAX-2 long: tried, execve says ENAMETOOLONG
 	write(filepath.Join(noexec, "git"), 0o644)
 	write(filepath.Join(cwd, "git"), 0o755)
 	const max = 4 * 1024 * 1024
@@ -49,9 +59,18 @@ func TestSpawnSyncMatchesNode(t *testing.T) {
 		{"only non-executable", noexec, "", []string{"x"}, "null", "spawnSync git EACCES", ""},
 		{"EACCES then found", noexec + ":" + bin, "", []string{"x"}, "0", "", "ran " + filepath.Join(bin, "git") + "\n"},
 		{"not found", "/nonexist", "", []string{"x"}, "null", "spawnSync git ENOENT", ""},
+		{"missing interpreter moves on", badint + ":" + bin, "", []string{"x"}, "0", "", "ran " + filepath.Join(bin, "git") + "\n"},
+		{"EACCES interpreter moves on", eaccint + ":" + bin, "", []string{"x"}, "0", "", "ran " + filepath.Join(bin, "git") + "\n"},
+		{"EACCES interpreter alone", eaccint, "", []string{"x"}, "null", "spawnSync git EACCES", ""},
+		{"long component ends the search", longComponent + ":" + bin, "", []string{"x"}, "null", "spawnSync git ENAMETOOLONG", ""},
+		{"PATH_MAX entry skipped", skipped + ":" + bin, "", []string{"x"}, "0", "", "ran " + filepath.Join(bin, "git") + "\n"},
+		{"entry below PATH_MAX tried", tooLong, "", []string{"x"}, "null", "spawnSync git ENAMETOOLONG", ""},
+		{"last errno reported", "/nonexistent:/etc/hosts", "", []string{"x"}, "null", "spawnSync git ENOTDIR", ""},
+		{"env re-encoded, socket stdio", bin, "", []string{"env"}, "0", "", "61efbfbd62 sock osock\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("PATH", tc.path)
+			t.Setenv("FOO", "a\xffb")
 			if tc.chdir != "" {
 				t.Chdir(tc.chdir)
 			}

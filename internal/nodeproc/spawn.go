@@ -1,17 +1,19 @@
 // Package nodeproc ports the parts of Node 22's child_process.spawnSync that
-// FaultLine's git runner observes: libuv's executable lookup, the maxBuffer
-// limit (shared by stdout and stderr), and how status and error are reported.
+// FaultLine's git runner observes: the environment and argv Node builds,
+// libuv's executable lookup, its stdio (socketpairs on Unix), the maxBuffer
+// limit (shared by stdout and stderr, read in 64 KiB segments), and how
+// status and error are reported.
 package nodeproc
 
 import (
 	"errors"
-	"io"
 	"os"
-	"os/exec"
 	"runtime"
-	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/Mizore66/faultline/internal/jsstr"
+	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
 // Result mirrors spawnSync's { status, stdout, stderr, error }.
@@ -38,13 +40,17 @@ type stream struct {
 	buf []byte
 }
 
+// segment is SyncProcessOutputBuffer's size: OnAlloc only offers the space
+// left in the current 64 KiB segment, so no read crosses a segment boundary.
+const segment = 64 * 1024
+
 // read drains r until EOF or until the shared budget is exceeded. Like
 // libuv's OnRead, each chunk is kept before the overflow check.
-func (s *stream) read(r io.Reader, done *sync.WaitGroup) {
+func (s *stream) read(r *os.File, done *sync.WaitGroup) {
 	defer done.Done()
-	chunk := make([]byte, 64*1024)
+	chunk := make([]byte, segment)
 	for {
-		n, err := r.Read(chunk)
+		n, err := r.Read(chunk[:segment-len(s.buf)%segment])
 		if n > 0 {
 			s.out.mu.Lock()
 			if s.out.overflow {
@@ -71,55 +77,43 @@ func spawnError(file, code string) error { return errors.New("spawnSync " + file
 
 // SpawnSync is spawnSync(file, args, { encoding: "buffer", maxBuffer,
 // shell: false }) with the inherited environment and working directory.
+// Arguments are JS strings: they reach the child as UTF-8 with each lone
+// surrogate replaced by U+FFFD, as Node encodes them.
 func SpawnSync(file string, args []string, maxBuffer int) Result {
-	path, code := lookPath(file)
+	argv := make([]string, 0, len(args)+1)
+	argv = append(argv, jsstr.ToUTF8(file))
+	for _, arg := range args {
+		argv = append(argv, jsstr.ToUTF8(arg))
+	}
+	io, err := newStdio()
+	if err != nil {
+		return Result{Err: spawnError(file, nodefs.ErrnoCode(err))}
+	}
+	proc, code := start(jsstr.ToUTF8(file), argv, nodeEnv(), io.child)
+	io.closeChild()
 	if code != "" {
+		io.closeParent()
 		return Result{Err: spawnError(file, code)}
 	}
-	outR, outW, err := os.Pipe()
-	if err != nil {
-		return Result{Err: spawnError(file, errnoCode(err))}
-	}
-	errR, errW, err := os.Pipe()
-	if err != nil {
-		outR.Close()
-		outW.Close()
-		return Result{Err: spawnError(file, errnoCode(err))}
-	}
-	cmd := &exec.Cmd{Path: path, Args: append([]string{file}, args...), Stdout: outW, Stderr: errW}
-	hideWindow(cmd)
-	startErr := cmd.Start()
-	outW.Close()
-	errW.Close()
-	if startErr != nil {
-		outR.Close()
-		errR.Close()
-		return Result{Err: spawnError(file, errnoCode(startErr))}
-	}
 	var closeOnce sync.Once
-	closePipes := func() {
-		closeOnce.Do(func() {
-			outR.Close()
-			errR.Close()
-		})
-	}
+	closePipes := func() { closeOnce.Do(io.closeParent) }
 	o := &output{maxBuffer: maxBuffer}
 	o.onOverrun = func() {
 		// SyncProcessRunner::Kill: send killSignal (SIGTERM), close the pipes.
 		if runtime.GOOS == "windows" {
-			cmd.Process.Kill()
+			proc.Kill()
 		} else {
-			cmd.Process.Signal(syscall.SIGTERM)
+			proc.Signal(syscall.SIGTERM)
 		}
 		closePipes()
 	}
 	stdout, stderr := &stream{out: o}, &stream{out: o}
 	var readers sync.WaitGroup
 	readers.Add(2)
-	go stdout.read(outR, &readers)
-	go stderr.read(errR, &readers)
+	go stdout.read(io.stdout, &readers)
+	go stderr.read(io.stderr, &readers)
 	readers.Wait()
-	cmd.Wait()
+	state, _ := proc.Wait()
 	closePipes()
 	result := Result{Stdout: stdout.buf, Stderr: stderr.buf}
 	o.mu.Lock()
@@ -128,165 +122,83 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 	if overflow {
 		result.Err = spawnError(file, "ENOBUFS")
 	}
-	if ps := cmd.ProcessState; ps != nil && ps.Exited() && !overflow {
-		status := ps.ExitCode()
+	if state != nil && state.Exited() && !overflow {
+		status := state.ExitCode()
 		result.Status = &status
 	}
 	return result
 }
 
-// errnoCode names err's errno the way Node's ErrnoException does.
-func errnoCode(err error) string {
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
-		if name, ok := errnoNames[errno]; ok {
-			return name
-		}
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return "ENOENT"
-	}
-	if errors.Is(err, os.ErrPermission) {
-		return "EACCES"
-	}
-	return "UNKNOWN"
+// stdio holds the parent's ends (stdin shut down for writing, stdout and
+// stderr for reading) and the child's ends.
+type stdio struct {
+	stdin, stdout, stderr *os.File
+	child                 []*os.File
 }
 
-// lookPath finds file as libuv does, returning the path to execute or the
-// errno code spawnSync reports.
-func lookPath(file string) (string, string) {
+func (s *stdio) closeChild() {
+	for _, f := range s.child {
+		f.Close()
+	}
+}
+
+func (s *stdio) closeParent() {
+	s.stdin.Close()
+	s.stdout.Close()
+	s.stderr.Close()
+}
+
+// nodeEnv is the envPairs normalizeSpawnArguments builds from process.env:
+// entries without "=" are skipped, keys and values are decoded as UTF-8 with
+// replacement, each key appears once with the value getenv finds for it (the
+// first entry), and a key whose bytes don't round-trip finds no value and is
+// dropped. Nil (inherit) on Windows, whose environment is already UTF-16.
+func nodeEnv() []string {
 	if runtime.GOOS == "windows" {
-		return lookPathWindows(file)
+		return nil
 	}
-	return lookPathPosix(file)
-}
-
-// lookPathPosix is libuv's uv__execvpe search (after musl's execvpe): each
-// PATH entry is tried in order, an empty entry means the working directory,
-// EACCES is remembered while the search continues, and any other failure
-// ends it.
-func lookPathPosix(file string) (string, string) {
-	if strings.Contains(file, "/") {
-		return file, checkExec(file)
-	}
-	pathEnv, ok := os.LookupEnv("PATH")
-	if !ok {
-		pathEnv = defaultPath
-	}
-	seenEACCES := false
-	for _, dir := range strings.Split(pathEnv, ":") {
-		candidate := file // an empty entry execs the bare name, relative to cwd
-		if dir != "" {
-			candidate = dir + "/" + file
-		}
-		switch code := checkExec(candidate); code {
-		case "":
-			return candidate, ""
-		case "EACCES":
-			seenEACCES = true
-		case "ENOENT", "ENOTDIR":
-		default:
-			return "", code
-		}
-	}
-	if seenEACCES {
-		return "", "EACCES"
-	}
-	return "", "ENOENT"
-}
-
-// checkExec predicts execve's errno for path: "" when it would run.
-func checkExec(path string) string {
-	info, err := os.Stat(path)
-	if err != nil {
-		return errnoCode(err)
-	}
-	if info.IsDir() || !info.Mode().IsRegular() {
-		return "EACCES"
-	}
-	if err := access(path); err != nil {
-		return errnoCode(err)
-	}
-	return ""
-}
-
-// lookPathWindows is libuv's search_path for a bare file name (FaultLine
-// only spawns "git"): the working directory first, then
-// each PATH entry (quotes stripped, empty entries skipped). A name without an
-// extension is tried with .com and then .exe only; with an extension, the
-// literal name comes first.
-func lookPathWindows(file string) (string, string) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", "ENOENT"
-	}
-	ext := false
-	if i := strings.LastIndexByte(file, '.'); i >= 0 && i < len(file)-1 && !strings.ContainsAny(file[i:], `\/`) {
-		ext = true
-	}
-	try := func(dir string) string {
-		if !isAbsWindows(dir) {
-			dir = cwd + `\` + dir
-		}
-		var names []string
-		if ext {
-			names = append(names, file)
-		}
-		names = append(names, file+".com", file+".exe")
-		for _, name := range names {
-			candidate := strings.TrimRight(dir, `\/`) + `\` + name
-			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-				return candidate
+	environ := syscall.Environ()
+	first := map[string]string{}
+	for _, entry := range environ {
+		for i := 0; i < len(entry); i++ {
+			if entry[i] == '=' {
+				if _, ok := first[entry[:i]]; !ok {
+					first[entry[:i]] = entry[i+1:]
+				}
+				break
 			}
 		}
-		return ""
 	}
-	if found := try(cwd); found != "" {
-		return found, ""
-	}
-	for _, dir := range splitWindowsPath(os.Getenv("PATH")) {
-		if found := try(dir); found != "" {
-			return found, ""
+	seen := map[string]bool{}
+	env := make([]string, 0, len(environ))
+	for _, entry := range environ {
+		i := 0
+		for i < len(entry) && entry[i] != '=' {
+			i++
 		}
-	}
-	return "", "ENOENT"
-}
-
-func isAbsWindows(p string) bool {
-	return len(p) > 0 && (p[0] == '\\' || p[0] == '/') || len(p) > 2 && p[1] == ':' && (p[2] == '\\' || p[2] == '/')
-}
-
-// splitWindowsPath splits PATH like libuv's search_path: ';'-separated, a
-// quoted entry may contain ';', and surrounding quotes are dropped.
-func splitWindowsPath(path string) []string {
-	var out []string
-	for i := 0; i < len(path); {
-		start := i
-		if path[i] == '"' || path[i] == '\'' {
-			if j := strings.IndexByte(path[i+1:], path[i]); j >= 0 {
-				i += 1 + j
-			} else {
-				i = len(path)
-			}
-		}
-		end := len(path)
-		if j := strings.IndexByte(path[i:], ';'); j >= 0 {
-			end = i + j
-		}
-		entry := path[start:end]
-		i = end + 1
-		if entry == "" {
+		if i == len(entry) {
 			continue
 		}
-		if entry[0] == '"' || entry[0] == '\'' {
-			entry = entry[1:]
+		key := nodefs.DecodeUTF8([]byte(entry[:i]))
+		if seen[key] {
+			continue
 		}
-		if entry != "" && (entry[len(entry)-1] == '"' || entry[len(entry)-1] == '\'') {
-			entry = entry[:len(entry)-1]
+		seen[key] = true
+		value, ok := first[key]
+		if !ok {
+			continue
 		}
-		if entry != "" {
-			out = append(out, entry)
+		env = append(env, key+"="+nodefs.DecodeUTF8([]byte(value)))
+	}
+	return env
+}
+
+// lookupEnv is getenv over an envPairs list: the first match wins.
+func lookupEnv(env []string, key string) (string, bool) {
+	for _, entry := range env {
+		if len(entry) > len(key) && entry[len(key)] == '=' && entry[:len(key)] == key {
+			return entry[len(key)+1:], true
 		}
 	}
-	return out
+	return "", false
 }
