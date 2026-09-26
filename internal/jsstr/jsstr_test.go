@@ -3,6 +3,7 @@ package jsstr
 import (
 	"slices"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestRoundTripKeepsLoneSurrogates(t *testing.T) {
@@ -38,5 +39,13 @@ func TestTrimMatchesJavaScript(t *testing.T) {
 	}
 	if Trim("\u0085x") != "\u0085x" { // NEL is not JS whitespace
 		t.Fatal("NEL must not be trimmed")
+	}
+}
+
+func TestToUTF8AlwaysValid(t *testing.T) {
+	for _, s := range []string{"a\xffb", "\xed\xa0\x80", "\xc0\xaf", "ok"} {
+		if out := ToUTF8(s); !utf8.ValidString(out) {
+			t.Errorf("ToUTF8(%q) = %q", s, out)
+		}
 	}
 }

@@ -60,9 +60,11 @@ func ToUTF16(s string) []uint16 {
 func Length(s string) int { return len(ToUTF16(s)) }
 
 // ToUTF8 is `Buffer.from(s, "utf8")` / `process.stdout.write(s)`:
-// lone surrogates become U+FFFD.
+// lone surrogates become U+FFFD. JS strings reach Go already decoded (argv,
+// file names and contents go through nodefs.DecodeUTF8), but any other byte
+// that is not valid UTF-8 is replaced too, so output is always valid UTF-8.
 func ToUTF8(s string) string {
-	if !strings.Contains(s, "\xED") {
+	if utf8.ValidString(s) {
 		return s
 	}
 	return string(utf16.Decode(ToUTF16(s)))
