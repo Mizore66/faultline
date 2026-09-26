@@ -9,6 +9,7 @@ import (
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
@@ -90,7 +91,7 @@ func newSet(values ...string) *orderedSet {
 
 func (s *orderedSet) add(v string) {
 	if !s.has[v] {
-		s.has[v] = true
+		jsexc.SetAdd(s.has, v)
 		s.order = append(s.order, v)
 	}
 }
@@ -124,7 +125,7 @@ func validateAnalysisCoverage(a jsjson.Value, errs *[]string) {
 		if catalog[id] {
 			*errs = append(*errs, "duplicate run id in catalog: "+id)
 		}
-		catalog[id] = true
+		jsexc.SetAdd(catalog, id)
 	}
 	for _, id := range referencedRunIDs(a).order {
 		if !catalog[id] {
@@ -136,7 +137,7 @@ func validateAnalysisCoverage(a jsjson.Value, errs *[]string) {
 func readJSONArtifact(path, label string, errs *[]string) (jsjson.Value, bool) {
 	v, err := bundle.ParseJSONFile(path)
 	if err != nil {
-		*errs = append(*errs, label+" JSON validation failed: "+err.Error())
+		*errs = append(*errs, jsexc.Concat(label, " JSON validation failed: ", jsexc.Message(err)))
 		return jsjson.Value{}, false
 	}
 	return v, true
@@ -173,7 +174,7 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 				add("witness artifact digest is invalid")
 			}
 		}); err != nil {
-			add("witness artifact schema validation failed: " + err.Error())
+			add(jsexc.Concat("witness artifact schema validation failed: ", jsexc.Message(err)))
 		}
 	}
 
@@ -183,7 +184,7 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 				add("minimization artifact does not match analysis.minimization")
 			}
 		}); err != nil {
-			add("minimization artifact schema validation failed: " + err.Error())
+			add(jsexc.Concat("minimization artifact schema validation failed: ", jsexc.Message(err)))
 		}
 	}
 
@@ -193,13 +194,13 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 				add("prevention artifact does not match analysis.prevention")
 			}
 		}); err != nil {
-			add("prevention artifact schema validation failed: " + err.Error())
+			add(jsexc.Concat("prevention artifact schema validation failed: ", jsexc.Message(err)))
 		}
 	}
 
 	catalog := map[string]jsjson.Value{}
 	for _, run := range a.Get("runCatalog").Items() {
-		catalog[run.Get("id").Str()] = run
+		jsexc.MapSet(catalog, run.Get("id").Str(), run)
 	}
 	for _, run := range a.Get("runCatalog").Items() {
 		id := run.Get("id").Str()
@@ -210,7 +211,7 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 					add("persisted run does not match catalog: " + id)
 				}
 			}); err != nil {
-				add("persisted run schema validation failed for " + id + ": " + err.Error())
+				add(jsexc.Concat("persisted run schema validation failed for ", id, ": ", jsexc.Message(err)))
 			}
 		}
 		if err := bundle.Try(func() {
@@ -221,7 +222,7 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 				add("stderr does not match catalog for " + id)
 			}
 		}); err != nil {
-			add("run log read failed for " + id + ": " + err.Error())
+			add(jsexc.Concat("run log read failed for ", id, ": ", jsexc.Message(err)))
 		}
 	}
 
@@ -335,6 +336,7 @@ func invalidDeclaredPath(file string) bool {
 
 // Verify ports verifyProofBundle (src/proof-bundle.ts:439).
 func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Result) {
+	defer jsjson.UseCallSite(jsjson.SiteDemo)()
 	output := nodefs.Resolve(directory)
 	var errs []string
 	var rootDigest *string
@@ -344,7 +346,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		status = "MISMATCH"
 	}
 	defer bundle.Catch(func(err error) {
-		errs = append(errs, "bundle verification failed safely: "+err.Error())
+		errs = append(errs, jsexc.Concat("bundle verification failed safely: ", jsexc.Message(err)))
 		result = bundle.Result{Errors: errs, RootDigest: rootDigest, ExternalRootStatus: status}
 	})
 
@@ -377,11 +379,11 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	}
 	manifest, manifestErr := bundle.ParseFile(manifestPath, manifestSchema)
 	if manifestErr != nil {
-		errs = append(errs, "manifest validation failed: "+manifestErr.Error())
+		errs = append(errs, jsexc.Concat("manifest validation failed: ", jsexc.Message(manifestErr)))
 	}
 	analysis, analysisErr := bundle.ParseFile(analysisPath, demoAnalysisSchema)
 	if analysisErr != nil {
-		errs = append(errs, "analysis validation failed: "+analysisErr.Error())
+		errs = append(errs, jsexc.Concat("analysis validation failed: ", jsexc.Message(analysisErr)))
 	}
 	if manifestErr == nil && analysisErr == nil {
 		if manifest.Get("analysisDigest").Str() != bundle.Must(canonical.DigestJSON(analysis)) {
@@ -414,7 +416,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 			errs = append(errs, "invalid declared path: "+file)
 			continue
 		}
-		declared[file] = digest
+		jsexc.MapSet(declared, file, digest)
 		declaredOrder = append(declaredOrder, file)
 	}
 	if analysisErr == nil {

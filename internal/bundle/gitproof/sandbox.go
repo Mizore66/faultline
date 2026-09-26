@@ -6,6 +6,7 @@ import (
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
@@ -123,7 +124,7 @@ func ValidateSandboxPlanAudit(audit jsjson.Value) []string {
 	passed := env.Get("passed").Items()
 	allowed := map[string]bool{}
 	for _, k := range allowedKeys {
-		allowed[k] = true
+		jsexc.SetAdd(allowed, k)
 	}
 	passedNames := make([]string, len(passed))
 	for i, entry := range passed {

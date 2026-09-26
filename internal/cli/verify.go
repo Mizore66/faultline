@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/bundle/demo"
@@ -60,11 +59,13 @@ func orUnavailable(s *string) string {
 
 func (e *env) printErrorsAndExit(r bundle.Result) {
 	if !r.Valid {
+		// `${result.errors.map((error) => `- ${error}`).join("\n")}\n`: each
+		// step can throw V8's "Invalid string length".
 		lines := make([]string, len(r.Errors))
 		for i, err := range r.Errors {
-			lines[i] = "- " + err
+			lines[i] = jsexc.Concat("- ", err)
 		}
-		e.out(strings.Join(lines, "\n") + "\n")
+		e.out(jsexc.Concat(jsexc.Join(lines, "\n"), "\n"))
 		e.exitCode = 1
 		return
 	}

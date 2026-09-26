@@ -3,6 +3,7 @@ package jsjson
 import (
 	"strconv"
 
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
@@ -125,10 +126,16 @@ func (p *parser) expectNext(t token, tmpl string) bool {
 
 // frame is one open container on the explicit parse stack.
 type frame struct {
-	obj   *Obj // nil for an array
-	key   string
-	items []Value
+	obj      *Obj // nil for an array
+	key      string
+	items    []Value
+	tooLarge bool // maxArrayElements or more items; the rest are not kept
 }
+
+// maxArrayElements is the first array length V8's JSON.parse cannot
+// allocate: NewJSArray aborts the process with "Fatal JavaScript invalid
+// size error 134217728" once the closing bracket is reached.
+const maxArrayElements = 1 << 27
 
 // parseValue is V8 JsonParser::ParseJsonValue. Like V8 it keeps open
 // containers on an explicit stack instead of recursing, so nesting depth is
@@ -222,12 +229,19 @@ func (p *parser) parseValue() Value {
 				}
 				v = MakeObject(top.obj)
 			} else {
-				top.items = append(top.items, v)
+				if len(top.items) < maxArrayElements-1 {
+					top.items = append(top.items, v)
+				} else {
+					top.tooLarge = true // V8 still parses to the ']' first
+				}
 				if p.check(tokComma) {
 					break attach
 				}
 				if !p.expect(tokRBrack, msgExpectedCommaOrRBrack) {
 					return Value{}
+				}
+				if top.tooLarge {
+					jsexc.FatalInvalidSize(maxArrayElements)
 				}
 				v = MakeArray(top.items)
 			}

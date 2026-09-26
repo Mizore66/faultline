@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
@@ -36,7 +37,11 @@ func fail(format string, a ...any) error { return &cliError{fmt.Sprintf(format, 
 // Run executes the fl command line and returns the process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
 	e := &env{stdout: stdout, stderr: stderr}
-	if err := dispatch(e, args); err != nil {
+	var err error
+	if thrown := jsexc.Try(func() { err = dispatch(e, args) }); thrown != nil {
+		err = thrown // a JS exception escaping the command reaches the CLI's catch
+	}
+	if err != nil {
 		io.WriteString(stderr, jsstr.ToUTF8(formatFailure(err.Error())+"\n"))
 		return 1
 	}

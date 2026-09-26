@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/schema"
 )
@@ -32,7 +33,7 @@ func expectedRunID(run jsjson.Value) string {
 func numSet(values []float64) map[float64]bool {
 	out := map[float64]bool{}
 	for _, v := range values {
-		out[v] = true
+		jsexc.SetAdd(out, v)
 	}
 	return out
 }
@@ -135,7 +136,7 @@ func bindLifecycleLedger(ledgerInput, result jsjson.Value) jsjson.Value {
 	sessionStarted := events[i]
 	byCommit := map[string]jsjson.Value{} // new Map: the last duplicate wins
 	for _, state := range result.Get("states").Items() {
-		byCommit[state.Get("commit").Str()] = state
+		jsexc.MapSet(byCommit, state.Get("commit").Str(), state)
 	}
 	var bindings []jsjson.Value
 	var covered []float64
@@ -225,7 +226,7 @@ func verifyLifecycleBinding(root string, manifest, result jsjson.Value, errs *[]
 			*errs = append(*errs, "lifecycle ledger binding does not match its valid checkpoint-to-state reconstruction")
 		}
 	}); err != nil {
-		*errs = append(*errs, "lifecycle ledger cannot bind to the investigation: "+err.Error())
+		*errs = append(*errs, jsexc.Concat("lifecycle ledger cannot bind to the investigation: ", jsexc.Message(err)))
 	}
 }
 
@@ -328,8 +329,8 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 		if commits[state.Get("commit").Str()] {
 			add("duplicate commit in Git state sequence: " + state.Get("commit").Str())
 		}
-		stateByIndex[index] = state
-		commits[state.Get("commit").Str()] = true
+		jsexc.MapSet(stateByIndex, index, state)
+		jsexc.SetAdd(commits, state.Get("commit").Str())
 	}
 	if resolved.Kind() == jsjson.Object && len(states) > 0 {
 		if !bundle.SameCanonical(states[0], resolved.Get("ancestor")) || !bundle.SameCanonical(states[len(states)-1], resolved.Get("descendant")) {
@@ -357,9 +358,9 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 		if nonces[run.Get("executionNonce").Str()] {
 			add("duplicate execution nonce: " + run.Get("executionNonce").Str())
 		}
-		runIDs[runID] = true
-		executionIDs[run.Get("executionId").Str()] = true
-		nonces[run.Get("executionNonce").Str()] = true
+		jsexc.SetAdd(runIDs, runID)
+		jsexc.SetAdd(executionIDs, run.Get("executionId").Str())
+		jsexc.SetAdd(nonces, run.Get("executionNonce").Str())
 		state, ok := stateByIndex[run.Get("stateIndex").Num()]
 		if !ok || state.Get("commit").Str() != run.Get("commit").Str() || state.Get("tree").Str() != run.Get("tree").Str() {
 			add("run state does not match the state sequence: " + runID)
@@ -419,8 +420,8 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 		if attempts[run.Get("executionAttempt").Num()] {
 			add("duplicate execution attempt for state " + fmtNum(run.Get("stateIndex")))
 		}
-		attempts[run.Get("executionAttempt").Num()] = true
-		attemptsByState[stateIndex] = attempts
+		jsexc.SetAdd(attempts, run.Get("executionAttempt").Num())
+		jsexc.MapSet(attemptsByState, stateIndex, attempts)
 	}
 	if len(runs) != len(states)*StableExecutionCount {
 		add("completed proof investigation does not contain exactly three runs per state")
@@ -470,7 +471,7 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 		if heterogeneousMapped {
 			images := map[string]bool{}
 			for _, entry := range fingerprints {
-				images[imageKey(findImage(entry.Get("commit").Str()))] = true
+				jsexc.SetAdd(images, imageKey(findImage(entry.Get("commit").Str())))
 			}
 			heterogeneousMapped = len(images) >= min(2, len(env.Get("distinctDigests").Items()))
 		}

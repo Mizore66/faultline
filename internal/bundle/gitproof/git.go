@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Mizore66/faultline/internal/bundle"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
@@ -227,7 +228,7 @@ func verifyPortableGitSource(root string, metadata, result jsjson.Value, errs *[
 			*errs = append(*errs, "Git bundle object format does not match source metadata")
 		}
 	}); err != nil {
-		*errs = append(*errs, "portable Git source verification failed: "+err.Error())
+		*errs = append(*errs, jsexc.Concat("portable Git source verification failed: ", jsexc.Message(err)))
 	}
 	// The finally block: rmSync's own failure escapes the verifier.
 	if err := nodefs.RemoveAll(temporaryBare); err != nil {

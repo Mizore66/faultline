@@ -86,10 +86,21 @@ func ErrorMessage(issues []Issue) string {
 }
 
 // Error is a ZodError thrown by `Schema.parse`. Its message is computed when
-// read, so a RangeError from the getter surfaces where TS reads `.message`.
+// read: Message throws (jsexc) a RangeError from the getter where TS reads
+// `.message`, so callers read it with jsexc.Message. Error never panics
+// (fmt recovers panics raised inside Error); it returns the thrown message
+// instead.
 type Error struct{ Issues []Issue }
 
-func (e *Error) Error() string { return ErrorMessage(e.Issues) }
+func (e *Error) Message() string { return ErrorMessage(e.Issues) }
+
+func (e *Error) Error() string {
+	var msg string
+	if err := jsexc.Try(func() { msg = e.Message() }); err != nil {
+		return err.Error()
+	}
+	return msg
+}
 
 func tooSmallMessage(kind string, minimum float64, inclusive, exact bool) string {
 	n := jsjson.FormatNumber(minimum)

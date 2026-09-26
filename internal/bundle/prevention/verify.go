@@ -9,6 +9,7 @@ import (
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
 	"github.com/Mizore66/faultline/internal/schema"
@@ -39,7 +40,7 @@ func assertNoLinksOrSpecialFiles(directory string) {
 func readJSON(path, label string, errs *[]string) jsjson.Value {
 	v, err := bundle.ParseJSONFile(path)
 	if err != nil {
-		*errs = append(*errs, "Unable to read "+label+": "+err.Error())
+		*errs = append(*errs, jsexc.Concat("Unable to read ", label, ": ", jsexc.Message(err)))
 		return jsjson.Value{}
 	}
 	return v
@@ -123,6 +124,7 @@ func validateRepairedRuns(body, artifact jsjson.Value) []string {
 
 // Verify ports verifyPreventionProof (src/prevention-proof.ts:296).
 func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Result) {
+	defer jsjson.UseCallSite(jsjson.SitePrevention)()
 	var errs []string
 	var manifest jsjson.Value
 	haveManifest, havePrevention := false, false
@@ -141,7 +143,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		return r
 	}
 	defer bundle.Catch(func(err error) {
-		errs = append(errs, "Prevention proof verification failed safely: "+err.Error())
+		errs = append(errs, jsexc.Concat("Prevention proof verification failed safely: ", jsexc.Message(err)))
 		result = finish()
 	})
 
@@ -156,7 +158,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	seen := map[string]bool{}
 	for _, name := range bundle.Must(nodefs.ReadDirNames(root)) {
 		if !seen[name] {
-			seen[name] = true
+			jsexc.SetAdd(seen, name)
 			physical = append(physical, name)
 		}
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	s "github.com/Mizore66/faultline/internal/schema"
 )
@@ -327,7 +328,7 @@ func validateLifecycleState(event jsjson.Value, state *lifecycleState, index int
 	if state.seenEventIDs[eventID] {
 		add(prefix + " reuses event id " + eventID)
 	}
-	state.seenEventIDs[eventID] = true
+	jsexc.SetAdd(state.seenEventIDs, eventID)
 	if state.ended {
 		add(prefix + " occurs after SESSION_ENDED")
 		return
@@ -382,7 +383,7 @@ func validateLifecycleState(event jsjson.Value, state *lifecycleState, index int
 		if turnOrdinal != expected {
 			add(prefix + " has turn ordinal " + jsjson.FormatNumber(turnOrdinal) + "; expected " + jsjson.FormatNumber(expected))
 		}
-		state.seenTurnIDs[turnID] = true
+		jsexc.SetAdd(state.seenTurnIDs, turnID)
 		state.active = &activeTurn{turnID, turnOrdinal}
 	case "TURN_COMPLETED":
 		if !state.started {

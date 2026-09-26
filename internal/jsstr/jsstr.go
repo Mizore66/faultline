@@ -114,3 +114,19 @@ func Trim(s string) string {
 	}
 	return FromUTF16(units[start:end])
 }
+
+// UTF16Len is the JS length of a WTF-8 string: one unit per code point
+// below U+10000 (including lone surrogates) and two for the rest.
+func UTF16Len(s string) int {
+	n := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c < 0x80 || c >= 0xC0 && c < 0xF0:
+			n++
+		case c >= 0xF0:
+			n += 2
+		}
+	}
+	return n
+}

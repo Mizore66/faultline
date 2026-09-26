@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/schema"
 )
@@ -128,7 +129,7 @@ func assertUniqueOverlayPathsForVerification(overlays []jsjson.Value, errs *[]st
 		if seen[key] {
 			*errs = append(*errs, "duplicate overlay path: "+overlay.Get("path").Str())
 		}
-		seen[key] = true
+		jsexc.SetAdd(seen, key)
 	}
 }
 

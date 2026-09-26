@@ -6,7 +6,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
+
+	"github.com/Mizore66/faultline/internal/sigexit"
 )
 
 // nodeDefaultSignals are the signals whose default action kills Node but
@@ -23,23 +24,14 @@ var nodeDefaultSignals = []os.Signal{
 // installSignals emulates Node's dispositions. SIGPIPE and SIGXFSZ are
 // caught and dropped (Node ignores them), so writes fail with EPIPE/EFBIG;
 // unlike SIG_IGN, a caught signal is reset to the default in git, as libuv
-// resets every signal in its children. For HUP, INT and TERM, Go's own
-// default is to die by the signal, so the handler restores it and
-// re-raises. For the others (and when the signal was ignored when fl
-// started, which restoring brings back) fl exits with 128+signal, the
-// status a shell reports for a signal death.
+// resets every signal in its children. The signals above end fl by their
+// default action (sigexit.Die), also when fl inherited them as ignored:
+// Notify replaces the inherited SIG_IGN, as Node's reset does.
 func installSignals() {
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE, syscall.SIGXFSZ)
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, nodeDefaultSignals...)
 	go func() {
-		sig := (<-ch).(syscall.Signal)
-		switch sig {
-		case syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM:
-			signal.Reset(sig)
-			syscall.Kill(os.Getpid(), sig)
-			time.Sleep(100 * time.Millisecond)
-		}
-		os.Exit(128 + int(sig))
+		sigexit.Die((<-ch).(syscall.Signal))
 	}()
 }

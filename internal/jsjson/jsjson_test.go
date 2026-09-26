@@ -3,6 +3,7 @@ package jsjson
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -148,30 +149,96 @@ func TestManyDescendingIndexKeys(t *testing.T) {
 }
 
 // JSON.stringify throws RangeError("Maximum call stack size exceeded") past
-// V8's native stack; the thresholds are calibrated against Node 22.
+// V8's native stack. The values are wrapped the way zod's message is built
+// (an issues array holding an issue object whose `received` is the value);
+// the exact thresholds were bisected through `node dist/cli.js verify` on
+// Node 22.22 linux/amd64 (see stackModel).
 func TestStringifyStackOverflow(t *testing.T) {
-	nest := func(depth int, wrap func(Value) Value) Value {
-		v := MakeNull()
+	nest := func(depth int, leaf Value, wrap func(Value) Value) Value {
+		v := leaf
 		for range depth {
 			v = wrap(v)
 		}
 		return v
 	}
 	arr := func(v Value) Value { return MakeArray([]Value{v}) }
-	obj := func(v Value) Value { o := NewObj(); o.Set("a", v); return MakeObject(o) }
-	for _, tc := range []struct {
-		name  string
-		v     Value
-		fails bool
-	}{
-		{"array ok", nest(2000, arr), false},
-		{"array overflow", nest(3000, arr), true},
-		{"object ok", nest(4000, obj), false},
-		{"object overflow", nest(5000, obj), true},
-	} {
-		_, err := StringifyIndentChecked(tc.v, "  ")
-		if tc.fails != (err == ErrStackOverflow) {
-			t.Errorf("%s: err = %v", tc.name, err)
+	objKey := func(key string, extra int) func(Value) Value {
+		return func(v Value) Value {
+			o := NewObj()
+			for i := range extra {
+				o.Set("k"+strconv.Itoa(i), MakeNumber(0))
+			}
+			o.Set(key, v)
+			return MakeObject(o)
 		}
+	}
+	zero, emptyArr, emptyObj := MakeNumber(0), MakeArray(nil), MakeObject(NewObj())
+	overflows := func(site int, v Value) bool {
+		defer UseCallSite(site)()
+		issue := NewObj()
+		issue.Set("received", v)
+		_, err := StringifyIndentChecked(MakeArray([]Value{MakeObject(issue)}), "") // indentation does not change the stack
+		return err == ErrStackOverflow
+	}
+	type shape struct {
+		name string
+		make func(n int) Value // n containers in total
+	}
+	shapes := map[string]shape{
+		"arr":  {"[]-terminated arrays", func(n int) Value { return nest(n-1, emptyArr, arr) }},
+		"arr0": {"[0]-terminated arrays", func(n int) Value { return nest(n, zero, arr) }},
+		"obj":  {`{"a":0} objects`, func(n int) Value { return nest(n, zero, objKey("a", 0)) }},
+		"objE": {"{}-terminated objects", func(n int) Value { return nest(n-1, emptyObj, objKey("a", 0)) }},
+		"idx":  {`{"0":0} objects (slow path)`, func(n int) Value { return nest(n, zero, objKey("0", 0)) }},
+		"d127": {"127-member objects (fast)", func(n int) Value { return nest(n, zero, objKey("a", 126)) }},
+		"d128": {"128-member objects (dictionary)", func(n int) Value { return nest(n, zero, objKey("a", 127)) }},
+	}
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		for _, sh := range shapes {
+			if overflows(SiteDemo, sh.make(1000)) || !overflows(SiteDemo, sh.make(9000)) {
+				t.Errorf("%s: threshold outside 1000..9000", sh.name)
+			}
+		}
+		return
+	}
+	for _, tc := range []struct {
+		site  int
+		shape string
+		last  int // deepest value that still stringifies
+	}{
+		{SiteDemo, "arr", 2233}, {SiteDemo, "arr0", 2232}, {SiteDemo, "obj", 4166}, {SiteDemo, "objE", 4167},
+		{SiteDemo, "idx", 2232}, {SiteDemo, "d127", 4166}, {SiteDemo, "d128", 2232},
+		{SitePrevention, "arr", 2233}, {SitePrevention, "obj", 4167}, {SitePrevention, "idx", 2232},
+		{SiteGitProof, "arr", 2232}, {SiteGitProof, "obj", 4165}, {SiteGitProof, "idx", 2231},
+	} {
+		sh := shapes[tc.shape]
+		if overflows(tc.site, sh.make(tc.last)) || !overflows(tc.site, sh.make(tc.last+1)) {
+			t.Errorf("site %d, %s: last depth that prints should be %d", tc.site, sh.name, tc.last)
+		}
+	}
+}
+
+// V8 throws RangeError("Invalid string length") once the result would pass
+// String::kMaxLength (counted in UTF-16 units), but only after serializing
+// everything: a stack overflow later in the value still wins.
+func TestStringifyStringLength(t *testing.T) {
+	check := func(v Value, max int) (string, bool, bool) {
+		w := &writer{budget: v8Stack.budget, maxUnits: max}
+		w.write(v, "")
+		return w.b.String(), w.tooLong, w.overflow
+	}
+	v := MakeArray([]Value{MakeString("ab😀")}) // ["ab😀"]: 8 units
+	if out, long, _ := check(v, 8); long || out != `["ab😀"]` {
+		t.Fatalf("at the limit: %q %v", out, long)
+	}
+	if _, long, _ := check(v, 7); !long {
+		t.Fatal("one unit over the limit must fail")
+	}
+	deep := MakeArray(nil)
+	for range 5000 {
+		deep = MakeArray([]Value{deep})
+	}
+	if _, long, overflow := check(MakeArray([]Value{MakeString("xxxxxxxx"), deep}), 4); !long || !overflow {
+		t.Fatal("serialization must continue past the length limit to the stack overflow")
 	}
 }

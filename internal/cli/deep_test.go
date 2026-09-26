@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -25,12 +26,17 @@ func copyBase(t *testing.T, base string) string {
 func TestDeepLiteralOverflowsLikeV8(t *testing.T) {
 	for _, tc := range []struct {
 		base, file, old, safe string
+		last                  int // linux/amd64: deepest []-terminated array that still prints
 	}{
-		{"demo-replay", "analysis.json", `"schemaVersion": "faultline.demo.v1"`, "- bundle verification failed safely: Maximum call stack size exceeded\n"},
-		{"prevention-verified", "prevention.json", `"verified":true`, "- Prevention proof verification failed safely: Maximum call stack size exceeded\n"},
-		{"git-two-states", "source/metadata.json", `"schemaVersion":"faultline.git-proof-source.v1"`, "- Git proof bundle verification failed safely: Maximum call stack size exceeded\n"},
+		{"demo-replay", "analysis.json", `"schemaVersion": "faultline.demo.v1"`, "- bundle verification failed safely: Maximum call stack size exceeded\n", 2233},
+		{"prevention-verified", "prevention.json", `"verified":true`, "- Prevention proof verification failed safely: Maximum call stack size exceeded\n", 2233},
+		{"git-two-states", "source/metadata.json", `"schemaVersion":"faultline.git-proof-source.v1"`, "- Git proof bundle verification failed safely: Maximum call stack size exceeded\n", 2232},
 	} {
-		for _, depth := range []int{2000, 3000} {
+		depths := map[int]bool{2000: false, 3000: true} // depth -> overflows
+		if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+			depths[tc.last], depths[tc.last+1] = false, true
+		}
+		for depth, wantOverflow := range depths {
 			dir := copyBase(t, tc.base)
 			path := filepath.Join(dir, tc.file)
 			b, err := os.ReadFile(path)
@@ -47,7 +53,7 @@ func TestDeepLiteralOverflowsLikeV8(t *testing.T) {
 			}
 			stdout, _, code := run("verify", dir)
 			overflowed := strings.Contains(stdout, tc.safe)
-			if code != 1 || overflowed != (depth == 3000) || depth == 3000 && len(stdout) > 1000 {
+			if code != 1 || overflowed != wantOverflow || wantOverflow && len(stdout) > 1000 {
 				t.Errorf("%s depth %d: code=%d overflowed=%v stdout(%d)=%.400q", tc.base, depth, code, overflowed, len(stdout), stdout)
 			}
 		}

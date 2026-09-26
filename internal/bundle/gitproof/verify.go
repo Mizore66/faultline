@@ -10,6 +10,7 @@ import (
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
@@ -131,7 +132,7 @@ func parseJSONFile(root, artifact, label string, errs *[]string) jsjson.Value {
 		path := safeArtifactPath(root, artifact)
 		out = bundle.Must(jsjson.Parse(nodefs.DecodeUTF8(readBoundedFile(path, label, maxSourceArtifactBytes))))
 	}); err != nil {
-		*errs = append(*errs, label+" JSON validation failed: "+err.Error())
+		*errs = append(*errs, jsexc.Concat(label, " JSON validation failed: ", jsexc.Message(err)))
 		return jsjson.Value{}
 	}
 	return out
@@ -187,7 +188,7 @@ func parseHashCatalog(hashes []byte, errs *[]string) *orderedMap {
 			break
 		}
 		catalog.keys = append(catalog.keys, artifact)
-		catalog.values[artifact] = digest
+		jsexc.MapSet(catalog.values, artifact, digest)
 	}
 	return catalog
 }
@@ -234,7 +235,7 @@ func newStringSet(values ...string) *stringSet {
 	s := &stringSet{has: map[string]bool{}}
 	for _, v := range values {
 		if !s.has[v] {
-			s.has[v] = true
+			jsexc.SetAdd(s.has, v)
 			s.order = append(s.order, v)
 		}
 	}
@@ -243,6 +244,7 @@ func newStringSet(values ...string) *stringSet {
 
 // Verify ports verifyGitInvestigationProofBundle (src/git-proof-bundle.ts:1142).
 func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Result) {
+	defer jsjson.UseCallSite(jsjson.SiteGitProof)()
 	var errs []string
 	var rootDigest *string
 	status := "NOT_PROVIDED"
@@ -250,7 +252,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		status = "MISMATCH"
 	}
 	defer bundle.Catch(func(err error) {
-		errs = append(errs, "Git proof bundle verification failed safely: "+err.Error())
+		errs = append(errs, jsexc.Concat("Git proof bundle verification failed safely: ", jsexc.Message(err)))
 		result = bundle.Result{Errors: errs, RootDigest: rootDigest, ExternalRootStatus: status}
 	})
 
@@ -296,7 +298,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 				errs = append(errs, "artifact digest mismatch: "+artifact)
 			}
 		}); err != nil {
-			errs = append(errs, "declared artifact cannot be read safely ("+artifact+"): "+err.Error())
+			errs = append(errs, jsexc.Concat("declared artifact cannot be read safely (", artifact, "): ", jsexc.Message(err)))
 		}
 		if stop {
 			break
@@ -363,7 +365,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 
 		runs := map[string]jsjson.Value{} // new Map: the last duplicate wins
 		for _, run := range investigation.Get("runs").Items() {
-			runs[run.Get("runId").Str()] = run
+			jsexc.MapSet(runs, run.Get("runId").Str(), run)
 		}
 		for _, descriptor := range manifest.Get("artifacts", "runs").Items() {
 			runID := descriptor.Get("runId").Str()

@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
@@ -55,39 +56,36 @@ func (e *RangeError) Error() string { return e.Message }
 // past the native stack limit.
 var ErrStackOverflow = &RangeError{"Maximum call stack size exceeded"}
 
-// V8's JsonStringifier recurses natively once per nested array or object and
-// throws ErrStackOverflow when the stack runs out. The budget below reproduces
-// where that happens for zod's ZodError.message (JSON.stringify(issues,
-// replacer, 2)) in `node dist/cli.js verify` on Node 22.22 (Linux x64): an
-// array level costs about 1.87 object levels. Calibrated by bisection: a
-// literal field nested 2,233 arrays or 4,166 single-key objects deep still
-// stringifies; one more level overflows. The limit depends on V8's frame
-// sizes, so other platforms can differ by a few levels (KNOWN_DIFFERENCES.md).
-const (
-	stringifyStackBudget = 4_169_700
-	arrayFrameCost       = 1866
-	objectFrameCost      = 1000
-)
+// ErrInvalidStringLength is the RangeError V8 throws when the result would
+// be longer than String::kMaxLength.
+var ErrInvalidStringLength = &RangeError{jsexc.ErrInvalidStringLength.Error()}
 
 // Stringify is JSON.stringify(v).
 func Stringify(v Value) string { return StringifyIndent(v, "") }
 
 // StringifyIndent is JSON.stringify(v, null, indent). Undefined object members
 // are omitted; Undefined array elements and non-finite numbers print null.
-// It has no stack limit; use StringifyIndentChecked for values from input.
+// It has no stack or length limit; use StringifyIndentChecked for values from
+// input.
 func StringifyIndent(v Value, indent string) string {
-	w := &writer{indent: indent, budget: -1}
+	w := &writer{indent: indent, budget: -1, maxUnits: -1}
 	w.write(v, "")
 	return w.b.String()
 }
 
-// StringifyIndentChecked is StringifyIndent that fails with ErrStackOverflow
-// where V8 would (see stringifyStackBudget).
+// StringifyIndentChecked is StringifyIndent with V8's limits: it fails with
+// ErrStackOverflow where the native stack would run out (see stackModel)
+// and, if serialization completes, with ErrInvalidStringLength when the
+// result exceeds String::kMaxLength. V8 keeps serializing after the string
+// overflows, so a later stack overflow still wins.
 func StringifyIndentChecked(v Value, indent string) (string, error) {
-	w := &writer{indent: indent, budget: stringifyStackBudget}
+	w := &writer{indent: indent, budget: v8Stack.budget + siteOffset, maxUnits: jsexc.MaxStringLength}
 	w.write(v, "")
-	if w.overflow {
+	switch {
+	case w.overflow:
 		return "", ErrStackOverflow
+	case w.tooLong:
+		return "", ErrInvalidStringLength
 	}
 	return w.b.String(), nil
 }
@@ -97,6 +95,26 @@ type writer struct {
 	indent   string
 	budget   int // remaining stack; -1 means unlimited
 	overflow bool
+	units    int // UTF-16 length written so far
+	maxUnits int // -1 means unlimited
+	tooLong  bool
+}
+
+// str appends s, tracking the JS length. Past the limit nothing more is
+// kept, but serialization continues for the stack check.
+func (w *writer) str(s string) {
+	if w.tooLong {
+		return
+	}
+	if w.maxUnits >= 0 {
+		w.units += jsstr.UTF16Len(s)
+		if w.units > w.maxUnits {
+			w.tooLong = true
+			w.b.Reset()
+			return
+		}
+	}
+	w.b.WriteString(s)
 }
 
 // enter charges one native frame; it reports false once the stack is exhausted.
@@ -118,82 +136,108 @@ func (w *writer) leave(cost int) {
 	}
 }
 
+// write serializes v. Following V8's JsonStringifier, only a non-empty
+// array or object pushes a native frame (`[]` and `{}` return first);
+// primitives and empty containers cost nothing beyond the replacer call the
+// budget already accounts for.
 func (w *writer) write(v Value, current string) {
-	b, indent := &w.b, w.indent
+	indent := w.indent
 	if w.overflow {
 		return
 	}
 	switch v.kind {
 	case Undefined, Null:
-		b.WriteString("null")
+		w.str("null")
 	case Bool:
 		if v.b {
-			b.WriteString("true")
+			w.str("true")
 		} else {
-			b.WriteString("false")
+			w.str("false")
 		}
 	case Number:
 		if math.IsNaN(v.n) || math.IsInf(v.n, 0) {
-			b.WriteString("null")
+			w.str("null")
 		} else {
-			b.WriteString(FormatNumber(v.n))
+			w.str(FormatNumber(v.n))
 		}
 	case String:
-		b.WriteString(Quote(v.s))
+		w.str(Quote(v.s))
 	case Array:
-		if !w.enter(arrayFrameCost) {
-			return
-		}
-		defer w.leave(arrayFrameCost)
 		if len(v.arr) == 0 {
-			b.WriteString("[]")
+			w.str("[]")
 			return
 		}
+		if !w.enter(v8Stack.array) {
+			return
+		}
+		defer w.leave(v8Stack.array)
 		inner := current + indent
-		b.WriteByte('[')
+		w.str("[")
 		for i, item := range v.arr {
 			if i > 0 {
-				b.WriteByte(',')
+				w.str(",")
 			}
 			if indent != "" {
-				b.WriteString("\n" + inner)
+				w.str("\n" + inner)
 			}
 			w.write(item, inner)
+			if w.overflow {
+				return
+			}
 		}
 		if indent != "" {
-			b.WriteString("\n" + current)
+			w.str("\n" + current)
 		}
-		b.WriteByte(']')
+		w.str("]")
 	case Object:
-		if !w.enter(objectFrameCost) {
+		keys := v.obj.orderedKeys()
+		if len(keys) == 0 {
+			w.str("{}")
 			return
 		}
-		defer w.leave(objectFrameCost)
+		cost := v8Stack.object
+		if v.obj.slowForStringify() {
+			cost = v8Stack.slowObject
+		}
+		if !w.enter(cost) {
+			return
+		}
+		defer w.leave(cost)
 		inner := current + indent
 		wrote := false
-		b.WriteByte('{')
-		for _, k := range v.obj.orderedKeys() {
+		w.str("{")
+		for _, k := range keys {
 			child := v.obj.values[k]
 			if child.kind == Undefined {
 				continue
 			}
 			if wrote {
-				b.WriteByte(',')
+				w.str(",")
 			}
 			if indent != "" {
-				b.WriteString("\n" + inner)
+				w.str("\n" + inner)
 			}
-			b.WriteString(Quote(k))
-			b.WriteByte(':')
+			w.str(Quote(k))
+			w.str(":")
 			if indent != "" {
-				b.WriteByte(' ')
+				w.str(" ")
 			}
 			w.write(child, inner)
+			if w.overflow {
+				return
+			}
 			wrote = true
 		}
 		if wrote && indent != "" {
-			b.WriteString("\n" + current)
+			w.str("\n" + current)
 		}
-		b.WriteByte('}')
+		w.str("}")
 	}
 }
+
+// slowForStringify reports whether V8 serializes the object through
+// SerializeJSReceiverSlow, whose frame is larger: objects with array-index
+// keys (elements) and objects JSON.parse built in dictionary mode, which
+// happens from 128 properties on (measured through the CLI: 127 members
+// stay on the fast path).
+func (o *Obj) slowForStringify() bool { return len(o.idx) > 0 || o.Len() >= 128 }

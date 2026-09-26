@@ -98,7 +98,7 @@ func Strings(v jsjson.Value) []string {
 func DistinctCount(values []string) int {
 	seen := map[string]bool{}
 	for _, v := range values {
-		seen[v] = true
+		jsexc.SetAdd(seen, v)
 	}
 	return len(seen)
 }
