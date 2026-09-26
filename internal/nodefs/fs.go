@@ -337,3 +337,6 @@ func Mkdtemp(prefix string) (string, error) {
 	}
 	return "", wrap(err, "mkdtemp", prefix+"XXXXXX")
 }
+
+// Describe is uv_strerror for a libuv error name.
+func Describe(code string) string { return descriptions[code] }

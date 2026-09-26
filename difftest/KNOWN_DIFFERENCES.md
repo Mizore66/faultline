@@ -30,9 +30,15 @@ Not an output difference, but an environment dependency of both implementations.
 
 When a zod schema rejects a deeply nested value, TS builds the error text with `JSON.stringify(issues, replacer, 2)` (the `ZodError.message` getter). V8 does this recursively, and past its native stack limit it throws `RangeError: Maximum call stack size exceeded`, which the verifier's catch prints as a `failed safely` line. Go reproduces the RangeError with a fixed budget (`internal/jsjson/stringify.go`), calibrated on Node 22.22 Linux x64: a value nested 2,233 arrays (or 4,166 single-key objects) deep still prints the zod message, and one more level overflows. V8's real limit depends on frame sizes, the platform and `--stack-size`, so TS on another machine can overflow a few levels earlier or later. Only inputs within a few levels of the threshold are affected. `JSON.parse` is iterative on both sides and has no depth limit.
 
-## Closed stdout pipe
+## Stdout write errors
 
-Both runtimes ignore SIGPIPE, so writing to a stdout pipe whose reader has gone is an `EPIPE` write error and the process exits 1. Node reports it as an unhandled `'error'` event with a stack trace on stderr; Go prints the single line `Error: write EPIPE`. Stdout and the exit code match; the stderr text does not.
+Both runtimes ignore SIGPIPE, so writing to a stdout pipe whose reader has gone is an `EPIPE` write error, and any stdout write error exits 1. Node reports it as an unhandled `'error'` event: a stack trace plus the error line. Go prints only the error line, in Node's form: `Error: <CODE>: <description>, write` when stdout is a file or a non-terminal device (`/dev/full` gives `Error: ENOSPC: no space left on device, write`), and `Error: write <CODE>` for a pipe, socket or terminal. On Windows, `ERROR_BROKEN_PIPE` and `ERROR_NO_DATA` are `EPIPE`, as in libuv. Stdout and the exit code match; the stack trace lines do not.
+
+## Signals and resource limits
+
+Node resets every signal to its default action at startup, ignoring only SIGPIPE and SIGXFSZ. Go emulates this: HUP, INT, QUIT, ABRT, ALRM, TERM, USR2, VTALRM and XCPU (including a CPU-time `ulimit`) end `fl` with no output and exit status 128+signal, also when the signal was inherited as ignored (`nohup`). For HUP, INT and TERM `fl` dies by the signal itself, as Node does; for the others the parent sees an exit status of 128+signal rather than a signal death (a shell's `$?` is the same). Git children get the default dispositions in both. Remaining differences: SIGPROF is consumed by the Go runtime, so it doesn't stop `fl`; SIGUSR1 starts Node's inspector (a "Debugger listening" line on stderr) and is ignored by Go; on Windows, console control events follow the Go runtime.
+
+Node keeps about 16 file descriptors open for its event loop and worker threads. Under a very low `RLIMIT_NOFILE` (about 16 or fewer on Linux), TS fails `spawnSync git` with `EMFILE` or does not start, while Go still verifies. The threshold depends on the Node version and platform, so it is not modelled.
 
 ## `ENOTDIR` on Windows
 
