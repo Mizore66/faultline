@@ -3,6 +3,7 @@ package nodefs
 import (
 	"errors"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"runtime"
 	"sort"
@@ -27,6 +28,9 @@ var descriptions = map[string]string{
 	"EBUSY":        "resource busy or locked",
 	"EINVAL":       "invalid argument",
 	"EIO":          "i/o error",
+	"EEXIST":       "file already exists",
+	"EROFS":        "read-only file system",
+	"ENOSPC":       "no space left on device",
 	"UNKNOWN":      "unknown error",
 }
 
@@ -73,6 +77,12 @@ func codeOf(err error) string {
 			return "EINVAL"
 		case syscall.EIO:
 			return "EIO"
+		case syscall.EEXIST:
+			return "EEXIST"
+		case syscall.EROFS:
+			return "EROFS"
+		case syscall.ENOSPC:
+			return "ENOSPC"
 		}
 	}
 	switch {
@@ -158,8 +168,62 @@ func ReadDirNames(path string) ([]string, error) {
 	return names, nil
 }
 
-// MkdirTemp is mkdtempSync(join(tmpdir(), prefix)).
-func MkdirTemp(prefix string) (string, error) { return os.MkdirTemp("", prefix) }
+// Tmpdir is os.tmpdir().
+func Tmpdir() string {
+	if isWindows {
+		path := os.Getenv("TEMP")
+		if path == "" {
+			path = os.Getenv("TMP")
+		}
+		if path == "" {
+			root := os.Getenv("SystemRoot")
+			if root == "" {
+				root = os.Getenv("windir")
+			}
+			if root == "" {
+				root = "undefined" // (undefined) + '\\temp'
+			}
+			path = root + `\temp`
+		}
+		if len(path) > 1 && path[len(path)-1] == '\\' && path[len(path)-2] != ':' {
+			return path[:len(path)-1]
+		}
+		return path
+	}
+	// GetTempDir: the first non-empty of TMPDIR, TMP, TEMP.
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+		if dir := os.Getenv(key); dir != "" {
+			dir = DecodeUTF8([]byte(dir))
+			if len(dir) > 1 && dir[len(dir)-1] == '/' {
+				dir = dir[:len(dir)-1]
+			}
+			return dir
+		}
+	}
+	return "/tmp"
+}
+
+const tempChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+// Mkdtemp is mkdtempSync(prefix): uv_fs_mkdtemp on prefix + "XXXXXX", with
+// Node's error text naming the template.
+func Mkdtemp(prefix string) (string, error) {
+	var err error
+	for range 100 {
+		b := make([]byte, 6)
+		for i := range b {
+			b[i] = tempChars[rand.IntN(len(tempChars))]
+		}
+		path := prefix + string(b)
+		if err = os.Mkdir(path, 0o700); err == nil {
+			return path, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			break
+		}
+	}
+	return "", wrap(err, "mkdtemp", prefix+"XXXXXX")
+}
 
 // RemoveAll is rmSync(path, { recursive: true, force: true }).
 func RemoveAll(path string) { os.RemoveAll(path) }

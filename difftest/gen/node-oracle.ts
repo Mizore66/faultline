@@ -1,6 +1,7 @@
 // Long-running oracle over frozen TS. One JSON request per stdin line,
 // one JSON response per stdout line. Run: pnpm exec tsx difftest/gen/node-oracle.ts
 import { createInterface } from "node:readline";
+import nodePath from "node:path";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { buildZod } from "./schema-dsl.js";
 import { PreventionProofBodySchema, PreventionProofManifestSchema, PreventionRepairedRunsArtifactSchema } from "../../src/prevention-proof.js";
@@ -83,6 +84,18 @@ export const handlers: Record<string, Handler> = {
       return canonicalJson(validateSandboxPlanAudit(JSON.parse(text)));
     } catch (error) {
       return `THREW:${(error as Error).message}`;
+    }
+  },
+  path: ({ platform, fn, args, cwd, env }: { platform: "posix" | "win32"; fn: string; args: string[]; cwd: string; env: Record<string, string> }) => {
+    const savedCwd = process.cwd;
+    const savedEnv = process.env;
+    process.cwd = () => cwd;
+    process.env = env;
+    try {
+      return (nodePath[platform] as unknown as Record<string, (...a: string[]) => unknown>)[fn]!(...args);
+    } finally {
+      process.cwd = savedCwd;
+      process.env = savedEnv;
     }
   },
   sortCodePoints: () => {

@@ -8,6 +8,7 @@ import (
 	"github.com/Mizore66/faultline/internal/bundle/demo"
 	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/bundle/prevention"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
@@ -16,7 +17,10 @@ func verifyCommand(e *env, args []string) error {
 	if len(args) == 0 || args[0] == "" {
 		return fail("Usage: fl verify <proof-bundle-directory>")
 	}
-	root := nodefs.Resolve(args[0])
+	var root string
+	if err := jsexc.Try(func() { root = nodefs.Resolve(args[0]) }); err != nil {
+		return err // process.cwd() threw (uv_cwd)
+	}
 	schemaVersion := ""
 	if text, err := nodefs.ReadText(nodefs.Join(root, "manifest.json")); err == nil {
 		if v, err := jsjson.Parse(text); err == nil {

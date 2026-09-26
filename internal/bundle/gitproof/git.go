@@ -3,7 +3,6 @@ package gitproof
 import (
 	"bytes"
 	"errors"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,52 +11,19 @@ import (
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
+	"github.com/Mizore66/faultline/internal/nodeproc"
 )
 
 const maxGitOutputBytes = 4 * 1024 * 1024
 
-type gitResult struct {
-	status         *int
-	stdout, stderr []byte
-	err            error
-}
-
-// limitedBuffer fails the write once maxGitOutputBytes is exceeded (spawnSync maxBuffer).
-type limitedBuffer struct {
-	bytes.Buffer
-	exceeded bool
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > maxGitOutputBytes {
-		b.exceeded = true
-		return 0, errors.New("maxBuffer exceeded")
-	}
-	return b.Buffer.Write(p)
-}
-
 func toGitPath(path string) string { return strings.ReplaceAll(nodefs.Resolve(path), `\`, "/") }
 
 // runGit ports runGit (git-proof-bundle.ts:380).
-func runGit(repository string, args ...string) gitResult {
+func runGit(repository string, args ...string) nodeproc.Result {
 	if repository != "" {
 		args = append([]string{"-C", toGitPath(repository)}, args...)
 	}
-	cmd := exec.Command("git", args...)
-	var stdout, stderr limitedBuffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	runErr := cmd.Run()
-	result := gitResult{stdout: stdout.Bytes(), stderr: stderr.Bytes()}
-	switch {
-	case stdout.exceeded || stderr.exceeded:
-		result.err = errors.New("spawnSync git ENOBUFS")
-	case errors.Is(runErr, exec.ErrNotFound):
-		result.err = errors.New("spawnSync git ENOENT")
-	default:
-		code := cmd.ProcessState.ExitCode()
-		result.status = &code
-	}
-	return result
+	return nodeproc.SpawnSync("git", args, maxGitOutputBytes)
 }
 
 func statusText(status *int) string {
@@ -70,21 +36,21 @@ func statusText(status *int) string {
 // gitBytes ports gitBytes (git-proof-bundle.ts:398).
 func gitBytes(repository, label string, args ...string) []byte {
 	r := runGit(repository, args...)
-	if r.err != nil || r.status == nil || *r.status != 0 {
+	if r.Err != nil || r.Status == nil || *r.Status != 0 {
 		var parts []string
-		if s := jsstr.Trim(nodefs.DecodeUTF8(r.stderr)); s != "" {
+		if s := jsstr.Trim(nodefs.DecodeUTF8(r.Stderr)); s != "" {
 			parts = append(parts, s)
 		}
-		if r.err != nil {
-			parts = append(parts, r.err.Error())
+		if r.Err != nil {
+			parts = append(parts, r.Err.Error())
 		}
 		detail := strings.Join(parts, "; ")
 		if detail == "" {
-			detail = "exit " + statusText(r.status)
+			detail = "exit " + statusText(r.Status)
 		}
 		bundle.Throw(errors.New(label + " failed: " + detail))
 	}
-	return r.stdout
+	return r.Stdout
 }
 
 func gitText(repository, label string, args ...string) string {
@@ -212,7 +178,7 @@ func verifyPortableGitSource(root string, metadata, result jsjson.Value, errs *[
 	patchPath := safeArtifactPath(root, metadata.Get("rangePatch", "path").Str())
 	assertRegularFile(bundlePath, "portable Git bundle", maxSourceArtifactBytes)
 	assertRegularFile(patchPath, "portable Git range patch", maxSourceArtifactBytes)
-	temporaryBare := bundle.Must(nodefs.MkdirTemp("faultline-git-proof-verify-"))
+	temporaryBare := bundle.Must(nodefs.Mkdtemp(nodefs.Join(nodefs.Tmpdir(), "faultline-git-proof-verify-")))
 	defer nodefs.RemoveAll(temporaryBare)
 	if err := bundle.Try(func() {
 		gitBundlePath := toGitPath(bundlePath)
@@ -233,7 +199,7 @@ func verifyPortableGitSource(root string, metadata, result jsjson.Value, errs *[
 		if !bundle.SameCanonical(gitStateValue(ac, at), gitStateValue(ancestorCommit, metadata.Get("ancestor", "tree").Str())) {
 			*errs = append(*errs, "Git bundle ancestor object does not match source metadata")
 		}
-		if ancestry := runGit(temporaryBare, "merge-base", "--is-ancestor", ancestorCommit, descendantCommit); ancestry.err != nil || ancestry.status == nil || *ancestry.status != 0 {
+		if ancestry := runGit(temporaryBare, "merge-base", "--is-ancestor", ancestorCommit, descendantCommit); ancestry.Err != nil || ancestry.Status == nil || *ancestry.Status != 0 {
 			*errs = append(*errs, "Git bundle does not preserve ancestor-to-descendant ancestry")
 		}
 		listed := gitText(temporaryBare, "Git bundle range enumeration", "rev-list", "--reverse", "--ancestry-path", "--end-of-options", ancestorCommit+".."+descendantCommit)

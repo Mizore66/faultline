@@ -25,3 +25,7 @@ Not an output difference. Frozen TS cannot write a SHA-256 Git proof bundle: bef
 ## `Maximum call stack size exceeded` threshold
 
 When a zod schema rejects a deeply nested value, TS builds the error text with `JSON.stringify(issues, replacer, 2)` (the `ZodError.message` getter). V8 does this recursively, and past its native stack limit it throws `RangeError: Maximum call stack size exceeded`, which the verifier's catch prints as a `failed safely` line. Go reproduces the RangeError with a fixed budget (`internal/jsjson/stringify.go`), calibrated on Node 22.22 Linux x64: a value nested 2,233 arrays (or 4,166 single-key objects) deep still prints the zod message, and one more level overflows. V8's real limit depends on frame sizes, the platform and `--stack-size`, so TS on another machine can overflow a few levels earlier or later. Only inputs within a few levels of the threshold are affected. `JSON.parse` is iterative on both sides and has no depth limit.
+
+## Closed stdout pipe
+
+Both runtimes ignore SIGPIPE, so writing to a stdout pipe whose reader has gone is an `EPIPE` write error and the process exits 1. Node reports it as an unhandled `'error'` event with a stack trace on stderr; Go prints the single line `Error: write EPIPE`. Stdout and the exit code match; the stderr text does not.

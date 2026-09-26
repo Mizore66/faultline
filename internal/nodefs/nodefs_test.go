@@ -89,3 +89,28 @@ func TestInvalidWindowsNameIsENOENT(t *testing.T) {
 		t.Fatalf("ReadText error = %v", err)
 	}
 }
+
+// process.cwd() is the physical directory (getcwd), not the shell's $PWD.
+func TestResolveUsesPhysicalCwd(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinked cwd is a POSIX shell concern")
+	}
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	phys := filepath.Join(dir, "phys", "sub")
+	if err := os.MkdirAll(phys, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "logical", "link")
+	os.MkdirAll(filepath.Dir(link), 0o755)
+	if err := os.Symlink(filepath.Join("..", "phys", "sub"), link); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(link)
+	t.Setenv("PWD", link)
+	if got, want := Resolve("../bundle"), filepath.Join(dir, "phys", "bundle"); got != want {
+		t.Fatalf("Resolve = %q, want %q", got, want)
+	}
+}
