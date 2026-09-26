@@ -3,3 +3,5 @@
 docs/samples/self-incident-commit-proof/** -text
 difftest/testdata/** -text
 internal/collation/root.bin binary
+go.mod text eol=lf
+go.sum text eol=lf
