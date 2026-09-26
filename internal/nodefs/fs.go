@@ -2,10 +2,11 @@ package nodefs
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"io/fs"
 	"math/rand/v2"
 	"os"
-	"runtime"
 	"sort"
 	"syscall"
 )
@@ -28,6 +29,12 @@ var descriptions = map[string]string{
 	"EBUSY":        "resource busy or locked",
 	"EINVAL":       "invalid argument",
 	"EIO":          "i/o error",
+	"EBADF":        "bad file descriptor",
+	"ENOMEM":       "not enough memory",
+	"EXDEV":        "cross-device link not permitted",
+	"EOF":          "end of file",
+	"ENOTSUP":      "operation not supported on socket",
+	"ENOTEMPTY":    "directory not empty",
 	"EEXIST":       "file already exists",
 	"EROFS":        "read-only file system",
 	"ENOSPC":       "no space left on device",
@@ -44,15 +51,11 @@ func (e *Error) Error() string {
 func codeOf(err error) string {
 	var errno syscall.Errno
 	if errors.As(err, &errno) {
-		if runtime.GOOS == "windows" {
-			// libuv (uv_translate_sys_error) maps these Win32 errors the way
-			// Node reports them; Linux reports ENOENT for the same names.
-			switch uintptr(errno) {
-			case 123, 161: // ERROR_INVALID_NAME, ERROR_BAD_PATHNAME
-				return "ENOENT"
-			case 206: // ERROR_FILENAME_EXCED_RANGE
-				return "ENAMETOOLONG"
+		if isWindows {
+			if code, ok := win32Codes[uintptr(errno)]; ok {
+				return code
 			}
+			return "UNKNOWN"
 		}
 		switch errno {
 		case syscall.ENOENT:
@@ -113,39 +116,99 @@ func wrap(err error, syscallName, path string) error {
 	return &Error{Code: code, Syscall: syscallName, Path: path}
 }
 
-// ReadBytes is readFileSync(path).
-func ReadBytes(path string) ([]byte, error) {
+// kIoMaxLength is the largest file readFileSync reads into a Buffer.
+const kIoMaxLength = 1<<31 - 1
+
+// maxStringLength is V8's String::kMaxLength on 64-bit platforms.
+const maxStringLength = 0x1fffffe8
+
+// ErrStringTooLong is ERR_STRING_TOO_LONG, thrown when a utf8 read would
+// decode to more UTF-16 units than V8 allows in one string.
+var ErrStringTooLong = errors.New("Cannot create a string longer than 0x1fffffe8 characters")
+
+func openRegular(path string) (*os.File, int64, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, wrap(err, "open", path)
+		return nil, 0, wrap(err, "open", path)
 	}
 	if info.IsDir() {
-		return nil, &Error{Code: "EISDIR", Syscall: "read", NoPath: true}
+		return nil, 0, &Error{Code: "EISDIR", Syscall: "read", NoPath: true}
 	}
-	b, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
-		return nil, wrap(err, "open", path)
+		return nil, 0, wrap(err, "open", path)
+	}
+	return f, info.Size(), nil
+}
+
+// ReadBytes is readFileSync(path), including ERR_FS_FILE_TOO_LARGE.
+func ReadBytes(path string) ([]byte, error) {
+	f, size, err := openRegular(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if size > kIoMaxLength {
+		return nil, fmt.Errorf("File size (%d) is greater than 2 GiB", size)
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return nil, wrap(err, "read", path)
 	}
 	return b, nil
 }
 
-// ReadText is readFileSync(path, "utf8").
+// ReadText is readFileSync(path, "utf8"). Node's utf8 fast path has no
+// 2 GiB check; anything decoding past V8's string limit is ERR_STRING_TOO_LONG.
 func ReadText(path string) (string, error) {
-	b, err := ReadBytes(path)
+	f, size, err := openRegular(path)
 	if err != nil {
 		return "", err
+	}
+	defer f.Close()
+	// Decoding yields between n/2 and n UTF-16 units for n bytes.
+	if size/2 > maxStringLength {
+		return "", ErrStringTooLong
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return "", wrap(err, "read", path)
+	}
+	if len(b) > maxStringLength && decodedUTF16Length(b) > maxStringLength {
+		return "", ErrStringTooLong
 	}
 	return DecodeUTF8(b), nil
 }
 
-// Lstat is lstatSync(path).
+// Lstat is lstatSync(path). On Windows, reparse points that Go reports as
+// ModeIrregular are classified the way libuv does: a readable link (symlink
+// or junction) is a symbolic link, anything else is a file or directory by
+// its attributes (for example OneDrive placeholders and WOF-compressed files
+// are regular files).
 func Lstat(path string) (fs.FileInfo, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, wrap(err, "lstat", path)
 	}
+	if isWindows && info.Mode()&fs.ModeIrregular != 0 {
+		mode := info.Mode() &^ (fs.ModeIrregular | fs.ModeType)
+		if _, err := os.Readlink(path); err == nil {
+			mode |= fs.ModeSymlink
+		} else if info.IsDir() {
+			mode |= fs.ModeDir
+		}
+		return libuvInfo{info, mode}, nil
+	}
 	return info, nil
 }
+
+type libuvInfo struct {
+	fs.FileInfo
+	mode fs.FileMode
+}
+
+func (i libuvInfo) Mode() fs.FileMode { return i.mode }
+func (i libuvInfo) IsDir() bool       { return i.mode.IsDir() }
 
 // Exists is existsSync(path): true when stat (following links) succeeds.
 func Exists(path string) bool {
@@ -164,7 +227,12 @@ func ReadDirNames(path string) ([]string, error) {
 	if err != nil {
 		return nil, wrap(err, "scandir", path)
 	}
+	// libuv sorts the raw names; Node then decodes each as UTF-8 with
+	// replacement, so a name with invalid bytes no longer names the file.
 	sort.Strings(names)
+	for i, name := range names {
+		names[i] = DecodeUTF8([]byte(name))
+	}
 	return names, nil
 }
 

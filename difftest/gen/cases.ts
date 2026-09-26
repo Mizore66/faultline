@@ -1,4 +1,4 @@
-import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { digestJson, sha256 } from "../../src/canonical.js";
 
@@ -150,7 +150,8 @@ function isBoundary(c: string | undefined): boolean {
 
 export function normalize(text: string, bundle: string): string {
   let out = text;
-  for (const p of new Set([bundle, realpathSync(bundle)])) out = out.split(p).join("<BUNDLE>");
+  // Only the path passed to fl is masked (goldens are generated on Linux).
+  out = out.split(bundle).join("<BUNDLE>");
   const marker = "faultline-git-proof-verify-";
   for (let i = out.indexOf(marker); i >= 0; i = out.indexOf(marker, i)) {
     let start = i;

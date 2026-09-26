@@ -286,9 +286,14 @@ func isAlnum(c byte) bool {
 
 func normalize(text, bundle string) string {
 	out := text
+	// Only the path passed to fl is masked, so output that names a resolved
+	// (physical) path instead still differs. Windows temp directories can be
+	// 8.3 short names that git expands, so there the long form is masked too.
 	paths := []string{bundle}
-	if real, err := filepath.EvalSymlinks(bundle); err == nil && real != bundle {
-		paths = append(paths, real)
+	if runtime.GOOS == "windows" {
+		if real, err := filepath.EvalSymlinks(bundle); err == nil && real != bundle {
+			paths = append(paths, real)
+		}
 	}
 	for _, p := range paths {
 		out = strings.ReplaceAll(out, p, "<BUNDLE>")

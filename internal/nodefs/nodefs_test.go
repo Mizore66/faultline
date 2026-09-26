@@ -1,10 +1,13 @@
 package nodefs
 
 import (
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
 func TestDecodeUTF8MatchesNode(t *testing.T) {
@@ -112,5 +115,58 @@ func TestResolveUsesPhysicalCwd(t *testing.T) {
 	t.Setenv("PWD", link)
 	if got, want := Resolve("../bundle"), filepath.Join(dir, "phys", "bundle"); got != want {
 		t.Fatalf("Resolve = %q, want %q", got, want)
+	}
+}
+
+func TestDecodedUTF16LengthMatchesDecode(t *testing.T) {
+	interesting := []byte{0x00, 0x41, 0x7F, 0x80, 0xBF, 0xC0, 0xC2, 0xDF, 0xE0, 0xE1, 0xED, 0xEF, 0xF0, 0xF1, 0xF4, 0xF5, 0xFF, 0xA0, 0x9F, 0x90, 0x8F}
+	r := rand.New(rand.NewPCG(3, 4))
+	for range 200_000 {
+		b := make([]byte, r.IntN(12))
+		for j := range b {
+			b[j] = interesting[r.IntN(len(interesting))]
+		}
+		if got, want := decodedUTF16Length(b), jsstr.Length(DecodeUTF8(b)); got != want {
+			t.Fatalf("% x: got %d, want %d", b, got, want)
+		}
+	}
+}
+
+// readdirSync decodes each raw name as UTF-8, so a name with invalid bytes
+// comes back with U+FFFD and no longer names the file.
+func TestReadDirNamesDecodesLikeNode(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs a filesystem that accepts arbitrary name bytes")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bad\xffname"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	names, err := ReadDirNames(dir)
+	if err != nil || len(names) != 1 || names[0] != "bad�name" {
+		t.Fatalf("%q %v", names, err)
+	}
+	_, err = Lstat(Join(dir, names[0]))
+	if err == nil || err.Error() != "ENOENT: no such file or directory, lstat '"+Join(dir, "bad�name")+"'" {
+		t.Fatalf("lstat: %v", err)
+	}
+}
+
+func TestReadSizeLimitsMatchNode(t *testing.T) {
+	dir := t.TempDir()
+	huge := filepath.Join(dir, "huge")
+	f, err := os.Create(huge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(1 << 31); err != nil { // sparse
+		t.Skip(err)
+	}
+	f.Close()
+	if _, err := ReadBytes(huge); err == nil || err.Error() != "File size (2147483648) is greater than 2 GiB" {
+		t.Fatalf("ReadBytes: %v", err)
+	}
+	if _, err := ReadText(huge); err != ErrStringTooLong {
+		t.Fatalf("ReadText: %v", err)
 	}
 }

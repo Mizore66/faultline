@@ -29,3 +29,7 @@ When a zod schema rejects a deeply nested value, TS builds the error text with `
 ## Closed stdout pipe
 
 Both runtimes ignore SIGPIPE, so writing to a stdout pipe whose reader has gone is an `EPIPE` write error and the process exits 1. Node reports it as an unhandled `'error'` event with a stack trace on stderr; Go prints the single line `Error: write EPIPE`. Stdout and the exit code match; the stderr text does not.
+
+## `ENOTDIR` on Windows
+
+When a path component that should be a directory is a file (`file.json/x`), Linux reports `ENOTDIR` while Windows (libuv maps `ERROR_PATH_NOT_FOUND` to `ENOENT`) reports `ENOENT`. Go on Windows reports `ENOTDIR` in that case, so it matches TS on Linux and the Linux-generated goldens. A missing parent directory is `ENOENT` everywhere. All other Win32 errors follow libuv's `uv_translate_sys_error`.

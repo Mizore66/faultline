@@ -56,3 +56,60 @@ func DecodeUTF8(b []byte) string {
 	}
 	return out.String()
 }
+
+// decodedUTF16Length is len(ToUTF16(DecodeUTF8(b))) without building the string.
+func decodedUTF16Length(b []byte) int {
+	n := 0
+	needed, seen := 0, 0
+	first := byte(0)
+	lower, upper := byte(0x80), byte(0xBF)
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if needed == 0 {
+			switch {
+			case c <= 0x7F:
+				n++
+			case c >= 0xC2 && c <= 0xDF:
+				needed, first = 1, c
+			case c >= 0xE0 && c <= 0xEF:
+				if c == 0xE0 {
+					lower = 0xA0
+				} else if c == 0xED {
+					upper = 0x9F
+				}
+				needed, first = 2, c
+			case c >= 0xF0 && c <= 0xF4:
+				if c == 0xF0 {
+					lower = 0x90
+				} else if c == 0xF4 {
+					upper = 0x8F
+				}
+				needed, first = 3, c
+			default:
+				n++
+			}
+			continue
+		}
+		if c < lower || c > upper {
+			needed, seen = 0, 0
+			lower, upper = 0x80, 0xBF
+			n++
+			i--
+			continue
+		}
+		lower, upper = 0x80, 0xBF
+		seen++
+		if seen == needed {
+			if first >= 0xF0 {
+				n += 2
+			} else {
+				n++
+			}
+			needed, seen = 0, 0
+		}
+	}
+	if needed != 0 {
+		n++
+	}
+	return n
+}
