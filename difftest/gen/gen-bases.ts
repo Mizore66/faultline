@@ -103,7 +103,14 @@ await gitBase("git-cjk-overlays", "HEAD~2", "sha1", undefined, [
   { path: "说明/神经.md", text: "nerve\n" },
   { path: "🤔.md", text: "thinking\n" },
   { path: "𠀀.txt", text: "ext-b\n" },
-  { path: "中.txt", text: "middle\n" }
+  { path: "中.txt", text: "middle\n" },
+  // ICU matches contractions on FCD text and skips identical prefixes:
+  // Gurung Khema, Tulu-Tigalari and FDD1 sequences exercise both.
+  { path: "\u{1611E}\u{16121}.md", text: "gurung khema\n" },
+  { path: "\u{16121}.md", text: "gurung khema u\n" },
+  { path: "\u{113C2}\u{113C5}.md", text: "tulu-tigalari\n" },
+  { path: "\uFDD1\u5B57.md", text: "fdd1 han\n" },
+  { path: "\uFDD1\u1FAF.md", text: "fdd1 omega\n" }
 ]);
 // SHA-256 object format. The verifier's temporary repository is a plain
 // `git init --bare`, which follows GIT_DEFAULT_HASH; goldens and replay run

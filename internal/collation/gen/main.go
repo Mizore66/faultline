@@ -226,6 +226,11 @@ func main() {
 		} else {
 			m.key = parseRunes(left)
 		}
+		if len(m.key) > 1 && m.key[0] == 0xFDD0 {
+			// genuca.cpp: contractions starting with U+FDD0 only go into the
+			// inverse table, not into the collation data.
+			continue
+		}
 		maps = append(maps, m)
 	}
 	fu.Close()
@@ -241,7 +246,7 @@ func main() {
 				if !ok {
 					log.Fatalf("reference to non-Han %U", c.han)
 				}
-				maps[mi].ces[ci].p = 0x81000000 | rank
+				maps[mi].ces[ci].p = 0x81030000 + rank // above FDD1 5B57 (81 02 02)
 				maps[mi].ces[ci].han = 0
 			}
 		}

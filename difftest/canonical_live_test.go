@@ -5,10 +5,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/Mizore66/faultline/difftest/gen"
 	"github.com/Mizore66/faultline/difftest/oracle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/collation"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 )
@@ -121,4 +123,94 @@ func codePointOf(units []uint16) rune {
 		return 0x10000 + (rune(units[0])-0xD800)<<10 + (rune(units[1]) - 0xDC00)
 	}
 	return rune(units[0])
+}
+
+// TestLiveCollationRules builds strings around every contraction and prefix
+// rule of the root data (marks inserted, reordered and dropped, precomposed
+// and decomposed forms, FDD0/FDD1 sequences, shared prefixes so ICU's
+// identical-prefix skip matters) and compares LocaleCompare and SortLocale
+// with Node.
+func TestLiveCollationRules(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	contractions, prefixes, nonStarters := collation.Rules()
+	r := rand.New(rand.NewPCG(31, 32))
+	mark := func() rune { return nonStarters[r.IntN(len(nonStarters))] }
+	piece := func() []rune {
+		switch r.IntN(6) {
+		case 0:
+			p := prefixes[r.IntN(len(prefixes))]
+			return append(slices.Clone(p[0]), p[1]...)
+		case 1:
+			return []rune{mark()}
+		case 2:
+			return []rune{[]rune{0xFDD0, 0xFDD1, 'L', 'a', 0x4E00, 0xAC00, 0x1100, 0xD800, 0x00B7, 0x2126}[r.IntN(10)]}
+		default:
+			k := slices.Clone(contractions[r.IntN(len(contractions))])
+			switch r.IntN(4) {
+			case 0:
+				k = slices.Insert(k, 1+r.IntN(len(k)), mark())
+			case 1:
+				r.Shuffle(len(k), func(i, j int) { k[i], k[j] = k[j], k[i] })
+			case 2:
+				k = k[:1+r.IntN(len(k))]
+			}
+			return k
+		}
+	}
+	str := func(rs []rune) string {
+		var units []uint16
+		for _, x := range rs {
+			if x >= 0xD800 && x <= 0xDFFF {
+				units = append(units, uint16(x))
+			} else {
+				units = append(units, utf16.Encode([]rune{x})...)
+			}
+		}
+		return jsstr.FromUTF16(units)
+	}
+	for round := 0; round < 40; round++ {
+		var pairs [][2]string
+		var items []string
+		for range 500 {
+			var p []rune
+			for n := r.IntN(3); n > 0; n-- {
+				p = append(p, piece()...)
+			}
+			a, b := slices.Clone(p), slices.Clone(p)
+			for n := 1 + r.IntN(2); n > 0; n-- {
+				a = append(a, piece()...)
+			}
+			for n := r.IntN(3); n > 0; n-- {
+				b = append(b, piece()...)
+			}
+			pairs = append(pairs, [2]string{str(a), str(b)})
+			items = append(items, str(a), str(b))
+		}
+		var list []string
+		for _, p := range pairs {
+			list = append(list, "["+jsjson.Quote(p[0])+","+jsjson.Quote(p[1])+"]")
+		}
+		raw, err := c.Call("compareMany", `{"pairs":[`+strings.Join(list, ",")+`]}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, _ := jsjson.Parse(raw)
+		for i, p := range pairs {
+			if got := canonical.LocaleCompare(p[0], p[1]); float64(got) != want.Items()[i].Num() {
+				t.Fatalf("LocaleCompare(%+q, %+q) = %d, Node %v", p[0], p[1], got, want.Items()[i].Num())
+			}
+		}
+		raw, err = c.Call("sort", `{"keys":`+quoteList(items)+`}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sorted, _ := jsjson.Parse(raw)
+		got := canonical.SortLocale(items)
+		for i, v := range sorted.Items() {
+			if got[i] != v.Str() {
+				t.Fatalf("SortLocale differs from Node at %d: %+q vs %+q", i, got[i], v.Str())
+			}
+		}
+	}
 }
