@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
 var stringPieces = []string{
@@ -46,7 +47,8 @@ func randomValue(r *rand.Rand, depth int) string {
 		}
 		return "[" + strings.Join(items, ",") + "]"
 	default:
-		keys := []string{`"b"`, `"a"`, `"A"`, `"_"`, `"-"`, `"0"`, `"10"`, `"01"`, `"4294967295"`, `"__proto__"`, `"é"`}
+		keys := []string{`"b"`, `"a"`, `"A"`, `"_"`, `"-"`, `"0"`, `"10"`, `"01"`, `"4294967295"`, `"__proto__"`, `"é"`,
+			`"中"`, `"神经"`, `"视图"`, `"🤣"`, `"\ud800"`, `"\udc00"`, `"a\u0301"`, `"á"`, `"٣"`, `"३"`, `"₿"`, `"\ufffd"`, `"가"`}
 		members := make([]string, r.IntN(5))
 		for i := range members {
 			members[i] = keys[r.IntN(len(keys))] + ":" + randomValue(r, depth+1)
@@ -90,20 +92,51 @@ const asciiKeyAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01
 
 var latin1Extras = []rune("éÉèàçñöÖüßøÆ¡¿ª·")
 
-// RandomKeys returns 2–7 distinct keys; about a quarter include Latin-1 letters.
+// keyRanges are code point ranges where collation is easy to get wrong:
+// CJK (radical-stroke order), CJK Ext B, emoji, combining marks, non-ASCII
+// digits, default ignorables, Hangul syllables and jamo, Arabic, Thai
+// prevowels (contractions), private use, unassigned, and the U+FFFx specials.
+var keyRanges = [][2]rune{
+	{0x4E00, 0x9FFF}, {0x20000, 0x2A6DF}, {0x1F300, 0x1FAFF}, {0x0300, 0x036F}, {0x1DC0, 0x1DFF},
+	{0x0660, 0x0669}, {0x0966, 0x096F}, {0xFF10, 0xFF19}, {0x00AD, 0x00AD}, {0x200B, 0x200F},
+	{0x2060, 0x2064}, {0xFEFF, 0xFEFF}, {0xAC00, 0xD7A3}, {0x1100, 0x11FF}, {0x0600, 0x06FF},
+	{0x0E00, 0x0E7F}, {0xE000, 0xF8FF}, {0x0378, 0x0379}, {0xFFFC, 0xFFFF}, {0x20A0, 0x20C1},
+}
+
+func randomKeyRune(r *rand.Rand) string {
+	switch k := r.IntN(10); {
+	case k < 4:
+		return string(asciiKeyAlphabet[r.IntN(len(asciiKeyAlphabet))])
+	case k == 4:
+		return string(latin1Extras[r.IntN(len(latin1Extras))])
+	case k == 5:
+		// A lone surrogate (WTF-8), as JSON "\udXXX" escapes produce.
+		return jsstr.FromUTF16([]uint16{uint16(0xD800 + r.IntN(0x800))})
+	default:
+		rg := keyRanges[r.IntN(len(keyRanges))]
+		return string(rg[0] + rune(r.IntN(int(rg[1]-rg[0]+1))))
+	}
+}
+
+// RandomKeys returns 2–7 distinct keys drawn from ASCII, Latin-1 and the
+// harder ranges above, plus occasional near-duplicates that differ only by a
+// combining mark or case, so ties and secondary/tertiary levels are exercised.
 func RandomKeys(r *rand.Rand) []string {
 	seen := map[string]bool{}
 	var keys []string
 	for count := 2 + r.IntN(6); len(keys) < count; {
 		var b strings.Builder
-		for n := 1 + r.IntN(12); n > 0; n-- {
-			if r.IntN(4) == 0 {
-				b.WriteRune(latin1Extras[r.IntN(len(latin1Extras))])
-			} else {
-				b.WriteByte(asciiKeyAlphabet[r.IntN(len(asciiKeyAlphabet))])
+		if len(keys) > 0 && r.IntN(4) == 0 {
+			b.WriteString(keys[r.IntN(len(keys))])
+			b.WriteString(pick(r, "\u0301", "\u0323", "A", "a", "\u00b7", "\u200b", ""))
+		} else {
+			for n := 1 + r.IntN(8); n > 0; n-- {
+				b.WriteString(randomKeyRune(r))
 			}
 		}
-		if k := b.String(); !seen[k] {
+		// Re-encode so adjacent lone surrogates that form a JS pair become
+		// one canonical WTF-8 code point.
+		if k := jsstr.FromUTF16(jsstr.ToUTF16(b.String())); !seen[k] {
 			seen[k] = true
 			keys = append(keys, k)
 		}

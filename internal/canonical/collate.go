@@ -2,25 +2,27 @@ package canonical
 
 import (
 	"slices"
-	"sync"
 
-	"golang.org/x/text/collate"
-	"golang.org/x/text/language"
+	"github.com/Mizore66/faultline/internal/collation"
 )
 
-// Collators keep internal buffers, so each goroutine takes its own.
-var collators = sync.Pool{New: func() any { return collate.New(language.AmericanEnglish) }}
-
-// LocaleCompare is `a.localeCompare(b)` under Node's en-US ICU defaults.
-func LocaleCompare(a, b string) int {
-	c := collators.Get().(*collate.Collator)
-	defer collators.Put(c)
-	return c.CompareString(a, b)
-}
+// LocaleCompare is `a.localeCompare(b)` under Node 22's en-US ICU collation.
+func LocaleCompare(a, b string) int { return collation.Compare(a, b) }
 
 // SortLocale is `[...keys].sort((l, r) => l.localeCompare(r))`; Array.prototype.sort is stable.
 func SortLocale(keys []string) []string {
-	out := slices.Clone(keys)
-	slices.SortStableFunc(out, LocaleCompare)
+	type entry struct {
+		s   string
+		key collation.Key
+	}
+	entries := make([]entry, len(keys))
+	for i, k := range keys {
+		entries[i] = entry{k, collation.MakeKey(k)}
+	}
+	slices.SortStableFunc(entries, func(a, b entry) int { return collation.CompareKeys(a.key, b.key) })
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.s
+	}
 	return out
 }

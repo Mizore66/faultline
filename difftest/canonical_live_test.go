@@ -10,6 +10,7 @@ import (
 	"github.com/Mizore66/faultline/difftest/oracle"
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
 func quoteList(items []string) string {
@@ -66,4 +67,58 @@ func TestLiveCanonical(t *testing.T) {
 			t.Fatalf("DigestJSON(%q) = %s, want %s", text, d, want.Field("digest").Str())
 		}
 	}
+}
+
+// TestLiveCollationAllCodePoints sorts every code point (lone surrogates as
+// single UTF-16 units) in Node and in Go and requires the same order and the
+// same ties.
+func TestLiveCollationAllCodePoints(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	want := call(t, c, "sortCodePoints", `{}`)
+	strs := make([]string, 0, 0x110000)
+	for cp := rune(0); cp <= 0x10FFFF; cp++ {
+		if cp >= 0xD800 && cp <= 0xDFFF {
+			strs = append(strs, jsstr.FromUTF16([]uint16{uint16(cp)}))
+		} else {
+			strs = append(strs, string(cp))
+		}
+	}
+	got := canonical.SortLocale(strs)
+	order := want.Field("order").Items()
+	ties := want.Field("ties").Str()
+	if len(order) != len(got) {
+		t.Fatalf("Node returned %d code points, Go %d", len(order), len(got))
+	}
+	bad := 0
+	for i, s := range got {
+		if units := jsstr.ToUTF16(s); len(units) > 0 {
+			gotCP := codePointOf(units)
+			if float64(gotCP) != order[i].Num() {
+				bad++
+				if bad <= 20 {
+					t.Errorf("position %d: Go U+%04X, Node U+%04X", i, gotCP, int(order[i].Num()))
+				}
+			}
+		}
+		if i > 0 {
+			tie := canonical.LocaleCompare(got[i-1], s) == 0
+			if tie != (ties[i-1] == '1') {
+				bad++
+				if bad <= 20 {
+					t.Errorf("tie at %d: Go %v, Node %v", i, tie, ties[i-1] == '1')
+				}
+			}
+		}
+	}
+	if bad > 0 {
+		t.Fatalf("%d mismatches in the full code point order", bad)
+	}
+}
+
+func codePointOf(units []uint16) rune {
+	if len(units) == 2 {
+		return 0x10000 + (rune(units[0])-0xD800)<<10 + (rune(units[1]) - 0xDC00)
+	}
+	return rune(units[0])
 }

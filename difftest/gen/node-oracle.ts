@@ -85,6 +85,14 @@ export const handlers: Record<string, Handler> = {
       return `THREW:${(error as Error).message}`;
     }
   },
+  sortCodePoints: () => {
+    const all: string[] = [];
+    for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));
+    all.sort((left, right) => left.localeCompare(right));
+    let ties = "";
+    for (let i = 1; i < all.length; i++) ties += all[i - 1]!.localeCompare(all[i]!) === 0 ? "1" : "0";
+    return { order: all.map((s) => s.codePointAt(0)), ties };
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
