@@ -2,6 +2,10 @@ package difftest
 
 import (
 	"math/rand/v2"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -34,8 +38,9 @@ func TestLivePath(t *testing.T) {
 		if r.IntN(2) == 0 {
 			platform = "win32"
 			cwd = winCwds[r.IntN(len(winCwds))]
-			if r.IntN(2) == 0 {
-				env["=D:"] = []string{`D:\dcwd`, `C:\wrong`, `d:\lower`, `D:`}[r.IntN(4)]
+			for n := r.IntN(3); n > 0; n-- {
+				key := []string{"=C:", "=D:", "=c:", "=d:", "=Z:"}[r.IntN(5)]
+				env[key] = []string{`D:\dcwd`, `C:\wrong`, `d:\lower`, `D:`, `é:\x`, "\u212a:\\k", `Z:\z`, "\xed\xa0\x80:\\s"}[r.IntN(8)]
 			}
 		}
 		fns := []string{"resolve", "normalize", "join", "relative", "isAbsolute", "dirname"}
@@ -87,7 +92,7 @@ func TestLivePath(t *testing.T) {
 		case "posix.relative":
 			str(nodefs.PosixRelative(cwdFn, args[0], args[1]))
 		case "posix.isAbsolute":
-			got = jsjson.MakeBool(args[0] != "" && args[0][0] == '/')
+			got = jsjson.MakeBool(nodefs.PosixIsAbsolute(args[0]))
 		case "posix.dirname":
 			str(nodefs.PosixDirname(args[0]))
 		case "win32.resolve":
@@ -105,6 +110,33 @@ func TestLivePath(t *testing.T) {
 		}
 		if jsjson.Stringify(got) != jsjson.Stringify(want) {
 			t.Errorf("%s.%s(%q) cwd=%q env=%v: got %s, want %s", platform, fn, args, cwd, env, jsjson.Stringify(got), jsjson.Stringify(want))
+		}
+	}
+}
+
+// process.cwd() is getcwd's bytes decoded as UTF-8 with replacement; compare
+// with the real Node process in a directory whose name is not UTF-8.
+func TestLiveCwdMatchesNode(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs a filesystem that accepts arbitrary name bytes")
+	}
+	oracle.Start(t).Close() // skip unless FAULTLINE_NODE_ORACLE=1
+	for _, name := range []string{"plain", "bad\xffdir", "half\xed\xa0\x80", "tail\xe2\x82"} {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("node", "-e", "process.stdout.write(JSON.stringify(process.cwd()))")
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, _ := jsjson.Parse(string(out))
+		t.Chdir(dir)
+		got, err := nodefs.Cwd()
+		if err != nil || got != want.Str() {
+			t.Errorf("%q: Cwd() = %q, %v; node %q", name, got, err, want.Str())
 		}
 	}
 }

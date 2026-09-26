@@ -5,11 +5,9 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"runtime"
 	"syscall"
 
 	"github.com/Mizore66/faultline/internal/cli"
-	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
 // stdoutWriter remembers the first write error, like the 'error' event
@@ -34,13 +32,7 @@ func main() {
 	// Node ignores SIGPIPE: a closed stdout pipe is a write error (EPIPE),
 	// and the unhandled 'error' event exits 1 (KNOWN_DIFFERENCES.md).
 	signal.Ignore(syscall.SIGPIPE)
-	args := os.Args[1:]
-	if runtime.GOOS != "windows" {
-		// process.argv decodes the raw bytes as UTF-8 with replacement.
-		for i, a := range args {
-			args[i] = nodefs.DecodeUTF8([]byte(a))
-		}
-	}
+	args := nodeArgv()
 	stdout := &stdoutWriter{w: os.Stdout}
 	code := cli.Run(args, stdout, os.Stderr)
 	if stdout.err != nil {

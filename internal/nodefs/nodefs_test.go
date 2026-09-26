@@ -177,3 +177,24 @@ func TestReadSizeLimitsMatchNode(t *testing.T) {
 		}
 	}
 }
+
+// A removed cwd is Node's uv_cwd error, on darwin too (where Go's getcwd
+// wrapper misses libc's NULL return and a stale path must be rejected).
+func TestCwdRemovedDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cannot remove the current directory")
+	}
+	dir := filepath.Join(t.TempDir(), "gone")
+	os.Mkdir(dir, 0o755)
+	t.Chdir(dir)
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Cwd(); err == nil || err.Error() != "ENOENT: no such file or directory, uv_cwd" {
+		t.Fatalf("Cwd() error = %v", err)
+	}
+	os.Mkdir(dir, 0o755) // recreated: still not the directory we are in
+	if _, err := Cwd(); err == nil || err.Error() != "ENOENT: no such file or directory, uv_cwd" {
+		t.Fatalf("Cwd() after recreate error = %v", err)
+	}
+}

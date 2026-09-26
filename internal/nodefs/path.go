@@ -4,7 +4,6 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -20,16 +19,6 @@ import (
 // All separators and dots are ASCII, so byte offsets stand in for UTF-16 ones.
 
 var isWindows = runtime.GOOS == "windows"
-
-// Cwd is process.cwd(): the physical working directory (libuv uv_cwd), or
-// the uv_cwd error Node throws when it is gone.
-func Cwd() (string, error) {
-	cwd, err := syscall.Getwd()
-	if err != nil {
-		return "", &Error{Code: codeOf(err), Syscall: "uv_cwd", NoPath: true}
-	}
-	return cwd, nil
-}
 
 func mustCwd() string { return jsexc.Must(Cwd()) }
 
@@ -360,7 +349,9 @@ func Win32Resolve(cwd func() string, env func(string) string, args ...string) st
 			if path == "" {
 				path = cwd()
 			}
-			if strings.ToLower(path[:min(2, len(path))]) != strings.ToLower(resolvedDevice) && at(path, 2) == '\\' {
+			// slice(0, 2) and charCodeAt(2) count UTF-16 units.
+			units := jsstr.ToUTF16(path)
+			if jsLower(jsstr.FromUTF16(units[:min(2, len(units))])) != jsLower(resolvedDevice) && len(units) > 2 && units[2] == '\\' {
 				path = resolvedDevice + `\`
 			}
 		}
@@ -807,12 +798,15 @@ func Dirname(p string) string {
 	return PosixDirname(p)
 }
 
+// PosixIsAbsolute is path.posix.isAbsolute.
+func PosixIsAbsolute(p string) bool { return p != "" && p[0] == '/' }
+
 // IsAbsolute is path.isAbsolute.
 func IsAbsolute(p string) bool {
 	if isWindows {
 		return Win32IsAbsolute(p)
 	}
-	return p != "" && p[0] == '/'
+	return PosixIsAbsolute(p)
 }
 
 // Relative is path.relative.

@@ -30,6 +30,8 @@ var descriptions = map[string]string{
 	"EBUSY":        "resource busy or locked",
 	"EINVAL":       "invalid argument",
 	"EIO":          "i/o error",
+	"ERANGE":       "result too large",
+	"ENOBUFS":      "no buffer space available",
 	"EBADF":        "bad file descriptor",
 	"ENOMEM":       "not enough memory",
 	"EXDEV":        "cross-device link not permitted",
@@ -83,6 +85,8 @@ func codeOf(err error) string {
 			return "EIO"
 		case syscall.EEXIST:
 			return "EEXIST"
+		case syscall.ERANGE:
+			return "ERANGE"
 		case syscall.EROFS:
 			return "EROFS"
 		case syscall.ENOSPC:
