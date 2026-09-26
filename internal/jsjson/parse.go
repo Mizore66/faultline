@@ -123,90 +123,116 @@ func (p *parser) expectNext(t token, tmpl string) bool {
 	return p.expect(t, tmpl)
 }
 
-func (p *parser) parseValue() Value {
-	p.skipWS()
-	c := p.peekChar()
-	switch tokenOf(c) {
-	case tokString:
-		p.pos++
-		if s, ok := p.scanString(); ok {
-			return MakeString(s)
-		}
-	case tokNumber:
-		return p.parseNumber()
-	case tokLBrace:
-		p.pos++
-		return p.parseObject()
-	case tokLBrack:
-		p.pos++
-		return p.parseArray()
-	case tokTrue:
-		if p.scanLiteral("true") {
-			return MakeBool(true)
-		}
-	case tokFalse:
-		if p.scanLiteral("false") {
-			return MakeBool(false)
-		}
-	case tokNull:
-		if p.scanLiteral("null") {
-			return MakeNull()
-		}
-	default:
-		p.unexpectedChar(c)
-	}
-	return Value{}
+// frame is one open container on the explicit parse stack.
+type frame struct {
+	obj   *Obj // nil for an array
+	key   string
+	items []Value
 }
 
-func (p *parser) parseObject() Value {
-	obj := NewObj()
-	if p.check(tokRBrace) {
-		return MakeObject(obj)
-	}
-	if !p.expectNext(tokString, msgExpectedPropNameOrRBrace) {
-		return Value{}
-	}
+// parseValue is V8 JsonParser::ParseJsonValue. Like V8 it keeps open
+// containers on an explicit stack instead of recursing, so nesting depth is
+// limited only by memory; the token checks and error positions follow the
+// same order as V8's iterative loop.
+func (p *parser) parseValue() Value {
+	var stack []frame
 	for {
-		key, ok := p.scanString()
-		if !ok || !p.expectNext(tokColon, msgExpectedColonAfterPropertyName) {
-			return Value{}
-		}
-		v := p.parseValue()
-		if p.err != nil {
-			return Value{}
-		}
-		obj.Set(key, v)
-		if p.check(tokComma) {
-			if !p.expectNext(tokString, msgExpectedDoubleQuotedPropertyName) {
+		// Parse the start of one value.
+		p.skipWS()
+		c := p.peekChar()
+		var v Value
+		switch tokenOf(c) {
+		case tokString:
+			p.pos++
+			s, ok := p.scanString()
+			if !ok {
 				return Value{}
 			}
+			v = MakeString(s)
+		case tokNumber:
+			v = p.parseNumber()
+			if p.err != nil {
+				return Value{}
+			}
+		case tokLBrace:
+			p.pos++
+			if p.check(tokRBrace) {
+				v = MakeObject(NewObj())
+				break
+			}
+			if !p.expectNext(tokString, msgExpectedPropNameOrRBrace) {
+				return Value{}
+			}
+			key, ok := p.scanString()
+			if !ok || !p.expectNext(tokColon, msgExpectedColonAfterPropertyName) {
+				return Value{}
+			}
+			stack = append(stack, frame{obj: NewObj(), key: key})
 			continue
-		}
-		if !p.expect(tokRBrace, msgExpectedCommaOrRBrace) {
+		case tokLBrack:
+			p.pos++
+			if p.check(tokRBrack) {
+				v = MakeArray(nil)
+				break
+			}
+			stack = append(stack, frame{})
+			continue
+		case tokTrue:
+			if !p.scanLiteral("true") {
+				return Value{}
+			}
+			v = MakeBool(true)
+		case tokFalse:
+			if !p.scanLiteral("false") {
+				return Value{}
+			}
+			v = MakeBool(false)
+		case tokNull:
+			if !p.scanLiteral("null") {
+				return Value{}
+			}
+			v = MakeNull()
+		default:
+			p.unexpectedChar(c)
 			return Value{}
 		}
-		return MakeObject(obj)
-	}
-}
 
-func (p *parser) parseArray() Value {
-	if p.check(tokRBrack) {
-		return MakeArray(nil)
-	}
-	var items []Value
-	for {
-		v := p.parseValue()
-		if p.err != nil {
-			return Value{}
+		// Attach v to the open containers, closing those that end here.
+	attach:
+		for {
+			if len(stack) == 0 {
+				return v
+			}
+			top := &stack[len(stack)-1]
+			if top.obj != nil {
+				top.obj.Set(top.key, v)
+				if p.check(tokComma) {
+					if !p.expectNext(tokString, msgExpectedDoubleQuotedPropertyName) {
+						return Value{}
+					}
+					key, ok := p.scanString()
+					if !ok || !p.expectNext(tokColon, msgExpectedColonAfterPropertyName) {
+						return Value{}
+					}
+					top.key = key
+					break attach
+				}
+				if !p.expect(tokRBrace, msgExpectedCommaOrRBrace) {
+					return Value{}
+				}
+				v = MakeObject(top.obj)
+			} else {
+				top.items = append(top.items, v)
+				if p.check(tokComma) {
+					break attach
+				}
+				if !p.expect(tokRBrack, msgExpectedCommaOrRBrack) {
+					return Value{}
+				}
+				v = MakeArray(top.items)
+			}
+			stack = stack[:len(stack)-1]
 		}
-		items = append(items, v)
-		if p.check(tokComma) {
-			continue
-		}
-		if !p.expect(tokRBrack, msgExpectedCommaOrRBrack) {
-			return Value{}
-		}
-		return MakeArray(items)
 	}
 }
 

@@ -2,9 +2,8 @@
 package bundle
 
 import (
-	"errors"
-
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
 	"github.com/Mizore66/faultline/internal/schema"
@@ -20,26 +19,18 @@ type Result struct {
 	Classification     *string
 }
 
-// Thrown carries a JS exception through Go panics.
-type Thrown struct{ Err error }
+// Thrown carries a JS exception through Go panics (see internal/jsexc).
+type Thrown = jsexc.Thrown
 
-func Throw(err error) { panic(Thrown{err}) }
+func Throw(err error) { jsexc.Throw(err) }
 
-func Must[T any](v T, err error) T {
-	if err != nil {
-		Throw(err)
-	}
-	return v
-}
+func Must[T any](v T, err error) T { return jsexc.Must(v, err) }
 
 // Try runs fn like a JS try block and returns the caught exception.
-func Try(fn func()) (err error) {
-	defer Catch(func(e error) { err = e })
-	fn()
-	return nil
-}
+func Try(fn func()) error { return jsexc.Try(fn) }
 
 // Catch recovers a Thrown panic; use as `defer bundle.Catch(handler)`.
+// It must be deferred directly so recover sees the panic.
 func Catch(handler func(error)) {
 	if r := recover(); r != nil {
 		t, ok := r.(Thrown)
@@ -50,11 +41,13 @@ func Catch(handler func(error)) {
 	}
 }
 
-// ParseValue is zod `Schema.parse(value)`.
+// ParseValue is zod `Schema.parse(value)`; failures are *schema.Error.
 func ParseValue(v jsjson.Value, s schema.Schema) (jsjson.Value, error) {
 	out, issues, ok := schema.Parse(s, v)
 	if !ok {
-		return jsjson.Value{}, errors.New(schema.ErrorMessage(issues))
+		// The message is computed when read, like zod's getter, so a
+		// RangeError from it escapes the enclosing catch handler as in TS.
+		return jsjson.Value{}, &schema.Error{Issues: issues}
 	}
 	return out, nil
 }

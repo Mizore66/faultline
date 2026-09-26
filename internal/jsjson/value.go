@@ -56,19 +56,46 @@ func (v Value) Get(keys ...string) Value {
 }
 
 // Obj keeps ordinary JS property order: array-index keys in ascending numeric
-// order, then the remaining keys in first-insertion order.
+// order, then the remaining keys in first-insertion order. Index keys are
+// sorted lazily, so building an object from out-of-order index keys (JSON
+// input or canonical's localeCompare order) stays O(n log n).
 type Obj struct {
-	keys   []string
-	values map[string]Value
-	nIndex int // leading keys that are array indices
+	idx       []indexKey
+	idxSorted bool
+	strs      []string
+	values    map[string]Value
 }
 
-func NewObj() *Obj { return &Obj{values: map[string]Value{}} }
+type indexKey struct {
+	n uint32
+	k string
+}
 
-func (o *Obj) Len() int                   { return len(o.keys) }
-func (o *Obj) Keys() []string             { return slices.Clone(o.keys) }
+func NewObj() *Obj { return &Obj{values: map[string]Value{}, idxSorted: true} }
+
+func (o *Obj) Len() int                   { return len(o.idx) + len(o.strs) }
 func (o *Obj) Get(k string) (Value, bool) { v, ok := o.values[k]; return v, ok }
 func (o *Obj) Field(k string) Value       { return o.values[k] }
+
+// Keys returns the keys in JS property order.
+func (o *Obj) Keys() []string { return slices.Clone(o.orderedKeys()) }
+
+// orderedKeys returns the keys in JS property order without copying when the
+// object has no array-index keys.
+func (o *Obj) orderedKeys() []string {
+	if len(o.idx) == 0 {
+		return o.strs
+	}
+	if !o.idxSorted {
+		slices.SortFunc(o.idx, func(a, b indexKey) int { return cmp.Compare(a.n, b.n) })
+		o.idxSorted = true
+	}
+	out := make([]string, 0, o.Len())
+	for _, e := range o.idx {
+		out = append(out, e.k)
+	}
+	return append(out, o.strs...)
+}
 
 func (o *Obj) Set(k string, v Value) {
 	if _, ok := o.values[k]; ok {
@@ -76,17 +103,15 @@ func (o *Obj) Set(k string, v Value) {
 		return
 	}
 	o.values[k] = v
-	idx, ok := arrayIndex(k)
+	n, ok := arrayIndex(k)
 	if !ok {
-		o.keys = append(o.keys, k)
+		o.strs = append(o.strs, k)
 		return
 	}
-	pos, _ := slices.BinarySearchFunc(o.keys[:o.nIndex], idx, func(key string, target uint32) int {
-		n, _ := arrayIndex(key)
-		return cmp.Compare(n, target)
-	})
-	o.keys = slices.Insert(o.keys, pos, k)
-	o.nIndex++
+	if l := len(o.idx); l > 0 && o.idx[l-1].n > n {
+		o.idxSorted = false
+	}
+	o.idx = append(o.idx, indexKey{n, k})
 }
 
 func (o *Obj) Delete(k string) {
@@ -94,11 +119,12 @@ func (o *Obj) Delete(k string) {
 		return
 	}
 	delete(o.values, k)
-	i := slices.Index(o.keys, k)
-	o.keys = slices.Delete(o.keys, i, i+1)
-	if i < o.nIndex {
-		o.nIndex--
+	if i := slices.IndexFunc(o.idx, func(e indexKey) bool { return e.k == k }); i >= 0 {
+		o.idx = slices.Delete(o.idx, i, i+1)
+		return
 	}
+	i := slices.Index(o.strs, k)
+	o.strs = slices.Delete(o.strs, i, i+1)
 }
 
 // arrayIndex reports whether k is a canonical array index, 0 … 2^32−2.

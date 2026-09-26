@@ -3,6 +3,7 @@ package schema
 import (
 	"strings"
 
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
@@ -73,14 +74,22 @@ func (c *ctx) invalidType(path []any, expected string, v jsjson.Value) {
 	c.addIssue(path, []kv{{"code", str("invalid_type")}, {"expected", str(expected)}, {"received", str(received)}}, message)
 }
 
-// ErrorMessage is ZodError.message: JSON.stringify(issues, replacer, 2).
+// ErrorMessage is the ZodError.message getter: JSON.stringify(issues,
+// replacer, 2). Like the getter, it throws (jsexc) a RangeError when a deeply
+// nested `received` value overflows V8's stack.
 func ErrorMessage(issues []Issue) string {
 	values := make([]jsjson.Value, len(issues))
 	for i, issue := range issues {
 		values[i] = jsjson.MakeObject(issue.Fields)
 	}
-	return jsjson.StringifyIndent(jsjson.MakeArray(values), "  ")
+	return jsexc.Must(jsjson.StringifyIndentChecked(jsjson.MakeArray(values), "  "))
 }
+
+// Error is a ZodError thrown by `Schema.parse`. Its message is computed when
+// read, so a RangeError from the getter surfaces where TS reads `.message`.
+type Error struct{ Issues []Issue }
+
+func (e *Error) Error() string { return ErrorMessage(e.Issues) }
 
 func tooSmallMessage(kind string, minimum float64, inclusive, exact bool) string {
 	n := jsjson.FormatNumber(minimum)

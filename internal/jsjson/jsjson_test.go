@@ -1,9 +1,13 @@
 package jsjson
 
 import (
+	"fmt"
 	"math"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseErrorsMatchV8(t *testing.T) {
@@ -87,5 +91,87 @@ func TestStringify(t *testing.T) {
 	want := "{\n  \"s\": \" <>&\\u0001\\ud800\u2028\",\n  \"a\": [],\n  \"o\": {},\n  \"n\": [\n    1,\n    {\n      \"x\": null\n    }\n  ]\n}"
 	if got := StringifyIndent(v, "  "); got != want {
 		t.Fatalf("StringifyIndent = %q", got)
+	}
+}
+
+// V8's JSON.parse is iterative; a hostile file nested millions of levels deep
+// must not overflow the Go stack.
+func TestParseDeepNestingIsIterative(t *testing.T) {
+	const depth = 2_000_000 // the recursive parser died at this depth
+	open := strings.Repeat("[", depth)
+	if _, err := Parse(open); err == nil || err.Error() != "Unexpected end of JSON input" {
+		t.Fatalf("unbalanced: got %v", err)
+	}
+	v, err := Parse(open + strings.Repeat("]", depth))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < depth; i++ {
+		if v.Kind() != Array || len(v.Items()) != 1 {
+			t.Fatalf("level %d: not a one-element array", i)
+		}
+		v = v.Items()[0]
+	}
+	if v.Kind() != Array || len(v.Items()) != 0 {
+		t.Fatal("innermost value is not []")
+	}
+	objs := strings.Repeat(`{"a":`, depth) + "1" + strings.Repeat("}", depth)
+	if _, err := Parse(objs); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Integer-like keys arriving in descending order used to cost O(n²) inserts.
+func TestManyDescendingIndexKeys(t *testing.T) {
+	const n = 400_000
+	var b strings.Builder
+	b.WriteByte('{')
+	for i := n - 1; i >= 0; i-- {
+		fmt.Fprintf(&b, `"%d":0`, i)
+		if i > 0 {
+			b.WriteByte(',')
+		}
+	}
+	b.WriteByte('}')
+	start := time.Now()
+	v, err := Parse(b.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := v.Obj().Keys()
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("took %v", elapsed)
+	}
+	if len(keys) != n || keys[0] != "0" || keys[n-1] != strconv.Itoa(n-1) {
+		t.Fatalf("keys out of order: first %q last %q", keys[0], keys[len(keys)-1])
+	}
+}
+
+// JSON.stringify throws RangeError("Maximum call stack size exceeded") past
+// V8's native stack; the thresholds are calibrated against Node 22.
+func TestStringifyStackOverflow(t *testing.T) {
+	nest := func(depth int, wrap func(Value) Value) Value {
+		v := MakeNull()
+		for range depth {
+			v = wrap(v)
+		}
+		return v
+	}
+	arr := func(v Value) Value { return MakeArray([]Value{v}) }
+	obj := func(v Value) Value { o := NewObj(); o.Set("a", v); return MakeObject(o) }
+	for _, tc := range []struct {
+		name  string
+		v     Value
+		fails bool
+	}{
+		{"array ok", nest(2000, arr), false},
+		{"array overflow", nest(3000, arr), true},
+		{"object ok", nest(4000, obj), false},
+		{"object overflow", nest(5000, obj), true},
+	} {
+		_, err := StringifyIndentChecked(tc.v, "  ")
+		if tc.fails != (err == ErrStackOverflow) {
+			t.Errorf("%s: err = %v", tc.name, err)
+		}
 	}
 }
