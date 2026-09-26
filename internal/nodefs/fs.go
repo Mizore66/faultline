@@ -3,6 +3,7 @@ package nodefs
 import (
 	"errors"
 	"fmt"
+	"github.com/Mizore66/faultline/internal/jsstr"
 	"io"
 	"io/fs"
 	"math/rand/v2"
@@ -101,12 +102,17 @@ func codeOf(err error) string {
 // (Linux returns ENOTDIR there; Windows reports "not found").
 func ancestorNotDir(path string) bool {
 	for dir := Dirname(path); dir != path; path, dir = dir, Dirname(dir) {
-		if info, err := os.Stat(dir); err == nil {
+		if info, err := os.Stat(sysPath(dir)); err == nil {
 			return !info.IsDir()
 		}
 	}
 	return false
 }
+
+// sysPath is the path Node hands to the syscall: JS strings are encoded as
+// UTF-8 with each lone surrogate replaced by U+FFFD. Error messages keep the
+// JS string (and print it through the same replacement).
+func sysPath(path string) string { return jsstr.ToUTF8(path) }
 
 func wrap(err error, syscallName, path string) error {
 	code := codeOf(err)
@@ -127,14 +133,14 @@ const maxStringLength = 0x1fffffe8
 var ErrStringTooLong = errors.New("Cannot create a string longer than 0x1fffffe8 characters")
 
 func openRegular(path string) (*os.File, int64, error) {
-	info, err := os.Stat(path)
+	info, err := os.Stat(sysPath(path))
 	if err != nil {
 		return nil, 0, wrap(err, "open", path)
 	}
 	if info.IsDir() {
 		return nil, 0, &Error{Code: "EISDIR", Syscall: "read", NoPath: true}
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(sysPath(path))
 	if err != nil {
 		return nil, 0, wrap(err, "open", path)
 	}
@@ -158,23 +164,24 @@ func ReadBytes(path string) ([]byte, error) {
 	return b, nil
 }
 
-// ReadText is readFileSync(path, "utf8"). Node's utf8 fast path has no
-// 2 GiB check; anything decoding past V8's string limit is ERR_STRING_TOO_LONG.
+// ReadText is readFileSync(path, "utf8"). Node 22's ReadFileUtf8 reads the
+// raw bytes and throws ERR_STRING_TOO_LONG when their count is at least V8's
+// String::kMaxLength (src/util-inl.h ToV8Value: str.size() >= kMaxLength),
+// whatever the decoded length would be; it has no 2 GiB check.
 func ReadText(path string) (string, error) {
 	f, size, err := openRegular(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	// Decoding yields between n/2 and n UTF-16 units for n bytes.
-	if size/2 > maxStringLength {
+	if size >= maxStringLength {
 		return "", ErrStringTooLong
 	}
 	b, err := io.ReadAll(f)
 	if err != nil {
 		return "", wrap(err, "read", path)
 	}
-	if len(b) > maxStringLength && decodedUTF16Length(b) > maxStringLength {
+	if len(b) >= maxStringLength { // non-regular files report size 0
 		return "", ErrStringTooLong
 	}
 	return DecodeUTF8(b), nil
@@ -186,13 +193,13 @@ func ReadText(path string) (string, error) {
 // its attributes (for example OneDrive placeholders and WOF-compressed files
 // are regular files).
 func Lstat(path string) (fs.FileInfo, error) {
-	info, err := os.Lstat(path)
+	info, err := os.Lstat(sysPath(path))
 	if err != nil {
 		return nil, wrap(err, "lstat", path)
 	}
 	if isWindows && info.Mode()&fs.ModeIrregular != 0 {
 		mode := info.Mode() &^ (fs.ModeIrregular | fs.ModeType)
-		if _, err := os.Readlink(path); err == nil {
+		if _, err := os.Readlink(sysPath(path)); err == nil {
 			mode |= fs.ModeSymlink
 		} else if info.IsDir() {
 			mode |= fs.ModeDir
@@ -212,13 +219,13 @@ func (i libuvInfo) IsDir() bool       { return i.mode.IsDir() }
 
 // Exists is existsSync(path): true when stat (following links) succeeds.
 func Exists(path string) bool {
-	_, err := os.Stat(path)
+	_, err := os.Stat(sysPath(path))
 	return err == nil
 }
 
 // ReadDirNames is readdirSync(path): names sorted by byte order (libuv scandir).
 func ReadDirNames(path string) ([]string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(sysPath(path))
 	if err != nil {
 		return nil, wrap(err, "scandir", path)
 	}
@@ -283,7 +290,7 @@ func Mkdtemp(prefix string) (string, error) {
 			b[i] = tempChars[rand.IntN(len(tempChars))]
 		}
 		path := prefix + string(b)
-		if err = os.Mkdir(path, 0o700); err == nil {
+		if err = os.Mkdir(sysPath(path), 0o700); err == nil {
 			return path, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {

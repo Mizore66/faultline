@@ -150,7 +150,16 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		return bundle.Result{Errors: []string{"Prevention proof directory does not exist"}, ExternalRootStatus: status}
 	}
 	assertNoLinksOrSpecialFiles(root)
-	physical := bundle.Must(nodefs.ReadDirNames(root))
+	// new Set(readdirSync(...).map(name)): decoded names can collide, and a
+	// Set keeps the first occurrence only.
+	var physical []string
+	seen := map[string]bool{}
+	for _, name := range bundle.Must(nodefs.ReadDirNames(root)) {
+		if !seen[name] {
+			seen[name] = true
+			physical = append(physical, name)
+		}
+	}
 	for _, expected := range baseArtifacts {
 		if !slices.Contains(physical, expected) {
 			errs = append(errs, "Prevention proof package is missing "+expected)

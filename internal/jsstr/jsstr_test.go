@@ -49,3 +49,18 @@ func TestToUTF8AlwaysValid(t *testing.T) {
 		}
 	}
 }
+
+// Invalid bytes that are not WTF-8 surrogates follow the WHATWG decoder
+// (maximal subparts), as Buffer.from(string) never sees them otherwise.
+func TestToUTF8InvalidBytesLikeWHATWG(t *testing.T) {
+	for in, want := range map[string]string{
+		"\xe2\x82A":                "�A",
+		"\xf0\x9f\x98":             "�",
+		"a\xed\xa0\x80b":           "a�b",
+		"\xed\xa0\xbd\xed\xb8\x80": "\U0001F600",
+	} {
+		if got := ToUTF8(in); got != want {
+			t.Errorf("ToUTF8(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

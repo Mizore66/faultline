@@ -1,13 +1,10 @@
 package nodefs
 
 import (
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
 func TestDecodeUTF8MatchesNode(t *testing.T) {
@@ -118,20 +115,6 @@ func TestResolveUsesPhysicalCwd(t *testing.T) {
 	}
 }
 
-func TestDecodedUTF16LengthMatchesDecode(t *testing.T) {
-	interesting := []byte{0x00, 0x41, 0x7F, 0x80, 0xBF, 0xC0, 0xC2, 0xDF, 0xE0, 0xE1, 0xED, 0xEF, 0xF0, 0xF1, 0xF4, 0xF5, 0xFF, 0xA0, 0x9F, 0x90, 0x8F}
-	r := rand.New(rand.NewPCG(3, 4))
-	for range 200_000 {
-		b := make([]byte, r.IntN(12))
-		for j := range b {
-			b[j] = interesting[r.IntN(len(interesting))]
-		}
-		if got, want := decodedUTF16Length(b), jsstr.Length(DecodeUTF8(b)); got != want {
-			t.Fatalf("% x: got %d, want %d", b, got, want)
-		}
-	}
-}
-
 // readdirSync decodes each raw name as UTF-8, so a name with invalid bytes
 // comes back with U+FFFD and no longer names the file.
 func TestReadDirNamesDecodesLikeNode(t *testing.T) {
@@ -168,5 +151,29 @@ func TestReadSizeLimitsMatchNode(t *testing.T) {
 	}
 	if _, err := ReadText(huge); err != ErrStringTooLong {
 		t.Fatalf("ReadText: %v", err)
+	}
+	if testing.Short() {
+		return
+	}
+	// Node 22 compares the raw byte count with >=, before any decoding: one
+	// byte below the limit reads, the limit itself and multi-byte text of that
+	// many bytes (far fewer UTF-16 units) do not.
+	for _, tc := range []struct {
+		size int64
+		ok   bool
+	}{{maxStringLength - 1, true}, {maxStringLength, false}} {
+		f := filepath.Join(dir, "edge")
+		if err := os.Truncate(f, 0); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		fh, err := os.Create(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fh.Truncate(tc.size)
+		fh.Close()
+		if _, err := ReadText(f); (err == nil) != tc.ok {
+			t.Fatalf("ReadText(%d bytes): %v", tc.size, err)
+		}
 	}
 }

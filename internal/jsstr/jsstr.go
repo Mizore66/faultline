@@ -59,15 +59,37 @@ func ToUTF16(s string) []uint16 {
 // Length is JS `string.length`.
 func Length(s string) int { return len(ToUTF16(s)) }
 
-// ToUTF8 is `Buffer.from(s, "utf8")` / `process.stdout.write(s)`:
-// lone surrogates become U+FFFD. JS strings reach Go already decoded (argv,
-// file names and contents go through nodefs.DecodeUTF8), but any other byte
-// that is not valid UTF-8 is replaced too, so output is always valid UTF-8.
+// ToUTF8 is `Buffer.from(s, "utf8")` / `process.stdout.write(s)`: each lone
+// surrogate becomes one U+FFFD. JS strings reach Go already decoded (argv,
+// file names and contents go through DecodeUTF8); any other invalid byte is
+// replaced the way the WHATWG decoder does, so output is always valid UTF-8.
 func ToUTF8(s string) string {
 	if utf8.ValidString(s) {
 		return s
 	}
-	return string(utf16.Decode(ToUTF16(s)))
+	var out strings.Builder
+	start := 0
+	for i := 0; i < len(s); {
+		if len(s)-i >= 3 && s[i] == 0xED && s[i+1] >= 0xA0 && s[i+1] <= 0xBF && s[i+2] >= 0x80 && s[i+2] <= 0xBF {
+			out.WriteString(DecodeUTF8([]byte(s[start:i])))
+			hi := 0xD000 | rune(s[i+1]&0x3F)<<6 | rune(s[i+2]&0x3F)
+			j := i + 3
+			if hi <= 0xDBFF && len(s)-j >= 3 && s[j] == 0xED && s[j+1] >= 0xB0 && s[j+1] <= 0xBF && s[j+2] >= 0x80 && s[j+2] <= 0xBF {
+				// A pair encoded as two WTF-8 halves is one code point.
+				lo := 0xD000 | rune(s[j+1]&0x3F)<<6 | rune(s[j+2]&0x3F)
+				out.WriteRune(utf16.DecodeRune(hi, lo))
+				j += 3
+			} else {
+				out.WriteString("\uFFFD")
+			}
+			i = j
+			start = i
+			continue
+		}
+		i++
+	}
+	out.WriteString(DecodeUTF8([]byte(s[start:])))
+	return out.String()
 }
 
 // IsWhitespace reports ECMAScript WhiteSpace or LineTerminator (the set
