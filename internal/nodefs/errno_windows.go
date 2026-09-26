@@ -1,47 +1,113 @@
 package nodefs
 
-// win32Codes is libuv's uv_translate_sys_error for the Win32 errors fs calls
-// return. Codes missing here are UNKNOWN, as in libuv. ERROR_PATH_NOT_FOUND
-// is ENOENT (Go names it syscall.ENOTDIR); wrap still reports ENOTDIR when an
-// ancestor is a file, matching the Linux goldens (KNOWN_DIFFERENCES.md).
+import "syscall"
+
+var unixCodes map[syscall.Errno]string
+
+// win32Codes is libuv's uv_translate_sys_error (libuv 1.51 and 1.52,
+// src/win/error.c), in code order. Codes missing here are UNKNOWN, as in
+// libuv. ERROR_PATH_NOT_FOUND is ENOENT (Go names it syscall.ENOTDIR); wrap
+// still reports ENOTDIR when an ancestor is a file, matching the Linux
+// goldens (KNOWN_DIFFERENCES.md).
 var win32Codes = map[uintptr]string{
-	1:    "EISDIR",       // ERROR_INVALID_FUNCTION
-	2:    "ENOENT",       // ERROR_FILE_NOT_FOUND
-	3:    "ENOENT",       // ERROR_PATH_NOT_FOUND
-	4:    "EMFILE",       // ERROR_TOO_MANY_OPEN_FILES
-	5:    "EPERM",        // ERROR_ACCESS_DENIED
-	6:    "EBADF",        // ERROR_INVALID_HANDLE
-	8:    "ENOMEM",       // ERROR_NOT_ENOUGH_MEMORY
-	14:   "ENOMEM",       // ERROR_OUTOFMEMORY
-	15:   "ENOENT",       // ERROR_INVALID_DRIVE
-	17:   "EXDEV",        // ERROR_NOT_SAME_DEVICE
-	19:   "EROFS",        // ERROR_WRITE_PROTECT
-	23:   "EIO",          // ERROR_CRC
-	32:   "EBUSY",        // ERROR_SHARING_VIOLATION
-	33:   "EBUSY",        // ERROR_LOCK_VIOLATION
-	38:   "EOF",          // ERROR_HANDLE_EOF
-	39:   "ENOSPC",       // ERROR_HANDLE_DISK_FULL
-	50:   "ENOTSUP",      // ERROR_NOT_SUPPORTED
-	80:   "EEXIST",       // ERROR_FILE_EXISTS
-	87:   "EINVAL",       // ERROR_INVALID_PARAMETER
-	112:  "ENOSPC",       // ERROR_DISK_FULL
-	123:  "ENOENT",       // ERROR_INVALID_NAME
-	126:  "ENOENT",       // ERROR_MOD_NOT_FOUND
-	142:  "EBUSY",        // ERROR_BUSY_DRIVE
-	145:  "ENOTEMPTY",    // ERROR_DIR_NOT_EMPTY
-	148:  "EBUSY",        // ERROR_PATH_BUSY
-	161:  "ENOENT",       // ERROR_BAD_PATHNAME
-	170:  "EBUSY",        // ERROR_BUSY
-	183:  "EEXIST",       // ERROR_ALREADY_EXISTS
-	206:  "ENAMETOOLONG", // ERROR_FILENAME_EXCED_RANGE
-	267:  "ENOENT",       // ERROR_DIRECTORY
-	740:  "EACCES",       // ERROR_ELEVATION_REQUIRED
-	998:  "EACCES",       // ERROR_NOACCESS
-	1117: "EIO",          // ERROR_IO_DEVICE
-	1314: "EPERM",        // ERROR_PRIVILEGE_NOT_HELD
-	1464: "EINVAL",       // ERROR_SYMLINK_NOT_SUPPORTED
-	1920: "EACCES",       // ERROR_CANT_ACCESS_FILE
-	1921: "ELOOP",        // ERROR_CANT_RESOLVE_FILENAME
-	4390: "EINVAL",       // ERROR_NOT_A_REPARSE_POINT
-	4392: "ENOENT",       // ERROR_INVALID_REPARSE_DATA
+	1:     "EISDIR",          // ERROR_INVALID_FUNCTION
+	2:     "ENOENT",          // ERROR_FILE_NOT_FOUND
+	3:     "ENOENT",          // ERROR_PATH_NOT_FOUND
+	4:     "EMFILE",          // ERROR_TOO_MANY_OPEN_FILES
+	5:     "EPERM",           // ERROR_ACCESS_DENIED
+	6:     "EBADF",           // ERROR_INVALID_HANDLE
+	8:     "ENOMEM",          // ERROR_NOT_ENOUGH_MEMORY
+	13:    "EINVAL",          // ERROR_INVALID_DATA
+	14:    "ENOMEM",          // ERROR_OUTOFMEMORY
+	15:    "ENOENT",          // ERROR_INVALID_DRIVE
+	17:    "EXDEV",           // ERROR_NOT_SAME_DEVICE
+	19:    "EROFS",           // ERROR_WRITE_PROTECT
+	23:    "EIO",             // ERROR_CRC
+	31:    "EIO",             // ERROR_GEN_FAILURE
+	32:    "EBUSY",           // ERROR_SHARING_VIOLATION
+	33:    "EBUSY",           // ERROR_LOCK_VIOLATION
+	39:    "ENOSPC",          // ERROR_HANDLE_DISK_FULL
+	50:    "ENOTSUP",         // ERROR_NOT_SUPPORTED
+	64:    "ECONNRESET",      // ERROR_NETNAME_DELETED
+	80:    "EEXIST",          // ERROR_FILE_EXISTS
+	82:    "ENOSPC",          // ERROR_CANNOT_MAKE
+	87:    "EINVAL",          // ERROR_INVALID_PARAMETER
+	109:   "EOF",             // ERROR_BROKEN_PIPE
+	110:   "EIO",             // ERROR_OPEN_FAILED
+	111:   "ENAMETOOLONG",    // ERROR_BUFFER_OVERFLOW
+	112:   "ENOSPC",          // ERROR_DISK_FULL
+	121:   "ETIMEDOUT",       // ERROR_SEM_TIMEOUT
+	122:   "EINVAL",          // ERROR_INSUFFICIENT_BUFFER
+	123:   "ENOENT",          // ERROR_INVALID_NAME
+	126:   "ENOENT",          // ERROR_MOD_NOT_FOUND
+	145:   "ENOTEMPTY",       // ERROR_DIR_NOT_EMPTY
+	156:   "EIO",             // ERROR_SIGNAL_REFUSED
+	161:   "ENOENT",          // ERROR_BAD_PATHNAME
+	183:   "EEXIST",          // ERROR_ALREADY_EXISTS
+	193:   "EFTYPE",          // ERROR_BAD_EXE_FORMAT
+	203:   "ENOENT",          // ERROR_ENVVAR_NOT_FOUND
+	205:   "EIO",             // ERROR_NO_SIGNAL_SENT
+	206:   "ENAMETOOLONG",    // ERROR_FILENAME_EXCED_RANGE
+	208:   "E2BIG",           // ERROR_META_EXPANSION_TOO_LONG
+	230:   "EPIPE",           // ERROR_BAD_PIPE
+	231:   "EBUSY",           // ERROR_PIPE_BUSY
+	232:   "EAGAIN",          // ERROR_NO_DATA
+	233:   "EPIPE",           // ERROR_PIPE_NOT_CONNECTED
+	267:   "ENOENT",          // ERROR_DIRECTORY
+	277:   "ENOSPC",          // ERROR_EA_TABLE_FULL
+	740:   "EACCES",          // ERROR_ELEVATION_REQUIRED
+	995:   "ECANCELED",       // ERROR_OPERATION_ABORTED
+	998:   "EFAULT",          // ERROR_NOACCESS
+	1004:  "EBADF",           // ERROR_INVALID_FLAGS
+	1100:  "ENOSPC",          // ERROR_END_OF_MEDIA
+	1101:  "EIO",             // ERROR_FILEMARK_DETECTED
+	1102:  "EIO",             // ERROR_BEGINNING_OF_MEDIA
+	1103:  "EIO",             // ERROR_SETMARK_DETECTED
+	1104:  "EIO",             // ERROR_NO_DATA_DETECTED
+	1106:  "EIO",             // ERROR_INVALID_BLOCK_LENGTH
+	1111:  "EIO",             // ERROR_BUS_RESET
+	1113:  "ECHARSET",        // ERROR_NO_UNICODE_TRANSLATION
+	1117:  "EIO",             // ERROR_IO_DEVICE
+	1129:  "EIO",             // ERROR_EOM_OVERFLOW
+	1165:  "EIO",             // ERROR_DEVICE_REQUIRES_CLEANING
+	1166:  "EIO",             // ERROR_DEVICE_DOOR_OPEN
+	1225:  "ECONNREFUSED",    // ERROR_CONNECTION_REFUSED
+	1227:  "EADDRINUSE",      // ERROR_ADDRESS_ALREADY_ASSOCIATED
+	1231:  "ENETUNREACH",     // ERROR_NETWORK_UNREACHABLE
+	1232:  "EHOSTUNREACH",    // ERROR_HOST_UNREACHABLE
+	1236:  "ECONNABORTED",    // ERROR_CONNECTION_ABORTED
+	1314:  "EPERM",           // ERROR_PRIVILEGE_NOT_HELD
+	1393:  "EIO",             // ERROR_DISK_CORRUPT
+	1464:  "EINVAL",          // ERROR_SYMLINK_NOT_SUPPORTED
+	1920:  "EACCES",          // ERROR_CANT_ACCESS_FILE
+	1921:  "ELOOP",           // ERROR_CANT_RESOLVE_FILENAME
+	2250:  "ENOTCONN",        // ERROR_NOT_CONNECTED
+	4392:  "ENOENT",          // ERROR_INVALID_REPARSE_DATA
+	10004: "ECANCELED",       // WSAEINTR
+	10013: "EACCES",          // WSAEACCES
+	10014: "EFAULT",          // WSAEFAULT
+	10022: "EINVAL",          // WSAEINVAL
+	10024: "EMFILE",          // WSAEMFILE
+	10035: "EAGAIN",          // WSAEWOULDBLOCK
+	10037: "EALREADY",        // WSAEALREADY
+	10038: "ENOTSOCK",        // WSAENOTSOCK
+	10040: "EMSGSIZE",        // WSAEMSGSIZE
+	10043: "EPROTONOSUPPORT", // WSAEPROTONOSUPPORT
+	10044: "ESOCKTNOSUPPORT", // WSAESOCKTNOSUPPORT
+	10046: "EINVAL",          // WSAEPFNOSUPPORT
+	10047: "EAFNOSUPPORT",    // WSAEAFNOSUPPORT
+	10048: "EADDRINUSE",      // WSAEADDRINUSE
+	10049: "EADDRNOTAVAIL",   // WSAEADDRNOTAVAIL
+	10051: "ENETUNREACH",     // WSAENETUNREACH
+	10053: "ECONNABORTED",    // WSAECONNABORTED
+	10054: "ECONNRESET",      // WSAECONNRESET
+	10055: "ENOBUFS",         // WSAENOBUFS
+	10056: "EISCONN",         // WSAEISCONN
+	10057: "ENOTCONN",        // WSAENOTCONN
+	10058: "EPIPE",           // WSAESHUTDOWN
+	10060: "ETIMEDOUT",       // WSAETIMEDOUT
+	10061: "ECONNREFUSED",    // WSAECONNREFUSED
+	10065: "EHOSTUNREACH",    // WSAEHOSTUNREACH
+	11001: "ENOENT",          // WSAHOST_NOT_FOUND
+	11004: "ENOENT",          // WSANO_DATA
 }

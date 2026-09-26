@@ -179,7 +179,6 @@ func verifyPortableGitSource(root string, metadata, result jsjson.Value, errs *[
 	assertRegularFile(bundlePath, "portable Git bundle", maxSourceArtifactBytes)
 	assertRegularFile(patchPath, "portable Git range patch", maxSourceArtifactBytes)
 	temporaryBare := bundle.Must(nodefs.Mkdtemp(nodefs.Join(nodefs.Tmpdir(), "faultline-git-proof-verify-")))
-	defer nodefs.RemoveAll(temporaryBare)
 	if err := bundle.Try(func() {
 		gitBundlePath := toGitPath(bundlePath)
 		heads := parseBundleHeads(gitBytes("", "Git bundle head listing", "bundle", "list-heads", gitBundlePath))
@@ -229,5 +228,9 @@ func verifyPortableGitSource(root string, metadata, result jsjson.Value, errs *[
 		}
 	}); err != nil {
 		*errs = append(*errs, "portable Git source verification failed: "+err.Error())
+	}
+	// The finally block: rmSync's own failure escapes the verifier.
+	if err := nodefs.RemoveAll(temporaryBare); err != nil {
+		bundle.Throw(err)
 	}
 }

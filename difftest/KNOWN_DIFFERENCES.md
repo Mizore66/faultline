@@ -37,3 +37,7 @@ Both runtimes ignore SIGPIPE, so writing to a stdout pipe whose reader has gone 
 ## `ENOTDIR` on Windows
 
 When a path component that should be a directory is a file (`file.json/x`), Linux reports `ENOTDIR` while Windows (libuv maps `ERROR_PATH_NOT_FOUND` to `ENOENT`) reports `ENOENT`. Go on Windows reports `ENOTDIR` in that case, so it matches TS on Linux and the Linux-generated goldens. A missing parent directory is `ENOENT` everywhere. All other Win32 errors follow libuv's `uv_translate_sys_error`.
+
+## WSL symlinks on Windows
+
+Go's `Lstat` follows libuv 1.52 (Node 22.23 and later): a WSL symlink (`IO_REPARSE_TAG_LX_SYMLINK`) is a symbolic link. libuv 1.51 (Node 22.22) has no case for that tag and retries with a following stat, which Win32 cannot resolve, so `lstatSync` throws. Either way the verifiers reject the file; only the error line differs.

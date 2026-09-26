@@ -18,30 +18,93 @@ type Error struct {
 	NoPath              bool
 }
 
+// descriptions is uv_strerror: libuv 1.51 include/uv.h UV_ERRNO_MAP.
 var descriptions = map[string]string{
-	"ENOENT":       "no such file or directory",
-	"ENOTDIR":      "not a directory",
-	"EISDIR":       "illegal operation on a directory",
-	"EACCES":       "permission denied",
-	"EPERM":        "operation not permitted",
-	"ELOOP":        "too many symbolic links encountered",
-	"ENAMETOOLONG": "name too long",
-	"EMFILE":       "too many open files",
-	"EBUSY":        "resource busy or locked",
-	"EINVAL":       "invalid argument",
-	"EIO":          "i/o error",
-	"ERANGE":       "result too large",
-	"ENOBUFS":      "no buffer space available",
-	"EBADF":        "bad file descriptor",
-	"ENOMEM":       "not enough memory",
-	"EXDEV":        "cross-device link not permitted",
-	"EOF":          "end of file",
-	"ENOTSUP":      "operation not supported on socket",
-	"ENOTEMPTY":    "directory not empty",
-	"EEXIST":       "file already exists",
-	"EROFS":        "read-only file system",
-	"ENOSPC":       "no space left on device",
-	"UNKNOWN":      "unknown error",
+	"E2BIG":           "argument list too long",
+	"EACCES":          "permission denied",
+	"EADDRINUSE":      "address already in use",
+	"EADDRNOTAVAIL":   "address not available",
+	"EAFNOSUPPORT":    "address family not supported",
+	"EAGAIN":          "resource temporarily unavailable",
+	"EAI_ADDRFAMILY":  "address family not supported",
+	"EAI_AGAIN":       "temporary failure",
+	"EAI_BADFLAGS":    "bad ai_flags value",
+	"EAI_BADHINTS":    "invalid value for hints",
+	"EAI_CANCELED":    "request canceled",
+	"EAI_FAIL":        "permanent failure",
+	"EAI_FAMILY":      "ai_family not supported",
+	"EAI_MEMORY":      "out of memory",
+	"EAI_NODATA":      "no address",
+	"EAI_NONAME":      "unknown node or service",
+	"EAI_OVERFLOW":    "argument buffer overflow",
+	"EAI_PROTOCOL":    "resolved protocol is unknown",
+	"EAI_SERVICE":     "service not available for socket type",
+	"EAI_SOCKTYPE":    "socket type not supported",
+	"EALREADY":        "connection already in progress",
+	"EBADF":           "bad file descriptor",
+	"EBUSY":           "resource busy or locked",
+	"ECANCELED":       "operation canceled",
+	"ECHARSET":        "invalid Unicode character",
+	"ECONNABORTED":    "software caused connection abort",
+	"ECONNREFUSED":    "connection refused",
+	"ECONNRESET":      "connection reset by peer",
+	"EDESTADDRREQ":    "destination address required",
+	"EEXIST":          "file already exists",
+	"EFAULT":          "bad address in system call argument",
+	"EFBIG":           "file too large",
+	"EHOSTUNREACH":    "host is unreachable",
+	"EINTR":           "interrupted system call",
+	"EINVAL":          "invalid argument",
+	"EIO":             "i/o error",
+	"EISCONN":         "socket is already connected",
+	"EISDIR":          "illegal operation on a directory",
+	"ELOOP":           "too many symbolic links encountered",
+	"EMFILE":          "too many open files",
+	"EMSGSIZE":        "message too long",
+	"ENAMETOOLONG":    "name too long",
+	"ENETDOWN":        "network is down",
+	"ENETUNREACH":     "network is unreachable",
+	"ENFILE":          "file table overflow",
+	"ENOBUFS":         "no buffer space available",
+	"ENODEV":          "no such device",
+	"ENOENT":          "no such file or directory",
+	"ENOMEM":          "not enough memory",
+	"ENONET":          "machine is not on the network",
+	"ENOPROTOOPT":     "protocol not available",
+	"ENOSPC":          "no space left on device",
+	"ENOSYS":          "function not implemented",
+	"ENOTCONN":        "socket is not connected",
+	"ENOTDIR":         "not a directory",
+	"ENOTEMPTY":       "directory not empty",
+	"ENOTSOCK":        "socket operation on non-socket",
+	"ENOTSUP":         "operation not supported on socket",
+	"EOVERFLOW":       "value too large for defined data type",
+	"EPERM":           "operation not permitted",
+	"EPIPE":           "broken pipe",
+	"EPROTO":          "protocol error",
+	"EPROTONOSUPPORT": "protocol not supported",
+	"EPROTOTYPE":      "protocol wrong type for socket",
+	"ERANGE":          "result too large",
+	"EROFS":           "read-only file system",
+	"ESHUTDOWN":       "cannot send after transport endpoint shutdown",
+	"ESPIPE":          "invalid seek",
+	"ESRCH":           "no such process",
+	"ETIMEDOUT":       "connection timed out",
+	"ETXTBSY":         "text file is busy",
+	"EXDEV":           "cross-device link not permitted",
+	"UNKNOWN":         "unknown error",
+	"EOF":             "end of file",
+	"ENXIO":           "no such device or address",
+	"EMLINK":          "too many links",
+	"EHOSTDOWN":       "host is down",
+	"EREMOTEIO":       "remote I/O error",
+	"ENOTTY":          "inappropriate ioctl for device",
+	"EFTYPE":          "inappropriate file type or format",
+	"EILSEQ":          "illegal byte sequence",
+	"ESOCKTNOSUPPORT": "socket type not supported",
+	"ENODATA":         "no data available",
+	"EUNATCH":         "protocol driver not attached",
+	"ENOEXEC":         "exec format error",
 }
 
 func (e *Error) Error() string {
@@ -50,6 +113,10 @@ func (e *Error) Error() string {
 	}
 	return e.Code + ": " + descriptions[e.Code] + ", " + e.Syscall + " '" + e.Path + "'"
 }
+
+// ErrnoCode names err's errno the way Node's ErrnoException does (libuv's
+// uv_err_name, after uv_translate_sys_error on Windows).
+func ErrnoCode(err error) string { return codeOf(err) }
 
 func codeOf(err error) string {
 	var errno syscall.Errno
@@ -60,37 +127,8 @@ func codeOf(err error) string {
 			}
 			return "UNKNOWN"
 		}
-		switch errno {
-		case syscall.ENOENT:
-			return "ENOENT"
-		case syscall.ENOTDIR:
-			return "ENOTDIR"
-		case syscall.EISDIR:
-			return "EISDIR"
-		case syscall.EACCES:
-			return "EACCES"
-		case syscall.EPERM:
-			return "EPERM"
-		case syscall.ELOOP:
-			return "ELOOP"
-		case syscall.ENAMETOOLONG:
-			return "ENAMETOOLONG"
-		case syscall.EMFILE:
-			return "EMFILE"
-		case syscall.EBUSY:
-			return "EBUSY"
-		case syscall.EINVAL:
-			return "EINVAL"
-		case syscall.EIO:
-			return "EIO"
-		case syscall.EEXIST:
-			return "EEXIST"
-		case syscall.ERANGE:
-			return "ERANGE"
-		case syscall.EROFS:
-			return "EROFS"
-		case syscall.ENOSPC:
-			return "ENOSPC"
+		if code, ok := unixCodes[errno]; ok {
+			return code
 		}
 	}
 	switch {
@@ -191,24 +229,20 @@ func ReadText(path string) (string, error) {
 	return DecodeUTF8(b), nil
 }
 
-// Lstat is lstatSync(path). On Windows, reparse points that Go reports as
-// ModeIrregular are classified the way libuv does: a readable link (symlink
-// or junction) is a symbolic link, anything else is a file or directory by
-// its attributes (for example OneDrive placeholders and WOF-compressed files
-// are regular files).
+// Lstat is lstatSync(path). On Windows, reparse points are classified the
+// way libuv does (see lstatReparse): symlinks, WSL symlinks, drive-letter
+// junctions and AppExecLinks are symbolic links; anything else (OneDrive
+// placeholders, WOF-compressed files, volume mount points) is a file or
+// directory by the attributes of what it resolves to.
 func Lstat(path string) (fs.FileInfo, error) {
 	info, err := os.Lstat(sysPath(path))
 	if err != nil {
 		return nil, wrap(err, "lstat", path)
 	}
-	if isWindows && info.Mode()&fs.ModeIrregular != 0 {
-		mode := info.Mode() &^ (fs.ModeIrregular | fs.ModeType)
-		if _, err := os.Readlink(sysPath(path)); err == nil {
-			mode |= fs.ModeSymlink
-		} else if info.IsDir() {
-			mode |= fs.ModeDir
+	if isWindows {
+		if info, err = lstatReparse(sysPath(path), info); err != nil {
+			return nil, wrap(err, "lstat", path)
 		}
-		return libuvInfo{info, mode}, nil
 	}
 	return info, nil
 }
@@ -303,6 +337,3 @@ func Mkdtemp(prefix string) (string, error) {
 	}
 	return "", wrap(err, "mkdtemp", prefix+"XXXXXX")
 }
-
-// RemoveAll is rmSync(path, { recursive: true, force: true }).
-func RemoveAll(path string) { os.RemoveAll(path) }
