@@ -19,7 +19,22 @@ type ObjectSchema struct {
 	strict bool
 }
 
-func Object(fields ...Field) *ObjectSchema { return &ObjectSchema{fields: fields} }
+// Object is z.object(shape). zod walks Object.keys(shape), so fields are kept
+// in JS property order: array-index names first (ascending), then the rest in
+// declaration order; a repeated name keeps its first position, last schema.
+func Object(fields ...Field) *ObjectSchema { return &ObjectSchema{fields: jsKeyOrder(fields)} }
+
+func jsKeyOrder(fields []Field) []Field {
+	shape := jsjson.NewObj()
+	for i, f := range fields {
+		shape.Set(f.Key, jsjson.MakeNumber(float64(i)))
+	}
+	out := make([]Field, 0, shape.Len())
+	for _, k := range shape.Keys() {
+		out = append(out, fields[int(shape.Field(k).Num())])
+	}
+	return out
+}
 
 func (o *ObjectSchema) Strict() *ObjectSchema {
 	return &ObjectSchema{fields: slices.Clone(o.fields), strict: true}
@@ -36,6 +51,7 @@ func (o *ObjectSchema) Extend(fields ...Field) *ObjectSchema {
 			out.fields = append(out.fields, f)
 		}
 	}
+	out.fields = jsKeyOrder(out.fields)
 	return out
 }
 
@@ -81,21 +97,38 @@ func (o *ObjectSchema) parse(c *ctx, v jsjson.Value, path []any) (jsjson.Value, 
 	return jsjson.MakeObject(out), st
 }
 
+// ArrayCheck is one of zod's array length calls. .length, .min and .max each
+// overwrite a single setting (the last call wins), and ZodArray._parse checks
+// exact length, then min, then max, whatever the call order.
 type ArrayCheck struct {
-	min, max int
-	exact    bool
+	kind byte // 'e'xact, 'm'in, 'M'ax
+	n    int
 }
 
-func Length(n int) ArrayCheck   { return ArrayCheck{min: n, max: n, exact: true} }
-func MinItems(n int) ArrayCheck { return ArrayCheck{min: n, max: -1} }
-func MaxItems(n int) ArrayCheck { return ArrayCheck{min: -1, max: n} }
+func Length(n int) ArrayCheck   { return ArrayCheck{'e', n} }
+func MinItems(n int) ArrayCheck { return ArrayCheck{'m', n} }
+func MaxItems(n int) ArrayCheck { return ArrayCheck{'M', n} }
 
 type arraySchema struct {
-	item   Schema
-	checks []ArrayCheck
+	item                  Schema
+	exact, minLen, maxLen *int
 }
 
-func Array(item Schema, checks ...ArrayCheck) Schema { return &arraySchema{item, checks} }
+func Array(item Schema, checks ...ArrayCheck) Schema {
+	a := &arraySchema{item: item}
+	for _, check := range checks {
+		n := check.n
+		switch check.kind {
+		case 'e':
+			a.exact = &n
+		case 'm':
+			a.minLen = &n
+		case 'M':
+			a.maxLen = &n
+		}
+	}
+	return a
+}
 
 func (a *arraySchema) parse(c *ctx, v jsjson.Value, path []any) (jsjson.Value, status) {
 	if v.Kind() != jsjson.Array {
@@ -104,25 +137,22 @@ func (a *arraySchema) parse(c *ctx, v jsjson.Value, path []any) (jsjson.Value, s
 	}
 	n := len(v.Items())
 	st := valid
-	for _, check := range a.checks {
-		if check.exact {
-			if n < check.min {
-				c.tooSmall(path, "array", float64(check.min), true, true)
-				st = dirty
-			} else if n > check.max {
-				c.tooBig(path, "array", float64(check.max), true, true)
-				st = dirty
-			}
-			continue
-		}
-		if check.min >= 0 && n < check.min {
-			c.tooSmall(path, "array", float64(check.min), true, false)
+	if a.exact != nil {
+		if n < *a.exact {
+			c.tooSmall(path, "array", float64(*a.exact), true, true)
+			st = dirty
+		} else if n > *a.exact {
+			c.tooBig(path, "array", float64(*a.exact), true, true)
 			st = dirty
 		}
-		if check.max >= 0 && n > check.max {
-			c.tooBig(path, "array", float64(check.max), true, false)
-			st = dirty
-		}
+	}
+	if a.minLen != nil && n < *a.minLen {
+		c.tooSmall(path, "array", float64(*a.minLen), true, false)
+		st = dirty
+	}
+	if a.maxLen != nil && n > *a.maxLen {
+		c.tooBig(path, "array", float64(*a.maxLen), true, false)
+		st = dirty
 	}
 	items := make([]jsjson.Value, n)
 	for i, item := range v.Items() {

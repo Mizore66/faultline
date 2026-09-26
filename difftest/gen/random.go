@@ -181,8 +181,12 @@ func randomNode(r *rand.Rand, depth int) (string, string) {
 		return `{"t":"enum","values":["A","B"]}`, pick(r, `"A"`, `"B"`, `"C"`, "1")
 	case "array":
 		d, v := randomNode(r, depth+1)
-		checks := pick(r, `[]`, `[{"k":"length","n":2}]`, `[{"k":"min","n":1}]`, `[{"k":"max","n":1}]`)
-		return `{"t":"array","item":` + d + `,"checks":` + checks + `}`, "[" + strings.Repeat(v+",", r.IntN(3)) + v + "]"
+		// zod keeps one exact/min/max setting each (last call wins) and checks
+		// them in that order, whatever the call order.
+		checks := pick(r, `[]`, `[{"k":"length","n":2}]`, `[{"k":"min","n":1}]`, `[{"k":"max","n":1}]`,
+			`[{"k":"max","n":1},{"k":"min","n":3}]`, `[{"k":"min","n":3},{"k":"length","n":2}]`,
+			`[{"k":"length","n":2},{"k":"length","n":3}]`, `[{"k":"max","n":0},{"k":"max","n":2},{"k":"length","n":1}]`)
+		return `{"t":"array","item":` + d + `,"checks":` + checks + `}`, "[" + strings.Repeat(v+",", r.IntN(4)) + v + "]"
 	case "record":
 		d, v := randomNode(r, depth+1)
 		return `{"t":"record","value":` + d + `}`, `{"a":` + v + `,"__proto__":` + v + `}`
@@ -195,6 +199,11 @@ func randomNode(r *rand.Rand, depth int) (string, string) {
 	case "object":
 		d1, v1 := randomNode(r, depth+1)
 		d2, v2 := randomNode(r, depth+1)
+		if r.IntN(3) == 0 {
+			// Integer-like names: zod walks Object.keys(shape), index names first.
+			return `{"t":"object","strict":` + pick(r, "true", "false") + `,"shape":[["b",` + d1 + `],["1",` + d2 + `],["a",` + d1 + `],["0",` + d2 + `],["4294967295",` + d1 + `]]}`,
+				pick(r, `{"z":1}`, `{"b":`+v1+`,"1":`+v2+`}`, `{"0":`+v2+`,"a":`+v1+`,"4294967295":`+v1+`,"1":`+v2+`,"b":`+v1+`}`)
+		}
 		return `{"t":"object","strict":` + pick(r, "true", "false") + `,"shape":[["a",` + d1 + `],["b",{"t":"optional","inner":` + d2 + `}],["c",{"t":"default","inner":{"t":"string","checks":[]},"v":"dflt"}]]}`,
 			`{"a":` + v1 + `,"b":` + v2 + `}`
 	case "disc":
