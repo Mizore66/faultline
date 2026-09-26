@@ -14,6 +14,8 @@ import { EnvironmentFingerprintSchema } from "../../src/environment-fingerprint.
 import { MaterializedOverlaySchema } from "../../src/safe-overlay.js";
 import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../src/ledger.js";
 import { validateSandboxPlanAudit } from "../../src/sandbox.js";
+import { resignLedger, richLedger } from "./ledger-seed.js";
+import { resignSandbox, sandboxVariant } from "./sandbox-seed.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -79,13 +81,20 @@ export const handlers: Record<string, Handler> = {
   verifyFrozenWitnessRecord: ({ text, expected }: { text: string; expected?: string }) =>
     canonicalJson(verifyFrozenWitnessRecord(JSON.parse(text), expected)),
   verifyCodexLifecycleLedger: ({ text }: { text: string }) => canonicalJson(verifyCodexLifecycleLedger(JSON.parse(text))),
+  // Verify runs the run-fact schema before the audit check, so the oracle does too.
   validateSandboxPlanAudit: ({ text }: { text: string }) => {
+    const parsed = GitInvestigationRunFactSchema.shape.sandbox.safeParse(JSON.parse(text));
+    if (!parsed.success) return `SCHEMA:${parsed.error.message}`;
     try {
-      return canonicalJson(validateSandboxPlanAudit(JSON.parse(text)));
+      return canonicalJson(validateSandboxPlanAudit(parsed.data));
     } catch (error) {
       return `THREW:${(error as Error).message}`;
     }
   },
+  richLedger: () => JSON.stringify(richLedger()),
+  resignLedger: ({ text }: { text: string }) => resignLedger(text),
+  resignSandbox: ({ text, legacy }: { text: string; legacy: boolean }) => resignSandbox(text, legacy),
+  sandboxVariant: ({ text, variant }: { text: string; variant: "legacy" | "unsafe-local" | "environment" }) => sandboxVariant(text, variant),
   path: ({ platform, fn, args, cwd, env }: { platform: "posix" | "win32"; fn: string; args: string[]; cwd: string; env: Record<string, string> }) => {
     const savedCwd = process.cwd;
     const savedEnv = process.env;

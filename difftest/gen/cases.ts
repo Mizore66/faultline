@@ -1,10 +1,12 @@
-import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { digestJson, sha256 } from "../../src/canonical.js";
 
 export type Template = {
   id: string; op: string; file?: string; path?: string; offset?: number; target?: string; content?: string;
   find?: string; replace?: string; hex?: string; key?: string; value?: unknown; rehash?: boolean;
+  bases?: string[]; jsonPath?: Array<string | number>; valueFrom?: Array<string | number>; swapWith?: Array<string | number>;
+  delete?: boolean; first?: boolean; to?: string; prefix?: string; suffix?: string; depth?: number; count?: number;
 };
 export type Case = { id: string; base: string; template?: Template; file?: string };
 
@@ -37,19 +39,71 @@ function applicable(t: Template, path: string): boolean {
     case "strip-trailing-newline": return readFileSync(path).at(-1) === 0x0a;
     case "json-add-key": return isObjectJson(path, false);
     case "json-retype": case "json-drop-first": return isObjectJson(path, true);
+    case "json-edit": return jsonEditApplicable(t, path);
+    case "replace-nested": return readFileSync(path).toString("latin1").includes(t.find!);
     default: return true;
   }
 }
+
+type Json = unknown;
+
+// at walks a JSON path (object keys and array indices); undefined when absent.
+function at(v: Json, path: Array<string | number>): Json {
+  let x = v;
+  for (const k of path) {
+    if (x === null || typeof x !== "object") return undefined;
+    if (Array.isArray(x)) {
+      if (typeof k !== "number" || k >= x.length) return undefined;
+      x = x[k];
+    } else {
+      if (typeof k !== "string" || !Object.prototype.hasOwnProperty.call(x, k)) return undefined;
+      x = (x as Record<string, Json>)[k];
+    }
+  }
+  return x;
+}
+
+function setAt(v: Json, path: Array<string | number>, value: Json): void {
+  const parent = at(v, path.slice(0, -1)) as Record<string, Json> | Json[];
+  const k = path[path.length - 1]!;
+  if (Array.isArray(parent)) parent[k as number] = value;
+  else defineOwn(parent, k as string, value);
+}
+
+function jsonEditApplicable(t: Template, path: string): boolean {
+  if (!isObjectJson(path, false)) return false;
+  const v = JSON.parse(readFileSync(path, "utf8")) as Json;
+  const parent = at(v, t.jsonPath!.slice(0, -1));
+  if (parent === null || typeof parent !== "object") return false;
+  if (t.delete || t.valueFrom || t.swapWith) {
+    if (at(v, t.jsonPath!) === undefined) return false;
+  }
+  if (t.valueFrom && at(v, t.valueFrom) === undefined) return false;
+  if (t.swapWith && at(v, t.swapWith) === undefined) return false;
+  return true;
+}
+
+// matches is a template file pattern: "*", "*.json", "dir/*" or an exact path.
+function matches(pattern: string, file: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern === "*.json") return file.endsWith(".json");
+  if (pattern.endsWith("/*")) return file.startsWith(pattern.slice(0, -1));
+  return pattern === file;
+}
+
+// Ops whose target is a path in the bundle (or the bundle itself), not an existing file.
+const PATH_OPS = new Set(["add-file", "root-symlink"]);
 
 export function expandCases(base: string, root: string, templates: Template[]): Case[] {
   const files = listFiles(root);
   const cases: Case[] = [{ id: base, base }];
   for (const t of templates) {
-    const targets = t.op === "add-file"
-      ? [t.path!]
-      : files.filter((f) => t.file === "*" || (t.file === "*.json" ? f.endsWith(".json") : t.file === f));
-    for (const file of targets) {
-      if (t.op !== "add-file" && !applicable(t, join(root, file))) continue;
+    if (t.bases && !t.bases.includes(base)) continue;
+    const targets = PATH_OPS.has(t.op)
+      ? [t.path ?? "."]
+      : files.filter((f) => matches(t.file!, f));
+    for (const file of t.first ? targets.slice(0, 1) : targets) {
+      if (!PATH_OPS.has(t.op) && !applicable(t, join(root, file))) continue;
       cases.push({ id: `${base}__${t.id}__${file.replaceAll("/", "~")}`, base, template: t, file });
     }
   }
@@ -86,11 +140,50 @@ function rehash(root: string, base: string): void {
   writeFileSync(join(root, "ROOT.sha256"), `sha256:${sha256(hashes)}\n`);
 }
 
+// applyMutation mutates the bundle at root; root-symlink replaces root itself
+// with a symbolic link to a sibling copy.
 export function applyMutation(root: string, c: Case): void {
   const t = c.template;
   if (!t) return;
   const path = join(root, c.file!);
   switch (t.op) {
+    case "root-symlink": {
+      const real = `${root}-real`;
+      renameSync(root, real);
+      symlinkSync(basename(real), root);
+      break;
+    }
+    case "rename": mkdirSync(dirname(join(root, t.to!)), { recursive: true }); renameSync(path, join(root, t.to!)); break;
+    case "replace-nested": {
+      const s = readFileSync(path).toString("latin1");
+      const nested = `${t.prefix ?? ""}${"[".repeat(t.depth!)}${"]".repeat(t.depth!)}${t.suffix ?? ""}`;
+      writeFileSync(path, Buffer.from(s.replace(t.find!, () => nested), "latin1"));
+      break;
+    }
+    case "append-catalog-lines": {
+      let extra = "";
+      for (let i = 0; i < t.count!; i++) extra += `${"0".repeat(64)}  extra/${String(i).padStart(5, "0")}.json\n`;
+      writeFileSync(path, Buffer.concat([readFileSync(path), Buffer.from(extra, "utf8")]));
+      break;
+    }
+    case "json-edit": {
+      const v = JSON.parse(readFileSync(path, "utf8")) as Json;
+      const p = t.jsonPath!;
+      if (t.delete) {
+        const parent = at(v, p.slice(0, -1));
+        if (Array.isArray(parent)) parent.splice(p[p.length - 1] as number, 1);
+        else delete (parent as Record<string, Json>)[p[p.length - 1] as string];
+      } else if (t.swapWith) {
+        const a = at(v, p);
+        const b = at(v, t.swapWith);
+        setAt(v, p, b);
+        setAt(v, t.swapWith, a);
+      } else {
+        setAt(v, p, t.valueFrom ? at(v, t.valueFrom) : t.value);
+      }
+      writeFileSync(path, `${JSON.stringify(v, null, 2)}\n`);
+      break;
+    }
     case "flip-byte": {
       const b = readFileSync(path);
       b[t.offset === -1 ? b.length - 1 : 0]! ^= 0x01;
@@ -148,6 +241,16 @@ function isBoundary(c: string | undefined): boolean {
   return c === undefined || c === "'" || c === "\"" || /\s/.test(c);
 }
 
+// maskGitDetail hides git's own stderr (it varies across git versions) but
+// keeps the text FaultLine composes around it: the "; " join with Node's
+// spawnSync error, and the "exit <status>" fallback.
+export function maskGitDetail(detail: string): string {
+  if (/^exit (?:null|-?\d+)$/.test(detail)) return detail;
+  const m = /^(?:([\s\S]*); )?(spawnSync git [A-Z0-9_]+)$/.exec(detail);
+  if (m) return m[1] === undefined ? m[2]! : `<GIT-STDERR>; ${m[2]}`;
+  return "<GIT-STDERR>";
+}
+
 export function normalize(text: string, bundle: string): string {
   let out = text;
   // Only the path passed to fl is masked (goldens are generated on Linux).
@@ -167,7 +270,9 @@ export function normalize(text: string, bundle: string): string {
       const from = i + needle.length;
       let to = out.indexOf("\n- ", from);
       if (to < 0) to = out.endsWith("\n") ? out.length - 1 : out.length;
-      out = `${out.slice(0, from)}<GIT-DETAIL>${out.slice(to)}`;
+      const detail = maskGitDetail(out.slice(from, to));
+      out = `${out.slice(0, from)}${detail}${out.slice(to)}`;
+      i = from + detail.length - needle.length;
     }
   }
   return out;

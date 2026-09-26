@@ -1,9 +1,11 @@
 package difftest
 
 import (
+	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -92,7 +94,10 @@ func TestLiveNamedSchemas(t *testing.T) {
 	defer c.Close()
 	bases := filepath.Join(oracle.RepoRoot(t), "difftest", "testdata", "bases")
 	r := rand.New(rand.NewPCG(13, 14))
-	for name, seeds := range namedSeeds {
+	// Sorted names keep the shared RNG's draws, and so the inputs, fixed.
+	names := slices.Sorted(maps.Keys(namedSeeds))
+	for _, name := range names {
+		seeds := namedSeeds[name]
 		for _, seed := range seeds {
 			raw := seedText(t, bases, seed)
 			for i := 0; i < liveCases/len(namedSeeds)/len(seeds); i++ {

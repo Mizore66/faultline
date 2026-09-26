@@ -4,7 +4,9 @@ Every intentional divergence is listed here. Anything not listed is a bug.
 
 ## Locale-dependent key order (TS bug, not reproduced)
 
-TS `canonicalJson` sorts object keys with `localeCompare`, which uses the machine's ICU default locale. Under `sv-SE`, Node sorts `å ä ö` after `z`; under `tr-TR`, it orders `I` before `i`. Go always uses en-US ordering (what CI and `C.UTF-8` machines produce). Bundles written under an affected locale with affected keys already fail TS verification on en-US machines.
+TS `canonicalJson` sorts object keys with `localeCompare`, which uses the machine's ICU default locale. Under `sv-SE`, Node sorts `å ä ö` after `z`; under `tr-TR`, it orders `I` before `i`. Go always uses the en-US (CLDR root) order that CI and `C.UTF-8` machines produce. Bundles written under an affected locale with affected keys already fail TS verification on en-US machines.
+
+Go's collation (`internal/collation`) is generated from the ICU 78 root collation data that Node 22 bundles (Unicode 17, CLDR 48) and matches `localeCompare` on every code point and on the tie set (checked against Node by `TestLiveCollationAllCodePoints`). A Node built against a different ICU version (for example `--with-intl=system-icu` on an older system ICU) can order newly assigned characters differently; Go follows the ICU that official Node 22 builds ship.
 
 ## Directory listing order on Windows
 
@@ -18,9 +20,9 @@ Kept verbatim in slice 1. The packaging slice changes it deliberately and update
 
 None. (Add entries here, with the issue kind and a reason, if any are ever excluded under spec §3.3.)
 
-## Corpus gap: no SHA-256 Git proof base
+## Git's default object format
 
-Not an output difference. Frozen TS cannot write a SHA-256 Git proof bundle: before publishing, `writeGitInvestigationProofBundle` re-verifies the package, and the verifier creates its temporary repository with a plain `git init --bare` (always SHA-1, `src/git-proof-bundle.ts:931`) and then fetches the SHA-256 bundle into it, which git rejects (`fatal: pack is corrupted (SHA1 mismatch)`, reproduced on git 2.43 and 2.51). The golden corpus therefore has no SHA-256 base. Go runs the same git commands, so on a SHA-256 bundle it reports the same `Git bundle extraction failed` INVALID result as TS.
+Not an output difference, but an environment dependency of both implementations. The verifier creates its temporary repository with a plain `git init --bare` (`src/git-proof-bundle.ts:931`), which follows `GIT_DEFAULT_HASH` and `init.defaultObjectFormat`. A SHA-1 bundle therefore verifies only where git defaults to SHA-1, and a SHA-256 bundle only where it defaults to SHA-256; elsewhere both report `Git bundle extraction failed`. Go runs the same git commands and matches TS in both settings. The golden generator and replay pin `GIT_DEFAULT_HASH=sha1`, and the `git-sha256` base runs with `GIT_DEFAULT_HASH=sha256` (`difftest/testdata/base-env.json`).
 
 ## `Maximum call stack size exceeded` threshold
 

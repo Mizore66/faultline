@@ -49,7 +49,9 @@ export function createRepository(objectFormat: "sha1" | "sha256" = "sha1"): { ro
   return { root, ancestor, descendant };
 }
 
-export function createFrozenWitness(store: string): FrozenWitness {
+export type ExtraOverlay = { path: string; text: string };
+
+export function createFrozenWitness(store: string, extraOverlays: ExtraOverlay[] = []): FrozenWitness {
   const proposal = proposeWitness(store, {
     proposalId: "portable-git-proof",
     proposalOrigin: "HUMAN",
@@ -66,7 +68,7 @@ export function createFrozenWitness(store: string): FrozenWitness {
       overlays: [{
         path: "witness.mjs",
         bytesBase64: Buffer.from("export const faultLineWitness = 'approved-exact-bytes';\n", "utf8").toString("base64")
-      }],
+      }, ...extraOverlays.map((overlay) => ({ path: overlay.path, bytesBase64: Buffer.from(overlay.text, "utf8").toString("base64") }))],
       policy: { network: "disabled", credentials: "redacted", timeoutSeconds: 30 }
     }
   });

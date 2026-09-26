@@ -17,9 +17,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: "1.27"
+      - run: go mod tidy -diff
       - run: go vet ./...
-      # Golden replay spawns git ~15k times; Windows needs more than the 10m default.
-      - run: go test -timeout 45m ./...
+      # Golden replay runs the fl binary once per invocation and git ~20k times;
+      # Windows needs well over the 10m default.
+      - run: go test -timeout 60m ./...
 
   difftest-live:
     name: difftest live (frozen TS oracle)
@@ -39,8 +41,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Regenerate goldens and require no drift
+        # porcelain also catches untracked files (a new base's golden).
         run: |
           pnpm exec tsx difftest/gen/gen-goldens.ts
-          git diff --exit-code difftest/testdata
+          git status --porcelain difftest/testdata
+          test -z "$(git status --porcelain difftest/testdata)"
       - name: Live property tests
         run: FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run TestLive -v -timeout 30m

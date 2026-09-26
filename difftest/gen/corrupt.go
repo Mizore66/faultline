@@ -2,6 +2,7 @@ package gen
 
 import (
 	"math/rand/v2"
+	"slices"
 	"strings"
 
 	"github.com/Mizore66/faultline/internal/jsjson"
@@ -62,40 +63,61 @@ func CorruptDeep(r *rand.Rand, text string) string {
 	return jsjson.Stringify(root)
 }
 
-// CorruptLeaf changes one scalar leaf or reverses one array, keeping JSON types.
+// CorruptLeaf changes one scalar leaf or reverses one array, keeping JSON
+// types. Leaves are found through nested objects and arrays, so a pick never
+// lands on an object and leaves the input unchanged.
 func CorruptLeaf(r *rand.Rand, text string) string {
 	root, err := jsjson.Parse(text)
 	if err != nil {
 		return text
 	}
-	var parents []jsjson.Value
-	var keys []string
+	type leaf struct {
+		get func() jsjson.Value
+		set func(jsjson.Value)
+	}
+	var leaves []leaf
 	var walk func(v jsjson.Value)
 	walk = func(v jsjson.Value) {
-		if v.Kind() != jsjson.Object {
-			return
-		}
-		for _, k := range v.Obj().Keys() {
-			parents = append(parents, v)
-			keys = append(keys, k)
-			walk(v.Obj().Field(k))
+		switch v.Kind() {
+		case jsjson.Object:
+			o := v.Obj()
+			for _, k := range o.Keys() {
+				child := o.Field(k)
+				if child.Kind() != jsjson.Object {
+					leaves = append(leaves, leaf{func() jsjson.Value { return o.Field(k) }, func(x jsjson.Value) { o.Set(k, x) }})
+				}
+				walk(child)
+			}
+		case jsjson.Array:
+			items := v.Items()
+			for i, child := range items {
+				if child.Kind() != jsjson.Object {
+					leaves = append(leaves, leaf{func() jsjson.Value { return items[i] }, func(x jsjson.Value) { items[i] = x }})
+				}
+				walk(child)
+			}
 		}
 	}
 	walk(root)
-	if len(keys) == 0 {
+	if len(leaves) == 0 {
 		return text
 	}
-	i := r.IntN(len(keys))
-	parent, key := parents[i].Obj(), keys[i]
-	switch leaf := parent.Field(key); leaf.Kind() {
+	l := leaves[r.IntN(len(leaves))]
+	switch v := l.get(); v.Kind() {
 	case jsjson.String:
-		parent.Set(key, jsjson.MakeString(pick(r, leaf.Str()+"x", "", "sha256:"+strings.Repeat("c", 64), "bad name", "IMG@sha256:"+strings.Repeat("d", 64))))
+		l.set(jsjson.MakeString(pick(r, v.Str()+"x", "", "sha256:"+strings.Repeat("c", 64), "bad name", "IMG@sha256:"+strings.Repeat("d", 64), "FEATURE_FLAG", "lower")))
 	case jsjson.Number:
-		parent.Set(key, jsjson.MakeNumber(pick(r, leaf.Num()+1, 0, -1, 1.5, 1e12)))
+		l.set(jsjson.MakeNumber(pick(r, v.Num()+1, 0, -1, 1.5, 1e12)))
 	case jsjson.Bool:
-		parent.Set(key, jsjson.MakeBool(!leaf.Bool()))
+		l.set(jsjson.MakeBool(!v.Bool()))
+	case jsjson.Null:
+		l.set(jsjson.MakeString(pick(r, "x", "/bin/sh", "none")))
 	case jsjson.Array:
-		items := leaf.Items()
+		items := v.Items()
+		if len(items) < 2 {
+			l.set(jsjson.MakeArray(append(slices.Clone(items), jsjson.MakeString(pick(r, "FEATURE_FLAG", "CI", "bad-name")))))
+			break
+		}
 		for a, b := 0, len(items)-1; a < b; a, b = a+1, b-1 {
 			items[a], items[b] = items[b], items[a]
 		}

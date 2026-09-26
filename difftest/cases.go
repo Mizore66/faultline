@@ -3,10 +3,12 @@ package difftest
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Mizore66/faultline/internal/canonical"
@@ -73,9 +75,89 @@ func applicable(t template, path string) bool {
 	case "json-retype", "json-drop-first":
 		o, ok := parseObjectFile(path)
 		return ok && o.Len() > 0
+	case "json-edit":
+		return jsonEditApplicable(t, path)
+	case "replace-nested":
+		return bytes.Contains(b, latin1(t.str("find")))
 	}
 	return true
 }
+
+func (t template) jsonPath(k string) []jsjson.Value { return t.fields.Field(k).Items() }
+
+// at walks a JSON path (object keys and array indices); ok is false when absent.
+func at(v jsjson.Value, path []jsjson.Value) (jsjson.Value, bool) {
+	for _, k := range path {
+		switch v.Kind() {
+		case jsjson.Array:
+			if k.Kind() != jsjson.Number || int(k.Num()) >= len(v.Items()) {
+				return jsjson.Value{}, false
+			}
+			v = v.Items()[int(k.Num())]
+		case jsjson.Object:
+			child, ok := v.Obj().Get(k.Str())
+			if k.Kind() != jsjson.String || !ok {
+				return jsjson.Value{}, false
+			}
+			v = child
+		default:
+			return jsjson.Value{}, false
+		}
+	}
+	return v, true
+}
+
+func setAt(root jsjson.Value, path []jsjson.Value, value jsjson.Value) {
+	parent, _ := at(root, path[:len(path)-1])
+	k := path[len(path)-1]
+	if parent.Kind() == jsjson.Array {
+		parent.Items()[int(k.Num())] = value // shares backing storage with the tree
+	} else {
+		parent.Obj().Set(k.Str(), value)
+	}
+}
+
+func jsonEditApplicable(t template, path string) bool {
+	o, ok := parseObjectFile(path)
+	if !ok {
+		return false
+	}
+	v := jsjson.MakeObject(o)
+	p := t.jsonPath("jsonPath")
+	if parent, ok := at(v, p[:len(p)-1]); !ok || (parent.Kind() != jsjson.Object && parent.Kind() != jsjson.Array) {
+		return false
+	}
+	has := func(k string) bool { _, ok := t.fields.Get(k); return ok }
+	if has("delete") || has("valueFrom") || has("swapWith") {
+		if _, ok := at(v, p); !ok {
+			return false
+		}
+	}
+	for _, k := range []string{"valueFrom", "swapWith"} {
+		if has(k) {
+			if _, ok := at(v, t.jsonPath(k)); !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// matches is a template file pattern: "*", "*.json", "dir/*" or an exact path.
+func matches(pattern, file string) bool {
+	switch {
+	case pattern == "*":
+		return true
+	case pattern == "*.json":
+		return strings.HasSuffix(file, ".json")
+	case strings.HasSuffix(pattern, "/*"):
+		return strings.HasPrefix(file, pattern[:len(pattern)-1])
+	}
+	return pattern == file
+}
+
+// pathOps target a path in the bundle (or the bundle itself), not an existing file.
+var pathOps = map[string]bool{"add-file": true, "root-symlink": true}
 
 // latin1 is Buffer.from(s, "latin1") for the ASCII find/replace strings.
 func latin1(s string) []byte {
@@ -92,19 +174,28 @@ func expandCases(base, root string, templates []template) []testCase {
 	cases := []testCase{{id: base, base: base}}
 	for i := range templates {
 		t := templates[i]
+		if bases, ok := t.fields.Get("bases"); ok && !slices.ContainsFunc(bases.Items(), func(b jsjson.Value) bool { return b.Str() == base }) {
+			continue
+		}
 		var targets []string
-		if t.str("op") == "add-file" {
-			targets = []string{t.str("path")}
+		if pathOps[t.str("op")] {
+			target := "."
+			if p, ok := t.fields.Get("path"); ok {
+				target = p.Str()
+			}
+			targets = []string{target}
 		} else {
 			for _, f := range files {
-				pattern := t.str("file")
-				if pattern == "*" || (pattern == "*.json" && strings.HasSuffix(f, ".json")) || pattern == f {
+				if matches(t.str("file"), f) {
 					targets = append(targets, f)
 				}
 			}
+			if t.fields.Field("first").Bool() && len(targets) > 1 {
+				targets = targets[:1]
+			}
 		}
 		for _, file := range targets {
-			if t.str("op") != "add-file" && !applicable(t, filepath.Join(root, filepath.FromSlash(file))) {
+			if !pathOps[t.str("op")] && !applicable(t, filepath.Join(root, filepath.FromSlash(file))) {
 				continue
 			}
 			cases = append(cases, testCase{id: base + "__" + t.str("id") + "__" + strings.ReplaceAll(file, "/", "~"), base: base, file: file, tpl: &templates[i]})
@@ -179,6 +270,60 @@ func applyMutation(root string, c testCase) bool {
 	t := *c.tpl
 	path := filepath.Join(root, filepath.FromSlash(c.file))
 	switch t.str("op") {
+	case "root-symlink":
+		real := root + "-real"
+		if err := os.Rename(root, real); err != nil {
+			return false
+		}
+		if err := os.Symlink(filepath.Base(real), root); err != nil {
+			return false
+		}
+	case "rename":
+		to := filepath.Join(root, filepath.FromSlash(t.str("to")))
+		os.MkdirAll(filepath.Dir(to), 0o755)
+		os.Rename(path, to)
+	case "replace-nested":
+		depth := int(t.fields.Field("depth").Num())
+		nested := t.str("prefix") + strings.Repeat("[", depth) + strings.Repeat("]", depth) + t.str("suffix")
+		b, _ := os.ReadFile(path)
+		os.WriteFile(path, bytes.Replace(b, latin1(t.str("find")), latin1(nested), 1), 0o644)
+	case "append-catalog-lines":
+		b, _ := os.ReadFile(path)
+		for i := 0; i < int(t.fields.Field("count").Num()); i++ {
+			b = fmt.Appendf(b, "%s  extra/%05d.json\n", strings.Repeat("0", 64), i)
+		}
+		os.WriteFile(path, b, 0o644)
+	case "json-edit":
+		o, _ := parseObjectFile(path)
+		v := jsjson.MakeObject(o)
+		p := t.jsonPath("jsonPath")
+		_, del := t.fields.Get("delete")
+		_, swap := t.fields.Get("swapWith")
+		_, from := t.fields.Get("valueFrom")
+		switch {
+		case del:
+			parent, _ := at(v, p[:len(p)-1])
+			k := p[len(p)-1]
+			if parent.Kind() == jsjson.Array {
+				items := parent.Items()
+				i := int(k.Num())
+				rest := append(slices.Clone(items[:i]), items[i+1:]...)
+				setAt(v, p[:len(p)-1], jsjson.MakeArray(rest))
+			} else {
+				parent.Obj().Delete(k.Str())
+			}
+		case swap:
+			a, _ := at(v, p)
+			b, _ := at(v, t.jsonPath("swapWith"))
+			setAt(v, p, b)
+			setAt(v, t.jsonPath("swapWith"), a)
+		case from:
+			src, _ := at(v, t.jsonPath("valueFrom"))
+			setAt(v, p, src)
+		default:
+			setAt(v, p, t.fields.Field("value"))
+		}
+		writeJSON(path, v)
 	case "flip-byte":
 		b, _ := os.ReadFile(path)
 		i := 0
@@ -284,7 +429,39 @@ func isAlnum(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
+// maskGitDetail hides git's own stderr (it varies across git versions) but
+// keeps the text FaultLine composes around it: the "; " join with Node's
+// spawnSync error, and the "exit <status>" fallback.
+func maskGitDetail(detail string) string {
+	if status, ok := strings.CutPrefix(detail, "exit "); ok {
+		if _, err := strconv.Atoi(status); err == nil || status == "null" {
+			return detail
+		}
+	}
+	if i := strings.LastIndex(detail, "spawnSync git "); i >= 0 {
+		code := detail[i+len("spawnSync git "):]
+		if code != "" && strings.Trim(code, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == "" {
+			if i == 0 {
+				return detail
+			}
+			if strings.HasSuffix(detail[:i], "; ") {
+				return "<GIT-STDERR>; " + detail[i:]
+			}
+		}
+	}
+	return "<GIT-STDERR>"
+}
+
 func normalize(text, bundle string) string {
+	out, _ := normalizeChecked(text, bundle)
+	return out
+}
+
+// normalizeChecked masks run-specific text. On Windows it also rewrites the
+// separators after <BUNDLE> to "/" to compare with Linux goldens, and reports
+// whether any "/" was already there: Node's path.win32 joins with "\", so a
+// "/" means Go built the path differently from TS on Windows.
+func normalizeChecked(text, bundle string) (string, bool) {
 	out := text
 	// Only the path passed to fl is masked, so output that names a resolved
 	// (physical) path instead still differs. Windows temp directories can be
@@ -297,25 +474,6 @@ func normalize(text, bundle string) string {
 	}
 	for _, p := range paths {
 		out = strings.ReplaceAll(out, p, "<BUNDLE>")
-	}
-	if runtime.GOOS == "windows" {
-		var b strings.Builder
-		for {
-			i := strings.Index(out, "<BUNDLE>")
-			if i < 0 {
-				b.WriteString(out)
-				break
-			}
-			b.WriteString(out[:i+len("<BUNDLE>")])
-			rest := out[i+len("<BUNDLE>"):]
-			end := 0
-			for end < len(rest) && !isBoundary(rest[end]) {
-				end++
-			}
-			b.WriteString(strings.ReplaceAll(rest[:end], `\`, "/"))
-			out = rest[end:]
-		}
-		out = b.String()
 	}
 	const marker = "faultline-git-proof-verify-"
 	for i := strings.Index(out, marker); i >= 0; {
@@ -346,15 +504,37 @@ func normalize(text, bundle string) string {
 			} else {
 				to = len(out)
 			}
-			out = out[:from] + "<GIT-DETAIL>" + out[to:]
-			next := strings.Index(out[from+len("<GIT-DETAIL>"):], needle)
+			detail := maskGitDetail(out[from:to])
+			out = out[:from] + detail + out[to:]
+			next := strings.Index(out[from+len(detail):], needle)
 			if next < 0 {
 				break
 			}
-			i = from + len("<GIT-DETAIL>") + next
+			i = from + len(detail) + next
 		}
 	}
-	return out
+	forwardSlash := false
+	if runtime.GOOS == "windows" {
+		var b strings.Builder
+		for {
+			i := strings.Index(out, "<BUNDLE>")
+			if i < 0 {
+				b.WriteString(out)
+				break
+			}
+			b.WriteString(out[:i+len("<BUNDLE>")])
+			rest := out[i+len("<BUNDLE>"):]
+			end := 0
+			for end < len(rest) && !isBoundary(rest[end]) {
+				end++
+			}
+			forwardSlash = forwardSlash || strings.Contains(rest[:end], "/")
+			b.WriteString(strings.ReplaceAll(rest[:end], `\`, "/"))
+			out = rest[end:]
+		}
+		out = b.String()
+	}
+	return out, forwardSlash
 }
 
 func baseRoot(root, base string) string {

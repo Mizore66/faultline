@@ -102,6 +102,10 @@ var (
 	).Strict()
 
 	// GitInvestigationRunFactSchema ports src/git-investigation.ts:163.
+	// SandboxAuditSchema is GitInvestigationRunFactSchema.shape.sandbox, for
+	// the difftest live oracle.
+	SandboxAuditSchema = sandboxAuditSchema
+
 	GitInvestigationRunFactSchema = s.Object(
 		s.F("schemaVersion", s.LiteralString(GitInvestigationSchemaVersion)),
 		s.F("runId", digestSchema),
