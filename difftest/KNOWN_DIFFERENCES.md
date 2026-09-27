@@ -12,7 +12,7 @@ Go's collation (`internal/collation`) is generated from the ICU 78 root collatio
 
 ## Directory listing order on Windows
 
-Node's `readdirSync` returns byte-sorted names on Linux and macOS but filesystem order on Windows. Go returns byte-sorted names everywhere, so Go on Windows matches TS on Linux. This only affects the order of error lines that enumerate files.
+Node's `readdirSync` returns byte-sorted names on Linux and macOS but filesystem order on Windows (NTFS: case-insensitive upcase order). Go returns byte-sorted names everywhere, so Go on Windows matches TS on Linux. This affects the order of error lines that enumerate files, and, because the file walkers stop at the first symlink, special file or oversized file they meet, which file such an error names when a bundle has two offending entries (for example `analysis.json` before `ROOT.sha256` on NTFS, the reverse in byte order).
 
 ## `Next: pnpm fl help` hint
 
@@ -44,7 +44,7 @@ Node keeps about 16 file descriptors open for its event loop and worker threads.
 
 ## `ENOTDIR` on Windows
 
-When a path component that should be a directory is a file (`file.json/x`), Linux reports `ENOTDIR` while Windows (libuv maps `ERROR_PATH_NOT_FOUND` to `ENOENT`) reports `ENOENT`. Go on Windows reports `ENOTDIR` in that case, so it matches TS on Linux and the Linux-generated goldens. A missing parent directory is `ENOENT` everywhere. All other Win32 errors follow libuv's `uv_translate_sys_error`.
+When a path component that should be a directory is a file (`file.json/x`), Linux reports `ENOTDIR` while Windows (libuv maps `ERROR_PATH_NOT_FOUND` to `ENOENT`) reports `ENOENT`. Go on Windows reports `ENOTDIR` in that case, deliberately: the Linux-generated goldens contain this error (`git-unbound__hashes-enotdir`, `manifest.json/x` declared in `hashes.txt`), and one expected output on every OS keeps the corpus portable. This is a deliberate divergence from TS on Windows, listed in the spec's done criteria. A missing parent directory is `ENOENT` everywhere. All other Win32 errors follow libuv's `uv_translate_sys_error`.
 
 ## WSL symlinks on Windows
 

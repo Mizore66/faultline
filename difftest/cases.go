@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -111,36 +112,110 @@ func setAt(root jsjson.Value, path []jsjson.Value, value jsjson.Value) {
 	parent, _ := at(root, path[:len(path)-1])
 	k := path[len(path)-1]
 	if parent.Kind() == jsjson.Array {
-		parent.Items()[int(k.Num())] = value // shares backing storage with the tree
+		items, i := parent.Items(), int(k.Num())
+		if i >= len(items) {
+			// JS `a[i] = v` past the end grows the array; holes stringify as null.
+			grown := slices.Clone(items)
+			for len(grown) < i {
+				grown = append(grown, jsjson.MakeNull())
+			}
+			setAt(root, path[:len(path)-1], jsjson.MakeArray(append(grown, value)))
+			return
+		}
+		items[i] = value // shares backing storage with the tree
 	} else {
 		parent.Obj().Set(k.Str(), value)
 	}
 }
 
+// jsonEdits are a json-edit template's steps: the template itself, or the
+// objects in its "edits" list, applied in order.
+func jsonEdits(t template) []template {
+	list, ok := t.fields.Get("edits")
+	if !ok {
+		return []template{t}
+	}
+	out := make([]template, len(list.Items()))
+	for i, e := range list.Items() {
+		out[i] = template{e.Obj()}
+	}
+	return out
+}
+
+// jsonEditApplicable checks every step against the file as it would be after
+// the steps before it.
 func jsonEditApplicable(t template, path string) bool {
 	o, ok := parseObjectFile(path)
 	if !ok {
 		return false
 	}
 	v := jsjson.MakeObject(o)
-	p := t.jsonPath("jsonPath")
-	if parent, ok := at(v, p[:len(p)-1]); !ok || (parent.Kind() != jsjson.Object && parent.Kind() != jsjson.Array) {
-		return false
-	}
-	has := func(k string) bool { _, ok := t.fields.Get(k); return ok }
-	if has("delete") || has("valueFrom") || has("swapWith") {
-		if _, ok := at(v, p); !ok {
+	for _, e := range jsonEdits(t) {
+		p := e.jsonPath("jsonPath")
+		if parent, ok := at(v, p[:len(p)-1]); !ok || (parent.Kind() != jsjson.Object && parent.Kind() != jsjson.Array) {
 			return false
 		}
-	}
-	for _, k := range []string{"valueFrom", "swapWith"} {
-		if has(k) {
-			if _, ok := at(v, t.jsonPath(k)); !ok {
+		has := func(k string) bool { _, ok := e.fields.Get(k); return ok }
+		if has("delete") || has("valueFrom") || has("swapWith") {
+			if _, ok := at(v, p); !ok {
 				return false
 			}
 		}
+		for _, k := range []string{"valueFrom", "swapWith"} {
+			if has(k) {
+				if _, ok := at(v, e.jsonPath(k)); !ok {
+					return false
+				}
+			}
+		}
+		v = applyJSONEdit(v, e)
 	}
 	return true
+}
+
+// applyJSONEdit applies one step and returns the (possibly new) root.
+func applyJSONEdit(v jsjson.Value, e template) jsjson.Value {
+	p := e.jsonPath("jsonPath")
+	_, del := e.fields.Get("delete")
+	_, swap := e.fields.Get("swapWith")
+	_, from := e.fields.Get("valueFrom")
+	switch {
+	case del:
+		parent, _ := at(v, p[:len(p)-1])
+		k := p[len(p)-1]
+		if parent.Kind() == jsjson.Array {
+			items := parent.Items()
+			i := int(k.Num())
+			rest := append(slices.Clone(items[:i]), items[i+1:]...)
+			setAt(v, p[:len(p)-1], jsjson.MakeArray(rest))
+		} else {
+			parent.Obj().Delete(k.Str())
+		}
+	case swap:
+		a, _ := at(v, p)
+		b, _ := at(v, e.jsonPath("swapWith"))
+		setAt(v, p, b)
+		setAt(v, e.jsonPath("swapWith"), a)
+	case from:
+		src, _ := at(v, e.jsonPath("valueFrom"))
+		setAt(v, p, src)
+	default:
+		setAt(v, p, cloneJSON(e.fields.Field("value")))
+	}
+	return v
+}
+
+// cloneJSON deep-copies a template value (structuredClone in the TS engine),
+// so later steps never edit the template itself.
+func cloneJSON(v jsjson.Value) jsjson.Value {
+	return bundleMust(jsjson.Parse(jsjson.Stringify(v)))
+}
+
+func bundleMust(v jsjson.Value, err error) jsjson.Value {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 // matches is a template file pattern: "*", "*.json", "dir/*" or an exact path.
@@ -156,8 +231,14 @@ func matches(pattern, file string) bool {
 	return pattern == file
 }
 
+// fixturesDir holds files that copy-file templates put into a bundle.
+func fixturesDir() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(file), "testdata", "fixtures")
+}
+
 // pathOps target a path in the bundle (or the bundle itself), not an existing file.
-var pathOps = map[string]bool{"add-file": true, "root-symlink": true}
+var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "sparse-file": true, "many-files": true, "fake-git": true}
 
 // latin1 is Buffer.from(s, "latin1") for the ASCII find/replace strings.
 func latin1(s string) []byte {
@@ -296,34 +377,41 @@ func applyMutation(root string, c testCase) bool {
 	case "json-edit":
 		o, _ := parseObjectFile(path)
 		v := jsjson.MakeObject(o)
-		p := t.jsonPath("jsonPath")
-		_, del := t.fields.Get("delete")
-		_, swap := t.fields.Get("swapWith")
-		_, from := t.fields.Get("valueFrom")
-		switch {
-		case del:
-			parent, _ := at(v, p[:len(p)-1])
-			k := p[len(p)-1]
-			if parent.Kind() == jsjson.Array {
-				items := parent.Items()
-				i := int(k.Num())
-				rest := append(slices.Clone(items[:i]), items[i+1:]...)
-				setAt(v, p[:len(p)-1], jsjson.MakeArray(rest))
-			} else {
-				parent.Obj().Delete(k.Str())
-			}
-		case swap:
-			a, _ := at(v, p)
-			b, _ := at(v, t.jsonPath("swapWith"))
-			setAt(v, p, b)
-			setAt(v, t.jsonPath("swapWith"), a)
-		case from:
-			src, _ := at(v, t.jsonPath("valueFrom"))
-			setAt(v, p, src)
-		default:
-			setAt(v, p, t.fields.Field("value"))
+		for _, e := range jsonEdits(t) {
+			v = applyJSONEdit(v, e)
 		}
 		writeJSON(path, v)
+	case "append-bytes":
+		unit, _ := hex.DecodeString(t.str("hex"))
+		b, _ := os.ReadFile(path)
+		b = append(b, bytes.Repeat(unit, int(t.fields.Field("count").Num()))...)
+		os.WriteFile(path, b, 0o644)
+	case "fake-git":
+		// The tree is unchanged; caseEnv puts the fake git (a POSIX shell
+		// script) first on PATH.
+		return runtime.GOOS != "windows"
+	case "copy-file":
+		b, _ := os.ReadFile(filepath.Join(fixturesDir(), filepath.FromSlash(t.str("from"))))
+		os.WriteFile(path, b, 0o644)
+	case "sparse-file":
+		// count > 1 makes path-00000, path-00001, ...
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		paths := []string{path}
+		if n, ok := t.fields.Get("count"); ok {
+			paths = nil
+			for i := 0; i < int(n.Num()); i++ {
+				paths = append(paths, fmt.Sprintf("%s-%05d", path, i))
+			}
+		}
+		for _, p := range paths {
+			os.WriteFile(p, nil, 0o644)
+			os.Truncate(p, int64(t.fields.Field("size").Num()))
+		}
+	case "many-files":
+		os.MkdirAll(path, 0o755)
+		for i := 0; i < int(t.fields.Field("count").Num()); i++ {
+			os.WriteFile(filepath.Join(path, fmt.Sprintf("%05d.txt", i)), []byte(t.str("content")), 0o644)
+		}
 	case "flip-byte":
 		b, _ := os.ReadFile(path)
 		i := 0
@@ -375,6 +463,19 @@ func applyMutation(root string, c testCase) bool {
 		rehash(root, c.base)
 	}
 	return true
+}
+
+// caseEnv adds a fake-git case's PATH to the base environment.
+func caseEnv(c testCase, env map[string]string) map[string]string {
+	if c.tpl == nil || c.tpl.str("fakeGit") == "" {
+		return env
+	}
+	out := map[string]string{}
+	for k, v := range env {
+		out[k] = v
+	}
+	out["PATH"] = filepath.Join(fixturesDir(), "..", "fakegit", c.tpl.str("fakeGit")) + string(os.PathListSeparator) + os.Getenv("PATH")
+	return out
 }
 
 func firstKey(o *jsjson.Obj) string {
@@ -429,28 +530,37 @@ func isAlnum(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
-// maskGitDetail hides git's own stderr (it varies across git versions) but
-// keeps the text FaultLine composes around it: the "; " join with Node's
-// spawnSync error, and the "exit <status>" fallback.
+// maskGitDetail hides git's own diagnostics (they vary across git
+// versions): each run of lines starting with "error: ", "fatal: ",
+// "warning: " or "hint: " becomes one <GIT-STDERR>. Everything else stays:
+// other git output, the text FaultLine composes (the "; " join with Node's
+// spawnSync error, the "exit <status>" fallback), and anything a port adds.
 func maskGitDetail(detail string) string {
 	if status, ok := strings.CutPrefix(detail, "exit "); ok {
 		if _, err := strconv.Atoi(status); err == nil || status == "null" {
 			return detail
 		}
 	}
-	if i := strings.LastIndex(detail, "spawnSync git "); i >= 0 {
-		code := detail[i+len("spawnSync git "):]
-		if code != "" && strings.Trim(code, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == "" {
-			if i == 0 {
-				return detail
-			}
-			if strings.HasSuffix(detail[:i], "; ") {
-				return "<GIT-STDERR>; " + detail[i:]
-			}
+	body, tail := detail, ""
+	if m := spawnSuffix.FindStringSubmatch(detail); m != nil && (m[1] == "") == !strings.HasPrefix(m[2], "; ") {
+		body, tail = m[1], m[2]
+	}
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		switch {
+		case !gitDiagnostic.MatchString(line):
+			out = append(out, line)
+		case len(out) == 0 || out[len(out)-1] != "<GIT-STDERR>":
+			out = append(out, "<GIT-STDERR>")
 		}
 	}
-	return "<GIT-STDERR>"
+	return strings.Join(out, "\n") + tail
 }
+
+var (
+	spawnSuffix   = regexp.MustCompile(`^((?s:.*?))((?:; )?spawnSync git [A-Z0-9_]+)$`)
+	gitDiagnostic = regexp.MustCompile(`^(?:error|fatal|warning|hint): `)
+)
 
 func normalize(text, bundle string) string {
 	out, _ := normalizeChecked(text, bundle)

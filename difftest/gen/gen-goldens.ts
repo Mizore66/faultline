@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { applyMutation, baseRoot, expandCases, normalize, treeDigest, type Case, type Template } from "./cases.js";
+import { applyMutation, baseRoot, caseEnv, expandCases, normalize, treeDigest, type Case, type Template } from "./cases.js";
 
 const repo = resolve(".");
 const cli = join(repo, "dist", "cli.js");
@@ -34,9 +34,9 @@ if (!existsSync(cli) || statSync(cli).mtimeMs < newestMtime(join(repo, "src"))) 
 const templates = JSON.parse(readFileSync(join(repo, "difftest/testdata/mutations.json"), "utf8")) as Template[];
 const ROOT_BAD = `sha256:${"0".repeat(64)}`;
 
-function run(base: string, args: string[]): Promise<{ stdout: string; stderr: string; exit: number }> {
+function run(c: Case, args: string[]): Promise<{ stdout: string; stderr: string; exit: number }> {
   return new Promise((done) => {
-    const child = spawn(process.execPath, [cli, "verify", ...args], { env: { ...env, ...baseEnv[base] }, cwd: repo });
+    const child = spawn(process.execPath, [cli, "verify", ...args], { env: caseEnv(c, { ...env, ...baseEnv[c.base] }), cwd: repo });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     child.stdout.on("data", (b) => out.push(b));
@@ -60,7 +60,7 @@ async function golden(c: Case, root: string, rootDigest: string): Promise<string
       ];
     const lines: string[] = [];
     for (const [inv, args] of invocations) {
-      const r = await run(c.base, args);
+      const r = await run(c, args);
       lines.push(JSON.stringify({ case: c.id, inv, treeDigest: digest, stdout: normalize(r.stdout, bundle), stderr: normalize(r.stderr, bundle), exit: r.exit }));
     }
     return lines;

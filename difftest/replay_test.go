@@ -203,7 +203,7 @@ func TestGoldenReplay(t *testing.T) {
 						if runtime.GOOS != "windows" {
 							t.Fatal("could not apply the mutation")
 						}
-						t.Skip("platform cannot create this case (symlink)")
+						t.Skip("platform cannot create this case (symlink, or a POSIX fake git)")
 					}
 					digest := treeDigest(bundle)
 					invocations := [][2]string{{"plain", ""}}
@@ -224,7 +224,7 @@ func TestGoldenReplay(t *testing.T) {
 						if inv[1] != "" {
 							args = append(args, "--expect-root", inv[1])
 						}
-						stdout, stderr, exit := runFl(t, repo, baseEnv[base], args...)
+						stdout, stderr, exit := runFl(t, repo, caseEnv(c, baseEnv[base]), args...)
 						gotOut, slashOut := normalizeChecked(stdout, bundle)
 						gotErr, slashErr := normalizeChecked(stderr, bundle)
 						if slashOut || slashErr {

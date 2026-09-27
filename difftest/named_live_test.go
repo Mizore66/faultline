@@ -96,15 +96,28 @@ func TestLiveNamedSchemas(t *testing.T) {
 	r := rand.New(rand.NewPCG(13, 14))
 	// Sorted names keep the shared RNG's draws, and so the inputs, fixed.
 	names := slices.Sorted(maps.Keys(namedSeeds))
+	// Each schema gets an equal share of liveCases distinct inputs; CorruptDeep
+	// repeats itself on small seeds, so duplicates are skipped (up to 20x
+	// attempts) and the distinct counts are logged.
 	for _, name := range names {
 		seeds := namedSeeds[name]
+		seen := map[string]bool{}
 		for _, seed := range seeds {
 			raw := seedText(t, bases, seed)
-			for i := 0; i < liveCases/len(namedSeeds)/len(seeds); i++ {
+			target := liveCases / len(namedSeeds) / len(seeds)
+			for i, distinct := 0, 0; distinct < target && i < 20*target; i++ {
 				text := raw
 				if i > 0 {
 					text = gen.CorruptDeep(r, text)
+					if r.IntN(3) == 0 {
+						text = gen.CorruptDeep(r, text)
+					}
 				}
+				if seen[text] {
+					continue
+				}
+				seen[text] = true
+				distinct++
 				want := call(t, c, "zodNamed", `{"name":"`+name+`","text":`+jsjson.Quote(text)+`}`)
 				value, _ := jsjson.Parse(text)
 				out, issues, ok := schema.Parse(namedSchemas[name], value)
@@ -126,5 +139,6 @@ func TestLiveNamedSchemas(t *testing.T) {
 				}
 			}
 		}
+		t.Logf("%s: %d distinct inputs", name, len(seen))
 	}
 }

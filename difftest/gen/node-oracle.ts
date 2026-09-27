@@ -16,6 +16,7 @@ import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../sr
 import { validateSandboxPlanAudit } from "../../src/sandbox.js";
 import { resignLedger, richLedger } from "./ledger-seed.js";
 import { resignSandbox, sandboxVariant } from "./sandbox-seed.js";
+import { makeWitness, resignWitness } from "./witness-seed.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -37,6 +38,8 @@ export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
 type Handler = (args: any) => unknown;
 export const handlers: Record<string, Handler> = {
   echo: (args) => args,
+  makeWitness: ({ paths }: { paths: string[] }) => makeWitness(paths),
+  resignWitness: ({ text }: { text: string }) => resignWitness(text),
   parse: ({ text }: { text: string }) => {
     try {
       const value = JSON.parse(text);

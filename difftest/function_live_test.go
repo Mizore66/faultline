@@ -1,7 +1,9 @@
 package difftest
 
 import (
+	"encoding/json"
 	"math/rand/v2"
+	"slices"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,13 +42,15 @@ func canonicalOf(v jsjson.Value) string {
 // liveCompare calls an oracle op that returns a string (canonical JSON, or
 // "THREW:<message>" when TS threw) and compares it with the Go result. Inputs
 // are deduplicated: it runs until liveCases distinct inputs were compared (or
-// gives up after 5x attempts) and logs how many there were.
-func liveCompare(t *testing.T, op string, next func(c *oracle.Client, r *rand.Rand, i int) (args, got string)) {
+// gives up after 5x attempts) and logs how many there were. It returns every
+// TS result, so callers can check which messages were reached.
+func liveCompare(t *testing.T, op string, next func(c *oracle.Client, r *rand.Rand, i int) (args, got string)) string {
 	c := oracle.Start(t)
 	defer c.Close()
 	r := rand.New(rand.NewPCG(15, uint64(len(op))))
 	seen := map[string]bool{}
 	threw := 0
+	var outputs strings.Builder
 	for i := 0; len(seen) < liveCases && i < 5*liveCases; i++ {
 		args, got := next(c, r, i)
 		if seen[args] {
@@ -58,6 +62,7 @@ func liveCompare(t *testing.T, op string, next func(c *oracle.Client, r *rand.Ra
 			t.Fatal(err)
 		}
 		want, _ := jsjson.Parse(raw)
+		outputs.WriteString(want.Str() + "\n")
 		if strings.HasPrefix(want.Str(), "THREW:") {
 			threw++
 			continue
@@ -67,6 +72,26 @@ func liveCompare(t *testing.T, op string, next func(c *oracle.Client, r *rand.Ra
 		}
 	}
 	t.Logf("%s: %d distinct inputs (%d where TS threw)", op, len(seen), threw)
+	return outputs.String()
+}
+
+// requireReached fails for each error literal in file (relative to
+// internal/bundle) that no TS result produced: the live test is the golden
+// gate for that file (liveGatedFiles in coverage_test.go).
+func requireReached(t *testing.T, file, outputs string) {
+	t.Helper()
+	for lit, pos := range errorLiterals(t, filepath.Join(oracle.RepoRoot(t), "internal", "bundle", filepath.FromSlash(file))) {
+		if _, ok := unreachableLiterals[lit]; ok {
+			continue
+		}
+		reached := true
+		for _, frag := range messageFragments(lit) {
+			reached = reached && strings.Contains(outputs, jsjson.Quote(frag)[1:len(jsjson.Quote(frag))-1])
+		}
+		if !reached {
+			t.Errorf("%s: no generated input reached %q", pos, lit)
+		}
+	}
 }
 
 // oracleText calls an oracle op that returns a string.
@@ -84,18 +109,20 @@ func oracleText(t *testing.T, c *oracle.Client, op, args string) string {
 
 func TestLiveWitness(t *testing.T) {
 	seeds := seedTexts(t, "git-unbound/witness/frozen.json", "git-sample-self-incident/witness/frozen.json")
-	liveCompare(t, "verifyFrozenWitnessRecord", func(_ *oracle.Client, r *rand.Rand, i int) (string, string) {
+	outputs := liveCompare(t, "verifyFrozenWitnessRecord", func(_ *oracle.Client, r *rand.Rand, i int) (string, string) {
 		text := seeds[r.IntN(len(seeds))]
 		if i >= len(seeds) {
 			text = gen.CorruptDeep(r, text)
 		}
 		value, _ := jsjson.Parse(text)
 		expected, provided := "", false
-		switch r.IntN(3) {
+		switch r.IntN(4) {
 		case 1:
 			expected, provided = value.Get("frozenDigest").Str(), true
 		case 2:
 			expected, provided = "nope", true
+		case 3: // well formed, but not this record's digest
+			expected, provided = "sha256:"+strings.Repeat("0", 64), true
 		}
 		args := `{"text":` + jsjson.Quote(text)
 		if provided {
@@ -103,6 +130,72 @@ func TestLiveWitness(t *testing.T) {
 		}
 		return args + "}", canonicalOf(gitproof.VerifyFrozenWitnessRecord(value, expected, provided).JSON())
 	})
+	requireReached(t, "gitproof/witness.go", outputs+liveWitnessOverlays(t))
+}
+
+// liveWitnessOverlays compares multi-overlay witnesses built by frozen TS
+// (proposeWitness sorts overlay paths with localeCompare), then reordered,
+// or given a case-alias duplicate, and re-signed, so the overlay order and
+// duplicate checks run on real collation-sensitive paths. Paths mix scripts,
+// contractions, marks and case variants. It returns every TS result.
+func liveWitnessOverlays(t *testing.T) string {
+	c := oracle.Start(t)
+	defer c.Close()
+	r := rand.New(rand.NewPCG(21, 4))
+	var outputs strings.Builder
+	built, compared := 0, 0
+	for round := 0; round < 400; round++ {
+		var paths []string
+		for _, key := range gen.RandomKeys(r) {
+			if key != "" && !strings.ContainsAny(key, "/\\:*?\"<>|\x00") && strings.TrimSpace(key) == key {
+				paths = append(paths, key+".md")
+			}
+			if len(paths) == 2+r.IntN(7) {
+				break
+			}
+		}
+		if len(paths) < 2 {
+			continue
+		}
+		args, _ := json.Marshal(map[string]any{"paths": paths})
+		raw, err := c.Call("makeWitness", string(args))
+		if err != nil {
+			continue // TS rejects the paths (unsafe or case aliases)
+		}
+		built++
+		text, _ := jsjson.Parse(raw)
+		variants := []string{text.Str()}
+		// Adjacent swap and full reversal of the overlays, re-signed.
+		frozen, _ := jsjson.Parse(text.Str())
+		overlays := frozen.Get("proposal", "witness", "overlays").Items()
+		i := r.IntN(len(overlays) - 1)
+		swapped := slices.Clone(overlays)
+		swapped[i], swapped[i+1] = swapped[i+1], swapped[i]
+		reversed := slices.Clone(overlays)
+		slices.Reverse(reversed)
+		alias := slices.Clone(overlays)
+		dup, _ := jsjson.Parse(jsjson.Stringify(alias[1]))
+		dup.Obj().Set("path", jsjson.MakeString(strings.ToUpper(alias[0].Get("path").Str())))
+		alias[1] = dup
+		for _, order := range [][]jsjson.Value{swapped, reversed, alias} {
+			frozen.Get("proposal", "witness").Obj().Set("overlays", jsjson.MakeArray(order))
+			variants = append(variants, oracleText(t, c, "resignWitness", `{"text":`+jsjson.Quote(jsjson.Stringify(frozen))+"}"))
+		}
+		for _, v := range variants {
+			value, _ := jsjson.Parse(v)
+			for _, expected := range []string{value.Get("frozenDigest").Str(), "sha256:" + strings.Repeat("0", 64)} {
+				want := oracleText(t, c, "verifyFrozenWitnessRecord", `{"text":`+jsjson.Quote(v)+`,"expected":`+jsjson.Quote(expected)+"}")
+				got := canonicalOf(gitproof.VerifyFrozenWitnessRecord(value, expected, true).JSON())
+				if got != want {
+					t.Fatalf("verifyFrozenWitnessRecord(%s, %s):\ngot  %s\nwant %s", v, expected, got, want)
+				}
+				outputs.WriteString(want + "\n")
+				compared++
+			}
+		}
+	}
+	t.Logf("%d multi-overlay witnesses built by TS, %d verifications compared", built, compared)
+	return outputs.String()
 }
 
 // Ledger seeds: the two committed ledgers plus a TS-built one with every
@@ -111,23 +204,33 @@ func TestLiveWitness(t *testing.T) {
 func TestLiveLedger(t *testing.T) {
 	seeds := seedTexts(t, "git-partially-bound/lifecycle/ledger.json", "git-fully-bound/lifecycle/ledger.json")
 	var rich string
-	liveCompare(t, "verifyCodexLifecycleLedger", func(c *oracle.Client, r *rand.Rand, i int) (string, string) {
+	outputs := liveCompare(t, "verifyCodexLifecycleLedger", func(c *oracle.Client, r *rand.Rand, i int) (string, string) {
 		if rich == "" {
 			rich = oracleText(t, c, "richLedger", "{}")
 			seeds = append(seeds, rich)
 		}
 		text := seeds[r.IntN(len(seeds))]
 		if i >= len(seeds) {
-			for n := r.IntN(2); n >= 0; n-- {
-				text = gen.CorruptDeep(r, text)
-			}
 			if r.IntN(2) == 0 {
+				// A structural event change behind a re-signed chain
+				// reaches the lifecycle state machine.
+				for n := r.IntN(2); n >= 0; n-- {
+					text = gen.MutateLedgerEvents(r, text)
+				}
 				text = oracleText(t, c, "resignLedger", `{"text":`+jsjson.Quote(text)+"}")
+			} else {
+				for n := r.IntN(2); n >= 0; n-- {
+					text = gen.CorruptDeep(r, text)
+				}
+				if r.IntN(2) == 0 {
+					text = oracleText(t, c, "resignLedger", `{"text":`+jsjson.Quote(text)+"}")
+				}
 			}
 		}
 		value, _ := jsjson.Parse(text)
 		return `{"text":` + jsjson.Quote(text) + "}", canonicalOf(gitproof.VerifyCodexLifecycleLedger(value).JSON())
 	})
+	requireReached(t, "gitproof/ledger.go", outputs)
 	if !strings.Contains(rich, "TURN_TREE_SNAPSHOT") || !strings.Contains(rich, "TOOL_USE_STARTED") || !strings.Contains(rich, "SESSION_BASELINE_SNAPSHOT") {
 		t.Fatalf("rich ledger seed lacks snapshot or tool-use events")
 	}
@@ -150,7 +253,7 @@ func TestLiveSandbox(t *testing.T) {
 	}
 	variants := 0
 	accepted := map[string]int{}
-	liveCompare(t, "validateSandboxPlanAudit", func(c *oracle.Client, r *rand.Rand, i int) (string, string) {
+	outputs := liveCompare(t, "validateSandboxPlanAudit", func(c *oracle.Client, r *rand.Rand, i int) (string, string) {
 		if variants == 0 {
 			docker := seeds[0]
 			for _, v := range []string{"legacy", "unsafe-local", "environment"} {
@@ -187,6 +290,7 @@ func TestLiveSandbox(t *testing.T) {
 		}
 		return `{"text":` + jsjson.Quote(text) + "}", canonicalOf(jsjson.MakeArray(items))
 	})
+	requireReached(t, "gitproof/sandbox.go", outputs)
 	t.Logf("accepted audits among generated inputs: %v", accepted)
 	for _, kind := range []string{"DOCKER_ISOLATED", "UNSAFE_LOCAL"} {
 		if accepted[kind] == 0 {

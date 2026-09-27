@@ -2,25 +2,24 @@ package difftest
 
 import "testing"
 
-// The git detail mask hides only git's own stderr; FaultLine's composition
-// (the "; " join, spawnSync errors, the exit fallback) is still compared.
+// Only git's own diagnostic lines are masked; FaultLine's text and anything
+// else around them must match exactly.
 func TestMaskGitDetail(t *testing.T) {
-	for in, want := range map[string]string{
-		"exit 128":             "exit 128",
-		"exit null":            "exit null",
-		"spawnSync git ENOENT": "spawnSync git ENOENT",
-		"fatal: bad object; spawnSync git ENOBUFS":   "<GIT-STDERR>; spawnSync git ENOBUFS",
-		"a; b\nc; spawnSync git EACCES":              "<GIT-STDERR>; spawnSync git EACCES",
-		"error: not a bundle\nfatal: pack corrupted": "<GIT-STDERR>",
-		"exit 128 and more":                          "<GIT-STDERR>",
-		"spawnSync git enoent":                       "<GIT-STDERR>",
+	for _, tc := range []struct{ in, want string }{
+		{"exit 128", "exit 128"},
+		{"exit null", "exit null"},
+		{"spawnSync git ENOENT", "spawnSync git ENOENT"},
+		{"fatal: pack is corrupted (SHA1 mismatch)", "<GIT-STDERR>"},
+		{"error: Repository lacks these prerequisite commits:\nerror: 0123 x", "<GIT-STDERR>"},
+		{"fatal: x; spawnSync git ENOBUFS", "<GIT-STDERR>; spawnSync git ENOBUFS"},
+		{"<GITTMP>/b is okay; spawnSync git ENOBUFS", "<GITTMP>/b is okay; spawnSync git ENOBUFS"},
+		{"fatal: x\n  [go-only trailer]", "<GIT-STDERR>\n  [go-only trailer]"},
+		{"fatal: x; exit 999", "<GIT-STDERR>"},
+		{"PLANTED-BOGUS-DETAIL; exit 999", "PLANTED-BOGUS-DETAIL; exit 999"},
+		{"The bundle records a complete history.\nfatal: y", "The bundle records a complete history.\n<GIT-STDERR>"},
 	} {
-		if got := maskGitDetail(in); got != want {
-			t.Errorf("maskGitDetail(%q) = %q, want %q", in, got, want)
+		if got := maskGitDetail(tc.in); got != tc.want {
+			t.Errorf("maskGitDetail(%q) = %q, want %q", tc.in, got, tc.want)
 		}
-	}
-	out := normalize("- portable Git source verification failed: Git bundle head listing failed: warn; spawnSync git ENOBUFS\n- next\n", "/b")
-	if want := "- portable Git source verification failed: Git bundle head listing failed: <GIT-STDERR>; spawnSync git ENOBUFS\n- next\n"; out != want {
-		t.Errorf("normalize = %q", out)
 	}
 }

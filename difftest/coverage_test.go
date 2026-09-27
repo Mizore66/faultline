@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,17 +18,21 @@ import (
 // produce, each with the reason. Everything else must appear in some golden
 // output, so a dropped or reworded check fails replay.
 var unreachableLiterals = map[string]string{
-	"declared path escapes bundle:":                                               "only a Windows drive-relative path (C:x) resolves outside the bundle after invalidDeclaredPath",
-	"Unsafe artifact path:":                                                       "metadata and manifest paths are schema-checked with the same safe-path rule first",
-	"Artifact path escapes its bundle:":                                           "unreachable after the safe-path check (no .. or absolute segments)",
-	"Git returned an invalid object identifier while writing a proof bundle.":     "git rev-parse --verify only prints object ids",
-	"Git bundle returned an invalid head line:":                                   "git bundle list-heads output is well formed for any bundle git accepts",
-	"Git range patch exceeds FaultLine's portable artifact limit.":                "needs a git diff over 128 MiB, larger than the bundle limits allow in the corpus",
-	"Git proof bundle artifact exceeds FaultLine's read limit:":                   "needs a 128 MiB file in the corpus",
-	"Git proof bundle contains too many files to verify safely":                   "needs more than 2048 files on disk; covered by the catalog-count case instead",
-	"Git proof bundle exceeds FaultLine's total verification read limit":          "needs 512 MiB on disk",
-	"declared artifacts exceed FaultLine's total verification read limit":         "needs 512 MiB on disk",
-	"investigation has no resolved range for source metadata cross-check":         "the investigation schema requires resolvedRange for a bundle with source metadata",
+	"declared path escapes bundle:":                                           "only a Windows drive-relative path (C:x) resolves outside the bundle after invalidDeclaredPath",
+	"Unsafe artifact path:":                                                   "metadata and manifest paths are schema-checked with the same safe-path rule first",
+	"Artifact path escapes its bundle:":                                       "unreachable after the safe-path check (no .. or absolute segments)",
+	"Git returned an invalid object identifier while writing a proof bundle.": "git rev-parse --verify only prints object ids",
+	"Git bundle returned an invalid head line:":                               "git bundle list-heads output is well formed for any bundle git accepts",
+	"Git range patch exceeds FaultLine's portable artifact limit.":            "needs a git diff over 128 MiB, larger than the bundle limits allow in the corpus",
+	"declared artifacts exceed FaultLine's total verification read limit":     "declared files are a subset of the physical files, whose total is checked first against the same limit",
+	"AGENT_DRAFT evidence cannot be exported as a Git proof bundle":           "proof.evidenceGrade is a zod enum without AGENT_DRAFT",
+	"duplicate runId:":                                                            "a duplicated runId breaks the manifest run catalog first, and the verifier fails safely before the semantics run",
+	"witness digest is invalid":                                                   "SandboxAuditSchema requires sha256 digests, and verify parses it first",
+	"command digest is invalid":                                                   "SandboxAuditSchema requires sha256 digests, and verify parses it first",
+	"environment policy digest is invalid":                                        "SandboxAuditSchema requires sha256 digests, and verify parses it first",
+	"sandbox policy digest is invalid":                                            "SandboxAuditSchema requires sha256 digests, and verify parses it first",
+	"run sandbox limits are invalid:":                                             "SandboxAuditSchema requires positive integer limits",
+	"cached replay minimization must be marked NOT_EXECUTED":                      "minimization.termination is a zod enum of BIDIRECTIONALLY_VALIDATED and NOT_EXECUTED, both handled before this branch",
 	"prevention package must set verified=true":                                   "verified is z.literal(true); the schema rejects false first",
 	"prevention requires NATIVE_DOCKER EXECUTED evidence on every state":          "executionTrust and executionKind are zod literals; the schema rejects other values first",
 	"expected frozen digest is not a valid sha256 digest":                         "the manifest schema requires frozenDigest to be a sha256 digest",
@@ -35,7 +40,6 @@ var unreachableLiterals = map[string]string{
 	"prevention requires at least three distinct executions per state":            "distinctExecutionCount has a zod minimum of 3",
 	"source metadata artifact paths do not match the manifest":                    "both paths are zod literals, so they always agree after the schemas pass",
 	"bound manifest lifecycle artifact path does not match its lifecycle binding": "lifecycle.path is a zod literal in the manifest schema",
-	"externally supplied frozen digest does not match":                            "bundle verification passes the record's own frozen digest; TestLiveWitness covers the mismatch",
 	// Binding a ledger to the investigation needs a re-signed ledger hash
 	// chain plus matching manifest ledgerDigest/headHash, which the generic
 	// mutation engines cannot produce.
@@ -49,7 +53,8 @@ var unreachableLiterals = map[string]string{
 }
 
 // errorLiterals collects the string literals passed to errors.New,
-// fmt.Errorf and append(errs, ...) in internal/bundle.
+// fmt.Errorf, append(errs, ...) and local error-adding closures (such as
+// `add := func(s string) { errs = append(errs, s) }`) in internal/bundle.
 func errorLiterals(t *testing.T, dir string) map[string]string {
 	out := map[string]string{}
 	fset := token.NewFileSet()
@@ -61,6 +66,7 @@ func errorLiterals(t *testing.T, dir string) map[string]string {
 		if err != nil {
 			return err
 		}
+		adders := errorClosures(f)
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -69,10 +75,13 @@ func errorLiterals(t *testing.T, dir string) map[string]string {
 			args := call.Args
 			switch fn := call.Fun.(type) {
 			case *ast.Ident:
-				if fn.Name != "append" || len(args) < 2 || !strings.Contains(strings.ToLower(exprString(args[0])), "err") {
+				switch {
+				case adders[fn.Name]:
+				case fn.Name == "append" && len(args) >= 2 && appendsToErrors(args[0]):
+					args = args[1:]
+				default:
 					return true
 				}
-				args = args[1:]
 			case *ast.SelectorExpr:
 				if fn.Sel.Name != "New" && fn.Sel.Name != "Errorf" {
 					return true
@@ -82,12 +91,18 @@ func errorLiterals(t *testing.T, dir string) map[string]string {
 			}
 			for _, a := range args {
 				ast.Inspect(a, func(m ast.Node) bool {
+					// Literals inside other calls (v.Get("key")) are not
+					// message text; jsexc.Concat builds the message itself.
+					if inner, ok := m.(*ast.CallExpr); ok {
+						sel, ok := inner.Fun.(*ast.SelectorExpr)
+						return ok && sel.Sel.Name == "Concat"
+					}
 					if lit, ok := m.(*ast.BasicLit); ok && lit.Kind == token.STRING {
 						s, _ := strconv.Unquote(lit.Value)
-						s = strings.TrimSpace(strings.Split(s, "%")[0])
-						// Short fragments ("; expected", "sequence") are glue
+						s = strings.TrimSpace(s)
+						// Short literals ("; expected", "sequence") are glue
 						// around the longer literal of the same message.
-						if len(s) >= 20 {
+						if len(messageFragments(s)) > 0 {
 							out[s] = fset.Position(lit.Pos()).String()
 						}
 					}
@@ -104,6 +119,49 @@ func errorLiterals(t *testing.T, dir string) map[string]string {
 	return out
 }
 
+func appendsToErrors(e ast.Expr) bool { return strings.Contains(strings.ToLower(exprString(e)), "err") }
+
+// errorClosures names the local function variables whose body appends to an
+// error slice.
+func errorClosures(f *ast.File) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return true
+		}
+		name, ok := assign.Lhs[0].(*ast.Ident)
+		lit, ok2 := assign.Rhs[0].(*ast.FuncLit)
+		if !ok || !ok2 {
+			return true
+		}
+		ast.Inspect(lit.Body, func(m ast.Node) bool {
+			if call, ok := m.(*ast.CallExpr); ok {
+				if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "append" && len(call.Args) >= 2 && appendsToErrors(call.Args[0]) {
+					out[name.Name] = true
+				}
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+var formatVerb = regexp.MustCompile(`%[-+# 0-9.]*[a-zA-Z%]`)
+
+// messageFragments splits a literal at its format verbs and keeps the parts
+// long enough to identify the message; each must appear in some golden.
+func messageFragments(s string) []string {
+	var out []string
+	for _, part := range formatVerb.Split(s, -1) {
+		if part = strings.TrimSpace(part); len(part) >= 12 {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 func exprString(e ast.Expr) string {
 	switch e := e.(type) {
 	case *ast.Ident:
@@ -114,6 +172,16 @@ func exprString(e ast.Expr) string {
 		return exprString(e.X) + "." + e.Sel.Name
 	}
 	return ""
+}
+
+// liveGatedFiles are checked by a live test against TS instead of goldens:
+// their functions run on thousands of generated inputs there, and the live
+// test fails when one of the file's literals was never produced
+// (requireReached).
+var liveGatedFiles = map[string]string{
+	"gitproof/ledger.go":  "TestLiveLedger",
+	"gitproof/sandbox.go": "TestLiveSandbox",
+	"gitproof/witness.go": "TestLiveWitness",
 }
 
 func TestGoldensReachEveryErrorLiteral(t *testing.T) {
@@ -132,9 +200,17 @@ func TestGoldensReachEveryErrorLiteral(t *testing.T) {
 	}
 	all := goldens.String()
 	literals := errorLiterals(t, filepath.Join(repo, "internal", "bundle"))
+	bundleDir := filepath.Join(repo, "internal", "bundle") + string(filepath.Separator)
 	for lit, pos := range literals {
-		quoted := strconv.Quote(lit)
-		if strings.Contains(all, quoted[1:len(quoted)-1]) {
+		if file, _, _ := strings.Cut(strings.TrimPrefix(pos, bundleDir), ":"); liveGatedFiles[filepath.ToSlash(file)] != "" {
+			continue
+		}
+		reached := true
+		for _, frag := range messageFragments(lit) {
+			quoted := strconv.Quote(frag)
+			reached = reached && strings.Contains(all, quoted[1:len(quoted)-1])
+		}
+		if reached {
 			if reason, ok := unreachableLiterals[lit]; ok {
 				t.Errorf("%s: %q is listed as unreachable (%s) but a golden produces it; drop it from the list", pos, lit, reason)
 			}

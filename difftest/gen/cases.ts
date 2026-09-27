@@ -1,14 +1,22 @@
-import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { digestJson, sha256 } from "../../src/canonical.js";
+import { fileURLToPath } from "node:url";
+import { sha256 } from "../../src/canonical.js";
 
 export type Template = {
   id: string; op: string; file?: string; path?: string; offset?: number; target?: string; content?: string;
   find?: string; replace?: string; hex?: string; key?: string; value?: unknown; rehash?: boolean;
   bases?: string[]; jsonPath?: Array<string | number>; valueFrom?: Array<string | number>; swapWith?: Array<string | number>;
   delete?: boolean; first?: boolean; to?: string; prefix?: string; suffix?: string; depth?: number; count?: number;
+  edits?: JsonEdit[]; size?: number; from?: string; fakeGit?: string;
 };
+// JsonEdit is one json-edit step; a json-edit template is one step itself or
+// lists several in `edits`, applied in order.
+type JsonEdit = Pick<Template, "jsonPath" | "value" | "valueFrom" | "swapWith" | "delete">;
 export type Case = { id: string; base: string; template?: Template; file?: string };
+
+// FIXTURES holds files that copy-file templates put into a bundle.
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "testdata", "fixtures");
 
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -70,17 +78,40 @@ function setAt(v: Json, path: Array<string | number>, value: Json): void {
   else defineOwn(parent, k as string, value);
 }
 
+const jsonEdits = (t: Template): JsonEdit[] => t.edits ?? [t];
+
+// jsonEditApplicable checks every step against the file as it would be after
+// the steps before it.
 function jsonEditApplicable(t: Template, path: string): boolean {
   if (!isObjectJson(path, false)) return false;
   const v = JSON.parse(readFileSync(path, "utf8")) as Json;
-  const parent = at(v, t.jsonPath!.slice(0, -1));
-  if (parent === null || typeof parent !== "object") return false;
-  if (t.delete || t.valueFrom || t.swapWith) {
-    if (at(v, t.jsonPath!) === undefined) return false;
+  for (const e of jsonEdits(t)) {
+    const parent = at(v, e.jsonPath!.slice(0, -1));
+    if (parent === null || typeof parent !== "object") return false;
+    if (e.delete || e.valueFrom || e.swapWith) {
+      if (at(v, e.jsonPath!) === undefined) return false;
+    }
+    if (e.valueFrom && at(v, e.valueFrom) === undefined) return false;
+    if (e.swapWith && at(v, e.swapWith) === undefined) return false;
+    applyJsonEdit(v, e);
   }
-  if (t.valueFrom && at(v, t.valueFrom) === undefined) return false;
-  if (t.swapWith && at(v, t.swapWith) === undefined) return false;
   return true;
+}
+
+function applyJsonEdit(v: Json, e: JsonEdit): void {
+  const p = e.jsonPath!;
+  if (e.delete) {
+    const parent = at(v, p.slice(0, -1));
+    if (Array.isArray(parent)) parent.splice(p[p.length - 1] as number, 1);
+    else delete (parent as Record<string, Json>)[p[p.length - 1] as string];
+  } else if (e.swapWith) {
+    const a = at(v, p);
+    const b = at(v, e.swapWith);
+    setAt(v, p, b);
+    setAt(v, e.swapWith, a);
+  } else {
+    setAt(v, p, e.valueFrom ? at(v, e.valueFrom) : structuredClone(e.value));
+  }
 }
 
 // matches is a template file pattern: "*", "*.json", "dir/*" or an exact path.
@@ -92,7 +123,7 @@ function matches(pattern: string, file: string): boolean {
 }
 
 // Ops whose target is a path in the bundle (or the bundle itself), not an existing file.
-const PATH_OPS = new Set(["add-file", "root-symlink"]);
+const PATH_OPS = new Set(["add-file", "root-symlink", "sparse-file", "many-files", "fake-git"]);
 
 export function expandCases(base: string, root: string, templates: Template[]): Case[] {
   const files = listFiles(root);
@@ -114,6 +145,63 @@ function defineOwn(o: Record<string, unknown>, key: string, value: unknown): voi
   Object.defineProperty(o, key, { value, enumerable: true, writable: true, configurable: true });
 }
 
+// canonicalDigest is src/canonical.ts digestJson without recursion, so the
+// harness rehash does not depend on how warmed-up V8 is (the recursive
+// version overflows the stack on deep values, or not, depending on JIT
+// state). It reproduces canonicalJson's output: members sorted with
+// localeCompare, then laid out as JSON.stringify lays out the rebuilt object
+// (array-index keys first, ascending), with __proto__ dropped because
+// assigning it sets the prototype instead of a property. Go's
+// canonical.DigestJSON is iterative too.
+export function canonicalDigest(root: unknown): string {
+  const out: string[] = [];
+  type Frame = { items: unknown[]; i: number } | { entries: Array<[string, unknown]>; i: number };
+  const stack: Frame[] = [];
+  const isIndex = (k: string) => /^(?:0|[1-9]\d{0,9})$/.test(k) && Number(k) < 4294967295;
+  const emit = (v: unknown): void => {
+    if (Array.isArray(v)) {
+      out.push("[");
+      stack.push({ items: v, i: 0 });
+    } else if (v !== null && typeof v === "object") {
+      const sorted = Object.entries(v).filter(([, c]) => c !== undefined).sort(([l], [r]) => l.localeCompare(r))
+        .filter(([k]) => k !== "__proto__");
+      const index = sorted.filter(([k]) => isIndex(k)).sort(([l], [r]) => Number(l) - Number(r));
+      out.push("{");
+      stack.push({ entries: [...index, ...sorted.filter(([k]) => !isIndex(k))], i: 0 });
+    } else if (typeof v === "number" && !Number.isFinite(v)) {
+      throw new TypeError("Value is not finite JSON: number");
+    } else if (v === null || typeof v === "boolean" || typeof v === "number" || typeof v === "string") {
+      out.push(JSON.stringify(v));
+    } else {
+      throw new TypeError(`Value is not JSON-serializable: ${typeof v}`);
+    }
+  };
+  emit(root);
+  while (stack.length > 0) {
+    const f = stack[stack.length - 1]!;
+    if ("items" in f) {
+      if (f.i === f.items.length) {
+        out.push("]");
+        stack.pop();
+        continue;
+      }
+      if (f.i > 0) out.push(",");
+      emit(f.items[f.i++]);
+    } else {
+      if (f.i === f.entries.length) {
+        out.push("}");
+        stack.pop();
+        continue;
+      }
+      if (f.i > 0) out.push(",");
+      const [k, v] = f.entries[f.i++]!;
+      out.push(JSON.stringify(k), ":");
+      emit(v);
+    }
+  }
+  return `sha256:${sha256(out.join(""))}`;
+}
+
 function rehash(root: string, base: string): void {
   if (base.startsWith("prevention-")) {
     let manifest: Record<string, unknown>;
@@ -124,10 +212,10 @@ function rehash(root: string, base: string): void {
       if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) return;
       const prevention = manifest.prevention;
       if (prevention !== null && typeof prevention === "object" && !Array.isArray(prevention)) {
-        (prevention as Record<string, unknown>).digest = digestJson(body);
+        (prevention as Record<string, unknown>).digest = canonicalDigest(body);
       }
       const { rootDigest: _dropped, ...unsigned } = manifest;
-      manifest.rootDigest = digestJson(unsigned);
+      manifest.rootDigest = canonicalDigest(unsigned);
     } catch {
       return;
     }
@@ -168,20 +256,30 @@ export function applyMutation(root: string, c: Case): void {
     }
     case "json-edit": {
       const v = JSON.parse(readFileSync(path, "utf8")) as Json;
-      const p = t.jsonPath!;
-      if (t.delete) {
-        const parent = at(v, p.slice(0, -1));
-        if (Array.isArray(parent)) parent.splice(p[p.length - 1] as number, 1);
-        else delete (parent as Record<string, Json>)[p[p.length - 1] as string];
-      } else if (t.swapWith) {
-        const a = at(v, p);
-        const b = at(v, t.swapWith);
-        setAt(v, p, b);
-        setAt(v, t.swapWith, a);
-      } else {
-        setAt(v, p, t.valueFrom ? at(v, t.valueFrom) : t.value);
-      }
+      for (const e of jsonEdits(t)) applyJsonEdit(v, e);
       writeFileSync(path, `${JSON.stringify(v, null, 2)}\n`);
+      break;
+    }
+    case "append-bytes": {
+      const unit = Buffer.from(t.hex!, "hex");
+      writeFileSync(path, Buffer.concat([readFileSync(path), ...Array.from({ length: t.count! }, () => unit)]));
+      break;
+    }
+    case "fake-git": break; // the tree is unchanged; caseEnv puts the fake git on PATH
+    case "copy-file": copyFileSync(join(FIXTURES, t.from!), path); break;
+    case "sparse-file": {
+      // count > 1 makes path-00000, path-00001, ...
+      mkdirSync(dirname(path), { recursive: true });
+      const paths = t.count === undefined ? [path] : Array.from({ length: t.count }, (_, i) => `${path}-${String(i).padStart(5, "0")}`);
+      for (const p of paths) {
+        writeFileSync(p, "");
+        truncateSync(p, t.size!);
+      }
+      break;
+    }
+    case "many-files": {
+      mkdirSync(path, { recursive: true });
+      for (let i = 0; i < t.count!; i++) writeFileSync(join(path, `${String(i).padStart(5, "0")}.txt`), t.content!);
       break;
     }
     case "flip-byte": {
@@ -215,6 +313,13 @@ export function applyMutation(root: string, c: Case): void {
   if (t.rehash) rehash(root, c.base);
 }
 
+// caseEnv is the environment a case runs fl with: a fake-git case puts
+// difftest/testdata/fakegit/<name> first on PATH (POSIX shell scripts).
+export function caseEnv(c: Case, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (!c.template?.fakeGit) return env;
+  return { ...env, PATH: `${join(FIXTURES, "..", "fakegit", c.template.fakeGit)}:${env.PATH ?? ""}` };
+}
+
 export function treeDigest(root: string): string {
   const lines: string[] = [];
   const walk = (rel: string) => {
@@ -241,14 +346,26 @@ function isBoundary(c: string | undefined): boolean {
   return c === undefined || c === "'" || c === "\"" || /\s/.test(c);
 }
 
-// maskGitDetail hides git's own stderr (it varies across git versions) but
-// keeps the text FaultLine composes around it: the "; " join with Node's
-// spawnSync error, and the "exit <status>" fallback.
+// maskGitDetail hides git's own diagnostics (they vary across git
+// versions): each run of lines starting with "error: ", "fatal: ",
+// "warning: " or "hint: " becomes one <GIT-STDERR>. Everything else stays:
+// other git output, the text FaultLine composes (the "; " join with Node's
+// spawnSync error, the "exit <status>" fallback), and anything a port adds.
 export function maskGitDetail(detail: string): string {
   if (/^exit (?:null|-?\d+)$/.test(detail)) return detail;
-  const m = /^(?:([\s\S]*); )?(spawnSync git [A-Z0-9_]+)$/.exec(detail);
-  if (m) return m[1] === undefined ? m[2]! : `<GIT-STDERR>; ${m[2]}`;
-  return "<GIT-STDERR>";
+  let body = detail;
+  let tail = "";
+  const m = /^([\s\S]*?)((?:; )?spawnSync git [A-Z0-9_]+)$/.exec(detail);
+  if (m && (m[1] === "") === !m[2]!.startsWith("; ")) {
+    body = m[1]!;
+    tail = m[2]!;
+  }
+  const out: string[] = [];
+  for (const line of body.split("\n")) {
+    if (!/^(?:error|fatal|warning|hint): /.test(line)) out.push(line);
+    else if (out.at(-1) !== "<GIT-STDERR>") out.push("<GIT-STDERR>");
+  }
+  return out.join("\n") + tail;
 }
 
 export function normalize(text: string, bundle: string): string {
