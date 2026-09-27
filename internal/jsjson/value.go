@@ -20,12 +20,14 @@ const (
 	Object
 )
 
+// Value is 48 bytes: arrays sit behind a pointer so the common scalar and
+// object cases stay small (JSON inputs can hold millions of values).
 type Value struct {
 	kind Kind
 	b    bool
 	n    float64
 	s    string
-	arr  []Value
+	arr  *[]Value
 	obj  *Obj
 }
 
@@ -33,14 +35,19 @@ func MakeNull() Value               { return Value{kind: Null} }
 func MakeBool(b bool) Value         { return Value{kind: Bool, b: b} }
 func MakeNumber(n float64) Value    { return Value{kind: Number, n: n} }
 func MakeString(s string) Value     { return Value{kind: String, s: s} }
-func MakeArray(items []Value) Value { return Value{kind: Array, arr: items} }
+func MakeArray(items []Value) Value { return Value{kind: Array, arr: &items} }
 func MakeObject(o *Obj) Value       { return Value{kind: Object, obj: o} }
 
 func (v Value) Kind() Kind     { return v.kind }
 func (v Value) Bool() bool     { return v.b }
 func (v Value) Num() float64   { return v.n }
 func (v Value) Str() string    { return v.s }
-func (v Value) Items() []Value { return v.arr }
+func (v Value) Items() []Value {
+	if v.arr == nil {
+		return nil
+	}
+	return *v.arr
+}
 func (v Value) Obj() *Obj      { return v.obj }
 
 // Get follows object keys like JS property access; a missing step or a
@@ -50,7 +57,7 @@ func (v Value) Get(keys ...string) Value {
 		if v.kind != Object {
 			return Value{}
 		}
-		v = v.obj.values[k]
+		v = v.obj.Field(k)
 	}
 	return v
 }
@@ -58,24 +65,52 @@ func (v Value) Get(keys ...string) Value {
 // Obj keeps ordinary JS property order: array-index keys in ascending numeric
 // order, then the remaining keys in first-insertion order. Index keys are
 // sorted lazily, so building an object from out-of-order index keys (JSON
-// input or canonical's localeCompare order) stays O(n log n).
+// input or canonical's localeCompare order) stays O(n log n). Members are
+// stored as parallel slices; a lookup map is built only for objects with
+// more than smallObject members, so the many small objects in real inputs
+// cost a few words each instead of a map.
 type Obj struct {
 	idx       []indexKey
 	idxSorted bool
 	strs      []string
-	values    map[string]Value
+	keys      []string // insertion order, parallel to vals
+	vals      []Value
+	index     map[string]int // key -> position in keys; nil while small
 }
+
+const smallObject = 8
 
 type indexKey struct {
 	n uint32
 	k string
 }
 
-func NewObj() *Obj { return &Obj{values: map[string]Value{}, idxSorted: true} }
+func NewObj() *Obj { return &Obj{idxSorted: true} }
 
-func (o *Obj) Len() int                   { return len(o.idx) + len(o.strs) }
-func (o *Obj) Get(k string) (Value, bool) { v, ok := o.values[k]; return v, ok }
-func (o *Obj) Field(k string) Value       { return o.values[k] }
+// find returns k's position in keys, or -1.
+func (o *Obj) find(k string) int {
+	if o.index != nil {
+		if i, ok := o.index[k]; ok {
+			return i
+		}
+		return -1
+	}
+	for i, key := range o.keys {
+		if key == k {
+			return i
+		}
+	}
+	return -1
+}
+
+func (o *Obj) Len() int { return len(o.keys) }
+func (o *Obj) Get(k string) (Value, bool) {
+	if i := o.find(k); i >= 0 {
+		return o.vals[i], true
+	}
+	return Value{}, false
+}
+func (o *Obj) Field(k string) Value { v, _ := o.Get(k); return v }
 
 // Keys returns the keys in JS property order.
 func (o *Obj) Keys() []string { return slices.Clone(o.orderedKeys()) }
@@ -90,7 +125,7 @@ func (o *Obj) orderedKeys() []string {
 		slices.SortFunc(o.idx, func(a, b indexKey) int { return cmp.Compare(a.n, b.n) })
 		o.idxSorted = true
 	}
-	out := make([]string, 0, o.Len())
+	out := make([]string, 0, len(o.idx)+len(o.strs))
 	for _, e := range o.idx {
 		out = append(out, e.k)
 	}
@@ -98,11 +133,20 @@ func (o *Obj) orderedKeys() []string {
 }
 
 func (o *Obj) Set(k string, v Value) {
-	if _, ok := o.values[k]; ok {
-		o.values[k] = v
+	if i := o.find(k); i >= 0 {
+		o.vals[i] = v
 		return
 	}
-	o.values[k] = v
+	o.keys = append(o.keys, k)
+	o.vals = append(o.vals, v)
+	if o.index != nil {
+		o.index[k] = len(o.keys) - 1
+	} else if len(o.keys) > smallObject {
+		o.index = make(map[string]int, len(o.keys)*2)
+		for i, key := range o.keys {
+			o.index[key] = i
+		}
+	}
 	n, ok := arrayIndex(k)
 	if !ok {
 		o.strs = append(o.strs, k)
@@ -115,16 +159,24 @@ func (o *Obj) Set(k string, v Value) {
 }
 
 func (o *Obj) Delete(k string) {
-	if _, ok := o.values[k]; !ok {
+	i := o.find(k)
+	if i < 0 {
 		return
 	}
-	delete(o.values, k)
-	if i := slices.IndexFunc(o.idx, func(e indexKey) bool { return e.k == k }); i >= 0 {
-		o.idx = slices.Delete(o.idx, i, i+1)
+	o.keys = slices.Delete(o.keys, i, i+1)
+	o.vals = slices.Delete(o.vals, i, i+1)
+	if o.index != nil {
+		delete(o.index, k)
+		for j := i; j < len(o.keys); j++ {
+			o.index[o.keys[j]] = j
+		}
+	}
+	if j := slices.IndexFunc(o.idx, func(e indexKey) bool { return e.k == k }); j >= 0 {
+		o.idx = slices.Delete(o.idx, j, j+1)
 		return
 	}
-	i := slices.Index(o.strs, k)
-	o.strs = slices.Delete(o.strs, i, i+1)
+	j := slices.Index(o.strs, k)
+	o.strs = slices.Delete(o.strs, j, j+1)
 }
 
 // arrayIndex reports whether k is a canonical array index, 0 … 2^32−2.

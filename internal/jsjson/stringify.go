@@ -163,7 +163,7 @@ func (w *writer) write(v Value, current string) {
 	case String:
 		w.str(Quote(v.s))
 	case Array:
-		if len(v.arr) == 0 {
+		if len(v.Items()) == 0 {
 			w.str("[]")
 			return
 		}
@@ -173,7 +173,7 @@ func (w *writer) write(v Value, current string) {
 		defer w.leave(v8Stack.array)
 		inner := current + indent
 		w.str("[")
-		for i, item := range v.arr {
+		for i, item := range v.Items() {
 			if i > 0 {
 				w.str(",")
 			}
@@ -207,7 +207,7 @@ func (w *writer) write(v Value, current string) {
 		wrote := false
 		w.str("{")
 		for _, k := range keys {
-			child := v.obj.values[k]
+			child := v.obj.Field(k)
 			if child.kind == Undefined {
 				continue
 			}
