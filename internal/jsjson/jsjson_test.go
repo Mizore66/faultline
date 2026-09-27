@@ -212,7 +212,11 @@ func TestStringifyStackOverflow(t *testing.T) {
 			{SiteDemoWitness, "arr", 2232}, {SiteDemoWitness, "obj", 4164}, {SiteDemoWitness, "idx", 2231}, {SiteDemoWitness, "alt", 2905},
 		}},
 		{"darwin", "arm64", []row{
-			{SiteDemo, "arr", 2610}, {SiteDemo, "arr0", 2609},
+			{SiteDemo, "arr", 2610}, {SiteDemo, "arr0", 2609}, {SiteDemo, "obj", 6089}, {SiteDemo, "idx", 2491}, {SiteDemo, "alt", 3653}, {SiteDemo, "dup", 2491},
+			{SitePrevention, "arr", 2611}, {SitePrevention, "obj", 6091}, {SitePrevention, "idx", 2491}, {SitePrevention, "alt", 3654},
+			{SiteGitProof, "arr", 2610}, {SiteGitProof, "obj", 6088}, {SiteGitProof, "idx", 2490}, {SiteGitProof, "alt", 3652},
+			{SiteGitLedger, "arr", 2609}, {SiteGitLedger, "obj", 6087}, {SiteGitLedger, "idx", 2490}, {SiteGitLedger, "alt", 3652},
+			{SiteDemoWitness, "arr", 2609}, {SiteDemoWitness, "obj", 6086}, {SiteDemoWitness, "idx", 2490}, {SiteDemoWitness, "alt", 3652},
 		}},
 		{"linux", "arm64", []row{
 			{SiteDemo, "arr", 1827}, {SiteDemo, "arr0", 1826}, {SiteDemo, "obj", 3653}, {SiteDemo, "idx", 1956}, {SiteDemo, "alt", 2434}, {SiteDemo, "dup", 1956},
