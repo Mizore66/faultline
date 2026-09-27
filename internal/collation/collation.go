@@ -51,6 +51,13 @@ type table struct {
 	hanRank     []uint32
 	unsafe      map[rune]bool // unsafe-backward code points
 	unsafeLead  [0x400]bool   // lead surrogates of unsafe supplementary code points
+	// contractFlags holds each contraction starter's CONTRACT_NEXT_CCC and
+	// CONTRACT_TRAILING_CCC bits.
+	contractFlags map[rune]uint16
+	// leadLccc and leadFCD are CollationFCD's lead-surrogate bits: some
+	// supplementary code point behind the lead has lccc != 0, or has lccc or
+	// tccc != 0.
+	leadLccc, leadFCD [0x400]bool
 }
 
 var (
@@ -161,6 +168,43 @@ func load() *table {
 			if c > 0xFFFF {
 				t.unsafeLead[(c-0x10000)>>10] = true
 			}
+		}
+		t.contractFlags = map[rune]uint16{}
+		nextCCC := map[rune]bool{}
+		for key := range t.multi {
+			k := []rune(key)
+			starter := k[0]
+			if _, seen := nextCCC[starter]; !seen {
+				nextCCC[starter] = true
+			}
+			if lead, _ := t.fcd16(k[1]); lead == 0 {
+				nextCCC[starter] = false
+			}
+			flags := t.contractFlags[starter]
+			if lead, _ := t.fcd16(k[len(k)-1]); lead != 0 {
+				flags |= contractTrailingCCC
+			}
+			t.contractFlags[starter] = flags
+		}
+		for starter, all := range nextCCC {
+			if all {
+				t.contractFlags[starter] |= contractNextCCC
+			}
+		}
+		supp := func(c rune) {
+			if c <= 0xFFFF {
+				return
+			}
+			lead, trail := t.fcd16(c)
+			i := (c - 0x10000) >> 10
+			t.leadLccc[i] = t.leadLccc[i] || lead != 0
+			t.leadFCD[i] = t.leadFCD[i] || lead != 0 || trail != 0
+		}
+		for c := range t.ccc {
+			supp(c)
+		}
+		for c := range t.decomp {
+			supp(c)
 		}
 		tab = t
 	})
@@ -287,150 +331,6 @@ func (t *table) fcd16(c rune) (lccc, tccc uint8) {
 	return cc, cc
 }
 
-// isTibetanCompositeVowel is CollationFCD::isFCD16OfTibetanCompositeVowel:
-// U+0F73, U+0F75 and U+0F81 always need normalization.
-func isTibetanCompositeVowel(c rune) bool { return c == 0x0F73 || c == 0x0F75 || c == 0x0F81 }
-
-// fcd is the text ICU's FCDUTF16CollationIterator collates: segments that
-// pass the FCD check stay as they are (precomposed characters, Hangul
-// syllables, contraction keys matched literally); a failing segment, up to
-// the next character with lccc 0, is replaced by its NFD.
-func (t *table) fcd(cps []rune) []rune {
-	out := make([]rune, 0, len(cps))
-	for pos := 0; pos < len(cps); {
-		i := pos
-		var prevCC uint8
-		fail := false
-		for i < len(cps) {
-			lead, trail := t.fcd16(cps[i])
-			if lead == 0 && i != pos {
-				break // FCD boundary before cps[i]
-			}
-			if lead != 0 && (prevCC > lead || isTibetanCompositeVowel(cps[i])) {
-				fail = true
-				break
-			}
-			prevCC = trail
-			i++
-			if prevCC == 0 {
-				break // FCD boundary after the last character
-			}
-		}
-		if !fail {
-			out = append(out, cps[pos:i]...)
-			pos = i
-			continue
-		}
-		q := i + 1
-		for q < len(cps) {
-			if lead, _ := t.fcd16(cps[q]); lead == 0 {
-				break
-			}
-			q++
-		}
-		out = append(out, t.nfd(cps[pos:q])...)
-		pos = q
-	}
-	return out
-}
-
-// elements returns the collation elements of s.
-func (t *table) elements(s string) []ce { return t.elementsFrom(codePoints(s), 0) }
-
-// elementsFrom returns the collation elements of raw[start:], the way ICU's
-// FCD iterator produces them when it starts at start: the FCD check begins
-// there, contractions start at or after it, and prefix contexts may still
-// look at the text before it.
-func (t *table) elementsFrom(raw []rune, start int) []ce {
-	cps := append(append(make([]rune, 0, len(raw)), raw[:start]...), t.fcd(raw[start:])...)
-	var out []ce
-	used := make([]bool, len(cps))
-	for i := start; i < len(cps); i++ {
-		if used[i] {
-			continue
-		}
-		c := cps[i]
-		// Prefix (context-before) mappings, e.g. L | U+00B7.
-		if ps, ok := t.prefixed[c]; ok && i > 0 {
-			matched := false
-			for _, p := range ps {
-				if len(p.prefix) <= i && runesEqual(cps[i-len(p.prefix):i], p.prefix) {
-					out = append(out, p.ces...)
-					matched = true
-					break
-				}
-			}
-			if matched {
-				continue
-			}
-		}
-		// Longest contiguous contraction starting at i.
-		key := []rune{c}
-		ces := t.lookupSingle(c)
-		end := i + 1
-		if t.maxKey > 0 {
-			stop := i + 1 // the first code point the contiguous scan did not take
-			for j := i + 1; j < len(cps) && j-i < t.maxKey; j++ {
-				stop = j
-				if used[j] {
-					break
-				}
-				cand := string(cps[i : j+1])
-				if m, ok := t.multi[cand]; ok {
-					key = append(key[:0:0], cps[i:j+1]...)
-					ces, end = m, j+1
-					stop = j + 1
-				} else if !t.multiPrefix[cand] {
-					break
-				}
-			}
-			// Discontiguous contractions (UCA S2.1.1): only right after a
-			// match (ICU's sinceMatch == 1), over non-starters that are not
-			// blocked: the tccc of the last skipped character must be below
-			// the next one's lccc.
-			if stop == end && end < len(cps) && t.multiPrefix[string(key)] {
-				var prevCC uint8
-				for j := end; j < len(cps); j++ {
-					if used[j] {
-						continue
-					}
-					lead, trail := t.fcd16(cps[j])
-					if lead == 0 {
-						break
-					}
-					if prevCC < lead {
-						cand := append(append([]rune(nil), key...), cps[j])
-						if m, ok := t.multi[string(cand)]; ok {
-							key, ces = cand, m
-							used[j] = true
-							continue
-						}
-					}
-					prevCC = trail
-				}
-			}
-		}
-		for k := i; k < end; k++ {
-			used[k] = true
-		}
-		out = append(out, ces...)
-		i = end - 1
-	}
-	return out
-}
-
-func runesEqual(a, b []rune) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // Key holds the weights of one string, level by level, zeros removed.
 type Key struct {
 	primary             []uint32
@@ -441,8 +341,9 @@ type Key struct {
 // tertiary byte (ICU Collation::ONLY_TERTIARY_MASK).
 const onlyTertiaryMask = 0x3F3F
 
-// MakeKey computes the comparison key of a JS string.
-func MakeKey(s string) Key { return makeKey(load().elements(s)) }
+// MakeKey computes the comparison key of a JS string: all its CEs from ICU's
+// FCD collation iterator, level by level.
+func MakeKey(s string) Key { return makeKey(load().allCEs(jsstr.ToUTF16(s))) }
 
 func makeKey(ces []ce) Key {
 	var k Key
@@ -492,10 +393,12 @@ func CompareKeys(a, b Key) int {
 // Compare is a.localeCompare(b) (sign only): ICU's
 // RuleBasedCollator::doCompare. It skips the identical prefix (in UTF-16
 // units), backs up while the code unit there is unsafe-backward (it could be
-// inside a contraction or a combining sequence), and collates both strings
-// from that point. A contraction that starts inside the skipped prefix is
-// therefore never used, so Compare is not always the same as comparing
-// MakeKey results (and is not always transitive, as in ICU).
+// inside a contraction or a combining sequence), and runs an FCD collation
+// iterator on each string from that point, comparing primaries as they come
+// and stopping at the first difference (compareUpToQuaternary). A
+// contraction that starts inside the skipped prefix is therefore never used,
+// so Compare is not always the same as comparing MakeKey results (and is not
+// always transitive, as in ICU).
 func Compare(a, b string) int {
 	if a == b {
 		return 0
@@ -514,9 +417,7 @@ func Compare(a, b string) int {
 			}
 		}
 	}
-	ra, sa := codePointsFrom(ua, eq)
-	rb, sb := codePointsFrom(ub, eq)
-	return CompareKeys(makeKey(t.elementsFrom(ra, sa)), makeKey(t.elementsFrom(rb, sb)))
+	return compare(t.newIter(ua, eq), t.newIter(ub, eq))
 }
 
 // codePointsFrom splits UTF-16 units into code points (lone surrogates kept)
@@ -579,7 +480,10 @@ func Prepare(s string) Prepared {
 	if !utf8.ValidString(s) { // WTF-8 lone surrogates
 		simple = false
 	}
-	return Prepared{S: s, key: MakeKey(s), simple: simple}
+	if !simple {
+		return Prepared{S: s} // compared with Compare, which stops early
+	}
+	return Prepared{S: s, key: MakeKey(s), simple: true}
 }
 
 // ComparePrepared is Compare(a.S, b.S).

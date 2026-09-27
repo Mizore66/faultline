@@ -53,6 +53,7 @@ export const handlers: Record<string, Handler> = {
     view.setBigUint64(0, BigInt(`0x${hex}`));
     return String(view.getFloat64(0));
   },
+  normalizeMany: ({ texts, form }: { texts: string[]; form: "NFC" | "NFD" }) => texts.map((s) => s.normalize(form)),
   compareMany: ({ pairs }: { pairs: [string, string][] }) => pairs.map(([a, b]) => Math.sign(a.localeCompare(b))),
   sort: ({ keys }: { keys: string[] }) => [...keys].sort((left, right) => left.localeCompare(right)),
   canonical: ({ text }: { text: string }) => {

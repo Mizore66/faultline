@@ -214,3 +214,116 @@ func TestLiveCollationRules(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveCollationMarkRuns targets ICU's FCD iterator: a contraction
+// starter (or a plain letter) followed by a run of non-starters mixing
+// supplementary and BMP marks in and out of canonical order, optionally a
+// trailing starter; each string is compared with its NFD and NFC forms (from
+// Node), with a reordering of its marks, and with strings sharing a prefix.
+// Composites whose NFD starts with a contraction's second code point cover
+// canonical closure.
+func TestLiveCollationMarkRuns(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	contractions, _, nonStarters := collation.Rules()
+	var starters []rune
+	seen := map[rune]bool{}
+	for _, k := range contractions {
+		if !seen[k[0]] {
+			seen[k[0]] = true
+			starters = append(starters, k[0])
+		}
+	}
+	starters = append(starters, 'a', 'L', 0x0438, 0xAC00, 0x1100, 0x4E00)
+	var supp, bmp []rune
+	for _, m := range nonStarters {
+		if m > 0xFFFF {
+			supp = append(supp, m)
+		} else {
+			bmp = append(bmp, m)
+		}
+	}
+	r := rand.New(rand.NewPCG(41, 42))
+	mark := func() rune {
+		if r.IntN(2) == 0 {
+			return supp[r.IntN(len(supp))]
+		}
+		return bmp[r.IntN(len(bmp))]
+	}
+	build := func() []rune {
+		s := []rune{starters[r.IntN(len(starters))]}
+		if r.IntN(4) == 0 {
+			k := contractions[r.IntN(len(contractions))]
+			s = slices.Clone(k)
+		}
+		for n := 1 + r.IntN(4); n > 0; n-- {
+			s = append(s, mark())
+		}
+		if r.IntN(2) == 0 {
+			s = append(s, []rune{'a', '.', 'x', 0x0438, 0x0F71}[r.IntN(5)])
+		}
+		return s
+	}
+	normalize := func(texts []string, form string) []string {
+		raw, err := c.Call("normalizeMany", `{"form":"`+form+`","texts":`+quoteList(texts)+`}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, _ := jsjson.Parse(raw)
+		out := make([]string, len(v.Items()))
+		for i, x := range v.Items() {
+			out[i] = x.Str()
+		}
+		return out
+	}
+	compared := 0
+	for round := 0; round < 60; round++ {
+		var base []string
+		var shuffled []string
+		for range 300 {
+			s := build()
+			base = append(base, string(s))
+			m := slices.Clone(s)
+			if len(m) > 2 {
+				tail := m[1:]
+				r.Shuffle(len(tail), func(i, j int) { tail[i], tail[j] = tail[j], tail[i] })
+			}
+			shuffled = append(shuffled, string(m))
+		}
+		nfd, nfc := normalize(base, "NFD"), normalize(base, "NFC")
+		var pairs [][2]string
+		for i := range base {
+			other := base[r.IntN(len(base))]
+			pairs = append(pairs, [2]string{base[i], nfd[i]}, [2]string{base[i], nfc[i]}, [2]string{nfd[i], shuffled[i]},
+				[2]string{base[i], shuffled[i]}, [2]string{base[i] + "a", nfd[i] + "b"}, [2]string{base[i], other})
+		}
+		var list []string
+		for _, p := range pairs {
+			list = append(list, "["+jsjson.Quote(p[0])+","+jsjson.Quote(p[1])+"]")
+		}
+		raw, err := c.Call("compareMany", `{"pairs":[`+strings.Join(list, ",")+`]}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, _ := jsjson.Parse(raw)
+		for i, p := range pairs {
+			if got := canonical.LocaleCompare(p[0], p[1]); float64(got) != want.Items()[i].Num() {
+				t.Fatalf("LocaleCompare(%+q, %+q) = %d, Node %v", p[0], p[1], got, want.Items()[i].Num())
+			}
+		}
+		compared += len(pairs)
+		items := append(append(slices.Clone(base), nfd...), shuffled...)
+		raw, err = c.Call("sort", `{"keys":`+quoteList(items)+`}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sorted, _ := jsjson.Parse(raw)
+		got := canonical.SortLocale(items)
+		for i, v := range sorted.Items() {
+			if got[i] != v.Str() {
+				t.Fatalf("SortLocale differs from Node at %d: %+q vs %+q", i, got[i], v.Str())
+			}
+		}
+	}
+	t.Logf("%d pairs compared", compared)
+}
