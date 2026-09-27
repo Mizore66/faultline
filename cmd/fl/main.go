@@ -10,10 +10,10 @@ import (
 
 func main() {
 	args := nodeArgv()
-	stdout := &stdoutWriter{w: os.Stdout}
+	stdout := newStdoutWriter(os.Stdout)
 	code := cli.Run(args, stdout, os.Stderr)
 	if stdout.err != nil {
-		io.WriteString(os.Stderr, writeErrorLine(os.Stdout, stdout.err)+"\n")
+		io.WriteString(os.Stderr, stdout.errorLine()+"\n")
 		os.Exit(1)
 	}
 	os.Exit(code)
