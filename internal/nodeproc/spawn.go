@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -87,7 +88,7 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 	}
 	io, err := newStdio()
 	if err != nil {
-		return Result{Err: spawnError(file, nodefs.ErrnoCode(err))}
+		return Result{Err: spawnError(file, nodefs.SystemErrorName(err))}
 	}
 	proc, code := start(jsstr.ToUTF8(file), argv, nodeEnv(), io.child)
 	io.closeChild()
@@ -122,7 +123,9 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 	if overflow {
 		result.Err = spawnError(file, "ENOBUFS")
 	}
-	if state != nil && state.Exited() && !overflow {
+	// Node reports the exit code whenever the child exited normally, even
+	// alongside ENOBUFS.
+	if state != nil && state.Exited() {
 		status := state.ExitCode()
 		result.Status = &status
 	}
@@ -152,12 +155,24 @@ func (s *stdio) closeParent() {
 // entries without "=" are skipped, keys and values are decoded as UTF-8 with
 // replacement, each key appears once with the value getenv finds for it (the
 // first entry), and a key whose bytes don't round-trip finds no value and is
-// dropped. Nil (inherit) on Windows, whose environment is already UTF-16.
+// dropped. Keys that are array indices ("0" to "4294967294") are dropped:
+// {...process.env} copies them through V8's indexed-property path, which
+// process.env does not implement. On Linux an empty key is dropped too
+// (getenv("") finds nothing). On Windows, process.env also leaves out the
+// hidden per-drive variables ("=C:"), whose names start with '='.
 func nodeEnv() []string {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
 	environ := syscall.Environ()
+	if runtime.GOOS == "windows" {
+		env := make([]string, 0, len(environ))
+		for _, entry := range environ {
+			i := strings.IndexByte(entry[min(1, len(entry)):], '=') + min(1, len(entry))
+			if entry == "" || entry[0] == '=' || i <= 0 || isArrayIndex(entry[:i]) {
+				continue
+			}
+			env = append(env, entry)
+		}
+		return env
+	}
 	first := map[string]string{}
 	for _, entry := range environ {
 		for i := 0; i < len(entry); i++ {
@@ -180,7 +195,7 @@ func nodeEnv() []string {
 			continue
 		}
 		key := nodefs.DecodeUTF8([]byte(entry[:i]))
-		if seen[key] {
+		if seen[key] || isArrayIndex(key) || key == "" && runtime.GOOS == "linux" {
 			continue
 		}
 		seen[key] = true
@@ -201,4 +216,20 @@ func lookupEnv(env []string, key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// isArrayIndex reports whether key is a canonical array index: a decimal
+// integer below 2^32-1 without leading zeros.
+func isArrayIndex(key string) bool {
+	if key == "" || len(key) > 10 || key[0] == '0' && len(key) > 1 {
+		return false
+	}
+	n := 0
+	for i := 0; i < len(key); i++ {
+		if key[i] < '0' || key[i] > '9' {
+			return false
+		}
+		n = n*10 + int(key[i]-'0')
+	}
+	return n < 1<<32-1
 }

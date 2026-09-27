@@ -1,4 +1,4 @@
-//go:build unix
+//go:build unix && !linux
 
 // Package sigexit ends the process by a signal's default action, which the
 // Go runtime cannot do for signals it handles itself (SIGTRAP, SIGQUIT,

@@ -41,6 +41,11 @@ func TestSpawnSyncMatchesNode(t *testing.T) {
 	skipped := strings.Repeat("/aa", pathMax/3+10)         // >= PATH_MAX: libuv skips it
 	tooLong := strings.Repeat("/aa", (pathMax-2)/3) + "/a" // PATH_MAX-2 long: tried, execve says ENAMETOOLONG
 	write(filepath.Join(noexec, "git"), 0o644)
+	noShebang, empty := filepath.Join(dir, "nsw"), filepath.Join(dir, "empty")
+	os.MkdirAll(noShebang, 0o755)
+	os.MkdirAll(empty, 0o755)
+	os.WriteFile(filepath.Join(noShebang, "git"), []byte("echo \"ran-noshebang $1\"\n"), 0o755)
+	os.WriteFile(filepath.Join(empty, "git"), nil, 0o755)
 	write(filepath.Join(cwd, "git"), 0o755)
 	const max = 4 * 1024 * 1024
 	for _, tc := range []struct {
@@ -67,6 +72,9 @@ func TestSpawnSyncMatchesNode(t *testing.T) {
 		{"entry below PATH_MAX tried", tooLong, "", []string{"x"}, "null", "spawnSync git ENAMETOOLONG", ""},
 		{"last errno reported", "/nonexistent:/etc/hosts", "", []string{"x"}, "null", "spawnSync git ENOTDIR", ""},
 		{"env re-encoded, socket stdio", bin, "", []string{"env"}, "0", "", "61efbfbd62 sock osock\n"},
+		{"no shebang runs under /bin/sh", noShebang, "", []string{"x"}, "0", "", "ran-noshebang x\n"},
+		{"empty file runs under /bin/sh", empty, "", []string{"x"}, "0", "", ""},
+		{"PATH_MAX entry then the cwd", skipped + ":" + noShebang, cwd, []string{"x"}, "0", "", "ran git\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("PATH", tc.path)

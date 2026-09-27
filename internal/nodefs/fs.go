@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"sort"
+	"strconv"
 	"syscall"
 )
 
@@ -117,6 +118,18 @@ func (e *Error) Error() string {
 // ErrnoCode names err's errno the way Node's ErrnoException does (libuv's
 // uv_err_name, after uv_translate_sys_error on Windows).
 func ErrnoCode(err error) string { return codeOf(err) }
+
+// SystemErrorName is util.getSystemErrorName for the errno err carries, as
+// ErrnoException prints it: libuv's name, or on Unix "Unknown system error
+// -N" for an errno libuv has no name for (libuv passes it through negated).
+func SystemErrorName(err error) string {
+	code := codeOf(err)
+	var errno syscall.Errno
+	if code == "UNKNOWN" && !isWindows && errors.As(err, &errno) {
+		return "Unknown system error -" + strconv.Itoa(int(errno))
+	}
+	return code
+}
 
 func codeOf(err error) string {
 	var errno syscall.Errno
