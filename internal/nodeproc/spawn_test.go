@@ -4,8 +4,8 @@ package nodeproc
 
 import (
 	"os"
-	"runtime"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
