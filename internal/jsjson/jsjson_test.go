@@ -215,8 +215,11 @@ func TestStringifyStackOverflow(t *testing.T) {
 			{SiteDemo, "arr", 2610}, {SiteDemo, "arr0", 2609},
 		}},
 		{"linux", "arm64", []row{
-			{SiteDemo, "arr", 1827}, {SiteDemo, "arr0", 1826}, {SiteDemo, "obj", 3653}, {SiteDemo, "idx", 1956}, {SiteDemo, "dup", 1956},
-			{SiteGitLedger, "arr", 1826}, {SiteDemoWitness, "arr", 1826},
+			{SiteDemo, "arr", 1827}, {SiteDemo, "arr0", 1826}, {SiteDemo, "obj", 3653}, {SiteDemo, "idx", 1956}, {SiteDemo, "alt", 2434}, {SiteDemo, "dup", 1956},
+			{SitePrevention, "arr", 1827}, {SitePrevention, "obj", 3653}, {SitePrevention, "idx", 1957}, {SitePrevention, "alt", 2435},
+			{SiteGitProof, "arr", 1827}, {SiteGitProof, "obj", 3652}, {SiteGitProof, "idx", 1956}, {SiteGitProof, "alt", 2434},
+			{SiteGitLedger, "arr", 1826}, {SiteGitLedger, "obj", 3651}, {SiteGitLedger, "idx", 1956}, {SiteGitLedger, "alt", 2434},
+			{SiteDemoWitness, "arr", 1826}, {SiteDemoWitness, "obj", 3651}, {SiteDemoWitness, "idx", 1955}, {SiteDemoWitness, "alt", 2434},
 		}},
 	}
 	saved := v8Stack

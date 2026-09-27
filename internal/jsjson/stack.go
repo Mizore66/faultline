@@ -17,17 +17,20 @@ import "runtime"
 //	                            git         2232      4165     2231     2906
 //	                            ledger      2232      4165     2231     2905
 //	                            witness     2232      4164     2231     2905
-//	linux/arm64 (22.22.2 glibc) demo        1827      3653     1956     -
-//	                            ledger      1826      -        -        -
-//	                            witness     1826      -        -        -
+//	linux/arm64 (22.22.2 glibc) demo        1827      3653     1956     2434
+//	                            prevention  1827      3653     1957     2435
+//	                            git         1827      3652     1956     2434
+//	                            ledger      1826      3651     1956     2434
+//	                            witness     1826      3651     1955     2434
 //	darwin/arm64 (22.22.2)      demo        2610      -        -        -
 //
 // Every row is Node 22.22.2, the release CI pins; TestLiveStackThresholds-
 // MatchNode bisects all five sites and four shapes against it on linux/amd64,
-// linux/arm64 and darwin/arm64 in CI. linux/amd64 was measured here, the
-// arm64 rows by the reviewers. Where a cell is empty the model keeps the
-// relative costs and site offsets measured on linux/amd64 (and, for
-// darwin/arm64, Node 22.23.2's relative costs), scaled to the platform.
+// linux/arm64 and darwin/arm64 in CI. linux/amd64 was measured here,
+// linux/arm64 by the stack-live CI job, darwin/arm64 by the reviewers. Where
+// a cell is empty the model keeps the relative costs and site offsets measured
+// on linux/amd64 (and, for darwin/arm64, Node 22.23.2's relative costs),
+// scaled to the platform.
 // [0]- and {}-terminated values cost one level more and less (2232 and 4167
 // at the linux/amd64 demo site).
 //
@@ -55,8 +58,8 @@ func stackModelFor(goos, goarch string) stackModel {
 		return stackModel{budget: 65_237_500 + 25_000 + 10_000, array: 25_000, object: 10_000, slowObject: 26_250,
 			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 20_000, SiteGitProof: -7_000, SiteGitLedger: -30_500, SiteDemoWitness: -35_000}}
 	case goarch == "arm64":
-		return stackModel{budget: 36_535_000 + 20_000 + 10_000, array: 20_000, object: 10_000, slowObject: 18_675,
-			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 7_500, SiteGitProof: -12_300, SiteGitLedger: -16_600, SiteDemoWitness: -20_300}}
+		return stackModel{budget: 36_531_800 + 20_003 + 10_000, array: 20_003, object: 10_000, slowObject: 18_669,
+			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 5_800, SiteGitProof: -4_100, SiteGitLedger: -13_500, SiteDemoWitness: -16_700}}
 	}
 	return stackModel{budget: 41_667_000 + 18_667 + 10_000, array: 18_667, object: 10_000, slowObject: 18_664,
 		sites: [siteCount]int{SiteDemo: 0, SitePrevention: 7_000, SiteGitProof: -11_500, SiteGitLedger: -15_500, SiteDemoWitness: -19_000}}
