@@ -38,17 +38,17 @@ func MakeString(s string) Value     { return Value{kind: String, s: s} }
 func MakeArray(items []Value) Value { return Value{kind: Array, arr: &items} }
 func MakeObject(o *Obj) Value       { return Value{kind: Object, obj: o} }
 
-func (v Value) Kind() Kind     { return v.kind }
-func (v Value) Bool() bool     { return v.b }
-func (v Value) Num() float64   { return v.n }
-func (v Value) Str() string    { return v.s }
+func (v Value) Kind() Kind   { return v.kind }
+func (v Value) Bool() bool   { return v.b }
+func (v Value) Num() float64 { return v.n }
+func (v Value) Str() string  { return v.s }
 func (v Value) Items() []Value {
 	if v.arr == nil {
 		return nil
 	}
 	return *v.arr
 }
-func (v Value) Obj() *Obj      { return v.obj }
+func (v Value) Obj() *Obj { return v.obj }
 
 // Get follows object keys like JS property access; a missing step or a
 // non-object yields Undefined.

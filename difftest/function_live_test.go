@@ -3,9 +3,9 @@ package difftest
 import (
 	"encoding/json"
 	"math/rand/v2"
-	"slices"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
