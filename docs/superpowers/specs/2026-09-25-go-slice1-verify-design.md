@@ -189,8 +189,8 @@ Golden generation and Go tests both run git with an isolated configuration (`HOM
 
 ### 4.6 CI
 
-- **`go`** (ubuntu-latest, macos-latest, windows-latest): `go vet ./...` and `go test ./...` against the committed corpus. Symlink cases are skipped on Windows when symlink creation is not permitted.
-- **`difftest-live`** (ubuntu-latest, Node 22, `LC_ALL=C.UTF-8`): `pnpm install --frozen-lockfile`, `pnpm build`, regenerate goldens, `git diff --exit-code difftest/testdata`, then run the property tests with `FAULTLINE_NODE_ORACLE=1`.
+- **`go`** (ubuntu-latest, macos-latest, windows-latest): `go mod tidy -diff`, `go vet ./...` and `go test -count=1 -timeout 60m ./...` against the committed corpus (`-count=1` because replay builds `cmd/fl` in a subprocess the test cache cannot see). Symlink cases, and the fake-git cases (POSIX shell scripts), are skipped on Windows.
+- **`difftest-live`** (ubuntu-latest, Node 22.22.2 pinned, `LC_ALL=C.UTF-8`): `pnpm install --frozen-lockfile`, `pnpm build`, regenerate goldens, fail if `git status --porcelain difftest/testdata` is non-empty (untracked goldens included), then run the property tests with `FAULTLINE_NODE_ORACLE=1 go test -count=1`.
 
 ## 5. `fl verify` behavior
 
@@ -214,5 +214,5 @@ Reproduced from `src/cli-app.ts:2903` and `src/cli.ts`, quirks included.
 
 1. `go test ./...` passes on ubuntu, macOS, and Windows, and every base and mutated case matches its golden stdout, stderr, and exit code.
 2. `difftest-live` passes: no golden drift, and 10,000 cases per property with zero mismatches.
-3. `difftest/KNOWN_DIFFERENCES.md` lists every intentional difference: the locale bug (2.4), any zod issue-kind exclusions (3.3), and the `Next: pnpm fl help` hint, which is kept verbatim in this slice and changed deliberately, with a golden update, in the packaging slice.
+3. `difftest/KNOWN_DIFFERENCES.md` lists every intentional difference: the locale bug (2.4), any zod issue-kind exclusions (3.3), and the `Next: pnpm fl help` hint, which is kept verbatim in this slice and changed deliberately, with a golden update, in the packaging slice. Differences found in review and accepted since, each with its reason there: the platform- and version-dependent V8 limits Go models from measurements (stack depth, string and collection sizes, the 2^27-element abort; Node's native stack trace is not reproduced), the minimum Node 22.x for collation (ICU 78), Node's stack trace on stdout write errors (Go prints only the error line), signals the Go runtime owns (SIGPROF, SIGUSR1) and Node's descriptor baseline under a tiny `RLIMIT_NOFILE`, directory listing order on Windows, `ENOTDIR` on Windows, and WSL symlinks under libuv 1.51.
 4. A benchmark of Go vs TS `verify` on the largest base is recorded in `difftest/BENCHMARK.md`. It is evidence for the performance goal, not a gate.
