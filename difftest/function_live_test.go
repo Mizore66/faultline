@@ -208,6 +208,10 @@ func TestLiveLedger(t *testing.T) {
 		if rich == "" {
 			rich = oracleText(t, c, "richLedger", "{}")
 			seeds = append(seeds, rich)
+			// A tool name outside the allowed characters, re-signed, for
+			// the schema's toolName pattern.
+			badTool := strings.Replace(rich, `"toolName":"shell"`, `"toolName":"sh ell!"`, 1)
+			seeds = append(seeds, oracleText(t, c, "resignLedger", `{"text":`+jsjson.Quote(badTool)+"}"))
 		}
 		text := seeds[r.IntN(len(seeds))]
 		if i >= len(seeds) {
