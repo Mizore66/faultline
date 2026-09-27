@@ -174,17 +174,22 @@ const maxStringLength = 0x1fffffe8
 // decode to more UTF-16 units than V8 allows in one string.
 var ErrStringTooLong = errors.New("Cannot create a string longer than 0x1fffffe8 characters")
 
+// openRegular opens path the way readFileSync does: open(2) first, so a
+// directory without read permission fails with EACCES on open, and a
+// readable directory then fails with EISDIR on read.
 func openRegular(path string) (*os.File, int64, error) {
-	info, err := os.Stat(sysPath(path))
-	if err != nil {
-		return nil, 0, wrap(err, "open", path)
-	}
-	if info.IsDir() {
-		return nil, 0, &Error{Code: "EISDIR", Syscall: "read", NoPath: true}
-	}
 	f, err := os.Open(sysPath(path))
 	if err != nil {
 		return nil, 0, wrap(err, "open", path)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, 0, wrap(err, "fstat", path)
+	}
+	if info.IsDir() {
+		f.Close()
+		return nil, 0, &Error{Code: "EISDIR", Syscall: "read", NoPath: true}
 	}
 	return f, info.Size(), nil
 }
