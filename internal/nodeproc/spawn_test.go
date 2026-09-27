@@ -4,6 +4,7 @@ package nodeproc
 
 import (
 	"os"
+	"runtime"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -72,9 +73,11 @@ func TestSpawnSyncMatchesNode(t *testing.T) {
 		{"entry below PATH_MAX tried", tooLong, "", []string{"x"}, "null", "spawnSync git ENAMETOOLONG", ""},
 		{"last errno reported", "/nonexistent:/etc/hosts", "", []string{"x"}, "null", "spawnSync git ENOTDIR", ""},
 		{"env re-encoded, socket stdio", bin, "", []string{"env"}, "0", "", "61efbfbd62 sock osock\n"},
-		{"no shebang runs under /bin/sh", noShebang, "", []string{"x"}, "0", "", "ran-noshebang x\n"},
-		{"empty file runs under /bin/sh", empty, "", []string{"x"}, "0", "", ""},
-		{"PATH_MAX entry then the cwd", skipped + ":" + noShebang, cwd, []string{"x"}, "0", "", "ran git\n"},
+		// glibc's execvp runs an ENOEXEC file under /bin/sh and tries the cwd
+		// after a skipped entry; libuv's posix_spawn loop on macOS does not.
+		{"no shebang", noShebang, "", []string{"x"}, onLinux("0", "null"), onLinux("", "spawnSync git ENOEXEC"), onLinux("ran-noshebang x\n", "")},
+		{"empty file", empty, "", []string{"x"}, onLinux("0", "null"), onLinux("", "spawnSync git ENOEXEC"), ""},
+		{"PATH_MAX entry then the cwd", skipped + ":" + noShebang, cwd, []string{"x"}, onLinux("0", "null"), onLinux("", "spawnSync git ENOEXEC"), onLinux("ran git\n", "")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("PATH", tc.path)
@@ -102,4 +105,11 @@ func TestSpawnSyncMatchesNode(t *testing.T) {
 			}
 		})
 	}
+}
+
+func onLinux(linux, other string) string {
+	if runtime.GOOS == "linux" {
+		return linux
+	}
+	return other
 }
