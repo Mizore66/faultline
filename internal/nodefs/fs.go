@@ -152,16 +152,21 @@ func ancestorNotDir(path string) bool {
 }
 
 // sysPath is the path Node hands to the syscall: JS strings are encoded as
-// UTF-8 with each lone surrogate replaced by U+FFFD. Error messages keep the
-// JS string (and print it through the same replacement).
-func sysPath(path string) string { return jsstr.ToUTF8(path) }
+// UTF-8 with each lone surrogate replaced by U+FFFD, and on Windows
+// namespaced (see toNamespacedPath). Error messages print errorPath.
+func sysPath(path string) string {
+	if isWindows {
+		return toNamespacedPath(jsstr.ToUTF8(path), processCwd, os.Getenv)
+	}
+	return jsstr.ToUTF8(path)
+}
 
 func wrap(err error, syscallName, path string) error {
 	code := codeOf(err)
 	if code == "ENOENT" && ancestorNotDir(path) {
 		code = "ENOTDIR"
 	}
-	return &Error{Code: code, Syscall: syscallName, Path: path}
+	return &Error{Code: code, Syscall: syscallName, Path: errorPath(path)}
 }
 
 // kIoMaxLength is the largest file readFileSync reads into a Buffer.
@@ -234,35 +239,23 @@ func ReadText(path string) (string, error) {
 	return DecodeUTF8(b), nil
 }
 
-// Lstat is lstatSync(path). On Windows, reparse points are classified the
-// way libuv does (see lstatReparse): symlinks, WSL symlinks, drive-letter
-// junctions and AppExecLinks are symbolic links; anything else (OneDrive
-// placeholders, WOF-compressed files, volume mount points) is a file or
-// directory by the attributes of what it resolves to.
+// Lstat is lstatSync(path). On Windows it follows libuv (see statRaw):
+// symlinks, WSL symlinks, drive-letter junctions and AppExecLinks are
+// symbolic links; any other reparse point is a file or directory by the
+// attributes of what it resolves to, or an error when that cannot be
+// opened.
 func Lstat(path string) (fs.FileInfo, error) {
-	info, err := os.Lstat(sysPath(path))
+	info, err := statRaw(sysPath(path), false)
 	if err != nil {
 		return nil, wrap(err, "lstat", path)
-	}
-	if isWindows {
-		if info, err = lstatReparse(sysPath(path), info); err != nil {
-			return nil, wrap(err, "lstat", path)
-		}
 	}
 	return info, nil
 }
 
-type libuvInfo struct {
-	fs.FileInfo
-	mode fs.FileMode
-}
-
-func (i libuvInfo) Mode() fs.FileMode { return i.mode }
-func (i libuvInfo) IsDir() bool       { return i.mode.IsDir() }
-
-// Exists is existsSync(path): true when stat (following links) succeeds.
+// Exists is existsSync(path): uv_fs_access, and on Windows also uv_fs_stat
+// (following links), must succeed.
 func Exists(path string) bool {
-	_, err := os.Stat(sysPath(path))
+	_, err := statRaw(sysPath(path), true)
 	return err == nil
 }
 
@@ -324,7 +317,8 @@ func Tmpdir() string {
 const tempChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 // Mkdtemp is mkdtempSync(prefix): uv_fs_mkdtemp on prefix + "XXXXXX", with
-// Node's error text naming the template.
+// Node's error text naming the template. Node does not namespace the
+// template on Windows.
 func Mkdtemp(prefix string) (string, error) {
 	var err error
 	for range 100 {
@@ -333,14 +327,23 @@ func Mkdtemp(prefix string) (string, error) {
 			b[i] = tempChars[rand.IntN(len(tempChars))]
 		}
 		path := prefix + string(b)
-		if err = os.Mkdir(sysPath(path), 0o700); err == nil {
+		if err = os.Mkdir(jsstr.ToUTF8(path), 0o700); err == nil {
 			return path, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
 			break
 		}
 	}
-	return "", wrap(err, "mkdtemp", prefix+"XXXXXX")
+	tmpl := prefix + "XXXXXX"
+	code := codeOf(err)
+	if code == "ENOENT" && ancestorNotDir(tmpl) {
+		code = "ENOTDIR"
+	}
+	display := tmpl
+	if isWindows {
+		display = DecodeUTF8([]byte(stringFromPath(jsstr.ToUTF8(tmpl))))
+	}
+	return "", &Error{Code: code, Syscall: "mkdtemp", Path: display}
 }
 
 // Describe is uv_strerror for a libuv error name.

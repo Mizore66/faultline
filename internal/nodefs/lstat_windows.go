@@ -3,8 +3,9 @@ package nodefs
 import (
 	"encoding/binary"
 	"io/fs"
-	"os"
+	"strings"
 	"syscall"
+	"time"
 )
 
 const (
@@ -16,51 +17,148 @@ const (
 	errSymlinkNotSupport  = syscall.Errno(1464) // ERROR_SYMLINK_NOT_SUPPORTED
 	errNotAReparsePoint   = syscall.Errno(4390) // ERROR_NOT_A_REPARSE_POINT
 	maxReparseDataBufSize = 16 * 1024
+	fileReadAttributes    = 0x80
+	errSharingViolation   = syscall.Errno(32)  // ERROR_SHARING_VIOLATION
+	errInvalidName        = syscall.Errno(123) // ERROR_INVALID_NAME
 )
 
-// lstatReparse classifies a reparse point the way libuv's lstat does
-// (fs__stat_handle with fs__readlink_handle, libuv 1.52): SYMLINK and
-// LX_SYMLINK tags, junctions whose target is a drive path (\??\X:\), and
-// AppExecLinks with an absolute third string are symbolic links. For any
-// other reparse point libuv retries with a following stat and takes the
-// directory bit from the target's attributes.
-func lstatReparse(raw string, info fs.FileInfo) (fs.FileInfo, error) {
-	attrs, ok := info.Sys().(*syscall.Win32FileAttributeData)
-	if !ok || attrs.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
-		return info, nil
+// statRaw is libuv's fs__stat_impl (1.51, Node 22.22.2) on a namespaced
+// path: lstat (follow=false) opens the entry itself; a reparse point is a
+// symbolic link when fs__readlink_handle accepts it (see classifyReparse),
+// and otherwise lstat is retried as a following stat. When the open fails
+// with ERROR_ACCESS_DENIED or ERROR_SHARING_VIOLATION the entry is read from
+// its parent directory (fs__stat_directory), where any reparse point is a
+// link to lstat and an error to stat.
+func statRaw(raw string, follow bool) (fs.FileInfo, error) {
+	raw = statPreparePath(raw)
+	info, err := statImplFromPath(raw, !follow)
+	if err != nil && !follow && (err == errSymlinkNotSupport || err == errNotAReparsePoint) {
+		return statImplFromPath(raw, false)
 	}
-	perm := info.Mode().Perm()
-	switch err := readlinkHandle(raw); err {
-	case nil:
-		return libuvInfo{info, fs.ModeSymlink | perm}, nil
-	case errSymlinkNotSupport, errNotAReparsePoint:
+	return info, err
+}
+
+// statPreparePath is fs__stat_prepare_path: one trailing separator is
+// dropped unless it follows a drive colon.
+func statPreparePath(p string) string {
+	if n := len(p); n > 1 && p[n-2] != ':' && (p[n-1] == '\\' || p[n-1] == '/') {
+		return p[:n-1]
+	}
+	return p
+}
+
+type winStat struct {
+	name string
+	size int64
+	mode fs.FileMode
+	mod  time.Time
+}
+
+func (s winStat) Name() string       { return s.name }
+func (s winStat) Size() int64        { return s.size }
+func (s winStat) Mode() fs.FileMode  { return s.mode }
+func (s winStat) ModTime() time.Time { return s.mod }
+func (s winStat) IsDir() bool        { return s.mode.IsDir() }
+func (s winStat) Sys() any           { return nil }
+
+// assignStat is fs__stat_assign_statbuf's type and permission bits.
+func assignStat(name string, attrs uint32, size int64, mtime syscall.Filetime, lstat bool) winStat {
+	st := winStat{name: name, mod: time.Unix(0, mtime.Nanoseconds())}
+	switch {
+	case lstat && attrs&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0:
+		st.mode = fs.ModeSymlink
+		st.size = size
+	case attrs&syscall.FILE_ATTRIBUTE_DIRECTORY != 0:
+		st.mode = fs.ModeDir
 	default:
-		return nil, err
+		st.size = size
 	}
-	target, err := os.Stat(raw)
+	if attrs&syscall.FILE_ATTRIBUTE_READONLY != 0 {
+		st.mode |= 0o444
+	} else {
+		st.mode |= 0o666
+	}
+	return st
+}
+
+func baseName(p string) string {
+	i := len(p)
+	for i > 0 && p[i-1] != '\\' && p[i-1] != '/' && p[i-1] != ':' {
+		i--
+	}
+	return p[i:]
+}
+
+// statImplFromPath is fs__stat_impl_from_path's handle path (the
+// GetFileInformationByName fast path gives the same results).
+func statImplFromPath(raw string, lstat bool) (fs.FileInfo, error) {
+	p, err := syscall.UTF16PtrFromString(raw)
 	if err != nil {
 		return nil, err
 	}
-	mode := perm
-	if t, ok := target.Sys().(*syscall.Win32FileAttributeData); ok && t.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 {
-		mode |= fs.ModeDir
+	flags := uint32(syscall.FILE_FLAG_BACKUP_SEMANTICS)
+	if lstat {
+		flags |= syscall.FILE_FLAG_OPEN_REPARSE_POINT
 	}
-	return libuvInfo{target, mode}, nil
+	h, err := syscall.CreateFile(p, fileReadAttributes, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
+		nil, syscall.OPEN_EXISTING, flags, 0)
+	if err != nil {
+		if err != syscall.ERROR_ACCESS_DENIED && err != errSharingViolation {
+			return nil, err
+		}
+		return statDirectory(raw, lstat, err)
+	}
+	defer syscall.CloseHandle(h)
+	var d syscall.ByHandleFileInformation
+	if err := syscall.GetFileInformationByHandle(h, &d); err != nil {
+		return nil, err
+	}
+	size := int64(d.FileSizeHigh)<<32 | int64(d.FileSizeLow)
+	if lstat && d.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		if err := readlinkHandle(h); err != nil {
+			return nil, err
+		}
+	}
+	return assignStat(baseName(raw), d.FileAttributes, size, d.LastWriteTime, lstat), nil
+}
+
+// statDirectory is fs__stat_directory: the entry as its parent directory
+// lists it. A reparse point cannot be stat'ed this way (the open error
+// stands) but is a link to lstat.
+func statDirectory(raw string, lstat bool, openErr error) (fs.FileInfo, error) {
+	name := baseName(raw)
+	if name == "" || strings.ContainsAny(name, "*?<>\"") {
+		if name != "" {
+			return nil, errInvalidName
+		}
+		return nil, openErr
+	}
+	p, err := syscall.UTF16PtrFromString(raw)
+	if err != nil {
+		return nil, err
+	}
+	var fd syscall.Win32finddata
+	h, err := syscall.FindFirstFile(p, &fd)
+	if err != nil {
+		if err == syscall.ERROR_FILE_NOT_FOUND || err == syscall.ERROR_NO_MORE_FILES {
+			return nil, syscall.ERROR_PATH_NOT_FOUND
+		}
+		return nil, err
+	}
+	syscall.FindClose(h)
+	if fd.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 && !lstat {
+		return nil, openErr
+	}
+	size := int64(fd.FileSizeHigh)<<32 | int64(fd.FileSizeLow)
+	if fd.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		size = 0
+	}
+	return assignStat(name, fd.FileAttributes, size, fd.LastWriteTime, lstat), nil
 }
 
 // readlinkHandle is fs__readlink_handle without building the target: nil
 // when libuv would report a link.
-func readlinkHandle(raw string) error {
-	p, err := syscall.UTF16PtrFromString(raw)
-	if err != nil {
-		return err
-	}
-	h, err := syscall.CreateFile(p, 0x80 /* FILE_READ_ATTRIBUTES */, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
-		nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
-	if err != nil {
-		return err
-	}
-	defer syscall.CloseHandle(h)
+func readlinkHandle(h syscall.Handle) error {
 	buf := make([]byte, maxReparseDataBufSize)
 	var n uint32
 	if err := syscall.DeviceIoControl(h, fsctlGetReparsePoint, nil, 0, &buf[0], uint32(len(buf)), &n, nil); err != nil {

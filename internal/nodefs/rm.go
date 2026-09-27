@@ -30,7 +30,7 @@ func (r remover) rimraf(raw, display string, depth int) error {
 	if r.maxDepth >= 0 && depth > r.maxDepth {
 		return ErrTooDeep
 	}
-	info, err := os.Lstat(raw)
+	info, err := statRaw(raw, false)
 	if err != nil {
 		switch codeOf(err) {
 		case "ENOENT":
@@ -128,7 +128,7 @@ func (r remover) fixWinEPERM(raw, display string, original error, depth int) err
 		}
 		return original
 	}
-	info, err := os.Stat(raw)
+	info, err := statRaw(raw, true)
 	if err != nil {
 		if codeOf(err) == "ENOENT" {
 			return nil
