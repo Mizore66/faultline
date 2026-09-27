@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fake git for difftest: `git bundle list-heads` prints a line that is not a head.
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+if [ "$1" = bundle ] && [ "$2" = list-heads ]; then echo 'not a head line'; exit 0; fi
+exec git "$@"

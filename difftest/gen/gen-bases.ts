@@ -4,6 +4,8 @@
 // system config, with fixed commit dates and SHA-1 by default. The committed
 // bases are snapshots: bundles record temporary paths and the Node version,
 // so a full rerun rewrites them (and the goldens must be regenerated).
+// Run it on Linux: git-cjk-overlays writes overlay paths containing U+FDD1,
+// which APFS rejects (EILSEQ), so on macOS that base has no runs.
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";

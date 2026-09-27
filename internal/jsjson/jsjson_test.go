@@ -212,19 +212,11 @@ func TestStringifyStackOverflow(t *testing.T) {
 			{SiteDemoWitness, "arr", 2232}, {SiteDemoWitness, "obj", 4164}, {SiteDemoWitness, "idx", 2231}, {SiteDemoWitness, "alt", 2905},
 		}},
 		{"darwin", "arm64", []row{
-			{SiteDemo, "arr", 2747}, {SiteDemo, "arr0", 2746}, {SiteDemo, "obj", 6867}, {SiteDemo, "objE", 6868},
-			{SiteDemo, "idx", 2616}, {SiteDemo, "alt", 3924}, {SiteDemo, "dup", 2616},
-			{SitePrevention, "arr", 2748}, {SitePrevention, "obj", 6869}, {SitePrevention, "idx", 2616}, {SitePrevention, "alt", 3924},
-			{SiteGitProof, "arr", 2747}, {SiteGitProof, "obj", 6866}, {SiteGitProof, "idx", 2615}, {SiteGitProof, "alt", 3923},
-			{SiteGitLedger, "arr", 2746}, {SiteGitLedger, "obj", 6864}, {SiteGitLedger, "idx", 2614}, {SiteGitLedger, "alt", 3922},
-			{SiteDemoWitness, "arr", 2746}, {SiteDemoWitness, "obj", 6863}, {SiteDemoWitness, "idx", 2614}, {SiteDemoWitness, "alt", 3922},
+			{SiteDemo, "arr", 2610}, {SiteDemo, "arr0", 2609},
 		}},
 		{"linux", "arm64", []row{
-			{SiteDemo, "arr", 1781}, {SiteDemo, "arr0", 1780}, {SiteDemo, "obj", 3560}, {SiteDemo, "objE", 3561},
-			{SiteDemo, "idx", 1907}, {SiteDemo, "alt", 2373}, {SiteDemo, "dup", 1907},
-			{SitePrevention, "arr", 1781}, {SitePrevention, "obj", 3561}, {SitePrevention, "idx", 1907},
-			{SiteGitProof, "arr", 1780}, {SiteGitProof, "obj", 3559}, {SiteGitProof, "idx", 1907},
-			{SiteDemoWitness, "arr", 1780}, {SiteDemoWitness, "obj", 3558}, {SiteDemoWitness, "idx", 1906},
+			{SiteDemo, "arr", 1827}, {SiteDemo, "arr0", 1826}, {SiteDemo, "obj", 3653}, {SiteDemo, "idx", 1956}, {SiteDemo, "dup", 1956},
+			{SiteGitLedger, "arr", 1826}, {SiteDemoWitness, "arr", 1826},
 		}},
 	}
 	saved := v8Stack

@@ -32,7 +32,7 @@ func TestDeepLiteralOverflowsLikeV8(t *testing.T) {
 		{"prevention-verified", "prevention.json", `"verified":true`, "- Prevention proof verification failed safely: Maximum call stack size exceeded\n", 2233},
 		{"git-two-states", "source/metadata.json", `"schemaVersion":"faultline.git-proof-source.v1"`, "- Git proof bundle verification failed safely: Maximum call stack size exceeded\n", 2232},
 	} {
-		depths := map[int]bool{2000: false, 3000: true} // depth -> overflows
+		depths := map[int]bool{1500: false, 3000: true} // depth -> overflows; 1500 is below every model
 		if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 			depths[tc.last], depths[tc.last+1] = false, true
 		}

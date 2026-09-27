@@ -1,14 +1,14 @@
 import { copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sha256 } from "../../src/canonical.js";
+import { digestJson, sha256 } from "../../src/canonical.js";
 
 export type Template = {
   id: string; op: string; file?: string; path?: string; offset?: number; target?: string; content?: string;
   find?: string; replace?: string; hex?: string; key?: string; value?: unknown; rehash?: boolean;
   bases?: string[]; jsonPath?: Array<string | number>; valueFrom?: Array<string | number>; swapWith?: Array<string | number>;
   delete?: boolean; first?: boolean; to?: string; prefix?: string; suffix?: string; depth?: number; count?: number;
-  edits?: JsonEdit[]; size?: number; from?: string; fakeGit?: string;
+  edits?: JsonEdit[]; size?: number; from?: string; fakeGit?: string; resignLedger?: boolean;
 };
 // JsonEdit is one json-edit step; a json-edit template is one step itself or
 // lists several in `edits`, applied in order.
@@ -228,6 +228,33 @@ function rehash(root: string, base: string): void {
   writeFileSync(join(root, "ROOT.sha256"), `sha256:${sha256(hashes)}\n`);
 }
 
+type LedgerJson = {
+  schemaVersion: string; ledgerId: string; sessionId: string; createdAt: string;
+  events: Array<{ hash?: string; previousHash?: string; event: { type: string; payload?: { checkpoint?: { digest?: string } } } }>;
+};
+
+// resignLedgerJson re-signs an edited lifecycle ledger the way the writer
+// does: each checkpoint's digest (signGitCheckpoint), then the event hash
+// chain from the genesis hash (hashLifecycleEvent, ledgerGenesisHash), so an
+// edit reaches the checks after the ledger's own verification.
+function resignLedgerJson(ledger: LedgerJson): void {
+  let previous = digestJson({
+    kind: "FAULTLINE_CODEX_LIFECYCLE_GENESIS", schemaVersion: ledger.schemaVersion,
+    ledgerId: ledger.ledgerId, sessionId: ledger.sessionId, createdAt: ledger.createdAt
+  });
+  for (const event of ledger.events) {
+    const checkpoint = event.event.payload?.checkpoint;
+    if (event.event.type === "WORKTREE_CHECKPOINT" && checkpoint) {
+      const { digest: _digest, ...unsigned } = checkpoint;
+      checkpoint.digest = digestJson(unsigned);
+    }
+    event.previousHash = previous;
+    const { hash: _hash, ...unsigned } = event;
+    event.hash = digestJson(unsigned);
+    previous = event.hash;
+  }
+}
+
 // applyMutation mutates the bundle at root; root-symlink replaces root itself
 // with a symbolic link to a sibling copy.
 export function applyMutation(root: string, c: Case): void {
@@ -257,6 +284,7 @@ export function applyMutation(root: string, c: Case): void {
     case "json-edit": {
       const v = JSON.parse(readFileSync(path, "utf8")) as Json;
       for (const e of jsonEdits(t)) applyJsonEdit(v, e);
+      if (t.resignLedger) resignLedgerJson(v as LedgerJson);
       writeFileSync(path, `${JSON.stringify(v, null, 2)}\n`);
       break;
     }

@@ -92,9 +92,14 @@ func (p *parser) peekChar() int {
 }
 
 func (p *parser) skipWS() {
-	for p.pos < len(p.src) && tokenOf(int(p.src[p.pos])) == tokWhitespace {
-		p.pos++
+	src, i := p.src, p.pos
+	for i < len(src) {
+		if c := src[i]; c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			break
+		}
+		i++
 	}
+	p.pos = i
 }
 
 // check is V8 Check: skip whitespace, consume token if it is next.
@@ -378,6 +383,19 @@ func hexValue(c int) int {
 
 // scanString is V8 ScanJsonString; the opening quote is consumed.
 func (p *parser) scanString() (string, bool) {
+	// Fast path: no escape before the closing quote, so the string is the
+	// source units as they are.
+	for end := p.pos; end < len(p.src); end++ {
+		c := p.src[end]
+		if c == '"' {
+			s := jsstr.FromUTF16(p.src[p.pos:end])
+			p.pos = end + 1
+			return s, true
+		}
+		if c == '\\' || c < 0x20 {
+			break
+		}
+	}
 	var units []uint16
 	for {
 		if p.pos >= len(p.src) {

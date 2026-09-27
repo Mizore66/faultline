@@ -13,6 +13,20 @@ import (
 
 // FromUTF16 encodes JS code units as WTF-8, joining valid surrogate pairs.
 func FromUTF16(units []uint16) string {
+	ascii := true
+	for _, u := range units {
+		if u >= 0x80 {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		b := make([]byte, len(units))
+		for i, u := range units {
+			b[i] = byte(u)
+		}
+		return string(b)
+	}
 	var b strings.Builder
 	b.Grow(len(units))
 	for i := 0; i < len(units); i++ {
@@ -39,6 +53,18 @@ func FromUTF16(units []uint16) string {
 func ToUTF16(s string) []uint16 {
 	units := make([]uint16, 0, len(s))
 	for i := 0; i < len(s); {
+		if s[i] < 0x80 { // ASCII runs, the common case, without decoding
+			n := len(units)
+			buf := units[n:cap(units)] // len(s) units always fit
+			k := 0
+			for i < len(s) && s[i] < 0x80 {
+				buf[k] = uint16(s[i])
+				i++
+				k++
+			}
+			units = units[:n+k]
+			continue
+		}
 		if len(s)-i >= 3 && s[i] == 0xED && s[i+1] >= 0xA0 && s[i+1] <= 0xBF && s[i+2] >= 0x80 && s[i+2] <= 0xBF {
 			units = append(units, uint16(0xD000|rune(s[i+1]&0x3F)<<6|rune(s[i+2]&0x3F)))
 			i += 3

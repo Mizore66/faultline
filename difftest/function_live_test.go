@@ -260,8 +260,24 @@ func TestLiveSandbox(t *testing.T) {
 				seeds = append(seeds, oracleText(t, c, "sandboxVariant", `{"text":`+jsjson.Quote(docker)+`,"variant":"`+v+`"}`))
 				variants++
 			}
+			// Each policy limit at its maximum and one past it, re-signed, so
+			// an off-by-one comparison changes the verdict here.
+			for _, limit := range []struct {
+				name string
+				max  float64
+			}{{"timeoutMs", 300_000}, {"maxOutputBytes", 8_388_608}, {"cpuCount", 4}, {"memoryBytes", 2_147_483_648}, {"pidsLimit", 512}, {"tmpfsBytes", 536_870_912}} {
+				for _, n := range []float64{limit.max, limit.max + 1} {
+					v, _ := jsjson.Parse(docker)
+					v.Get("runtime", "limits").Obj().Set(limit.name, jsjson.MakeNumber(n))
+					seeds = append(seeds, oracleText(t, c, "resignSandbox", `{"text":`+jsjson.Quote(jsjson.Stringify(v))+`,"legacy":false}`))
+					variants++
+				}
+			}
 		}
 		seed := r.IntN(len(seeds))
+		if i < len(seeds) {
+			seed = i // every seed once, unchanged, before the corrupted ones
+		}
 		text := seeds[seed]
 		if i >= len(seeds) {
 			for n := r.IntN(3); n >= 0; n-- {

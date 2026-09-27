@@ -114,6 +114,9 @@ os.execv(argv[0], argv)
 	runs := 0
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) {
+			if (sc.nobody || sc.chroot) && os.Geteuid() != 0 {
+				t.Skip("needs root (setuid, chroot and mount namespaces)")
+			}
 			run := func(argv ...string) [3]any {
 				runs++
 				root := filepath.Join(base, "r"+strconv.Itoa(runs))

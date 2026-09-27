@@ -1,6 +1,7 @@
 package difftest
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -326,4 +327,95 @@ func TestLiveCollationMarkRuns(t *testing.T) {
 		}
 	}
 	t.Logf("%d pairs compared", compared)
+}
+
+// Tibetan composite vowels (U+0F73, U+0F75, U+0F81 decompose to U+0F71 plus
+// a vowel sign, and are not FCD) exercise ICU's incremental FCD check, which
+// normalizes some of these runs and leaves others as they are.
+func TestLiveCollationTibetan(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	alphabet := []rune{'a', 0x0F40, 0x0F71, 0x0F72, 0x0F73, 0x0F74, 0x0F75, 0x0F7A, 0x0F80, 0x0F81, 0x0F90, 0x0FB2, 0x0FB3, 0x0F77, 0x0F79, 0x0334}
+	r := rand.New(rand.NewPCG(71, 72))
+	word := func() string {
+		s := []rune{alphabet[r.IntN(3)]}
+		for n := 1 + r.IntN(6); n > 0; n-- {
+			s = append(s, alphabet[r.IntN(len(alphabet))])
+		}
+		return string(s)
+	}
+	compared := 0
+	for range 40 {
+		var list []string
+		var pairs [][2]string
+		for range 2000 {
+			a := word()
+			b := a + string(alphabet[r.IntN(len(alphabet))])
+			if r.IntN(2) == 0 {
+				b = word()
+			}
+			pairs = append(pairs, [2]string{a, b})
+			list = append(list, "["+jsjson.Quote(a)+","+jsjson.Quote(b)+"]")
+		}
+		raw, err := c.Call("compareMany", `{"pairs":[`+strings.Join(list, ",")+`]}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, _ := jsjson.Parse(raw)
+		for i, p := range pairs {
+			if got := canonical.LocaleCompare(p[0], p[1]); float64(got) != want.Items()[i].Num() {
+				t.Fatalf("LocaleCompare(%+q, %+q) = %d, Node %v", p[0], p[1], got, want.Items()[i].Num())
+			}
+		}
+		compared += len(pairs)
+	}
+	t.Logf("%d pairs compared", compared)
+}
+
+// Long, nearly sorted inputs make V8's TimSort gallop (runs merged with
+// minGallop adaptation), which short random key lists never reach.
+func TestLiveSortLocaleLong(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	r := rand.New(rand.NewPCG(81, 82))
+	for round := range 12 {
+		n := 2000 + r.IntN(3000)
+		keys := make([]string, n)
+		for i := range keys {
+			keys[i] = fmt.Sprintf("k%06d", i*7)
+		}
+		switch round % 4 {
+		case 0: // a few swaps
+			for range 20 {
+				i, j := r.IntN(n), r.IntN(n)
+				keys[i], keys[j] = keys[j], keys[i]
+			}
+		case 1: // interleaved sorted runs
+			slices.SortFunc(keys, func(a, b string) int { return strings.Compare(a[len(a)-1:], b[len(b)-1:]) })
+		case 2: // reversed blocks
+			for i := 0; i+100 <= n; i += 100 {
+				slices.Reverse(keys[i : i+100])
+			}
+		case 3: // mixed-case and accented variants (locale order differs from code units)
+			for i := range keys {
+				switch r.IntN(4) {
+				case 0:
+					keys[i] = strings.ToUpper(keys[i])
+				case 1:
+					keys[i] = "é" + keys[i]
+				}
+			}
+		}
+		raw, err := c.Call("sort", `{"keys":`+quoteList(keys)+`}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, _ := jsjson.Parse(raw)
+		got := canonical.SortLocale(keys)
+		for i, item := range v.Items() {
+			if got[i] != item.Str() {
+				t.Fatalf("round %d: SortLocale differs from Node at %d: %q vs %q", round, i, got[i], item.Str())
+			}
+		}
+	}
 }

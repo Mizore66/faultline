@@ -21,39 +21,28 @@ var unreachableLiterals = map[string]string{
 	"declared path escapes bundle:":                                           "only a Windows drive-relative path (C:x) resolves outside the bundle after invalidDeclaredPath",
 	"Unsafe artifact path:":                                                   "metadata and manifest paths are schema-checked with the same safe-path rule first",
 	"Artifact path escapes its bundle:":                                       "unreachable after the safe-path check (no .. or absolute segments)",
-	"Git returned an invalid object identifier while writing a proof bundle.": "git rev-parse --verify only prints object ids",
-	"Git bundle returned an invalid head line:":                               "git bundle list-heads output is well formed for any bundle git accepts",
-	"Git range patch exceeds FaultLine's portable artifact limit.":            "needs a git diff over 128 MiB, larger than the bundle limits allow in the corpus",
-	"declared artifacts exceed FaultLine's total verification read limit":     "declared files are a subset of the physical files, whose total is checked first against the same limit",
+	"Git range patch exceeds FaultLine's portable artifact limit.":            "git diff output past the 4 MiB maxBuffer fails with ENOBUFS before the 128 MiB artifact limit is checked",
 	"AGENT_DRAFT evidence cannot be exported as a Git proof bundle":           "proof.evidenceGrade is a zod enum without AGENT_DRAFT",
-	"duplicate runId:":                                                            "a duplicated runId breaks the manifest run catalog first, and the verifier fails safely before the semantics run",
-	"witness digest is invalid":                                                   "SandboxAuditSchema requires sha256 digests, and verify parses it first",
-	"command digest is invalid":                                                   "SandboxAuditSchema requires sha256 digests, and verify parses it first",
-	"environment policy digest is invalid":                                        "SandboxAuditSchema requires sha256 digests, and verify parses it first",
-	"sandbox policy digest is invalid":                                            "SandboxAuditSchema requires sha256 digests, and verify parses it first",
-	"run sandbox limits are invalid:":                                             "SandboxAuditSchema requires positive integer limits",
-	"cached replay minimization must be marked NOT_EXECUTED":                      "minimization.termination is a zod enum of BIDIRECTIONALLY_VALIDATED and NOT_EXECUTED, both handled before this branch",
-	"prevention package must set verified=true":                                   "verified is z.literal(true); the schema rejects false first",
-	"prevention requires NATIVE_DOCKER EXECUTED evidence on every state":          "executionTrust and executionKind are zod literals; the schema rejects other values first",
-	"expected frozen digest is not a valid sha256 digest":                         "the manifest schema requires frozenDigest to be a sha256 digest",
-	"three-state prevention requires PASS → FAIL → PASS":                          "each state's verdict is a zod literal (PASS, FAIL, PASS); the schema rejects other orders first",
-	"prevention requires at least three distinct executions per state":            "distinctExecutionCount has a zod minimum of 3",
-	"source metadata artifact paths do not match the manifest":                    "both paths are zod literals, so they always agree after the schemas pass",
-	"bound manifest lifecycle artifact path does not match its lifecycle binding": "lifecycle.path is a zod literal in the manifest schema",
-	// Binding a ledger to the investigation needs a re-signed ledger hash
-	// chain plus matching manifest ledgerDigest/headHash, which the generic
-	// mutation engines cannot produce.
-	"lifecycle ledger cannot bind to the investigation:":                                            "needs a re-signed ledger and manifest binding",
-	"Lifecycle checkpoint":                                                                          "needs a re-signed ledger and manifest binding",
-	"has a tree that disagrees with investigated commit":                                            "needs a re-signed ledger and manifest binding",
-	"Cannot bind a lifecycle ledger without a clean checkpoint matching an investigated Git state.": "needs a re-signed ledger and manifest binding",
-	"Lifecycle ledger must include a clean checkpoint for the investigated descendant state.":       "needs a re-signed ledger and manifest binding",
-	"Cannot bind an invalid Codex lifecycle ledger:":                                                "binding runs only after the ledger verified",
-	"Cannot bind a lifecycle ledger that has no SESSION_STARTED observation.":                       "a verified ledger always starts with SESSION_STARTED",
+	"duplicate runId:":                                                        "a duplicated runId breaks the manifest run catalog first, and the verifier fails safely before the semantics run",
+	"witness digest is invalid":                                               "SandboxAuditSchema requires sha256 digests, and verify parses it first",
+	"command digest is invalid":                                               "SandboxAuditSchema requires sha256 digests, and verify parses it first",
+	"environment policy digest is invalid":                                    "SandboxAuditSchema requires sha256 digests, and verify parses it first",
+	"sandbox policy digest is invalid":                                        "SandboxAuditSchema requires sha256 digests, and verify parses it first",
+	"run sandbox limits are invalid:":                                         "SandboxAuditSchema requires positive integer limits",
+	"cached replay minimization must be marked NOT_EXECUTED":                  "minimization.termination is a zod enum of BIDIRECTIONALLY_VALIDATED and NOT_EXECUTED, both handled before this branch",
+	"prevention package must set verified=true":                               "verified is z.literal(true); the schema rejects false first",
+	"prevention requires NATIVE_DOCKER EXECUTED evidence on every state":      "executionTrust and executionKind are zod literals; the schema rejects other values first",
+	"expected frozen digest is not a valid sha256 digest":                     "the manifest schema requires frozenDigest to be a sha256 digest",
+	"three-state prevention requires PASS → FAIL → PASS":                      "each state's verdict is a zod literal (PASS, FAIL, PASS); the schema rejects other orders first",
+	"prevention requires at least three distinct executions per state":        "distinctExecutionCount has a zod minimum of 3",
+	"source metadata artifact paths do not match the manifest":                "both paths are zod literals, so they always agree after the schemas pass",
+	"Cannot bind an invalid Codex lifecycle ledger:":                          "binding runs only after the ledger verified",
+	"Cannot bind a lifecycle ledger that has no SESSION_STARTED observation.": "a verified ledger always starts with SESSION_STARTED",
 }
 
 // errorLiterals collects the string literals passed to errors.New,
-// fmt.Errorf, append(errs, ...) and local error-adding closures (such as
+// fmt.Errorf, schema.Regex and schema.Refine (as their message), append(errs,
+// ...) and local error-adding closures (such as
 // `add := func(s string) { errs = append(errs, s) }`) in internal/bundle.
 func errorLiterals(t *testing.T, dir string) map[string]string {
 	out := map[string]string{}
@@ -83,7 +72,13 @@ func errorLiterals(t *testing.T, dir string) map[string]string {
 					return true
 				}
 			case *ast.SelectorExpr:
-				if fn.Sel.Name != "New" && fn.Sel.Name != "Errorf" {
+				switch fn.Sel.Name {
+				case "New", "Errorf":
+				case "Regex", "Refine":
+					// schema.Regex(m, message) and schema.Refine(inner, pred,
+					// message): zod's custom issue messages.
+					args = args[len(args)-1:]
+				default:
 					return true
 				}
 			default:

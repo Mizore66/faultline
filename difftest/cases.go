@@ -285,6 +285,43 @@ func expandCases(base, root string, templates []template) []testCase {
 	return cases
 }
 
+// resignLedgerJSON is the TS engine's resignLedgerJson: checkpoint digests,
+// then the event hash chain from the genesis hash.
+func resignLedgerJSON(ledger jsjson.Value) {
+	genesis := jsjson.NewObj()
+	genesis.Set("kind", jsjson.MakeString("FAULTLINE_CODEX_LIFECYCLE_GENESIS"))
+	for _, k := range []string{"schemaVersion", "ledgerId", "sessionId", "createdAt"} {
+		genesis.Set(k, ledger.Get(k))
+	}
+	previous := bundleMustString(canonical.DigestJSON(jsjson.MakeObject(genesis)))
+	without := func(o *jsjson.Obj, key string) jsjson.Value {
+		c := jsjson.NewObj()
+		for _, k := range o.Keys() {
+			if k != key {
+				c.Set(k, o.Field(k))
+			}
+		}
+		return jsjson.MakeObject(c)
+	}
+	for _, event := range ledger.Get("events").Items() {
+		if event.Get("event", "type").Str() == "WORKTREE_CHECKPOINT" {
+			if cp := event.Get("event", "payload", "checkpoint"); cp.Kind() == jsjson.Object {
+				cp.Obj().Set("digest", jsjson.MakeString(bundleMustString(canonical.DigestJSON(without(cp.Obj(), "digest")))))
+			}
+		}
+		event.Obj().Set("previousHash", jsjson.MakeString(previous))
+		previous = bundleMustString(canonical.DigestJSON(without(event.Obj(), "hash")))
+		event.Obj().Set("hash", jsjson.MakeString(previous))
+	}
+}
+
+func bundleMustString(s string, err error) string {
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
 func writeJSON(path string, v jsjson.Value) {
 	os.WriteFile(path, []byte(jsstr.ToUTF8(jsjson.StringifyIndent(v, "  ")+"\n")), 0o644)
 }
@@ -379,6 +416,9 @@ func applyMutation(root string, c testCase) bool {
 		v := jsjson.MakeObject(o)
 		for _, e := range jsonEdits(t) {
 			v = applyJSONEdit(v, e)
+		}
+		if t.fields.Field("resignLedger").Bool() {
+			resignLedgerJSON(v)
 		}
 		writeJSON(path, v)
 	case "append-bytes":
@@ -532,7 +572,9 @@ func isAlnum(c byte) bool {
 
 // maskGitDetail hides git's own diagnostics (they vary across git
 // versions): each run of lines starting with "error: ", "fatal: ",
-// "warning: " or "hint: " becomes one <GIT-STDERR>. Everything else stays:
+// "warning: " or "hint: " becomes one <GIT-STDERR> (the number of such
+// lines varies across git versions; a line containing "; " is not masked).
+// Everything else stays:
 // other git output, the text FaultLine composes (the "; " join with Node's
 // spawnSync error, the "exit <status>" fallback), and anything a port adds.
 func maskGitDetail(detail string) string {
@@ -548,7 +590,9 @@ func maskGitDetail(detail string) string {
 	var out []string
 	for _, line := range strings.Split(body, "\n") {
 		switch {
-		case !gitDiagnostic.MatchString(line):
+		case !gitDiagnostic.MatchString(line) || strings.Contains(line, "; "):
+			// A "; " on a diagnostic line is FaultLine's own join (an exit
+			// status or spawn error glued onto git's text): keep it visible.
 			out = append(out, line)
 		case len(out) == 0 || out[len(out)-1] != "<GIT-STDERR>":
 			out = append(out, "<GIT-STDERR>")

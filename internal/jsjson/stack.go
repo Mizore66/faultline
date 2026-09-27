@@ -17,20 +17,19 @@ import "runtime"
 //	                            git         2232      4165     2231     2906
 //	                            ledger      2232      4165     2231     2905
 //	                            witness     2232      4164     2231     2905
-//	darwin/arm64 (22.23.2)      demo        2747      6867     2616     3924
-//	                            prevention  2748      6869     2616     3924
-//	                            git         2747      6866     2615     3923
-//	                            ledger      2746      6864     2614     3922
-//	                            witness     2746      6863     2614     3922
-//	linux/arm64 (22.13.1 glibc) demo        1781      3560     1907     2373
-//	                            prevention  1781      3561     1907     -
-//	                            git         1780      3559     1907     -
-//	                            witness     1780      3558     1906     -
+//	linux/arm64 (22.22.2 glibc) demo        1827      3653     1956     -
+//	                            ledger      1826      -        -        -
+//	                            witness     1826      -        -        -
+//	darwin/arm64 (22.22.2)      demo        2610      -        -        -
 //
-// linux/amd64 was measured here; the darwin/arm64 and linux/arm64 rows are
-// the reviewers' measurements. [0]- and {}-terminated values cost one level
-// more and less (2232 and 4167 at the linux/amd64 demo site). The ledger
-// site on linux/arm64 has not been measured and uses the git offset.
+// Every row is Node 22.22.2, the release CI pins; TestLiveStackThresholds-
+// MatchNode bisects all five sites and four shapes against it on linux/amd64,
+// linux/arm64 and darwin/arm64 in CI. linux/amd64 was measured here, the
+// arm64 rows by the reviewers. Where a cell is empty the model keeps the
+// relative costs and site offsets measured on linux/amd64 (and, for
+// darwin/arm64, Node 22.23.2's relative costs), scaled to the platform.
+// [0]- and {}-terminated values cost one level more and less (2232 and 4167
+// at the linux/amd64 demo site).
 //
 // The budgets include the two frames Go charges for zod's wrapper (the
 // issues array and the issue object holding `received`). The JS frames
@@ -53,11 +52,11 @@ var v8Stack = stackModelFor(runtime.GOOS, runtime.GOARCH)
 func stackModelFor(goos, goarch string) stackModel {
 	switch {
 	case goos == "darwin" && goarch == "arm64":
-		return stackModel{budget: 68_672_000 + 25_000 + 10_000, array: 25_000, object: 10_000, slowObject: 26_250,
+		return stackModel{budget: 65_237_500 + 25_000 + 10_000, array: 25_000, object: 10_000, slowObject: 26_250,
 			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 20_000, SiteGitProof: -7_000, SiteGitLedger: -30_500, SiteDemoWitness: -35_000}}
 	case goarch == "arm64":
-		return stackModel{budget: 35_605_000 + 20_000 + 10_000, array: 20_000, object: 10_000, slowObject: 18_666,
-			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 7_000, SiteGitProof: -7_000, SiteGitLedger: -7_000, SiteDemoWitness: -20_000}}
+		return stackModel{budget: 36_535_000 + 20_000 + 10_000, array: 20_000, object: 10_000, slowObject: 18_675,
+			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 7_500, SiteGitProof: -12_300, SiteGitLedger: -16_600, SiteDemoWitness: -20_300}}
 	}
 	return stackModel{budget: 41_667_000 + 18_667 + 10_000, array: 18_667, object: 10_000, slowObject: 18_664,
 		sites: [siteCount]int{SiteDemo: 0, SitePrevention: 7_000, SiteGitProof: -11_500, SiteGitLedger: -15_500, SiteDemoWitness: -19_000}}

@@ -26,6 +26,15 @@ var portedTypes = map[string]bool{"demo": true, "prevention": true, "git": true}
 var flBinary string
 
 func TestMain(m *testing.M) {
+	// Corepack keeps pnpm under the real HOME; an empty one would make the
+	// oracle (pnpm exec tsx) download pnpm again.
+	if realHome, err := os.UserHomeDir(); err == nil && os.Getenv("COREPACK_HOME") == "" {
+		os.Setenv("COREPACK_HOME", filepath.Join(realHome, ".cache", "node", "corepack"))
+	}
+	// gen-goldens.ts runs git with LC_ALL=C.UTF-8; a localized git would
+	// word its diagnostics differently.
+	os.Setenv("LC_ALL", "C.UTF-8")
+	os.Setenv("LANGUAGE", "")
 	home, _ := os.MkdirTemp("", "faultline-difftest-home-")
 	empty := filepath.Join(home, "empty.gitconfig")
 	os.WriteFile(empty, nil, 0o600)
