@@ -230,8 +230,12 @@ func verifyPortableGitSource(root string, metadata, result jsjson.Value, errs *[
 	}); err != nil {
 		*errs = append(*errs, jsexc.Concat("portable Git source verification failed: ", jsexc.Message(err)))
 	}
-	// The finally block: rmSync's own failure escapes the verifier.
-	if err := nodefs.RemoveAll(temporaryBare); err != nil {
+	// The finally block: rmSync's own failure escapes the verifier, and so
+	// does the stack overflow of its recursive rimrafSync on a deep tree.
+	if err := nodefs.RemoveAllDepth(temporaryBare, jsjson.RimrafDepth); err != nil {
+		if err == nodefs.ErrTooDeep {
+			bundle.Throw(jsjson.ErrStackOverflow)
+		}
 		bundle.Throw(err)
 	}
 }

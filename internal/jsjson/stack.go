@@ -135,3 +135,18 @@ func SpreadFits(n, offset int) bool { return n <= v8Spread.base-offset }
 // CollectSpreadOffset is the offset of the demo file walker's spread for a
 // directory depth levels below the bundle root.
 func CollectSpreadOffset(depth int) int { return v8Spread.perCollectLevel * depth }
+
+// RimrafDepth is the deepest directory, in levels below the removed root,
+// that Node 22's recursive rimrafSync (rmSync with recursive: true) reaches
+// before V8's stack overflows: 1,672 on linux/amd64 (Node 22.22.2, bisected
+// through the git verifier's temporary bare repository), and between 1,361
+// and 1,379 on linux/arm64 (the reviewers' measurement, Node 22.22.2 musl and
+// 22.23.3 glibc). darwin cannot reach it (PATH_MAX gives ENAMETOOLONG at
+// about 470 levels) and uses the arm64 value; other targets use their
+// architecture's Linux value (KNOWN_DIFFERENCES.md).
+var RimrafDepth = func() int {
+	if runtime.GOARCH == "arm64" {
+		return 1_370
+	}
+	return 1_672
+}()

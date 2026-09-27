@@ -1,6 +1,7 @@
 package nodefs
 
 import (
+	"errors"
 	"os"
 	"sort"
 )
@@ -9,9 +10,26 @@ import (
 // rimrafSync with its defaults (maxRetries 0). Only ENOENT is ignored; any
 // other failure is returned as the error rmSync throws. Child paths are raw
 // bytes (Node builds them as Buffers) and print through UTF-8 replacement.
-func RemoveAll(path string) error { return rimraf(sysPath(path), path) }
+func RemoveAll(path string) error { return RemoveAllDepth(path, -1) }
 
-func rimraf(raw, display string) error {
+// ErrTooDeep reports that RemoveAllDepth reached a directory more than
+// maxDepth levels below path, where V8's recursive rimrafSync runs out of
+// stack. Nothing at or below that directory has been removed.
+var ErrTooDeep = errors.New("rimraf: directory tree too deep")
+
+// RemoveAllDepth is RemoveAll that fails with ErrTooDeep instead of
+// descending more than maxDepth levels (-1 means no limit).
+func RemoveAllDepth(path string, maxDepth int) error {
+	r := remover{maxDepth: maxDepth}
+	return r.rimraf(sysPath(path), path, 0)
+}
+
+type remover struct{ maxDepth int }
+
+func (r remover) rimraf(raw, display string, depth int) error {
+	if r.maxDepth >= 0 && depth > r.maxDepth {
+		return ErrTooDeep
+	}
 	info, err := os.Lstat(raw)
 	if err != nil {
 		switch codeOf(err) {
@@ -19,7 +37,7 @@ func rimraf(raw, display string) error {
 			return nil
 		case "EPERM":
 			if isWindows {
-				if err := fixWinEPERM(raw, display, wrap(err, "lstat", display)); err != nil {
+				if err := r.fixWinEPERM(raw, display, wrap(err, "lstat", display), depth); err != nil {
 					return err
 				}
 			}
@@ -27,23 +45,27 @@ func rimraf(raw, display string) error {
 		info = nil // stats stays undefined: rimraf falls through to unlink
 	}
 	if info != nil && info.IsDir() {
-		err = rmdirTree(raw, display, nil)
+		err = r.rmdirTree(raw, display, nil, depth)
 	} else {
 		err = unlinkFile(raw, display)
 	}
 	if err == nil {
 		return nil
 	}
-	switch err.(*Error).Code {
+	e, ok := err.(*Error)
+	if !ok {
+		return err
+	}
+	switch e.Code {
 	case "ENOENT":
 		return nil
 	case "EPERM":
 		if isWindows {
-			return fixWinEPERM(raw, display, err)
+			return r.fixWinEPERM(raw, display, err, depth)
 		}
-		return rmdirTree(raw, display, err)
+		return r.rmdirTree(raw, display, err, depth)
 	case "EISDIR":
-		return rmdirTree(raw, display, err)
+		return r.rmdirTree(raw, display, err, depth)
 	}
 	return err
 }
@@ -59,7 +81,7 @@ func unlinkFile(raw, display string) error {
 }
 
 // rmdirTree is rimraf's _rmdirSync.
-func rmdirTree(raw, display string, original error) error {
+func (r remover) rmdirTree(raw, display string, original error, depth int) error {
 	err := rmdirRaw(raw)
 	if err == nil {
 		return nil
@@ -81,7 +103,7 @@ func rmdirTree(raw, display string, original error) error {
 		}
 		for _, name := range names {
 			child := raw + rmSep + name
-			if err := rimraf(child, DecodeUTF8([]byte(child))); err != nil {
+			if err := r.rimraf(child, DecodeUTF8([]byte(child)), depth+1); err != nil {
 				return err
 			}
 		}
@@ -99,7 +121,7 @@ func rmdirTree(raw, display string, original error) error {
 }
 
 // fixWinEPERM is rimraf's fixWinEPERMSync.
-func fixWinEPERM(raw, display string, original error) error {
+func (r remover) fixWinEPERM(raw, display string, original error, depth int) error {
 	if err := os.Chmod(raw, 0o666); err != nil {
 		if codeOf(err) == "ENOENT" {
 			return nil
@@ -114,7 +136,7 @@ func fixWinEPERM(raw, display string, original error) error {
 		return original
 	}
 	if info.IsDir() {
-		return rmdirTree(raw, display, original)
+		return r.rmdirTree(raw, display, original, depth)
 	}
 	return unlinkFile(raw, display)
 }

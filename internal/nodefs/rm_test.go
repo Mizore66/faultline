@@ -51,3 +51,25 @@ func TestRemoveAllMatchesNodeRimraf(t *testing.T) {
 		}
 	}
 }
+
+// V8's recursive rimrafSync overflows its stack on a deep enough tree; the
+// throw leaves the tree in place.
+func TestRemoveAllDepth(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root")
+	if err := os.MkdirAll(filepath.Join(root, "a", "b", "c"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveAllDepth(root, 2); err != ErrTooDeep {
+		t.Fatalf("depth 3 with limit 2: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "a", "b", "c")); err != nil {
+		t.Fatalf("the tree must survive the overflow: %v", err)
+	}
+	if err := RemoveAllDepth(root, 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatalf("root still exists: %v", err)
+	}
+}
