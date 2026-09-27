@@ -773,10 +773,15 @@ func Win32Dirname(path string) string {
 // path needs a working directory that no longer exists.
 func Resolve(p ...string) string {
 	if isWindows {
-		return Win32Resolve(mustCwd, os.Getenv, p...)
+		return Win32Resolve(mustCwd, jsEnv, p...)
 	}
 	return PosixResolve(mustCwd, p...)
 }
+
+// jsEnv is process.env[k]: libuv's uv_os_getenv gives WTF-8, and V8's
+// NewFromUtf8 turns each byte of a lone surrogate into U+FFFD. Go's
+// os.Getenv keeps a lone surrogate as WTF-8.
+func jsEnv(k string) string { return DecodeUTF8([]byte(os.Getenv(k))) }
 
 // Join is path.join.
 func Join(p ...string) string {
@@ -808,7 +813,7 @@ func IsAbsolute(p string) bool {
 // Relative is path.relative.
 func Relative(from, to string) string {
 	if isWindows {
-		return Win32Relative(mustCwd, os.Getenv, from, to)
+		return Win32Relative(mustCwd, jsEnv, from, to)
 	}
 	return PosixRelative(mustCwd, from, to)
 }
