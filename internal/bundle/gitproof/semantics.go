@@ -126,7 +126,7 @@ func bindLifecycleLedger(ledgerInput, result jsjson.Value) jsjson.Value {
 	ledger := bundle.Must(bundle.ParseValue(ledgerInput, CodexLifecycleLedgerSchema))
 	verification := VerifyCodexLifecycleLedger(ledger)
 	if !verification.Valid || verification.HeadHash == nil {
-		bundle.Throw(errors.New("Cannot bind an invalid Codex lifecycle ledger: " + strings.Join(verification.Errors, "; ")))
+		bundle.Throw(errors.New(jsexc.Concat("Cannot bind an invalid Codex lifecycle ledger: ", strings.Join(verification.Errors, "; "))))
 	}
 	events := ledger.Get("events").Items()
 	i := slices.IndexFunc(events, func(e jsjson.Value) bool { return e.Get("event", "type").Str() == "SESSION_STARTED" })
@@ -152,7 +152,7 @@ func bindLifecycleLedger(ledgerInput, result jsjson.Value) jsjson.Value {
 			continue
 		}
 		if checkpoint.Get("treeDigest").Str() != state.Get("tree").Str() {
-			bundle.Throw(errors.New("Lifecycle checkpoint " + num(event.Get("sequence")) + " has a tree that disagrees with investigated commit " + checkpoint.Get("headCommit").Str() + "."))
+			bundle.Throw(errors.New(jsexc.Concat("Lifecycle checkpoint ", num(event.Get("sequence")), " has a tree that disagrees with investigated commit ", checkpoint.Get("headCommit").Str(), ".")))
 		}
 		o := jsjson.NewObj()
 		o.Set("sequence", event.Get("sequence"))
@@ -201,13 +201,18 @@ func verifyLifecycleBinding(root string, manifest, result jsjson.Value, errs *[]
 	payload := parseJSONFile(root, lifecycle.Get("path").Str(), "lifecycle ledger", errs)
 	ledger, issues, ok := schema.Parse(CodexLifecycleLedgerSchema, payload)
 	if !ok {
-		*errs = append(*errs, "lifecycle ledger schema validation failed: "+schema.ErrorMessage(issues))
+		*errs = append(*errs, jsexc.Concat("lifecycle ledger schema validation failed: ",
+			jsjson.AtCallSite(jsjson.SiteGitLedger, func() string { return schema.ErrorMessage(issues) })))
 		return
 	}
 	verification := VerifyCodexLifecycleLedger(ledger)
 	if !verification.Valid || verification.HeadHash == nil {
+		// errors.push(...verification.errors.map(...)): a spread.
+		if !jsjson.SpreadFits(len(verification.Errors), jsjson.SpreadGitLedger) {
+			bundle.Throw(jsjson.ErrStackOverflow)
+		}
 		for _, e := range verification.Errors {
-			*errs = append(*errs, "lifecycle ledger verification failed: "+e)
+			*errs = append(*errs, jsexc.Concat("lifecycle ledger verification failed: ", e))
 		}
 		return
 	}
@@ -291,14 +296,14 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 	}
 	for _, run := range runs {
 		if run.Get("result", "kind").Str() == "UNSAFE_LOCAL" || run.Get("sandbox", "kind").Str() == "UNSAFE_LOCAL" || run.Get("result", "executor").Str() == "UNSAFE_LOCAL" {
-			add("UNSAFE_LOCAL run facts are structurally unexportable and refuse package compilation: " + run.Get("runId").Str())
+			add(jsexc.Concat("UNSAFE_LOCAL run facts are structurally unexportable and refuse package compilation: ", run.Get("runId").Str()))
 		}
 	}
 
 	verification := VerifyFrozenWitnessRecord(frozen, frozen.Get("frozenDigest").Str(), true)
 	if !verification.Valid || verification.ExternalDigestStatus != "MATCH" {
 		for _, e := range verification.Errors {
-			add("frozen witness is invalid: " + e)
+			add(jsexc.Concat("frozen witness is invalid: ", e))
 		}
 	}
 	if witness.Kind() == jsjson.Object {
@@ -321,13 +326,13 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 	for offset, state := range states {
 		index := state.Get("index").Num()
 		if index != float64(offset) {
-			add("state index is not contiguous at offset " + strconv.Itoa(offset))
+			add(jsexc.Concat("state index is not contiguous at offset ", strconv.Itoa(offset)))
 		}
 		if _, dup := stateByIndex[index]; dup {
-			add("duplicate state index: " + fmtNum(state.Get("index")))
+			add(jsexc.Concat("duplicate state index: ", fmtNum(state.Get("index"))))
 		}
 		if commits[state.Get("commit").Str()] {
-			add("duplicate commit in Git state sequence: " + state.Get("commit").Str())
+			add(jsexc.Concat("duplicate commit in Git state sequence: ", state.Get("commit").Str()))
 		}
 		jsexc.MapSet(stateByIndex, index, state)
 		jsexc.SetAdd(commits, state.Get("commit").Str())
@@ -344,73 +349,73 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 	for _, run := range runs {
 		runID := run.Get("runId").Str()
 		if runID != expectedRunID(run) {
-			add("runId does not match the canonical run fact: " + runID)
+			add(jsexc.Concat("runId does not match the canonical run fact: ", runID))
 		}
 		if run.Get("executionId").Str() != expectedExecutionID(run) {
-			add("executionId does not match its state and attempt: " + runID)
+			add(jsexc.Concat("executionId does not match its state and attempt: ", runID))
 		}
 		if runIDs[runID] {
-			add("duplicate runId: " + runID)
+			add(jsexc.Concat("duplicate runId: ", runID))
 		}
 		if executionIDs[run.Get("executionId").Str()] {
-			add("duplicate executionId: " + run.Get("executionId").Str())
+			add(jsexc.Concat("duplicate executionId: ", run.Get("executionId").Str()))
 		}
 		if nonces[run.Get("executionNonce").Str()] {
-			add("duplicate execution nonce: " + run.Get("executionNonce").Str())
+			add(jsexc.Concat("duplicate execution nonce: ", run.Get("executionNonce").Str()))
 		}
 		jsexc.SetAdd(runIDs, runID)
 		jsexc.SetAdd(executionIDs, run.Get("executionId").Str())
 		jsexc.SetAdd(nonces, run.Get("executionNonce").Str())
 		state, ok := stateByIndex[run.Get("stateIndex").Num()]
 		if !ok || state.Get("commit").Str() != run.Get("commit").Str() || state.Get("tree").Str() != run.Get("tree").Str() {
-			add("run state does not match the state sequence: " + runID)
+			add(jsexc.Concat("run state does not match the state sequence: ", runID))
 		}
 		if run.Get("frozenDigest").Str() != frozen.Get("frozenDigest").Str() || run.Get("witnessDigest").Str() != frozen.Get("witnessDigest").Str() {
-			add("run witness digest does not match the frozen witness: " + runID)
+			add(jsexc.Concat("run witness digest does not match the frozen witness: ", runID))
 		}
 		if run.Get("sandbox", "kind").Str() != run.Get("result", "kind").Str() {
-			add("run sandbox kind does not match result kind: " + runID)
+			add(jsexc.Concat("run sandbox kind does not match result kind: ", runID))
 		}
 		for _, auditError := range ValidateSandboxPlanAudit(run.Get("sandbox")) {
-			add("run sandbox audit is invalid: " + runID + ": " + auditError)
+			add(jsexc.Concat("run sandbox audit is invalid: ", runID, ": ", auditError))
 		}
 		if run.Get("sandbox", "witnessDigest").Str() != frozen.Get("frozenDigest").Str() {
-			add("run sandbox witness digest does not match frozen witness: " + runID)
+			add(jsexc.Concat("run sandbox witness digest does not match frozen witness: ", runID))
 		}
 		if run.Get("sandbox", "commandDigest").Str() != commandDigestValue {
-			add("run sandbox command digest does not match frozen command bytes: " + runID)
+			add(jsexc.Concat("run sandbox command digest does not match frozen command bytes: ", runID))
 		}
 		runtime := run.Get("sandbox", "runtime")
 		if !digestPinnedImage.MatchString(runtime.Get("image").Str()) { // runtime.image ?? ""
-			add("run sandbox image is not digest-pinned: " + runID)
+			add(jsexc.Concat("run sandbox image is not digest-pinned: ", runID))
 		}
 		strIs := func(v jsjson.Value, want string) bool { return v.Kind() == jsjson.String && v.Str() == want }
 		if !strIs(runtime.Get("entrypoint"), "/bin/sh") || !strIs(runtime.Get("network"), "none") || !runtime.Get("rootFilesystemReadOnly").Bool() ||
 			!strIs(runtime.Get("user"), "65534:65534") || !runtime.Get("capDropAll").Bool() || !runtime.Get("noNewPrivileges").Bool() || !strIs(runtime.Get("pull"), "never") {
-			add("run sandbox runtime policy is not a locked Docker plan: " + runID)
+			add(jsexc.Concat("run sandbox runtime policy is not a locked Docker plan: ", runID))
 		}
 		limits := runtime.Get("limits")
 		if limits.Get("timeoutMs").Num() <= 0 || limits.Get("maxOutputBytes").Num() <= 0 || limits.Get("cpuCount").Num() <= 0 ||
 			limits.Get("memoryBytes").Num() <= 0 || limits.Get("pidsLimit").Num() <= 0 || limits.Get("tmpfsBytes").Num() <= 0 {
-			add("run sandbox limits are invalid: " + runID)
+			add(jsexc.Concat("run sandbox limits are invalid: ", runID))
 		}
 		r := run.Get("result")
 		if r.Get("kind").Str() != "DOCKER_ISOLATED" {
-			add("non-Docker run cannot support this proof bundle: " + runID)
+			add(jsexc.Concat("non-Docker run cannot support this proof bundle: ", runID))
 		}
 		if r.Get("executor").Str() != "NATIVE_DOCKER" {
-			add("non-native Docker executor cannot support this proof bundle: " + runID)
+			add(jsexc.Concat("non-native Docker executor cannot support this proof bundle: ", runID))
 		}
 		verdict, reason, exitCode := r.Get("verdict").Str(), r.Get("reason").Str(), r.Get("exitCode")
 		if verdict != "PASS" && verdict != "FAIL" {
-			add("non-decisive run cannot support this proof bundle: " + runID)
+			add(jsexc.Concat("non-decisive run cannot support this proof bundle: ", runID))
 		}
 		exitZero := exitCode.Kind() == jsjson.Number && exitCode.Num() == 0
 		if verdict == "PASS" && (reason != "PREDICATE_PASS" || !exitZero) {
-			add("PASS run has inconsistent execution result: " + runID)
+			add(jsexc.Concat("PASS run has inconsistent execution result: ", runID))
 		}
 		if verdict == "FAIL" && (reason != "PREDICATE_FAIL" || exitZero || exitCode.Kind() == jsjson.Null) {
-			add("FAIL run has inconsistent execution result: " + runID)
+			add(jsexc.Concat("FAIL run has inconsistent execution result: ", runID))
 		}
 		stateIndex := run.Get("stateIndex").Num()
 		attempts := attemptsByState[stateIndex]
@@ -418,7 +423,7 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 			attempts = map[float64]bool{}
 		}
 		if attempts[run.Get("executionAttempt").Num()] {
-			add("duplicate execution attempt for state " + fmtNum(run.Get("stateIndex")))
+			add(jsexc.Concat("duplicate execution attempt for state ", fmtNum(run.Get("stateIndex"))))
 		}
 		jsexc.SetAdd(attempts, run.Get("executionAttempt").Num())
 		jsexc.MapSet(attemptsByState, stateIndex, attempts)
@@ -429,7 +434,7 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 	for _, state := range states {
 		attempts := attemptsByState[state.Get("index").Num()]
 		if attempts == nil || len(attempts) != StableExecutionCount || !attempts[1] || !attempts[2] || !attempts[3] {
-			add("state " + fmtNum(state.Get("index")) + " does not contain attempts 1, 2, and 3 exactly once")
+			add(jsexc.Concat("state ", fmtNum(state.Get("index")), " does not contain attempts 1, 2, and 3 exactly once"))
 		}
 	}
 

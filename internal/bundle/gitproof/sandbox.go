@@ -130,7 +130,10 @@ func ValidateSandboxPlanAudit(audit jsjson.Value) []string {
 	for i, entry := range passed {
 		passedNames[i] = entry.Get("key").Str()
 	}
-	if len(allowed) != len(allowedKeys) || bundle.DistinctCount(passedNames) != len(passed) || bundle.DistinctCount(redactedKeys) != len(redactedKeys) {
+	// TS builds all three Sets before comparing, so each can hit V8's size
+	// limit even when an earlier comparison already fails.
+	distinctPassed, distinctRedacted := bundle.DistinctCount(passedNames), bundle.DistinctCount(redactedKeys)
+	if len(allowed) != len(allowedKeys) || distinctPassed != len(passed) || distinctRedacted != len(redactedKeys) {
 		add("sandbox environment audit contains duplicate names")
 	}
 	for _, entry := range passed {
@@ -163,7 +166,7 @@ func ValidateSandboxPlanAudit(audit jsjson.Value) []string {
 	for _, limit := range maxSandboxLimits {
 		value := limits.Get(limit.name)
 		if !isInteger(value) || value.Num() <= 0 || value.Num() > limit.maximum {
-			add("sandbox limit " + limit.name + " is outside the allowed policy range")
+			add(jsexc.Concat("sandbox limit ", limit.name, " is outside the allowed policy range"))
 		}
 	}
 	witnessDigest := audit.Get("witnessDigest").Str()

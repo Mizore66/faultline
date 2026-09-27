@@ -109,7 +109,7 @@ func assertUniqueOverlayPathsForVerification(overlays []jsjson.Value, errs *[]st
 	for _, overlay := range overlays {
 		key := localeLower(overlay.Get("path").Str())
 		if seen[key] {
-			*errs = append(*errs, "duplicate overlay path: "+overlay.Get("path").Str())
+			*errs = append(*errs, jsexc.Concat("duplicate overlay path: ", overlay.Get("path").Str()))
 		}
 		jsexc.SetAdd(seen, key)
 	}
@@ -139,7 +139,7 @@ func verifyProposal(proposal jsjson.Value, errs *[]string) {
 	for _, overlay := range overlays {
 		decoded, _ := base64.StdEncoding.DecodeString(overlay.Get("bytesBase64").Str())
 		if overlay.Get("bytesDigest").Str() != byteDigest(decoded) {
-			*errs = append(*errs, "overlay byte digest does not match: "+overlay.Get("path").Str())
+			*errs = append(*errs, jsexc.Concat("overlay byte digest does not match: ", overlay.Get("path").Str()))
 		}
 	}
 	if proposal.Get("witness", "overlayDigest").Str() != overlayDigest(overlays) {

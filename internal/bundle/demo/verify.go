@@ -20,13 +20,13 @@ func isLink(info fs.FileInfo) bool { return info.Mode()&fs.ModeSymlink != 0 }
 func assertNoLinksOrSpecialFiles(directory string) {
 	stat := bundle.Must(nodefs.Lstat(directory))
 	if isLink(stat) || !stat.IsDir() {
-		bundle.Throw(errors.New("Proof bundle destination must be a real directory: " + directory))
+		bundle.Throw(errors.New(jsexc.Concat("Proof bundle destination must be a real directory: ", directory)))
 	}
 	for _, name := range bundle.Must(nodefs.ReadDirNames(directory)) {
 		child := nodefs.Join(directory, name)
 		childStat := bundle.Must(nodefs.Lstat(child))
 		if isLink(childStat) || (!childStat.IsDir() && !childStat.Mode().IsRegular()) {
-			bundle.Throw(errors.New("Proof bundle destination contains a symbolic link or special file: " + child))
+			bundle.Throw(errors.New(jsexc.Concat("Proof bundle destination contains a symbolic link or special file: ", child)))
 		}
 		if childStat.IsDir() {
 			assertNoLinksOrSpecialFiles(child)
@@ -34,16 +34,26 @@ func assertNoLinksOrSpecialFiles(directory string) {
 	}
 }
 
-func collectFiles(directory, current string) []string {
+func collectFiles(directory, current string) []string { return collectFilesAt(directory, current, 0) }
+
+// collectFilesAt is collectFiles for a directory depth levels below the
+// bundle root. TS spreads each subdirectory's list into its parent's
+// (files.push(...collectFiles(...))), which overflows V8's stack past about
+// 125k files (jsjson.SpreadFits).
+func collectFilesAt(directory, current string, depth int) []string {
 	var files []string
 	for _, name := range bundle.Must(nodefs.ReadDirNames(current)) {
 		path := nodefs.Join(current, name)
 		stat := bundle.Must(nodefs.Lstat(path))
 		if isLink(stat) || (!stat.IsDir() && !stat.Mode().IsRegular()) {
-			bundle.Throw(errors.New("bundle contains a symbolic link or special file: " + path))
+			bundle.Throw(errors.New(jsexc.Concat("bundle contains a symbolic link or special file: ", path)))
 		}
 		if stat.IsDir() {
-			files = append(files, collectFiles(directory, path)...)
+			sub := collectFilesAt(directory, path, depth+1)
+			if !jsjson.SpreadFits(len(sub), jsjson.CollectSpreadOffset(depth+1)) {
+				bundle.Throw(jsjson.ErrStackOverflow)
+			}
+			files = append(files, sub...)
 		} else {
 			files = append(files, strings.ReplaceAll(nodefs.Relative(directory, path), `\`, "/"))
 		}
@@ -70,7 +80,7 @@ func requiredDeclaredFiles(analysis jsjson.Value) []string {
 	files := []string{"manifest.json", "report.md", "analysis.json", "witness/witness.json", "minimization/attempts.json", "prevention/three-state.json", "VERIFY.md"}
 	for _, run := range analysis.Get("runCatalog").Items() {
 		base := "runs/" + safeRunFileName(run.Get("id").Str())
-		files = append(files, base+"/result.json", base+"/stdout.log", base+"/stderr.log")
+		files = append(files, jsexc.Concat(base, "/result.json"), jsexc.Concat(base, "/stdout.log"), jsexc.Concat(base, "/stderr.log"))
 	}
 	return canonical.SortLocale(files)
 }
@@ -123,13 +133,13 @@ func validateAnalysisCoverage(a jsjson.Value, errs *[]string) {
 	for _, record := range a.Get("runCatalog").Items() {
 		id := record.Get("id").Str()
 		if catalog[id] {
-			*errs = append(*errs, "duplicate run id in catalog: "+id)
+			*errs = append(*errs, jsexc.Concat("duplicate run id in catalog: ", id))
 		}
 		jsexc.SetAdd(catalog, id)
 	}
 	for _, id := range referencedRunIDs(a).order {
 		if !catalog[id] {
-			*errs = append(*errs, "analysis references a run not present in the catalog: "+id)
+			*errs = append(*errs, jsexc.Concat("analysis references a run not present in the catalog: ", id))
 		}
 	}
 }
@@ -174,7 +184,8 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 				add("witness artifact digest is invalid")
 			}
 		}); err != nil {
-			add(jsexc.Concat("witness artifact schema validation failed: ", jsexc.Message(err)))
+			add(jsexc.Concat("witness artifact schema validation failed: ",
+				jsjson.AtCallSite(jsjson.SiteDemoWitness, func() string { return jsexc.Message(err) })))
 		}
 	}
 
@@ -208,7 +219,7 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 		if persisted, ok := readJSONArtifact(nodefs.Join(base, "result.json"), "run "+id, errs); ok {
 			if err := bundle.Try(func() {
 				if !bundle.SameCanonical(bundle.Must(bundle.ParseValue(persisted, runRecordSchema)), run) {
-					add("persisted run does not match catalog: " + id)
+					add(jsexc.Concat("persisted run does not match catalog: ", id))
 				}
 			}); err != nil {
 				add(jsexc.Concat("persisted run schema validation failed for ", id, ": ", jsexc.Message(err)))
@@ -216,10 +227,10 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 		}
 		if err := bundle.Try(func() {
 			if bundle.Must(nodefs.ReadText(nodefs.Join(base, "stdout.log"))) != run.Get("stdout").Str() {
-				add("stdout does not match catalog for " + id)
+				add(jsexc.Concat("stdout does not match catalog for ", id))
 			}
 			if bundle.Must(nodefs.ReadText(nodefs.Join(base, "stderr.log"))) != run.Get("stderr").Str() {
-				add("stderr does not match catalog for " + id)
+				add(jsexc.Concat("stderr does not match catalog for ", id))
 			}
 		}); err != nil {
 			add(jsexc.Concat("run log read failed for ", id, ": ", jsexc.Message(err)))
@@ -240,7 +251,7 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 		}
 		before, after := t.Get("beforeStateId").Str(), t.Get("afterStateId").Str()
 		if bundle.DistinctCount(ids) != len(ids) {
-			add("transition contains duplicate boundary run IDs: " + before + " -> " + after)
+			add(jsexc.Concat("transition contains duplicate boundary run IDs: ", before, " -> ", after))
 		}
 		var beforeRuns, afterRuns []jsjson.Value
 		for _, run := range boundary {
@@ -254,7 +265,7 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 		beforeVerdict, afterVerdict := t.Get("beforeVerdict").Str(), t.Get("afterVerdict").Str()
 		shouldBeStable := stableExecutedRuns(beforeRuns, before, beforeVerdict) && stableExecutedRuns(afterRuns, after, afterVerdict)
 		if t.Get("stable").Bool() != shouldBeStable {
-			add("transition stability does not match executed boundary evidence: " + before + " -> " + after)
+			add(jsexc.Concat("transition stability does not match executed boundary evidence: ", before, " -> ", after))
 		}
 		expectedKind := ""
 		if beforeVerdict == "PASS" && afterVerdict == "FAIL" {
@@ -263,7 +274,7 @@ func validateSemanticEvidence(a jsjson.Value, output string, errs *[]string) {
 			expectedKind = "FAIL_TO_PASS"
 		}
 		if expectedKind == "" || t.Get("kind").Str() != expectedKind {
-			add("transition kind does not match verdicts: " + before + " -> " + after)
+			add(jsexc.Concat("transition kind does not match verdicts: ", before, " -> ", after))
 		}
 		if mode == "REPLAY" && t.Get("stable").Bool() {
 			add("cached replay cannot certify a stable transition")
@@ -405,15 +416,15 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		}
 		digest, file, ok := parseHashLine(line)
 		if !ok {
-			errs = append(errs, "invalid hash entry: "+line)
+			errs = append(errs, jsexc.Concat("invalid hash entry: ", line))
 			continue
 		}
 		if _, dup := declared[file]; dup {
-			errs = append(errs, "duplicate declared file: "+file)
+			errs = append(errs, jsexc.Concat("duplicate declared file: ", file))
 			continue
 		}
 		if invalidDeclaredPath(file) {
-			errs = append(errs, "invalid declared path: "+file)
+			errs = append(errs, jsexc.Concat("invalid declared path: ", file))
 			continue
 		}
 		jsexc.MapSet(declared, file, digest)
@@ -423,12 +434,12 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		required := newSet(requiredDeclaredFiles(analysis)...)
 		for _, file := range required.order {
 			if _, ok := declared[file]; !ok {
-				errs = append(errs, "required evidence file is not declared: "+file)
+				errs = append(errs, jsexc.Concat("required evidence file is not declared: ", file))
 			}
 		}
 		for _, file := range declaredOrder {
 			if !required.has[file] {
-				errs = append(errs, "undeclared-schema file is present in hashes.txt: "+file)
+				errs = append(errs, jsexc.Concat("undeclared-schema file is present in hashes.txt: ", file))
 			}
 		}
 	}
@@ -436,21 +447,21 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		path := nodefs.Resolve(output, file)
 		local := nodefs.Relative(output, path)
 		if strings.HasPrefix(local, "..") || nodefs.IsAbsolute(local) {
-			errs = append(errs, "declared path escapes bundle: "+file)
+			errs = append(errs, jsexc.Concat("declared path escapes bundle: ", file))
 			continue
 		}
 		if !nodefs.Exists(path) {
-			errs = append(errs, "declared file is missing: "+file)
+			errs = append(errs, jsexc.Concat("declared file is missing: ", file))
 			continue
 		}
 		if canonical.SHA256HexBytes(bundle.Must(nodefs.ReadBytes(path))) != declared[file] {
-			errs = append(errs, "digest mismatch: "+file)
+			errs = append(errs, jsexc.Concat("digest mismatch: ", file))
 		}
 	}
 	expectedPhysical := newSet(append(slices.Clone(declaredOrder), "hashes.txt", "ROOT.sha256")...)
 	for _, file := range collectFiles(output, output) {
 		if !expectedPhysical.has[file] {
-			errs = append(errs, "undeclared file exists in bundle: "+file)
+			errs = append(errs, jsexc.Concat("undeclared file exists in bundle: ", file))
 		}
 	}
 	if analysisErr == nil {

@@ -326,146 +326,146 @@ func validateLifecycleState(event jsjson.Value, state *lifecycleState, index int
 	prefix := "Event " + num(event.Get("sequence")) + " (" + eventType + ")"
 	eventID := event.Get("eventId").Str()
 	if state.seenEventIDs[eventID] {
-		add(prefix + " reuses event id " + eventID)
+		add(jsexc.Concat(prefix, " reuses event id ", eventID))
 	}
 	jsexc.SetAdd(state.seenEventIDs, eventID)
 	if state.ended {
-		add(prefix + " occurs after SESSION_ENDED")
+		add(jsexc.Concat(prefix, " occurs after SESSION_ENDED"))
 		return
 	}
 	occurredAt := timestampMs(event.Get("occurredAt").Str())
 	switch eventType {
 	case "SESSION_STARTED":
 		if state.started {
-			add(prefix + " starts a session that has already started")
+			add(jsexc.Concat(prefix, " starts a session that has already started"))
 		}
 		if index != 0 {
-			add(prefix + " must be the first event")
+			add(jsexc.Concat(prefix, " must be the first event"))
 		}
 		state.started = true
 	case "SESSION_BASELINE_SNAPSHOT":
 		switch {
 		case !state.started:
-			add(prefix + " occurs before SESSION_STARTED")
+			add(jsexc.Concat(prefix, " occurs before SESSION_STARTED"))
 			return
 		case state.hasBaseline:
-			add(prefix + " repeats SESSION_BASELINE_SNAPSHOT")
+			add(jsexc.Concat(prefix, " repeats SESSION_BASELINE_SNAPSHOT"))
 			return
 		case state.active != nil:
-			add(prefix + " is not permitted while turn " + state.active.id + " is active")
+			add(jsexc.Concat(prefix, " is not permitted while turn ", state.active.id, " is active"))
 			return
 		case len(state.seenTurnIDs) > 0 || state.completedTurnOrdinal != 0:
-			add(prefix + " must occur before any turn events")
+			add(jsexc.Concat(prefix, " must occur before any turn events"))
 			return
 		}
 		snapshot := payload.Get("snapshot")
 		if timestampMs(snapshot.Get("capturedAt").Str()) > occurredAt {
-			add(prefix + " is timestamped before its baseline tree snapshot was captured")
+			add(jsexc.Concat(prefix, " is timestamped before its baseline tree snapshot was captured"))
 		}
 		for _, e := range verifyTurnTreeSnapshot(snapshot) {
-			add(prefix + ": " + e)
+			add(jsexc.Concat(prefix, ": ", e))
 		}
 		state.hasBaseline = true
 	case "TURN_STARTED":
 		if !state.started {
-			add(prefix + " occurs before SESSION_STARTED")
+			add(jsexc.Concat(prefix, " occurs before SESSION_STARTED"))
 			return
 		}
 		if state.active != nil {
-			add(prefix + " starts turn " + payload.Get("turnId").Str() + " while " + state.active.id + " is active")
+			add(jsexc.Concat(prefix, " starts turn ", payload.Get("turnId").Str(), " while ", state.active.id, " is active"))
 			return
 		}
 		turnID, turnOrdinal := payload.Get("turnId").Str(), payload.Get("turnOrdinal").Num()
 		if state.seenTurnIDs[turnID] {
-			add(prefix + " reuses turn id " + turnID)
+			add(jsexc.Concat(prefix, " reuses turn id ", turnID))
 		}
 		expected := state.completedTurnOrdinal + 1
 		if turnOrdinal != expected {
-			add(prefix + " has turn ordinal " + jsjson.FormatNumber(turnOrdinal) + "; expected " + jsjson.FormatNumber(expected))
+			add(jsexc.Concat(prefix, " has turn ordinal ", jsjson.FormatNumber(turnOrdinal), "; expected ", jsjson.FormatNumber(expected)))
 		}
 		jsexc.SetAdd(state.seenTurnIDs, turnID)
 		state.active = &activeTurn{turnID, turnOrdinal}
 	case "TURN_COMPLETED":
 		if !state.started {
-			add(prefix + " occurs before SESSION_STARTED")
+			add(jsexc.Concat(prefix, " occurs before SESSION_STARTED"))
 			return
 		}
 		if state.active == nil {
-			add(prefix + " has no matching active turn")
+			add(jsexc.Concat(prefix, " has no matching active turn"))
 			return
 		}
 		turnID, turnOrdinal := payload.Get("turnId").Str(), payload.Get("turnOrdinal").Num()
 		if turnID != state.active.id || turnOrdinal != state.active.ordinal {
-			add(prefix + " does not match active turn " + state.active.id + "/" + jsjson.FormatNumber(state.active.ordinal))
+			add(jsexc.Concat(prefix, " does not match active turn ", state.active.id, "/", jsjson.FormatNumber(state.active.ordinal)))
 			return
 		}
 		state.completedTurnOrdinal = turnOrdinal
 		state.active = nil
 	case "TOOL_USE_STARTED", "TOOL_USE_COMPLETED":
 		if !state.started {
-			add(prefix + " occurs before SESSION_STARTED")
+			add(jsexc.Concat(prefix, " occurs before SESSION_STARTED"))
 			return
 		}
 		if state.active == nil {
-			add(prefix + " requires an active turn")
+			add(jsexc.Concat(prefix, " requires an active turn"))
 			return
 		}
 		turnID, turnOrdinal := payload.Get("turnId").Str(), payload.Get("turnOrdinal").Num()
 		if turnID != state.active.id || turnOrdinal != state.active.ordinal {
-			add(prefix + " does not match active turn " + state.active.id + "/" + jsjson.FormatNumber(state.active.ordinal))
+			add(jsexc.Concat(prefix, " does not match active turn ", state.active.id, "/", jsjson.FormatNumber(state.active.ordinal)))
 		}
 	case "WORKTREE_CHECKPOINT":
 		if !state.started {
-			add(prefix + " occurs before SESSION_STARTED")
+			add(jsexc.Concat(prefix, " occurs before SESSION_STARTED"))
 			return
 		}
 		if state.active != nil {
-			add(prefix + " is not permitted while turn " + state.active.id + " is active")
+			add(jsexc.Concat(prefix, " is not permitted while turn ", state.active.id, " is active"))
 			return
 		}
 		checkpoint, afterTurnOrdinal := payload.Get("checkpoint"), payload.Get("afterTurnOrdinal").Num()
 		if afterTurnOrdinal != state.completedTurnOrdinal {
-			add(prefix + " claims after turn " + jsjson.FormatNumber(afterTurnOrdinal) + "; expected " + jsjson.FormatNumber(state.completedTurnOrdinal))
+			add(jsexc.Concat(prefix, " claims after turn ", jsjson.FormatNumber(afterTurnOrdinal), "; expected ", jsjson.FormatNumber(state.completedTurnOrdinal)))
 		}
 		if timestampMs(checkpoint.Get("capturedAt").Str()) > occurredAt {
-			add(prefix + " is timestamped before its Git checkpoint was captured")
+			add(jsexc.Concat(prefix, " is timestamped before its Git checkpoint was captured"))
 		}
 		for _, e := range verifyGitCheckpoint(checkpoint) {
-			add(prefix + ": " + e)
+			add(jsexc.Concat(prefix, ": ", e))
 		}
 	case "TURN_TREE_SNAPSHOT":
 		if !state.started {
-			add(prefix + " occurs before SESSION_STARTED")
+			add(jsexc.Concat(prefix, " occurs before SESSION_STARTED"))
 			return
 		}
 		if state.active != nil {
-			add(prefix + " is not permitted while turn " + state.active.id + " is active")
+			add(jsexc.Concat(prefix, " is not permitted while turn ", state.active.id, " is active"))
 			return
 		}
 		turnID, turnOrdinal, snapshot := payload.Get("turnId").Str(), payload.Get("turnOrdinal").Num(), payload.Get("snapshot")
 		if !state.seenTurnIDs[turnID] {
-			add(prefix + " references a turn id that was never started: " + turnID)
+			add(jsexc.Concat(prefix, " references a turn id that was never started: ", turnID))
 		}
 		if turnOrdinal != state.completedTurnOrdinal {
-			add(prefix + " claims turn ordinal " + jsjson.FormatNumber(turnOrdinal) + "; expected " + jsjson.FormatNumber(state.completedTurnOrdinal))
+			add(jsexc.Concat(prefix, " claims turn ordinal ", jsjson.FormatNumber(turnOrdinal), "; expected ", jsjson.FormatNumber(state.completedTurnOrdinal)))
 		}
 		if timestampMs(snapshot.Get("capturedAt").Str()) > occurredAt {
-			add(prefix + " is timestamped before its turn tree snapshot was captured")
+			add(jsexc.Concat(prefix, " is timestamped before its turn tree snapshot was captured"))
 		}
 		for _, e := range verifyTurnTreeSnapshot(snapshot) {
-			add(prefix + ": " + e)
+			add(jsexc.Concat(prefix, ": ", e))
 		}
 	case "SESSION_ENDED":
 		if !state.started {
-			add(prefix + " occurs before SESSION_STARTED")
+			add(jsexc.Concat(prefix, " occurs before SESSION_STARTED"))
 			return
 		}
 		if state.active != nil {
-			add(prefix + " ends while turn " + state.active.id + " is active")
+			add(jsexc.Concat(prefix, " ends while turn ", state.active.id, " is active"))
 			return
 		}
 		if completed := payload.Get("completedTurns").Num(); completed != state.completedTurnOrdinal {
-			add(prefix + " reports " + jsjson.FormatNumber(completed) + " completed turns; expected " + jsjson.FormatNumber(state.completedTurnOrdinal))
+			add(jsexc.Concat(prefix, " reports ", jsjson.FormatNumber(completed), " completed turns; expected ", jsjson.FormatNumber(state.completedTurnOrdinal)))
 		}
 		state.ended = true
 	}
@@ -486,26 +486,26 @@ func VerifyCodexLifecycleLedger(value jsjson.Value) LedgerVerification {
 		sequence := num(event.Get("sequence"))
 		expectedSequence := strconv.Itoa(index + 1)
 		if event.Get("sequence").Num() != float64(index+1) {
-			errs = append(errs, "Event at index "+strconv.Itoa(index)+" has sequence "+sequence+"; expected "+expectedSequence)
+			errs = append(errs, jsexc.Concat("Event at index ", strconv.Itoa(index), " has sequence ", sequence, "; expected ", expectedSequence))
 		}
 		if event.Get("ledgerId").Str() != ledger.Get("ledgerId").Str() {
-			errs = append(errs, "Event "+sequence+" has ledger id "+event.Get("ledgerId").Str()+"; expected "+ledger.Get("ledgerId").Str())
+			errs = append(errs, jsexc.Concat("Event ", sequence, " has ledger id ", event.Get("ledgerId").Str(), "; expected ", ledger.Get("ledgerId").Str()))
 		}
 		if event.Get("sessionId").Str() != ledger.Get("sessionId").Str() {
-			errs = append(errs, "Event "+sequence+" has session id "+event.Get("sessionId").Str()+"; expected "+ledger.Get("sessionId").Str())
+			errs = append(errs, jsexc.Concat("Event ", sequence, " has session id ", event.Get("sessionId").Str(), "; expected ", ledger.Get("sessionId").Str()))
 		}
 		if event.Get("previousHash").Str() != expectedPreviousHash {
-			errs = append(errs, "Event "+sequence+" previous hash does not match its predecessor")
+			errs = append(errs, jsexc.Concat("Event ", sequence, " previous hash does not match its predecessor"))
 		}
 		unsigned := jsjson.NewObj()
 		for _, k := range []string{"schemaVersion", "ledgerId", "sessionId", "sequence", "eventId", "occurredAt", "event", "previousHash"} {
 			unsigned.Set(k, event.Get(k))
 		}
 		if event.Get("hash").Str() != hashLifecycleEvent(jsjson.MakeObject(unsigned)) {
-			errs = append(errs, "Event "+sequence+" hash does not match its contents")
+			errs = append(errs, jsexc.Concat("Event ", sequence, " hash does not match its contents"))
 		}
 		if timestampMs(event.Get("occurredAt").Str()) < timestampMs(previousTimestamp) {
-			errs = append(errs, "Event "+sequence+" occurs before the preceding ledger timestamp")
+			errs = append(errs, jsexc.Concat("Event ", sequence, " occurs before the preceding ledger timestamp"))
 		}
 		validateLifecycleState(event, state, index, &errs)
 		expectedPreviousHash = event.Get("hash").Str()

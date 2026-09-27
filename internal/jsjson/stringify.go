@@ -237,7 +237,9 @@ func (w *writer) write(v Value, current string) {
 
 // slowForStringify reports whether V8 serializes the object through
 // SerializeJSReceiverSlow, whose frame is larger: objects with array-index
-// keys (elements) and objects JSON.parse built in dictionary mode, which
-// happens from 128 properties on (measured through the CLI: 127 members
-// stay on the fast path).
-func (o *Obj) slowForStringify() bool { return len(o.idx) > 0 || o.Len() >= 128 }
+// keys (elements) and objects in dictionary mode, which JSON.parse makes of
+// an object literal with 128 or more named entries (duplicates count;
+// measured through the CLI: 127 stay on the fast path).
+func (o *Obj) slowForStringify() bool {
+	return len(o.idx) > 0 || o.namedEntries >= 128 || o.Len() >= 128
+}

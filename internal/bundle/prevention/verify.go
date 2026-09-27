@@ -22,13 +22,13 @@ func isLink(info fs.FileInfo) bool { return info.Mode()&fs.ModeSymlink != 0 }
 func assertNoLinksOrSpecialFiles(directory string) {
 	stat := bundle.Must(nodefs.Lstat(directory))
 	if isLink(stat) || !stat.IsDir() {
-		bundle.Throw(errors.New("Prevention proof directory must be a real directory: " + directory))
+		bundle.Throw(errors.New(jsexc.Concat("Prevention proof directory must be a real directory: ", directory)))
 	}
 	for _, name := range bundle.Must(nodefs.ReadDirNames(directory)) {
 		child := nodefs.Join(directory, name)
 		childStat := bundle.Must(nodefs.Lstat(child))
 		if isLink(childStat) || (!childStat.IsDir() && !childStat.Mode().IsRegular()) {
-			bundle.Throw(errors.New("Prevention proof directory contains a symbolic link or special file: " + child))
+			bundle.Throw(errors.New(jsexc.Concat("Prevention proof directory contains a symbolic link or special file: ", child)))
 		}
 		if childStat.IsDir() {
 			assertNoLinksOrSpecialFiles(child)
@@ -86,10 +86,10 @@ func validateSemantics(b jsjson.Value) []string {
 		ids := bundle.Strings(st.Get("runIds"))
 		role := st.Get("role").Str()
 		if len(ids) != 3 || bundle.DistinctCount(ids) != 3 {
-			errs = append(errs, role+" requires three distinct runIds")
+			errs = append(errs, jsexc.Concat(role, " requires three distinct runIds"))
 		}
 		if st.Get("distinctExecutionCount").Num() != float64(len(ids)) {
-			errs = append(errs, role+" distinctExecutionCount must equal runIds length")
+			errs = append(errs, jsexc.Concat(role, " distinctExecutionCount must equal runIds length"))
 		}
 	}
 	base, firstBadTree := b.Get("repairBaseTree"), b.Get("firstBad", "tree")
@@ -113,10 +113,10 @@ func validateRepairedRuns(body, artifact jsjson.Value) []string {
 		runID := run.Get("runId").Str()
 		tree := repaired.Get("tree")
 		if run.Get("commit").Str() != repaired.Get("commit").Str() || tree.Kind() != jsjson.String || run.Get("tree").Str() != tree.Str() {
-			errs = append(errs, "repaired run "+runID+" commit/tree does not match repaired state")
+			errs = append(errs, jsexc.Concat("repaired run ", runID, " commit/tree does not match repaired state"))
 		}
 		if run.Get("witnessDigest").Str() != body.Get("frozenWitnessDigest").Str() {
-			errs = append(errs, "repaired run "+runID+" witness digest mismatch")
+			errs = append(errs, jsexc.Concat("repaired run ", runID, " witness digest mismatch"))
 		}
 	}
 	return errs
@@ -164,21 +164,21 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	}
 	for _, expected := range baseArtifacts {
 		if !slices.Contains(physical, expected) {
-			errs = append(errs, "Prevention proof package is missing "+expected)
+			errs = append(errs, jsexc.Concat("Prevention proof package is missing ", expected))
 		}
 	}
 	for _, actual := range physical {
 		if actual != "repaired-runs.json" && !slices.Contains(baseArtifacts, actual) {
-			errs = append(errs, "Prevention proof package contains an unexpected artifact: "+actual)
+			errs = append(errs, jsexc.Concat("Prevention proof package contains an unexpected artifact: ", actual))
 		}
 		stat := bundle.Must(nodefs.Lstat(nodefs.Join(root, actual)))
 		if !stat.Mode().IsRegular() || isLink(stat) {
-			errs = append(errs, "Prevention proof artifact must be a regular non-symlink file: "+actual)
+			errs = append(errs, jsexc.Concat("Prevention proof artifact must be a regular non-symlink file: ", actual))
 		}
 	}
 
 	if out, issues, ok := schema.Parse(ManifestSchema, readJSON(nodefs.Join(root, "manifest.json"), "prevention proof manifest", &errs)); !ok {
-		errs = append(errs, "Prevention proof manifest schema validation failed: "+schema.ErrorMessage(issues))
+		errs = append(errs, jsexc.Concat("Prevention proof manifest schema validation failed: ", schema.ErrorMessage(issues)))
 	} else {
 		manifest, haveManifest = out, true
 		rd := manifest.Get("rootDigest").Str()
@@ -197,7 +197,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	}
 
 	if out, issues, ok := schema.Parse(BodySchema, readJSON(nodefs.Join(root, "prevention.json"), "prevention body", &errs)); !ok {
-		errs = append(errs, "Prevention proof body schema validation failed: "+schema.ErrorMessage(issues))
+		errs = append(errs, jsexc.Concat("Prevention proof body schema validation failed: ", schema.ErrorMessage(issues)))
 	} else {
 		prevention, havePrevention = out, true
 		errs = append(errs, validateSemantics(prevention)...)
@@ -219,7 +219,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 
 	if slices.Contains(physical, "repaired-runs.json") && havePrevention {
 		if out, issues, ok := schema.Parse(RepairedRunsSchema, readJSON(nodefs.Join(root, "repaired-runs.json"), "repaired runs artifact", &errs)); !ok {
-			errs = append(errs, "repaired-runs.json schema validation failed: "+schema.ErrorMessage(issues))
+			errs = append(errs, jsexc.Concat("repaired-runs.json schema validation failed: ", schema.ErrorMessage(issues)))
 		} else {
 			errs = append(errs, validateRepairedRuns(prevention, out)...)
 		}

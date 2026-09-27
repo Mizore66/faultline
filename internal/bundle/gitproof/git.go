@@ -49,7 +49,7 @@ func gitBytes(repository, label string, args ...string) []byte {
 		if detail == "" {
 			detail = "exit " + statusText(r.Status)
 		}
-		bundle.Throw(errors.New(label + " failed: " + detail))
+		bundle.Throw(errors.New(jsexc.Concat(label, " failed: ", detail)))
 	}
 	return r.Stdout
 }
@@ -134,7 +134,7 @@ func parseBundleHeads(b []byte) []bundleHead {
 	for _, line := range splitLines(nodefs.DecodeUTF8(b)) {
 		commit, ref, ok := matchBundleHead(jsstr.Trim(line))
 		if !ok {
-			bundle.Throw(errors.New("Git bundle returned an invalid head line: " + line))
+			bundle.Throw(errors.New(jsexc.Concat("Git bundle returned an invalid head line: ", line)))
 		}
 		heads = append(heads, bundleHead{commit, ref})
 	}

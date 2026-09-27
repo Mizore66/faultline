@@ -3,7 +3,6 @@ package jsjson
 import (
 	"fmt"
 	"math"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -150,70 +149,104 @@ func TestManyDescendingIndexKeys(t *testing.T) {
 
 // JSON.stringify throws RangeError("Maximum call stack size exceeded") past
 // V8's native stack. The values are wrapped the way zod's message is built
-// (an issues array holding an issue object whose `received` is the value);
-// the exact thresholds were bisected through `node dist/cli.js verify` on
-// Node 22.22 linux/amd64 (see stackModel).
+// (an issues array holding an issue object whose `received` is the value)
+// and parsed from text, so dictionary mode follows the parsed entries. The
+// thresholds are the last depths that print through `node dist/cli.js
+// verify` (see stackModel); every platform model is checked on every host.
 func TestStringifyStackOverflow(t *testing.T) {
-	nest := func(depth int, leaf Value, wrap func(Value) Value) Value {
-		v := leaf
-		for range depth {
-			v = wrap(v)
+	dup := strings.Repeat(`"a":0,`, 127)
+	many := func(n int) string {
+		var b strings.Builder
+		for i := range n {
+			fmt.Fprintf(&b, `"k%d":0,`, i)
 		}
-		return v
+		return b.String()
 	}
-	arr := func(v Value) Value { return MakeArray([]Value{v}) }
-	objKey := func(key string, extra int) func(Value) Value {
-		return func(v Value) Value {
-			o := NewObj()
-			for i := range extra {
-				o.Set("k"+strconv.Itoa(i), MakeNumber(0))
+	m126, m127 := many(126), many(127)
+	shapes := map[string]func(n int) string{
+		"arr":  func(n int) string { return strings.Repeat("[", n) + strings.Repeat("]", n) },
+		"arr0": func(n int) string { return strings.Repeat("[", n) + "0" + strings.Repeat("]", n) },
+		"obj":  func(n int) string { return strings.Repeat(`{"a":`, n) + "0" + strings.Repeat("}", n) },
+		"objE": func(n int) string { return strings.Repeat(`{"a":`, n-1) + "{}" + strings.Repeat("}", n-1) },
+		"idx":  func(n int) string { return strings.Repeat(`{"0":`, n) + "0" + strings.Repeat("}", n) },
+		"alt": func(n int) string {
+			var open, closing strings.Builder
+			for i := range n {
+				if i%2 == 1 {
+					open.WriteString(`{"a":`)
+				} else {
+					open.WriteString("[")
+				}
 			}
-			o.Set(key, v)
-			return MakeObject(o)
-		}
-	}
-	zero, emptyArr, emptyObj := MakeNumber(0), MakeArray(nil), MakeObject(NewObj())
-	overflows := func(site int, v Value) bool {
-		defer UseCallSite(site)()
-		issue := NewObj()
-		issue.Set("received", v)
-		_, err := StringifyIndentChecked(MakeArray([]Value{MakeObject(issue)}), "") // indentation does not change the stack
-		return err == ErrStackOverflow
-	}
-	type shape struct {
-		name string
-		make func(n int) Value // n containers in total
-	}
-	shapes := map[string]shape{
-		"arr":  {"[]-terminated arrays", func(n int) Value { return nest(n-1, emptyArr, arr) }},
-		"arr0": {"[0]-terminated arrays", func(n int) Value { return nest(n, zero, arr) }},
-		"obj":  {`{"a":0} objects`, func(n int) Value { return nest(n, zero, objKey("a", 0)) }},
-		"objE": {"{}-terminated objects", func(n int) Value { return nest(n-1, emptyObj, objKey("a", 0)) }},
-		"idx":  {`{"0":0} objects (slow path)`, func(n int) Value { return nest(n, zero, objKey("0", 0)) }},
-		"d127": {"127-member objects (fast)", func(n int) Value { return nest(n, zero, objKey("a", 126)) }},
-		"d128": {"128-member objects (dictionary)", func(n int) Value { return nest(n, zero, objKey("a", 127)) }},
-	}
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		for _, sh := range shapes {
-			if overflows(SiteDemo, sh.make(1000)) || !overflows(SiteDemo, sh.make(9000)) {
-				t.Errorf("%s: threshold outside 1000..9000", sh.name)
+			for i := n - 1; i >= 0; i-- {
+				if i%2 == 1 {
+					closing.WriteString("}")
+				} else {
+					closing.WriteString("]")
+				}
 			}
-		}
-		return
+			return open.String() + "0" + closing.String()
+		},
+		// 127 distinct members plus the nested one: fast.
+		"d127": func(n int) string { return strings.Repeat("{"+m126+`"a":`, n) + "0" + strings.Repeat("}", n) },
+		// 128 distinct members: dictionary mode.
+		"d128": func(n int) string { return strings.Repeat("{"+m127+`"a":`, n) + "0" + strings.Repeat("}", n) },
+		// 128 entries of one key: V8 counts entries, so dictionary mode too.
+		"dup": func(n int) string { return strings.Repeat("{"+dup+`"a":`, n) + "0" + strings.Repeat("}", n) },
 	}
-	for _, tc := range []struct {
-		site  int
+	type row struct {
+		site  Site
 		shape string
-		last  int // deepest value that still stringifies
+		last  int
+	}
+	platforms := []struct {
+		goos, goarch string
+		rows         []row
 	}{
-		{SiteDemo, "arr", 2233}, {SiteDemo, "arr0", 2232}, {SiteDemo, "obj", 4166}, {SiteDemo, "objE", 4167},
-		{SiteDemo, "idx", 2232}, {SiteDemo, "d127", 4166}, {SiteDemo, "d128", 2232},
-		{SitePrevention, "arr", 2233}, {SitePrevention, "obj", 4167}, {SitePrevention, "idx", 2232},
-		{SiteGitProof, "arr", 2232}, {SiteGitProof, "obj", 4165}, {SiteGitProof, "idx", 2231},
-	} {
-		sh := shapes[tc.shape]
-		if overflows(tc.site, sh.make(tc.last)) || !overflows(tc.site, sh.make(tc.last+1)) {
-			t.Errorf("site %d, %s: last depth that prints should be %d", tc.site, sh.name, tc.last)
+		{"linux", "amd64", []row{
+			{SiteDemo, "arr", 2233}, {SiteDemo, "arr0", 2232}, {SiteDemo, "obj", 4166}, {SiteDemo, "objE", 4167},
+			{SiteDemo, "idx", 2232}, {SiteDemo, "alt", 2906}, {SiteDemo, "d127", 4166}, {SiteDemo, "d128", 2232}, {SiteDemo, "dup", 2232},
+			{SitePrevention, "arr", 2233}, {SitePrevention, "obj", 4167}, {SitePrevention, "idx", 2232}, {SitePrevention, "alt", 2907},
+			{SiteGitProof, "arr", 2232}, {SiteGitProof, "obj", 4165}, {SiteGitProof, "idx", 2231}, {SiteGitProof, "alt", 2906},
+			{SiteGitLedger, "arr", 2232}, {SiteGitLedger, "obj", 4165}, {SiteGitLedger, "idx", 2231}, {SiteGitLedger, "alt", 2905},
+			{SiteDemoWitness, "arr", 2232}, {SiteDemoWitness, "obj", 4164}, {SiteDemoWitness, "idx", 2231}, {SiteDemoWitness, "alt", 2905},
+		}},
+		{"darwin", "arm64", []row{
+			{SiteDemo, "arr", 2747}, {SiteDemo, "arr0", 2746}, {SiteDemo, "obj", 6867}, {SiteDemo, "objE", 6868},
+			{SiteDemo, "idx", 2616}, {SiteDemo, "alt", 3924}, {SiteDemo, "dup", 2616},
+			{SitePrevention, "arr", 2748}, {SitePrevention, "obj", 6869}, {SitePrevention, "idx", 2616}, {SitePrevention, "alt", 3924},
+			{SiteGitProof, "arr", 2747}, {SiteGitProof, "obj", 6866}, {SiteGitProof, "idx", 2615}, {SiteGitProof, "alt", 3923},
+			{SiteGitLedger, "arr", 2746}, {SiteGitLedger, "obj", 6864}, {SiteGitLedger, "idx", 2614}, {SiteGitLedger, "alt", 3922},
+			{SiteDemoWitness, "arr", 2746}, {SiteDemoWitness, "obj", 6863}, {SiteDemoWitness, "idx", 2614}, {SiteDemoWitness, "alt", 3922},
+		}},
+		{"linux", "arm64", []row{
+			{SiteDemo, "arr", 1781}, {SiteDemo, "arr0", 1780}, {SiteDemo, "obj", 3560}, {SiteDemo, "objE", 3561},
+			{SiteDemo, "idx", 1907}, {SiteDemo, "alt", 2373}, {SiteDemo, "dup", 1907},
+			{SitePrevention, "arr", 1781}, {SitePrevention, "obj", 3561}, {SitePrevention, "idx", 1907},
+			{SiteGitProof, "arr", 1780}, {SiteGitProof, "obj", 3559}, {SiteGitProof, "idx", 1907},
+			{SiteDemoWitness, "arr", 1780}, {SiteDemoWitness, "obj", 3558}, {SiteDemoWitness, "idx", 1906},
+		}},
+	}
+	saved := v8Stack
+	defer func() { v8Stack = saved }()
+	for _, p := range platforms {
+		v8Stack = stackModelFor(p.goos, p.goarch)
+		overflows := func(site Site, text string) bool {
+			v, err := Parse(text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer UseCallSite(site)()
+			issue := NewObj()
+			issue.Set("received", v)
+			_, err = StringifyIndentChecked(MakeArray([]Value{MakeObject(issue)}), "") // indentation does not change the stack
+			return err == ErrStackOverflow
+		}
+		for _, r := range p.rows {
+			make := shapes[r.shape]
+			if overflows(r.site, make(r.last)) || !overflows(r.site, make(r.last+1)) {
+				t.Errorf("%s/%s site %d, %s: last depth that prints should be %d", p.goos, p.goarch, r.site, r.shape, r.last)
+			}
 		}
 	}
 }
@@ -240,5 +273,27 @@ func TestStringifyStringLength(t *testing.T) {
 	}
 	if _, long, overflow := check(MakeArray([]Value{MakeString("xxxxxxxx"), deep}), 4); !long || !overflow {
 		t.Fatal("serialization must continue past the length limit to the stack overflow")
+	}
+}
+
+// Spreading a list into call arguments overflows V8's stack past a limit
+// that depends on the call site; the linux/amd64 limits were bisected
+// through `node dist/cli.js verify` (see v8Spread).
+func TestSpreadLimits(t *testing.T) {
+	base := v8Spread.base
+	for _, tc := range []struct {
+		name   string
+		offset int
+		last   int // on linux/amd64
+	}{
+		{"demo walker, depth 1", CollectSpreadOffset(1), 125576},
+		{"demo walker, depth 5", CollectSpreadOffset(5), 125452},
+		{"git semantics errors", SpreadGitSemantics, 125587},
+		{"git lifecycle ledger errors", SpreadGitLedger, 125562},
+	} {
+		last := tc.last - 125607 + base
+		if !SpreadFits(last, tc.offset) || SpreadFits(last+1, tc.offset) {
+			t.Errorf("%s: last list length that fits should be %d", tc.name, last)
+		}
 	}
 }

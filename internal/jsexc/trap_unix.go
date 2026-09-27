@@ -9,3 +9,5 @@ import (
 )
 
 func trap() { sigexit.Die(syscall.SIGTRAP) }
+
+func abort() { sigexit.Die(syscall.SIGABRT) }

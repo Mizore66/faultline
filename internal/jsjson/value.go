@@ -76,6 +76,10 @@ type Obj struct {
 	keys      []string // insertion order, parallel to vals
 	vals      []Value
 	index     map[string]int // key -> position in keys; nil while small
+	// namedEntries counts the named members JSON.parse read for this
+	// object, duplicates included: V8 builds the object in dictionary mode
+	// from 128 on (see slowForStringify).
+	namedEntries int
 }
 
 const smallObject = 8

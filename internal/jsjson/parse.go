@@ -126,16 +126,22 @@ func (p *parser) expectNext(t token, tmpl string) bool {
 
 // frame is one open container on the explicit parse stack.
 type frame struct {
-	obj      *Obj // nil for an array
-	key      string
-	items    []Value
-	tooLarge bool // maxArrayElements or more items; the rest are not kept
+	obj   *Obj // nil for an array
+	key   string
+	items []Value
+	count int // array elements parsed; past maxArrayElements-1 they are not kept
 }
 
 // maxArrayElements is the first array length V8's JSON.parse cannot
 // allocate: NewJSArray aborts the process with "Fatal JavaScript invalid
 // size error 134217728" once the closing bracket is reached.
 const maxArrayElements = 1 << 27
+
+// maxNamedEntries is the first named-entry count whose NameDictionary V8
+// cannot allocate (capacity RoundUpPow2(n + n/2) past kMaxCapacity): Node
+// dies with "FATAL ERROR: invalid table size Allocation failed - JavaScript
+// heap out of memory" when the object closes.
+const maxNamedEntries = 22_369_622
 
 // parseValue is V8 JsonParser::ParseJsonValue. Like V8 it keeps open
 // containers on an explicit stack instead of recursing, so nesting depth is
@@ -212,7 +218,15 @@ func (p *parser) parseValue() Value {
 			}
 			top := &stack[len(stack)-1]
 			if top.obj != nil {
-				top.obj.Set(top.key, v)
+				// V8 sizes an object's property dictionary from the named
+				// entries it parsed, duplicates included (index keys are
+				// elements).
+				if _, index := arrayIndex(top.key); !index {
+					top.obj.namedEntries++
+				}
+				if top.obj.namedEntries < maxNamedEntries {
+					top.obj.Set(top.key, v)
+				}
 				if p.check(tokComma) {
 					if !p.expectNext(tokString, msgExpectedDoubleQuotedPropertyName) {
 						return Value{}
@@ -227,12 +241,16 @@ func (p *parser) parseValue() Value {
 				if !p.expect(tokRBrace, msgExpectedCommaOrRBrace) {
 					return Value{}
 				}
+				if top.obj.namedEntries >= maxNamedEntries {
+					jsexc.FatalOOM("invalid table size")
+				}
 				v = MakeObject(top.obj)
 			} else {
-				if len(top.items) < maxArrayElements-1 {
+				// V8 parses to the ']' before allocating, then reports the
+				// real length.
+				top.count++
+				if top.count < maxArrayElements {
 					top.items = append(top.items, v)
-				} else {
-					top.tooLarge = true // V8 still parses to the ']' first
 				}
 				if p.check(tokComma) {
 					break attach
@@ -240,8 +258,8 @@ func (p *parser) parseValue() Value {
 				if !p.expect(tokRBrack, msgExpectedCommaOrRBrack) {
 					return Value{}
 				}
-				if top.tooLarge {
-					jsexc.FatalInvalidSize(maxArrayElements)
+				if top.count >= maxArrayElements {
+					jsexc.FatalInvalidSize(top.count)
 				}
 				v = MakeArray(top.items)
 			}

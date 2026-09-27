@@ -25,12 +25,12 @@ func isLink(info fs.FileInfo) bool { return info.Mode()&fs.ModeSymlink != 0 }
 // safeArtifactPath ports git-proof-bundle.ts:230.
 func safeArtifactPath(root, artifact string) string {
 	if !isSafeRelativeArtifactPath(artifact) {
-		bundle.Throw(errors.New("Unsafe artifact path: " + artifact))
+		bundle.Throw(errors.New(jsexc.Concat("Unsafe artifact path: ", artifact)))
 	}
 	destination := nodefs.Resolve(root, artifact)
 	nested := nodefs.Relative(root, destination)
 	if nested == "" || strings.HasPrefix(nested, "..") || nodefs.IsAbsolute(nested) {
-		bundle.Throw(errors.New("Artifact path escapes its bundle: " + artifact))
+		bundle.Throw(errors.New(jsexc.Concat("Artifact path escapes its bundle: ", artifact)))
 	}
 	return destination
 }
@@ -39,13 +39,13 @@ func safeArtifactPath(root, artifact string) string {
 func assertNoLinksOrSpecialFiles(directory string) {
 	stat := bundle.Must(nodefs.Lstat(directory))
 	if isLink(stat) || !stat.IsDir() {
-		bundle.Throw(errors.New("Git proof bundle must be a real directory: " + directory))
+		bundle.Throw(errors.New(jsexc.Concat("Git proof bundle must be a real directory: ", directory)))
 	}
 	for _, name := range bundle.Must(nodefs.ReadDirNames(directory)) {
 		child := nodefs.Join(directory, name)
 		childStat := bundle.Must(nodefs.Lstat(child))
 		if isLink(childStat) || (!childStat.IsDir() && !childStat.Mode().IsRegular()) {
-			bundle.Throw(errors.New("Git proof bundle contains a symbolic link or special file: " + child))
+			bundle.Throw(errors.New(jsexc.Concat("Git proof bundle contains a symbolic link or special file: ", child)))
 		}
 		if childStat.IsDir() {
 			assertNoLinksOrSpecialFiles(child)
@@ -57,7 +57,7 @@ func assertNoLinksOrSpecialFiles(directory string) {
 func assertRegularFile(path, label string, maximumBytes int64) int64 {
 	stat := bundle.Must(nodefs.Lstat(path))
 	if isLink(stat) || !stat.Mode().IsRegular() {
-		bundle.Throw(errors.New(label + " must be a regular non-symlink file"))
+		bundle.Throw(errors.New(jsexc.Concat(label, " must be a regular non-symlink file")))
 	}
 	if stat.Size() > maximumBytes {
 		bundle.Throw(fmt.Errorf("%s exceeds FaultLine's %d byte read limit", label, maximumBytes))
@@ -80,14 +80,14 @@ func collectFiles(root, current string, budget *fileBudget) []string {
 		child := nodefs.Join(current, name)
 		stat := bundle.Must(nodefs.Lstat(child))
 		if isLink(stat) || (!stat.IsDir() && !stat.Mode().IsRegular()) {
-			bundle.Throw(errors.New("Git proof bundle contains a symbolic link or special file: " + child))
+			bundle.Throw(errors.New(jsexc.Concat("Git proof bundle contains a symbolic link or special file: ", child)))
 		}
 		if stat.IsDir() {
 			files = append(files, collectFiles(root, child, budget)...)
 			continue
 		}
 		if stat.Size() > maxSourceArtifactBytes {
-			bundle.Throw(errors.New("Git proof bundle artifact exceeds FaultLine's read limit: " + child))
+			bundle.Throw(errors.New(jsexc.Concat("Git proof bundle artifact exceeds FaultLine's read limit: ", child)))
 		}
 		budget.files++
 		budget.bytes += stat.Size()
@@ -172,15 +172,15 @@ func parseHashCatalog(hashes []byte, errs *[]string) *orderedMap {
 		}
 		digest, artifact, ok := parseCatalogLine(line)
 		if !ok {
-			*errs = append(*errs, "invalid hash catalog entry: "+line)
+			*errs = append(*errs, jsexc.Concat("invalid hash catalog entry: ", line))
 			continue
 		}
 		if !isSafeRelativeArtifactPath(artifact) {
-			*errs = append(*errs, "hash catalog path is unsafe: "+artifact)
+			*errs = append(*errs, jsexc.Concat("hash catalog path is unsafe: ", artifact))
 			continue
 		}
 		if catalog.has(artifact) {
-			*errs = append(*errs, "hash catalog lists an artifact more than once: "+artifact)
+			*errs = append(*errs, jsexc.Concat("hash catalog lists an artifact more than once: ", artifact))
 			continue
 		}
 		if len(catalog.keys) >= maxGitProofArtifacts {
@@ -295,7 +295,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 				return
 			}
 			if canonical.SHA256HexBytes(readBoundedFile(path, label, maxSourceArtifactBytes)) != catalog.values[artifact] {
-				errs = append(errs, "artifact digest mismatch: "+artifact)
+				errs = append(errs, jsexc.Concat("artifact digest mismatch: ", artifact))
 			}
 		}); err != nil {
 			errs = append(errs, jsexc.Concat("declared artifact cannot be read safely (", artifact, "): ", jsexc.Message(err)))
@@ -311,19 +311,19 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	metadataPayload := parseJSONFile(root, "source/metadata.json", "source metadata", &errs)
 	manifest, manifestIssues, haveManifest := schema.Parse(GitProofBundleManifestSchema, manifestPayload)
 	if !haveManifest {
-		errs = append(errs, "manifest schema validation failed: "+schema.ErrorMessage(manifestIssues))
+		errs = append(errs, jsexc.Concat("manifest schema validation failed: ", schema.ErrorMessage(manifestIssues)))
 	}
 	investigation, investigationIssues, haveResult := schema.Parse(GitInvestigationResultSchema, investigationPayload)
 	if !haveResult {
-		errs = append(errs, "investigation schema validation failed: "+schema.ErrorMessage(investigationIssues))
+		errs = append(errs, jsexc.Concat("investigation schema validation failed: ", schema.ErrorMessage(investigationIssues)))
 	}
 	frozen, frozenIssues, haveFrozen := schema.Parse(FrozenWitnessSchema, frozenPayload)
 	if !haveFrozen {
-		errs = append(errs, "frozen witness schema validation failed: "+schema.ErrorMessage(frozenIssues))
+		errs = append(errs, jsexc.Concat("frozen witness schema validation failed: ", schema.ErrorMessage(frozenIssues)))
 	}
 	metadata, metadataIssues, haveMetadata := schema.Parse(GitProofSourceMetadataSchema, metadataPayload)
 	if !haveMetadata {
-		errs = append(errs, "source metadata schema validation failed: "+schema.ErrorMessage(metadataIssues))
+		errs = append(errs, jsexc.Concat("source metadata schema validation failed: ", schema.ErrorMessage(metadataIssues)))
 	}
 
 	if haveManifest && haveResult && haveFrozen && haveMetadata {
@@ -342,24 +342,24 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		expectedArtifacts := newStringSet(requiredArtifactPaths(investigation, hasLifecycleLedger(manifest.Get("lifecycle")))...)
 		for _, artifact := range expectedArtifacts.order {
 			if !catalog.has(artifact) {
-				errs = append(errs, "required artifact is missing from hashes.txt: "+artifact)
+				errs = append(errs, jsexc.Concat("required artifact is missing from hashes.txt: ", artifact))
 			}
 		}
 		for _, artifact := range catalog.keys {
 			if !expectedArtifacts.has[artifact] {
-				errs = append(errs, "hashes.txt contains an unexpected artifact: "+artifact)
+				errs = append(errs, jsexc.Concat("hashes.txt contains an unexpected artifact: ", artifact))
 			}
 		}
 		physical := newStringSet(collectFiles(root, root, &fileBudget{})...)
 		expectedPhysical := newStringSet(append(append([]string{}, expectedArtifacts.order...), "hashes.txt", "ROOT.sha256")...)
 		for _, artifact := range physical.order {
 			if !expectedPhysical.has[artifact] {
-				errs = append(errs, "undeclared physical file exists in Git proof bundle: "+artifact)
+				errs = append(errs, jsexc.Concat("undeclared physical file exists in Git proof bundle: ", artifact))
 			}
 		}
 		for _, artifact := range expectedPhysical.order {
 			if !physical.has[artifact] {
-				errs = append(errs, "expected physical file is missing from Git proof bundle: "+artifact)
+				errs = append(errs, jsexc.Concat("expected physical file is missing from Git proof bundle: ", artifact))
 			}
 		}
 
@@ -372,9 +372,9 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 			payload := parseJSONFile(root, descriptor.Get("path").Str(), "run "+runID, &errs)
 			parsed, issues, ok := schema.Parse(GitInvestigationRunFactSchema, payload)
 			if !ok {
-				errs = append(errs, "run artifact schema validation failed for "+runID+": "+schema.ErrorMessage(issues))
+				errs = append(errs, jsexc.Concat("run artifact schema validation failed for ", runID, ": ", schema.ErrorMessage(issues)))
 			} else if parsed.Get("runId").Str() != runID || !bundle.SameCanonical(parsed, runs[runID]) {
-				errs = append(errs, "run artifact does not match investigation run catalog: "+runID)
+				errs = append(errs, jsexc.Concat("run artifact does not match investigation run catalog: ", runID))
 			}
 		}
 		transitions := investigation.Get("transitions").Items()
@@ -383,7 +383,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 			payload := parseJSONFile(root, descriptor.Get("path").Str(), "transition "+label, &errs)
 			parsed, issues, ok := schema.Parse(StableGitTransitionSchema, payload)
 			if !ok {
-				errs = append(errs, "transition artifact schema validation failed for "+label+": "+schema.ErrorMessage(issues))
+				errs = append(errs, jsexc.Concat("transition artifact schema validation failed for ", label, ": ", schema.ErrorMessage(issues)))
 				continue
 			}
 			var expected jsjson.Value // result.transitions[index]: undefined when out of range
@@ -391,16 +391,22 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 				expected = transitions[index]
 			}
 			if descriptor.Get("index").Num() != float64(index) || !bundle.SameCanonical(parsed, expected) {
-				errs = append(errs, "transition artifact does not match investigation transition catalog: "+label)
+				errs = append(errs, jsexc.Concat("transition artifact does not match investigation transition catalog: ", label))
 			}
 		}
 		witness := VerifyFrozenWitnessRecord(frozen, frozen.Get("frozenDigest").Str(), true)
 		if !witness.Valid || witness.ExternalDigestStatus != "MATCH" {
 			for _, e := range witness.Errors {
-				errs = append(errs, "frozen witness verification failed: "+e)
+				errs = append(errs, jsexc.Concat("frozen witness verification failed: ", e))
 			}
 		}
-		errs = append(errs, validateGitInvestigationProofSemantics(investigation, frozen)...)
+		// errors.push(...validateGitInvestigationProofSemantics(...)): a
+		// spread, which overflows V8's stack past about 125k errors.
+		semantic := validateGitInvestigationProofSemantics(investigation, frozen)
+		if !jsjson.SpreadFits(len(semantic), jsjson.SpreadGitSemantics) {
+			bundle.Throw(jsjson.ErrStackOverflow)
+		}
+		errs = append(errs, semantic...)
 		verifyLifecycleBinding(root, manifest, investigation, &errs)
 		sourceMetadataFromArtifacts(root, metadata, investigation, manifest, &errs)
 		verifyPortableGitSource(root, metadata, investigation, &errs)
