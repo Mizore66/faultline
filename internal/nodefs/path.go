@@ -5,9 +5,7 @@ import (
 	"runtime"
 	"strings"
 
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
-
+	"github.com/Mizore66/faultline/internal/jscase"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsstr"
 )
@@ -558,10 +556,8 @@ func Win32Join(args ...string) string {
 	return Win32Normalize(joined)
 }
 
-var lowerCaser = cases.Lower(language.Und)
-
-// jsLower is String.prototype.toLowerCase (full, locale-independent mapping).
-func jsLower(s string) string { return lowerCaser.String(s) }
+// jsLower is String.prototype.toLowerCase.
+func jsLower(s string) string { return jscase.Lower(s) }
 
 // Win32Relative is path.win32.relative.
 func Win32Relative(cwd func() string, env func(string) string, from, to string) string {

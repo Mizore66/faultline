@@ -110,7 +110,15 @@ await gitBase("git-cjk-overlays", "HEAD~2", "sha1", undefined, [
   { path: "\u{16121}.md", text: "gurung khema u\n" },
   { path: "\u{113C2}\u{113C5}.md", text: "tulu-tigalari\n" },
   { path: "\uFDD1\u5B57.md", text: "fdd1 han\n" },
-  { path: "\uFDD1\u1FAF.md", text: "fdd1 omega\n" }
+  { path: "\uFDD1\u1FAF.md", text: "fdd1 omega\n" },
+  // ICU's FCD iterator leaves a supplementary mark run after a contraction
+  // starter (и) un-normalized; the order of these two depends on it.
+  { path: "\u0438\u{1E00A}\u0F72.md", text: "cyrillic tibetan\n" },
+  { path: "\u0438\u{1E00A}\u1B3E.md", text: "cyrillic balinese\n" },
+  // Final sigma: ICU skips Case_Ignorable before testing Cased, so ʰΣ
+  // lowercases to ʰσ and these are not duplicate overlay paths.
+  { path: "a/\u02B0\u03A3", text: "sigma\n" },
+  { path: "a/\u02B0\u03C2", text: "final sigma\n" }
 ]);
 // SHA-256 object format. The verifier's temporary repository is a plain
 // `git init --bare`, which follows GIT_DEFAULT_HASH; goldens and replay run

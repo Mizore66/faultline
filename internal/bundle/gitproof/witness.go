@@ -3,13 +3,10 @@ package gitproof
 import (
 	"encoding/base64"
 	"regexp"
-	"strings"
-
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jscase"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/schema"
@@ -103,23 +100,8 @@ func witnessPayload(proposal jsjson.Value) jsjson.Value {
 	return jsjson.MakeObject(o)
 }
 
-// localeLower is toLocaleLowerCase("en-US"); lone surrogates (three-byte
-// WTF-8 sequences ED A0–BF xx) pass through unchanged.
-func localeLower(s string) string {
-	lower := cases.Lower(language.AmericanEnglish)
-	var b strings.Builder
-	last := 0
-	for i := 0; i+2 < len(s); i++ {
-		if s[i] == 0xED && s[i+1] >= 0xA0 && s[i+1] <= 0xBF {
-			b.WriteString(lower.String(s[last:i]))
-			b.WriteString(s[i : i+3])
-			last = i + 3
-			i += 2
-		}
-	}
-	b.WriteString(lower.String(s[last:]))
-	return b.String()
-}
+// localeLower is toLocaleLowerCase("en-US").
+func localeLower(s string) string { return jscase.Lower(s) }
 
 // assertUniqueOverlayPathsForVerification ports src/witness-lock.ts:207.
 func assertUniqueOverlayPathsForVerification(overlays []jsjson.Value, errs *[]string) {
