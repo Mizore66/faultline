@@ -309,3 +309,28 @@ func TestSpreadLimits(t *testing.T) {
 		v8Spread = saved
 	}
 }
+
+// JSON.parse stores an object's index-keyed entries in a NumberDictionary
+// or a FixedArray up to the largest index (ShouldConvertToSlowElements);
+// the cases were probed against Node 22.22.2, where the FixedArray ones of
+// 2^27 or more slots abort.
+func TestSlowElements(t *testing.T) {
+	for _, tc := range []struct {
+		used   int
+		length uint64
+		slow   bool
+	}{
+		{5592405, 134217728, true},   // Node survives
+		{5592406, 134217728, false},  // Node aborts: invalid size error 134217728
+		{5592406, 134217727, false},  // fits
+		{5592406, 150000000, false},  // aborts
+		{11184811, 200000000, true},  // survives
+		{11184812, 200000000, false}, // aborts
+		{2, 134217728, true},
+		{1, 1, false},
+	} {
+		if got := slowElements(tc.used, tc.length); got != tc.slow {
+			t.Errorf("slowElements(%d, %d) = %v", tc.used, tc.length, got)
+		}
+	}
+}

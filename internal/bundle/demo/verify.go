@@ -410,7 +410,13 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	}
 	declared := map[string]string{}
 	var declaredOrder []string
-	for _, line := range strings.Split(jsstr.Trim(hashes), "\n") {
+	trimmed := jsstr.Trim(hashes)
+	// V8's split aborts the process when the result needs 2^27 or more
+	// elements (a FixedArray), before any line is looked at.
+	if n := strings.Count(trimmed, "\n") + 1; n >= 1<<27 {
+		jsexc.FatalInvalidFixedArraySize(n)
+	}
+	for _, line := range strings.Split(trimmed, "\n") {
 		if line == "" {
 			continue
 		}

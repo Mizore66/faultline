@@ -135,12 +135,46 @@ type frame struct {
 	key   string
 	items []Value
 	count int // array elements parsed; past maxArrayElements-1 they are not kept
+	// elements and maxIndex are an object's index-keyed entries parsed,
+	// duplicates included, and the largest index among them.
+	elements int
+	maxIndex uint32
 }
 
 // maxArrayElements is the first array length V8's JSON.parse cannot
 // allocate: NewJSArray aborts the process with "Fatal JavaScript invalid
 // size error 134217728" once the closing bracket is reached.
 const maxArrayElements = 1 << 27
+
+// checkElements is how V8's JSON.parse stores an object's index-keyed
+// entries (BuildJsonObject), when the object closes: in a NumberDictionary
+// sized for all of them when that is smaller than a FixedArray up to the
+// largest index (ShouldConvertToSlowElements), otherwise in that
+// FixedArray. Either allocation can be impossible, and V8 then aborts the
+// process: a dictionary of maxNamedEntries or more entries (its capacity
+// limit is the NameDictionary's), or a FixedArray of 2^27 or more slots.
+func checkElements(elements int, maxIndex uint32) {
+	length := uint64(maxIndex) + 1
+	if slowElements(elements, length) {
+		if elements >= maxNamedEntries {
+			jsexc.FatalOOM("invalid table size")
+		}
+	} else if length >= maxArrayElements {
+		jsexc.FatalInvalidFixedArraySize(int(length))
+	}
+}
+
+// slowElements is ShouldConvertToSlowElements(used, capacity):
+// kPreferFastElementsSizeFactor (3) × ComputeCapacity(used) × kEntrySize
+// (3) <= capacity, where ComputeCapacity rounds used + used/2 up to a power
+// of two, at least 4.
+func slowElements(used int, capacity uint64) bool {
+	c := uint64(4)
+	for c < uint64(used+used/2) {
+		c <<= 1
+	}
+	return 3*c*3 <= capacity
+}
 
 // maxNamedEntries is the first named-entry count whose NameDictionary V8
 // cannot allocate (capacity RoundUpPow2(n + n/2) past kMaxCapacity): Node
@@ -226,10 +260,13 @@ func (p *parser) parseValue() Value {
 				// V8 sizes an object's property dictionary from the named
 				// entries it parsed, duplicates included (index keys are
 				// elements).
-				if _, index := arrayIndex(top.key); !index {
+				if i, index := arrayIndex(top.key); index {
+					top.elements++
+					top.maxIndex = max(top.maxIndex, i)
+				} else {
 					top.obj.namedEntries++
 				}
-				if top.obj.namedEntries < maxNamedEntries {
+				if top.obj.namedEntries < maxNamedEntries && top.elements < maxNamedEntries {
 					top.obj.Set(top.key, v)
 				}
 				if p.check(tokComma) {
@@ -245,6 +282,9 @@ func (p *parser) parseValue() Value {
 				}
 				if !p.expect(tokRBrace, msgExpectedCommaOrRBrace) {
 					return Value{}
+				}
+				if top.elements > 0 {
+					checkElements(top.elements, top.maxIndex)
 				}
 				if top.obj.namedEntries >= maxNamedEntries {
 					jsexc.FatalOOM("invalid table size")

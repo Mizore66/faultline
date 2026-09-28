@@ -9,9 +9,19 @@ import (
 // size limits ("Fatal JavaScript invalid size error <n>"): the report
 // header on stderr, then the process dies by the breakpoint trap V8 uses
 // (exit status 133 on Unix). Node's native stack trace is not reproduced.
+// JSON.parse arrays report "(see crbug.com/1201626)" after the length.
 func FatalInvalidSize(n int) {
+	fatalInvalidSize(strconv.Itoa(n) + " (see crbug.com/1201626)")
+}
+
+// FatalInvalidFixedArraySize is FatalInvalidSize for the other FixedArray
+// allocations (an object's elements store, String.prototype.split), which
+// report the length alone.
+func FatalInvalidFixedArraySize(n int) { fatalInvalidSize(strconv.Itoa(n)) }
+
+func fatalInvalidSize(what string) {
 	os.Stderr.WriteString("\n\n#\n# Fatal error in , line 0\n# Fatal JavaScript invalid size error " +
-		strconv.Itoa(n) + " (see crbug.com/1201626)\n#\n#\n#\n#FailureMessage Object: 0x0\n")
+		what + "\n#\n#\n#\n#FailureMessage Object: 0x0\n")
 	trap()
 }
 
