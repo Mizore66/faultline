@@ -52,17 +52,20 @@ func start(file string, argv, env []string, files []*os.File) (*os.Process, stri
 	if err != nil {
 		return nil, nodefs.ErrnoCode(err)
 	}
+	// GetCurrentDirectoryW(0, NULL) counts the terminating NUL, so libuv
+	// shortens a cwd of MAX_PATH-1 units or more, before the search runs
+	// on it.
+	dir := ""
+	if len(syscall.StringToUTF16(cwd)) >= syscall.MAX_PATH {
+		short, err := shortPath(cwd)
+		if err != nil {
+			return nil, nodefs.ErrnoCode(err)
+		}
+		cwd, dir = short, short
+	}
 	path, ok := searchPath(file, cwd, os.Getenv("PATH"), searchCwd(), fileExists)
 	if !ok {
 		return nil, "ENOENT"
-	}
-	dir := ""
-	if len(syscall.StringToUTF16(cwd))-1 >= syscall.MAX_PATH {
-		if short, err := shortPath(cwd); err == nil {
-			dir = short
-		} else {
-			return nil, nodefs.ErrnoCode(err)
-		}
 	}
 	const createNoWindow = 0x08000000
 	p, err := os.StartProcess(path, argv, &os.ProcAttr{Dir: dir, Env: env, Files: files,

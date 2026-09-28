@@ -9,6 +9,8 @@ import (
 	"errors"
 	"os"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -171,7 +173,7 @@ func nodeEnv() []string {
 			}
 			env = append(env, entry)
 		}
-		return env
+		return windowsEnvDedupe(env)
 	}
 	first := map[string]string{}
 	for _, entry := range environ {
@@ -206,6 +208,32 @@ func nodeEnv() []string {
 		env = append(env, key+"="+nodefs.DecodeUTF8([]byte(value)))
 	}
 	return env
+}
+
+// windowsEnvDedupe is normalizeSpawnArguments on Windows, where names are
+// case-insensitive: the names are sorted (by UTF-16 code units, as
+// Array.prototype.sort does) and only the first of those that uppercase
+// alike is kept. strings.ToUpper stands in for toUpperCase; it differs only
+// where a letter uppercases to several (ß to SS).
+func windowsEnvDedupe(env []string) []string {
+	name := func(entry string) string {
+		i := strings.IndexByte(entry[min(1, len(entry)):], '=') + min(1, len(entry))
+		return entry[:i]
+	}
+	sort.SliceStable(env, func(i, j int) bool {
+		return slices.Compare(jsstr.ToUTF16(name(env[i])), jsstr.ToUTF16(name(env[j]))) < 0
+	})
+	seen := map[string]bool{}
+	out := env[:0]
+	for _, entry := range env {
+		upper := strings.ToUpper(name(entry))
+		if seen[upper] {
+			continue
+		}
+		seen[upper] = true
+		out = append(out, entry)
+	}
+	return out
 }
 
 // lookupEnv is getenv over an envPairs list: the first match wins.
