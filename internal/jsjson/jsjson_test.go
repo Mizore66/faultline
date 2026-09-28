@@ -276,23 +276,36 @@ func TestStringifyStringLength(t *testing.T) {
 }
 
 // Spreading a list into call arguments overflows V8's stack past a limit
-// that depends on the call site; the linux/amd64 limits were bisected
-// through `node dist/cli.js verify` (see v8Spread).
+// that depends on the call site and the platform, bisected through
+// `node dist/cli.js verify` on Node 22.22.2 (see v8Spread);
+// TestLiveSpreadLimitsMatchNode checks them against Node in CI.
 func TestSpreadLimits(t *testing.T) {
-	base := v8Spread.base
-	for _, tc := range []struct {
-		name   string
-		offset int
-		last   int // on linux/amd64
+	for _, p := range []struct {
+		goos, goarch                          string
+		collect1, collect5, semantics, ledger int
 	}{
-		{"demo walker, depth 1", CollectSpreadOffset(1), 125576},
-		{"demo walker, depth 5", CollectSpreadOffset(5), 125452},
-		{"git semantics errors", SpreadGitSemantics, 125587},
-		{"git lifecycle ledger errors", SpreadGitLedger, 125562},
+		{"linux", "amd64", 125576, 125452, 125587, 125562},
+		{"linux", "arm64", 110189, 110061, 110201, 110175},
+		{"darwin", "arm64", 110181, 110053, 110193, 110167},
+		{"windows", "arm64", 110189, 110061, 110201, 110175},
+		{"darwin", "amd64", 125576, 125452, 125587, 125562},
 	} {
-		last := tc.last - 125607 + base
-		if !SpreadFits(last, tc.offset) || SpreadFits(last+1, tc.offset) {
-			t.Errorf("%s: last list length that fits should be %d", tc.name, last)
+		saved := v8Spread
+		v8Spread = spreadModelFor(p.goos, p.goarch)
+		for _, tc := range []struct {
+			name string
+			fits func(int) bool
+			last int
+		}{
+			{"demo walker, depth 1", func(n int) bool { return CollectSpreadFits(n, 1) }, p.collect1},
+			{"demo walker, depth 5", func(n int) bool { return CollectSpreadFits(n, 5) }, p.collect5},
+			{"git semantics errors", func(n int) bool { return SpreadFits(n, SpreadGitSemantics) }, p.semantics},
+			{"git lifecycle ledger errors", func(n int) bool { return SpreadFits(n, SpreadGitLedger) }, p.ledger},
+		} {
+			if !tc.fits(tc.last) || tc.fits(tc.last+1) {
+				t.Errorf("%s/%s %s: last list length that fits should be %d", p.goos, p.goarch, tc.name, tc.last)
+			}
 		}
+		v8Spread = saved
 	}
 }

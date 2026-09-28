@@ -39,7 +39,7 @@ func collectFiles(directory, current string) []string { return collectFilesAt(di
 // collectFilesAt is collectFiles for a directory depth levels below the
 // bundle root. TS spreads each subdirectory's list into its parent's
 // (files.push(...collectFiles(...))), which overflows V8's stack past about
-// 125k files (jsjson.SpreadFits).
+// 110k-125k files (jsjson.CollectSpreadFits).
 func collectFilesAt(directory, current string, depth int) []string {
 	var files []string
 	for _, name := range bundle.Must(nodefs.ReadDirNames(current)) {
@@ -50,7 +50,7 @@ func collectFilesAt(directory, current string, depth int) []string {
 		}
 		if stat.IsDir() {
 			sub := collectFilesAt(directory, path, depth+1)
-			if !jsjson.SpreadFits(len(sub), jsjson.CollectSpreadOffset(depth+1)) {
+			if !jsjson.CollectSpreadFits(len(sub), depth+1) {
 				bundle.Throw(jsjson.ErrStackOverflow)
 			}
 			files = append(files, sub...)

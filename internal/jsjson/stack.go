@@ -98,58 +98,73 @@ func AtCallSite(site Site, f func() string) string {
 // V8 passes spread call arguments (list.push(...items)) on the machine stack,
 // so a spread of too many elements throws "Maximum call stack size
 // exceeded". The limit depends on the stack left at the call site. Limits
-// were bisected through `node dist/cli.js verify` on Node 22.22.2
-// linux/amd64:
+// were bisected through `node dist/cli.js verify` on Node 22.22.2 (last
+// list length that still passes):
 //
-//	demo collectFiles, directory d levels below the root: 125607 - 31*d
-//	  (d=1: 125576 files; d=5: 125452)
-//	git investigation semantics errors (git-proof-bundle.ts:1246): 125587
-//	  (125,587 errors pass, 125,588 overflow)
-//	git lifecycle ledger errors (git-proof-bundle.ts:1006): 125562
-//	  (125,562 errors pass, 125,563 overflow)
+//	                               linux/amd64  linux/arm64  darwin/arm64
+//	demo collectFiles, depth d=1   125576       110189       110181
+//	  each further level           -31          -32          -32
+//	git investigation semantics    125587       110201       110193
+//	  (git-proof-bundle.ts:1246)
+//	git lifecycle ledger           125562       110175       110167
+//	  (git-proof-bundle.ts:1006)
+//
+// linux/arm64 is glibc; Node built on musl overflows about 20 elements
+// earlier (110,171 for the demo walker). windows/arm64 uses the linux/arm64
+// values and every other target the linux/amd64 ones; they have not been
+// measured (KNOWN_DIFFERENCES.md).
 //
 // The other spreads Go ports cannot reach the limit: the git walker is capped
 // at 2,048 files, witness errors at a few per overlay (at most 64 overlays),
 // prevention semantics at 15, and repaired-runs.json has exactly 3 runs.
-//
-// Other platforms have not been measured: darwin/arm64 is scaled by the
-// plain-Node limit the reviewers measured there (110,423 vs 125,273), and
-// linux/arm64 uses the linux/amd64 values (KNOWN_DIFFERENCES.md).
-type spreadModel struct{ base, perCollectLevel int }
+type spreadModel struct{ collect1, perCollectLevel, semantics, ledger int }
 
-var v8Spread = func() spreadModel {
-	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
-		return spreadModel{base: 125607 * 110423 / 125273, perCollectLevel: 31}
+var v8Spread = spreadModelFor(runtime.GOOS, runtime.GOARCH)
+
+func spreadModelFor(goos, goarch string) spreadModel {
+	switch {
+	case goarch == "arm64" && goos == "darwin":
+		return spreadModel{collect1: 110181, perCollectLevel: 32, semantics: 110193, ledger: 110167}
+	case goarch == "arm64":
+		return spreadModel{collect1: 110189, perCollectLevel: 32, semantics: 110201, ledger: 110175}
 	}
-	return spreadModel{base: 125607, perCollectLevel: 31}
-}()
+	return spreadModel{collect1: 125576, perCollectLevel: 31, semantics: 125587, ledger: 125562}
+}
 
-// Spread call sites, as the stack left there relative to the demo walker's
-// root (in elements).
+// SpreadSite is a spread call site whose limit was measured.
+type SpreadSite int
+
 const (
-	SpreadGitSemantics = 20
-	SpreadGitLedger    = 45
+	SpreadGitSemantics SpreadSite = iota
+	SpreadGitLedger
 )
 
-// SpreadFits reports whether V8 can spread n elements into a call at a site
-// offset elements below the demo walker's root (see v8Spread).
-func SpreadFits(n, offset int) bool { return n <= v8Spread.base-offset }
+// SpreadFits reports whether V8 can spread n elements into the call at site.
+func SpreadFits(n int, site SpreadSite) bool {
+	if site == SpreadGitLedger {
+		return n <= v8Spread.ledger
+	}
+	return n <= v8Spread.semantics
+}
 
-// CollectSpreadOffset is the offset of the demo file walker's spread for a
-// directory depth levels below the bundle root.
-func CollectSpreadOffset(depth int) int { return v8Spread.perCollectLevel * depth }
+// CollectSpreadFits reports whether V8 can spread n files into the demo
+// file walker's push for a directory depth levels below the bundle root.
+func CollectSpreadFits(n, depth int) bool {
+	return n <= v8Spread.collect1-v8Spread.perCollectLevel*(depth-1)
+}
 
-// RimrafDepth is the deepest directory, in levels below the removed root,
-// that Node 22's recursive rimrafSync (rmSync with recursive: true) reaches
-// before V8's stack overflows: 1,672 on linux/amd64 (Node 22.22.2, bisected
-// through the git verifier's temporary bare repository), and between 1,361
-// and 1,379 on linux/arm64 (the reviewers' measurement, Node 22.22.2 musl and
-// 22.23.3 glibc). darwin cannot reach it (PATH_MAX gives ENAMETOOLONG at
-// about 470 levels) and uses the arm64 value; other targets use their
-// architecture's Linux value (KNOWN_DIFFERENCES.md).
+// RimrafDepth is the deepest entry, in levels below the removed root, that
+// Node 22's recursive rimrafSync (rmSync with recursive: true) reaches
+// before V8's stack overflows, bisected through the git verifier's
+// temporary bare repository on Node 22.22.2: 1,672 on linux/amd64 and 1,375
+// on linux/arm64 (glibc and musl alike; a file or an empty directory at
+// that depth is removed, anything below it overflows). darwin cannot reach
+// it (PATH_MAX gives ENAMETOOLONG at about 470 levels) and uses the arm64
+// value; other targets use their architecture's Linux value
+// (KNOWN_DIFFERENCES.md).
 var RimrafDepth = func() int {
 	if runtime.GOARCH == "arm64" {
-		return 1_370
+		return 1_375
 	}
 	return 1_672
 }()
