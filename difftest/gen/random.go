@@ -12,7 +12,7 @@ import (
 
 var stringPieces = []string{
 	"a", "Z", "_", "-", ".", "/", "0", "9", " ", "é", "ß", "中", "😀",
-	`\n`, `\t`, `\"`, `\\`, `\/`, `\u00e9`, `\ud800`, `\udc00`, `\ud83d\ude00`, `\u2028`,
+	`\n`, `\t`, `\"`, `\\`, `\/`, `\u00e9`, `\ud800`, `\udc00`, `\ud83d\ude00`, `\u2028`, `\r`, `\u0000`,
 }
 
 var corruptions = []string{"{", "}", "[", "]", ",", ":", `"`, `\`, "-", "+", ".", "e", "0", "t", "n", " ", "\t", "\r", "\n", "\x00", "\x1f", "é", "\ufeff", "\u2028", "😀"}
@@ -20,6 +20,9 @@ var corruptions = []string{"{", "}", "[", "]", ",", ":", `"`, `\`, "-", "+", "."
 func randomString(r *rand.Rand) string {
 	var b strings.Builder
 	b.WriteByte('"')
+	if r.IntN(16) == 0 { // lengths around the 512-unit revision limit
+		b.WriteString(strings.Repeat("H", 510+r.IntN(4)))
+	}
 	for n := r.IntN(8); n > 0; n-- {
 		b.WriteString(stringPieces[r.IntN(len(stringPieces))])
 	}

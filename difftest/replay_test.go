@@ -35,6 +35,14 @@ func TestMain(m *testing.M) {
 	// word its diagnostics differently.
 	os.Setenv("LC_ALL", "C.UTF-8")
 	os.Setenv("LANGUAGE", "")
+	// Git reads GIT_DIR, GIT_CONFIG_COUNT, GIT_TRACE and the like from the
+	// environment (a hook exports GIT_DIR, for one); gen-goldens.ts clears
+	// them too, and sets only the ones below.
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); strings.HasPrefix(name, "GIT_") {
+			os.Unsetenv(name)
+		}
+	}
 	home, _ := os.MkdirTemp("", "faultline-difftest-home-")
 	empty := filepath.Join(home, "empty.gitconfig")
 	os.WriteFile(empty, nil, 0o600)
@@ -215,32 +223,37 @@ func TestGoldenReplay(t *testing.T) {
 						t.Skip("platform cannot create this case (symlink, or a POSIX fake git)")
 					}
 					digest := treeDigest(bundle)
-					invocations := [][2]string{{"plain", ""}}
+					type invocation struct {
+						name string
+						args []string
+					}
+					invocations := []invocation{{"plain", nil}}
 					if c.tpl == nil {
-						invocations = append(invocations, [2]string{"root-ok", rootDigest}, [2]string{"root-bad", "sha256:" + strings.Repeat("0", 64)},
-							[2]string{"root-malformed", "not-a-digest"})
+						// root-empty: TS tests `expectedRoot ? …`, so an empty
+						// root is not provided.
+						invocations = append(invocations, invocation{"root-ok", []string{"--expect-root", rootDigest}},
+							invocation{"root-bad", []string{"--expect-root", "sha256:" + strings.Repeat("0", 64)}},
+							invocation{"root-malformed", []string{"--expect-root", "not-a-digest"}},
+							invocation{"root-empty", []string{"--expect-root", ""}})
 					}
 					for _, inv := range invocations {
-						want := golden[c.id+"|"+inv[0]]
+						want := golden[c.id+"|"+inv.name]
 						if want == nil {
-							t.Fatalf("no golden for %s %s", c.id, inv[0])
+							t.Fatalf("no golden for %s %s", c.id, inv.name)
 						}
 						if digest != want.Field("treeDigest").Str() {
 							t.Fatalf("tree digest mismatch: the Go (difftest/cases.go) and TS (difftest/gen/cases.ts) mutation engines built different trees. " +
 								"Rehashing uses internal/canonical and internal/jsjson, so a bug there shows up here too.")
 						}
-						args := []string{"verify", bundle}
-						if inv[1] != "" {
-							args = append(args, "--expect-root", inv[1])
-						}
+						args := append([]string{"verify", bundle}, inv.args...)
 						stdout, stderr, exit := runFl(t, repo, caseEnv(c, baseEnv[base]), args...)
-						gotOut, slashOut := normalizeChecked(stdout, bundle)
-						gotErr, slashErr := normalizeChecked(stderr, bundle)
+						gotOut, slashOut := normalizeChecked(stdout, bundle, maskGit(c))
+						gotErr, slashErr := normalizeChecked(stderr, bundle, maskGit(c))
 						if slashOut || slashErr {
-							t.Errorf("%s: a path under the bundle uses '/' on Windows, where Node's path.win32 prints '\\':\n%s%s", inv[0], stdout, stderr)
+							t.Errorf("%s: a path under the bundle uses '/' on Windows, where Node's path.win32 prints '\\':\n%s%s", inv.name, stdout, stderr)
 						}
 						if gotOut != want.Field("stdout").Str() || gotErr != want.Field("stderr").Str() || float64(exit) != want.Field("exit").Num() {
-							t.Fatalf("%s:\n--- Go (exit %d)\n%s%s\n--- TS (exit %v)\n%s%s", inv[0], exit, gotOut, gotErr, want.Field("exit").Num(), want.Field("stdout").Str(), want.Field("stderr").Str())
+							t.Fatalf("%s:\n--- Go (exit %d)\n%s%s\n--- TS (exit %v)\n%s%s", inv.name, exit, gotOut, gotErr, want.Field("exit").Num(), want.Field("stdout").Str(), want.Field("stderr").Str())
 						}
 					}
 				})

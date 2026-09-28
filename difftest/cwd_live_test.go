@@ -27,6 +27,9 @@ func TestLiveCwdErrorsMatchNode(t *testing.T) {
 		t.Skip("the scenarios use Linux mounts, chroot and setpriv")
 	}
 	oracle.Start(t).Close() // skip unless FAULTLINE_NODE_ORACLE=1
+	if os.Getenv("FAULTLINE_REQUIRE_ROOT") != "" && os.Geteuid() != 0 {
+		t.Fatal("FAULTLINE_REQUIRE_ROOT is set but the test is not running as root")
+	}
 	repo, _ := filepath.Abs("..")
 	cli := filepath.Join(repo, "dist", "cli.js")
 	base, err := os.MkdirTemp("/tmp", "fl-cwd-")
@@ -115,6 +118,8 @@ os.execv(argv[0], argv)
 	for _, sc := range scenarios {
 		t.Run(sc.name, func(t *testing.T) {
 			if (sc.nobody || sc.chroot) && os.Geteuid() != 0 {
+				// CI runs these in a separate step as root, which sets
+				// FAULTLINE_REQUIRE_ROOT so that they cannot skip there.
 				t.Skip("needs root (setuid, chroot and mount namespaces)")
 			}
 			run := func(argv ...string) [3]any {

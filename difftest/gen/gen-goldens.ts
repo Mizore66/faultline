@@ -12,8 +12,10 @@ const home = mkdtempSync(join(tmpdir(), "faultline-difftest-home-"));
 writeFileSync(join(home, "empty.gitconfig"), "");
 // The frozen verifier's temporary `git init --bare` follows GIT_DEFAULT_HASH,
 // so it is pinned; base-env.json overrides it per base (git-sha256).
+// Git reads GIT_DIR, GIT_CONFIG_COUNT, GIT_TRACE and the like from the
+// environment (a hook exports GIT_DIR, for one): only the ones below are set.
 const env = {
-  ...process.env, HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(home, "empty.gitconfig"),
+  ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_"))), HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(home, "empty.gitconfig"),
   LC_ALL: "C.UTF-8", GIT_DEFAULT_HASH: "sha1"
 };
 const baseEnv = JSON.parse(readFileSync(join(repo, "difftest/testdata/base-env.json"), "utf8")) as Record<string, Record<string, string>>;
@@ -56,12 +58,13 @@ async function golden(c: Case, root: string, rootDigest: string): Promise<string
       ? [["plain", [bundle]]]
       : [
         ["plain", [bundle]], ["root-ok", [bundle, "--expect-root", rootDigest]], ["root-bad", [bundle, "--expect-root", ROOT_BAD]],
-        ["root-malformed", [bundle, "--expect-root", "not-a-digest"]]
+        ["root-malformed", [bundle, "--expect-root", "not-a-digest"]], ["root-empty", [bundle, "--expect-root", ""]]
       ];
     const lines: string[] = [];
     for (const [inv, args] of invocations) {
       const r = await run(c, args);
-      lines.push(JSON.stringify({ case: c.id, inv, treeDigest: digest, stdout: normalize(r.stdout, bundle), stderr: normalize(r.stderr, bundle), exit: r.exit }));
+      const maskGit = !c.template?.fakeGit;
+      lines.push(JSON.stringify({ case: c.id, inv, treeDigest: digest, stdout: normalize(r.stdout, bundle, maskGit), stderr: normalize(r.stderr, bundle, maskGit), exit: r.exit }));
     }
     return lines;
   } finally {

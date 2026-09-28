@@ -1,4 +1,4 @@
-import { copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { digestJson, sha256 } from "../../src/canonical.js";
@@ -8,7 +8,14 @@ export type Template = {
   find?: string; replace?: string; hex?: string; key?: string; value?: unknown; rehash?: boolean;
   bases?: string[]; jsonPath?: Array<string | number>; valueFrom?: Array<string | number>; swapWith?: Array<string | number>;
   delete?: boolean; first?: boolean; to?: string; prefix?: string; suffix?: string; depth?: number; count?: number;
-  edits?: JsonEdit[]; size?: number; from?: string; fakeGit?: string; resignLedger?: boolean;
+  edits?: JsonEdit[]; size?: number; from?: string; fakeGit?: string; resignLedger?: boolean; total?: number;
+  // alsoEdit: json-edit steps for other files of the same case.
+  alsoEdit?: Array<{ file: string; edits: JsonEdit[] }>;
+  // rebindLifecycle: after a ledger edit, rebind manifest.lifecycle to the
+  // edited ledger the way the writer's bindLifecycleLedger does.
+  rebindLifecycle?: boolean;
+  // fakeGitPathOnly: PATH is the fake git's directory and a missing one.
+  fakeGitPathOnly?: boolean;
 };
 // JsonEdit is one json-edit step; a json-edit template is one step itself or
 // lists several in `edits`, applied in order.
@@ -123,7 +130,7 @@ function matches(pattern: string, file: string): boolean {
 }
 
 // Ops whose target is a path in the bundle (or the bundle itself), not an existing file.
-const PATH_OPS = new Set(["add-file", "root-symlink", "sparse-file", "many-files", "fake-git"]);
+const PATH_OPS = new Set(["add-file", "root-symlink", "sparse-file", "many-files", "fake-git", "pad-total"]);
 
 export function expandCases(base: string, root: string, templates: Template[]): Case[] {
   const files = listFiles(root);
@@ -255,6 +262,54 @@ function resignLedgerJson(ledger: LedgerJson): void {
   }
 }
 
+// padTotal adds sparse files path-00000, ... of at most 120 MiB (under the
+// per-artifact cap) so that the bundle's regular files, hashes.txt and
+// ROOT.sha256 included, total exactly `total` bytes.
+function padTotal(root: string, base: string, path: string, total: number): void {
+  const chunk = 120 * 1024 * 1024;
+  const size = () => listFiles(root).reduce((n, f) => n + statSync(join(root, f)).size, 0);
+  rehash(root, base);
+  let need = total - size();
+  let last = "";
+  for (let i = 0; need > 0; i++) {
+    last = `${path}-${String(i).padStart(5, "0")}`;
+    const n = Math.min(need, chunk);
+    writeFileSync(last, "");
+    truncateSync(last, n);
+    need -= n;
+  }
+  rehash(root, base);
+  truncateSync(last, statSync(last).size + total - size());
+  rehash(root, base);
+}
+
+// rebindLifecycle binds manifest.lifecycle to the ledger as the writer's
+// bindLifecycleLedger does: the ledger digest, the last event hash, one
+// binding per checkpoint whose head commit is an investigation state, and
+// FULLY_BOUND when every state is covered.
+function rebindLifecycle(root: string, ledger: LedgerJson): void {
+  const investigation = JSON.parse(readFileSync(join(root, "investigation.json"), "utf8")) as { states: Array<{ index: number; commit: string }> };
+  const manifestPath = join(root, "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { lifecycle: Record<string, unknown> };
+  const stateByCommit = new Map(investigation.states.map((s) => [s.commit, s]));
+  const bindings: Array<{ sequence: number; stateIndex: number; checkpointDigest: string }> = [];
+  for (const event of ledger.events as Array<{ sequence: number; event: { type: string; payload?: { checkpoint?: { headCommit?: string; digest?: string } } } }>) {
+    const checkpoint = event.event.payload?.checkpoint;
+    if (event.event.type !== "WORKTREE_CHECKPOINT" || !checkpoint) continue;
+    const state = stateByCommit.get(checkpoint.headCommit!);
+    if (state) bindings.push({ sequence: event.sequence, stateIndex: state.index, checkpointDigest: checkpoint.digest! });
+  }
+  const covered = new Set(bindings.map((b) => b.stateIndex));
+  manifest.lifecycle = {
+    ...manifest.lifecycle,
+    status: covered.size === investigation.states.length ? "FULLY_BOUND" : "PARTIALLY_BOUND",
+    ledgerDigest: digestJson(ledger),
+    headHash: ledger.events.at(-1)!.hash,
+    checkpointBindings: bindings
+  };
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
 // applyMutation mutates the bundle at root; root-symlink replaces root itself
 // with a symbolic link to a sibling copy.
 export function applyMutation(root: string, c: Case): void {
@@ -286,6 +341,13 @@ export function applyMutation(root: string, c: Case): void {
       for (const e of jsonEdits(t)) applyJsonEdit(v, e);
       if (t.resignLedger) resignLedgerJson(v as LedgerJson);
       writeFileSync(path, `${JSON.stringify(v, null, 2)}\n`);
+      for (const also of t.alsoEdit ?? []) {
+        const other = join(root, also.file);
+        const w = JSON.parse(readFileSync(other, "utf8")) as Json;
+        for (const e of also.edits) applyJsonEdit(w, e);
+        writeFileSync(other, `${JSON.stringify(w, null, 2)}\n`);
+      }
+      if (t.rebindLifecycle) rebindLifecycle(root, v as LedgerJson);
       break;
     }
     case "append-bytes": {
@@ -305,6 +367,7 @@ export function applyMutation(root: string, c: Case): void {
       }
       break;
     }
+    case "pad-total": padTotal(root, c.base, path, t.total!); break;
     case "many-files": {
       mkdirSync(path, { recursive: true });
       for (let i = 0; i < t.count!; i++) writeFileSync(join(path, `${String(i).padStart(5, "0")}.txt`), t.content!);
@@ -345,7 +408,9 @@ export function applyMutation(root: string, c: Case): void {
 // difftest/testdata/fakegit/<name> first on PATH (POSIX shell scripts).
 export function caseEnv(c: Case, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (!c.template?.fakeGit) return env;
-  return { ...env, PATH: `${join(FIXTURES, "..", "fakegit", c.template.fakeGit)}:${env.PATH ?? ""}` };
+  const dir = join(FIXTURES, "..", "fakegit", c.template.fakeGit);
+  if (c.template.fakeGitPathOnly) return { ...env, PATH: `${dir}:/nonexistent-faultline-path` };
+  return { ...env, PATH: `${dir}:${env.PATH ?? ""}` };
 }
 
 export function treeDigest(root: string): string {
@@ -376,9 +441,11 @@ function isBoundary(c: string | undefined): boolean {
 
 // maskGitDetail hides git's own diagnostics (they vary across git
 // versions): each run of lines starting with "error: ", "fatal: ",
-// "warning: " or "hint: " becomes one <GIT-STDERR>. Everything else stays:
+// "warning: " or "hint: " becomes one <GIT-STDERR> (a line containing "; "
+// is not masked). Everything else stays:
 // other git output, the text FaultLine composes (the "; " join with Node's
 // spawnSync error, the "exit <status>" fallback), and anything a port adds.
+// The fake gits print fixed text, so their cases are not masked at all.
 export function maskGitDetail(detail: string): string {
   if (/^exit (?:null|-?\d+)$/.test(detail)) return detail;
   let body = detail;
@@ -390,13 +457,13 @@ export function maskGitDetail(detail: string): string {
   }
   const out: string[] = [];
   for (const line of body.split("\n")) {
-    if (!/^(?:error|fatal|warning|hint): /.test(line)) out.push(line);
+    if (!/^(?:error|fatal|warning|hint): /.test(line) || line.includes("; ")) out.push(line);
     else if (out.at(-1) !== "<GIT-STDERR>") out.push("<GIT-STDERR>");
   }
   return out.join("\n") + tail;
 }
 
-export function normalize(text: string, bundle: string): string {
+export function normalize(text: string, bundle: string, maskGit = true): string {
   let out = text;
   // Only the path passed to fl is masked (goldens are generated on Linux).
   out = out.split(bundle).join("<BUNDLE>");
@@ -409,7 +476,7 @@ export function normalize(text: string, bundle: string): string {
     out = `${out.slice(0, start)}<GITTMP>${out.slice(end)}`;
     i = start + "<GITTMP>".length;
   }
-  for (const label of GIT_LABELS) {
+  for (const label of maskGit ? GIT_LABELS : []) {
     const needle = `${label} failed: `;
     for (let i = out.indexOf(needle); i >= 0; i = out.indexOf(needle, i + needle.length)) {
       const from = i + needle.length;

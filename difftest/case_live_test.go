@@ -47,5 +47,45 @@ func TestLiveLowerCase(t *testing.T) {
 		}
 		compared += len(texts)
 	}
+	// Final_Sigma looks past any run of case-ignorable code points on either
+	// side: Σ between letters and 0 to 3 ignorables (BMP, supplementary, and
+	// ones that are also cased) each way.
+	ignorables := []string{"'", "­", "́", "‍", "ʰ", "\U0001d167", "ͅ", ".", "·"}
+	var runs []string
+	var build func(prefix string, n int)
+	build = func(prefix string, n int) {
+		runs = append(runs, prefix)
+		if n == 3 {
+			return
+		}
+		for _, ig := range ignorables {
+			build(prefix+ig, n+1)
+		}
+	}
+	build("", 0)
+	var texts []string
+	for _, left := range []string{"", "a", "A", "\U00010400", "1"} {
+		for _, before := range runs {
+			for _, after := range []string{"", "'", "́", "́‍", "ʰ'­"} {
+				for _, right := range []string{"", "b", " ", "\U00010428"} {
+					texts = append(texts, left+before+"Σ"+after+right)
+				}
+			}
+		}
+	}
+	for start := 0; start < len(texts); start += batch {
+		chunk := texts[start:min(start+batch, len(texts))]
+		raw, err := c.Call("lowerMany", `{"texts":`+quoteList(chunk)+`}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, _ := jsjson.Parse(raw)
+		for i, s := range chunk {
+			if got := jscase.Lower(s); got != want.Items()[i].Str() {
+				t.Fatalf("%s: got %s, Node %s", jsjson.Quote(s), jsjson.Quote(got), jsjson.Quote(want.Items()[i].Str()))
+			}
+		}
+		compared += len(chunk)
+	}
 	t.Logf("%d strings compared", compared)
 }

@@ -64,6 +64,8 @@ func TestSpawnSyncMatchesNode(t *testing.T) {
 		{"empty PATH entry", ":/nonexist", cwd, []string{"x"}, "0", "", "ran git\n"},
 		{"only non-executable", noexec, "", []string{"x"}, "null", "spawnSync git EACCES", ""},
 		{"EACCES then found", noexec + ":" + bin, "", []string{"x"}, "0", "", "ran " + filepath.Join(bin, "git") + "\n"},
+		// EACCES is kept when a later entry is missing (glibc and libuv alike).
+		{"EACCES then missing", noexec + ":/nonexist", "", []string{"x"}, "null", "spawnSync git EACCES", ""},
 		{"not found", "/nonexist", "", []string{"x"}, "null", "spawnSync git ENOENT", ""},
 		{"missing interpreter moves on", badint + ":" + bin, "", []string{"x"}, "0", "", "ran " + filepath.Join(bin, "git") + "\n"},
 		{"EACCES interpreter moves on", eaccint + ":" + bin, "", []string{"x"}, "0", "", "ran " + filepath.Join(bin, "git") + "\n"},

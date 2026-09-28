@@ -23,7 +23,6 @@ var unreachableLiterals = map[string]string{
 	"Artifact path escapes its bundle:":                                       "unreachable after the safe-path check (no .. or absolute segments)",
 	"Git range patch exceeds FaultLine's portable artifact limit.":            "git diff output past the 4 MiB maxBuffer fails with ENOBUFS before the 128 MiB artifact limit is checked",
 	"AGENT_DRAFT evidence cannot be exported as a Git proof bundle":           "proof.evidenceGrade is a zod enum without AGENT_DRAFT",
-	"duplicate runId:":                                                        "a duplicated runId breaks the manifest run catalog first, and the verifier fails safely before the semantics run",
 	"witness digest is invalid":                                               "SandboxAuditSchema requires sha256 digests, and verify parses it first",
 	"command digest is invalid":                                               "SandboxAuditSchema requires sha256 digests, and verify parses it first",
 	"environment policy digest is invalid":                                    "SandboxAuditSchema requires sha256 digests, and verify parses it first",

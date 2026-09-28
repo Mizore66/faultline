@@ -3,6 +3,7 @@ package gitproof
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Mizore66/faultline/internal/jsjson"
@@ -38,7 +39,9 @@ func TestCommittedBasesSatisfySchemas(t *testing.T) {
 }
 
 func TestSafeGitRevision(t *testing.T) {
-	for in, want := range map[string]bool{"HEAD~2": true, "-x": false, "": false, "a\nb": false, "a\x00": false} {
+	for in, want := range map[string]bool{"HEAD~2": true, "-x": false, "": false, "a\nb": false, "a\x00": false, "HEAD~1\r": false,
+		strings.Repeat("H", 511): true, strings.Repeat("H", 512): true, strings.Repeat("H", 513): false,
+		strings.Repeat("é", 512): true, strings.Repeat("😀", 256): true, strings.Repeat("😀", 256) + "H": false} {
 		if safeGitRevision(in) != want {
 			t.Errorf("safeGitRevision(%q) != %v", in, want)
 		}

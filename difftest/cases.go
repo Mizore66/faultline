@@ -238,7 +238,7 @@ func fixturesDir() string {
 }
 
 // pathOps target a path in the bundle (or the bundle itself), not an existing file.
-var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "sparse-file": true, "many-files": true, "fake-git": true}
+var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "sparse-file": true, "many-files": true, "fake-git": true, "pad-total": true}
 
 // latin1 is Buffer.from(s, "latin1") for the ASCII find/replace strings.
 func latin1(s string) []byte {
@@ -313,6 +313,83 @@ func resignLedgerJSON(ledger jsjson.Value) {
 		previous = bundleMustString(canonical.DigestJSON(without(event.Obj(), "hash")))
 		event.Obj().Set("hash", jsjson.MakeString(previous))
 	}
+}
+
+// padTotal is the TS engine's padTotal: sparse files path-00000, ... of at
+// most 120 MiB (under the per-artifact cap) bring the bundle's regular
+// files, hashes.txt and ROOT.sha256 included, to exactly total bytes.
+func padTotal(root, base, path string, total int64) {
+	const chunk = 120 << 20
+	size := func() int64 {
+		var n int64
+		for _, f := range listFiles(root, "") {
+			if st, err := os.Stat(filepath.Join(root, filepath.FromSlash(f))); err == nil {
+				n += st.Size()
+			}
+		}
+		return n
+	}
+	rehash(root, base)
+	need := total - size()
+	var last string
+	for i := 0; need > 0; i++ {
+		last = fmt.Sprintf("%s-%05d", path, i)
+		n := min(need, chunk)
+		os.WriteFile(last, nil, 0o644)
+		os.Truncate(last, n)
+		need -= n
+	}
+	rehash(root, base)
+	if st, err := os.Stat(last); err == nil {
+		os.Truncate(last, st.Size()+total-size())
+	}
+	rehash(root, base)
+}
+
+// rebindLifecycle is the TS engine's rebindLifecycle: manifest.lifecycle
+// bound to the edited ledger as the writer's bindLifecycleLedger does.
+func rebindLifecycle(root string, ledger jsjson.Value) {
+	investigation, _ := parseObjectFile(filepath.Join(root, "investigation.json"))
+	manifestPath := filepath.Join(root, "manifest.json")
+	manifest, _ := parseObjectFile(manifestPath)
+	stateByCommit := map[string]jsjson.Value{}
+	states := investigation.Field("states").Items()
+	for _, st := range states {
+		stateByCommit[st.Get("commit").Str()] = st // new Map(...): the last one wins
+	}
+	var bindings []jsjson.Value
+	covered := map[float64]bool{}
+	for _, event := range ledger.Get("events").Items() {
+		cp := event.Get("event", "payload", "checkpoint")
+		if event.Get("event", "type").Str() != "WORKTREE_CHECKPOINT" || cp.Kind() != jsjson.Object {
+			continue
+		}
+		state, ok := stateByCommit[cp.Get("headCommit").Str()]
+		if !ok {
+			continue
+		}
+		b := jsjson.NewObj()
+		b.Set("sequence", event.Get("sequence"))
+		b.Set("stateIndex", state.Get("index"))
+		b.Set("checkpointDigest", cp.Get("digest"))
+		bindings = append(bindings, jsjson.MakeObject(b))
+		covered[state.Get("index").Num()] = true
+	}
+	status := "PARTIALLY_BOUND"
+	if len(covered) == len(states) {
+		status = "FULLY_BOUND"
+	}
+	events := ledger.Get("events").Items()
+	lifecycle := jsjson.NewObj()
+	for _, k := range manifest.Field("lifecycle").Obj().Keys() {
+		lifecycle.Set(k, manifest.Field("lifecycle").Get(k))
+	}
+	lifecycle.Set("status", jsjson.MakeString(status))
+	lifecycle.Set("ledgerDigest", jsjson.MakeString(bundleMustString(canonical.DigestJSON(ledger))))
+	lifecycle.Set("headHash", events[len(events)-1].Get("hash"))
+	lifecycle.Set("checkpointBindings", jsjson.MakeArray(bindings))
+	manifest.Set("lifecycle", jsjson.MakeObject(lifecycle))
+	writeJSON(manifestPath, jsjson.MakeObject(manifest))
 }
 
 func bundleMustString(s string, err error) string {
@@ -421,6 +498,20 @@ func applyMutation(root string, c testCase) bool {
 			resignLedgerJSON(v)
 		}
 		writeJSON(path, v)
+		if also, ok := t.fields.Get("alsoEdit"); ok {
+			for _, a := range also.Items() {
+				other := filepath.Join(root, filepath.FromSlash(a.Get("file").Str()))
+				o, _ := parseObjectFile(other)
+				w := jsjson.MakeObject(o)
+				for _, e := range jsonEdits(template{a.Obj()}) {
+					w = applyJSONEdit(w, e)
+				}
+				writeJSON(other, w)
+			}
+		}
+		if t.fields.Field("rebindLifecycle").Bool() {
+			rebindLifecycle(root, v)
+		}
 	case "append-bytes":
 		unit, _ := hex.DecodeString(t.str("hex"))
 		b, _ := os.ReadFile(path)
@@ -447,6 +538,8 @@ func applyMutation(root string, c testCase) bool {
 			os.WriteFile(p, nil, 0o644)
 			os.Truncate(p, int64(t.fields.Field("size").Num()))
 		}
+	case "pad-total":
+		padTotal(root, c.base, path, int64(t.fields.Field("total").Num()))
 	case "many-files":
 		os.MkdirAll(path, 0o755)
 		for i := 0; i < int(t.fields.Field("count").Num()); i++ {
@@ -514,7 +607,12 @@ func caseEnv(c testCase, env map[string]string) map[string]string {
 	for k, v := range env {
 		out[k] = v
 	}
-	out["PATH"] = filepath.Join(fixturesDir(), "..", "fakegit", c.tpl.str("fakeGit")) + string(os.PathListSeparator) + os.Getenv("PATH")
+	dir := filepath.Join(fixturesDir(), "..", "fakegit", c.tpl.str("fakeGit"))
+	if c.tpl.fields.Field("fakeGitPathOnly").Bool() {
+		out["PATH"] = dir + string(os.PathListSeparator) + "/nonexistent-faultline-path"
+		return out
+	}
+	out["PATH"] = dir + string(os.PathListSeparator) + os.Getenv("PATH")
 	return out
 }
 
@@ -607,15 +705,20 @@ var (
 )
 
 func normalize(text, bundle string) string {
-	out, _ := normalizeChecked(text, bundle)
+	out, _ := normalizeChecked(text, bundle, true)
 	return out
 }
+
+// maskGit is false for fake-git cases: the fake gits print fixed text, so
+// their git detail is compared in full (lines FaultLine adds or drops
+// show).
+func maskGit(c testCase) bool { return c.tpl == nil || c.tpl.str("fakeGit") == "" }
 
 // normalizeChecked masks run-specific text. On Windows it also rewrites the
 // separators after <BUNDLE> to "/" to compare with Linux goldens, and reports
 // whether any "/" was already there: Node's path.win32 joins with "\", so a
 // "/" means Go built the path differently from TS on Windows.
-func normalizeChecked(text, bundle string) (string, bool) {
+func normalizeChecked(text, bundle string, maskGit bool) (string, bool) {
 	out := text
 	// Only the path passed to fl is masked, so output that names a resolved
 	// (physical) path instead still differs. Windows temp directories can be
@@ -646,7 +749,11 @@ func normalizeChecked(text, bundle string) (string, bool) {
 		}
 		i = start + len("<GITTMP>") + next
 	}
-	for _, label := range gitLabels {
+	labels := gitLabels
+	if !maskGit {
+		labels = nil
+	}
+	for _, label := range labels {
 		needle := label + " failed: "
 		for i := strings.Index(out, needle); i >= 0; {
 			from := i + len(needle)

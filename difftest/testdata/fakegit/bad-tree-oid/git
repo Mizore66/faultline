@@ -1,9 +1,9 @@
 #!/bin/sh
-# Fake git for difftest: `git init` fails.
+# Fake git for difftest: tree resolution prints something that is not an
+# object id (commit resolution works).
 # Everything else runs the real git (PATH without this directory).
 here=$(cd "$(dirname "$0")" && pwd)
 PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
 export PATH
-# Two diagnostic lines, so a port that drops or rewrites one shows.
-if [ "$1" = init ]; then { printf 'error: planted detail\nfatal: planted failure\n' >&2; exit 128; }; fi
+for a in "$@"; do case "$a" in *"^{tree}") echo zz-not-an-oid; exit 0;; esac; done
 exec git "$@"
