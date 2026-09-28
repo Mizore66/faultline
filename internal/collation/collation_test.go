@@ -1,6 +1,8 @@
 package collation
 
 import (
+	"math/rand/v2"
+	"strings"
 	"testing"
 
 	"github.com/Mizore66/faultline/internal/jsstr"
@@ -65,6 +67,58 @@ func TestMatchesNodeICU(t *testing.T) {
 		}
 		if got := Compare(c.b, c.a); got != -c.want {
 			t.Errorf("Compare(%+q, %+q) = %d, want %d", c.b, c.a, got, -c.want)
+		}
+	}
+}
+
+// A prepared simple string's key is built a chunk at a time; comparing
+// prepared strings must equal Compare, however far the keys got.
+func TestComparePreparedMatchesCompare(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	var alphabet []rune
+	for _, c := range "aAbBzZ09 -_./\u00e9\u20ac\u4e2d\ud55c\u017f\u00df\u00c6\u00e6\u00a0\u3000\U0001d504\U0001f600\u00ff\u0300\u1e00\u01c4" {
+		if Prepare(string(c)).key != nil {
+			alphabet = append(alphabet, c)
+		}
+	}
+	if len(alphabet) < 20 {
+		t.Fatalf("simple alphabet %q", string(alphabet))
+	}
+	gen := func() string {
+		var b strings.Builder
+		n := rng.IntN(3)
+		switch n {
+		case 0:
+			n = rng.IntN(8)
+		case 1:
+			n = 60 + rng.IntN(10) // around a chunk boundary
+		default:
+			n = 200 + rng.IntN(100)
+		}
+		for range n {
+			b.WriteRune(alphabet[rng.IntN(len(alphabet))])
+		}
+		return b.String()
+	}
+	for range 20000 {
+		a := gen()
+		b := a
+		if rng.IntN(2) == 0 {
+			b = gen()
+		} else if len(b) > 0 {
+			r := []rune(b)
+			r[rng.IntN(len(r))] = alphabet[rng.IntN(len(alphabet))]
+			b = string(r)
+		}
+		pa, pb := Prepare(a), Prepare(b)
+		if pa.key == nil || pb.key == nil {
+			t.Fatalf("%q or %q not simple", a, b)
+		}
+		if got, want := ComparePrepared(pa, pb), Compare(a, b); got != want {
+			t.Fatalf("ComparePrepared(%q, %q) = %d, Compare = %d", a, b, got, want)
+		}
+		if got, want := ComparePrepared(pa, pb), CompareKeys(MakeKey(a), MakeKey(b)); got != want {
+			t.Fatalf("ComparePrepared(%q, %q) = %d, keys = %d", a, b, got, want)
 		}
 	}
 }

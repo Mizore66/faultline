@@ -5,7 +5,10 @@
 // bases are snapshots: bundles record temporary paths and the Node version,
 // so a full rerun rewrites them (and the goldens must be regenerated).
 // Run it on Linux: git-cjk-overlays writes overlay paths containing U+FDD1,
-// which APFS rejects (EILSEQ), so on macOS that base has no runs.
+// which APFS rejects (EILSEQ). On macOS a full run stops with "fixture did
+// not create a decisive state" at that base, after rewriting the git bases
+// before it and none of the ones after, leaving the tree half regenerated;
+// there, pass the ids of the bases to rewrite, leaving out git-cjk-overlays.
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";

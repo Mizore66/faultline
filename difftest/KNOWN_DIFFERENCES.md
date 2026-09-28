@@ -71,3 +71,13 @@ The TS bundle walkers recurse on V8's stack, so a bundle nested thousands of dir
 ## WSL symlinks on Windows
 
 Go's `Lstat` follows libuv 1.52 (Node 22.23 and later): a WSL symlink (`IO_REPARSE_TAG_LX_SYMLINK`) is a symbolic link. libuv 1.51 (Node 22.22) has no case for that tag and retries with a following stat, which Win32 cannot resolve, so `lstatSync` throws. Either way the verifiers reject the file; only the error line differs.
+
+## Memory use
+
+Go holds a JSON input as UTF-16 while parsing it and builds one `Obj` per object, so on large JSON inputs it needs 4 to 6 times Node's memory (a 40 MB document of 5M small objects peaks at about 1.9 GB in Go against 0.5 GB in Node). Under a memory limit this can decide the outcome: in a 4 GB container a demo bundle whose `analysis.json` holds an 80 MB array is verified by TS (INVALID, with the full error list) and gets Go killed by the OOM killer (exit 137, no output). The demo verifier reads `analysis.json` without a size cap, as TS does; the git verifier's per-artifact cap of 128 MiB is too high to prevent it. Outputs are identical whenever both finish. Collation builds sort keys lazily, as far as comparisons need them, so long record keys that differ early cost about what they cost Node.
+
+## Oracle pathologies not reproduced
+
+- ICU 78's discontiguous-contraction back-off can loop forever: a TRAILING_CCC contraction starter, an out-of-order run with a supplementary mark, U+0344 and a starter (`ا\u{11100}\u{16AF2}\u{0344}ꪫ` against the same string without the last code point) make ICU's iterator step back past the starter and re-read it. Go ports the iterator and hangs the same way on the same pairs. Once memory runs out, ICU's CE buffer allocation fails and `localeCompare` returns an arbitrary sign, while Go dies of out-of-memory (exit 2).
+- Loading `dist/cli.js` instantiates undici's WebAssembly HTTP parser, which reserves about 10 GiB of address space: under `ulimit -v` of 10 GiB or less, TS prints the verdict and then exits 1 with `RangeError: WebAssembly.instantiate(): Out of memory`, where Go exits with the verdict's status.
+- On macOS, Node links CoreFoundation, which sets `__CF_USER_TEXT_ENCODING=0x<uid>:0x0:0x0` in Node's environment when it is missing, invalid or belongs to another uid, so git sees that variable under TS only. Git's output does not depend on it.

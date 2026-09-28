@@ -1,5 +1,6 @@
 // Generates internal/jscase/tables.go from the running Node's ICU:
-//   node internal/jscase/gen/gen.mjs > internal/jscase/tables.go
+//   node internal/jscase/gen/gen.mjs | gofmt > internal/jscase/tables.go
+// (the raw output differs from the committed file in alignment only)
 // Node 22.22.2 (ICU 78.2, Unicode 17) produced the committed file.
 const lower = [];
 const cased = [];

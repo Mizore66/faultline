@@ -51,6 +51,9 @@ type table struct {
 	hanRank     []uint32
 	unsafe      map[rune]bool // unsafe-backward code points
 	unsafeLead  [0x400]bool   // lead surrogates of unsafe supplementary code points
+	// notSimpleBMP marks BMP code points that make a string not simple
+	// (see Prepare), so the check costs no map lookups.
+	notSimpleBMP [0x10000 / 64]uint64
 	// contractFlags holds each contraction starter's CONTRACT_NEXT_CCC and
 	// CONTRACT_TRAILING_CCC bits.
 	contractFlags map[rune]uint16
@@ -167,6 +170,26 @@ func load() *table {
 		for c := range t.unsafe {
 			if c > 0xFFFF {
 				t.unsafeLead[(c-0x10000)>>10] = true
+			}
+		}
+		mark := func(c rune) {
+			if c <= 0xFFFF {
+				t.notSimpleBMP[c>>6] |= 1 << (c & 63)
+			}
+		}
+		for c := rune(0xD800); c <= 0xDFFF; c++ {
+			mark(c)
+		}
+		mark(utf8.RuneError)
+		for c := range t.unsafe {
+			mark(c)
+		}
+		for c := range t.prefixed {
+			mark(c)
+		}
+		for key := range t.multiPrefix {
+			if r := []rune(key); len(r) == 1 {
+				mark(r[0])
 			}
 		}
 		t.contractFlags = map[rune]uint16{}
@@ -457,41 +480,109 @@ func (t *table) unsafeBackward(u uint16) bool {
 	return t.unsafe[rune(u)]
 }
 
-// Prepared is a string with its key, for sorting many strings.
+// Prepared is a string with its key, for sorting many strings. The key is
+// built lazily, as far as comparisons need it, since ICU stops at the first
+// primary difference: sorting long strings that differ early costs little.
 type Prepared struct {
-	S      string
-	key    Key
-	simple bool
+	S   string
+	key *lazyKey // nil unless the string is simple
 }
 
-// Prepare computes s's key. A string is simple when no code point in it
-// starts or continues a contraction, has a prefix context, is
-// unsafe-backward or is a surrogate: then ICU's identical-prefix skip cannot
-// change the result, and comparing keys equals Compare.
+// lazyKey is a simple string's key, extended a chunk of code points at a
+// time. For a simple string the CEs of the whole equal the CEs of any
+// split at code-point boundaries concatenated: no contraction, prefix
+// context or combining mark can reach across the split.
+type lazyKey struct {
+	rest string // the code points not yet in key
+	key  Key
+}
+
+const lazyChunk = 64 // code points per extension
+
+// extend adds the next chunk's weights; false when the key is complete.
+func (k *lazyKey) extend() bool {
+	if k.rest == "" {
+		return false
+	}
+	n, i := 0, 0
+	for i < len(k.rest) && n < lazyChunk {
+		_, size := utf8.DecodeRuneInString(k.rest[i:])
+		i += size
+		n++
+	}
+	chunk := makeKey(load().allCEs(jsstr.ToUTF16(k.rest[:i])))
+	k.rest = k.rest[i:]
+	k.key.primary = append(k.key.primary, chunk.primary...)
+	k.key.secondary = append(k.key.secondary, chunk.secondary...)
+	k.key.tertiary = append(k.key.tertiary, chunk.tertiary...)
+	return true
+}
+
+// Prepare checks whether s is simple: no code point in it starts or
+// continues a contraction, has a prefix context, is unsafe-backward or is
+// a surrogate. Then ICU's identical-prefix skip cannot change the result,
+// and comparing keys equals Compare.
 func Prepare(s string) Prepared {
 	t := load()
-	simple := true
 	for _, c := range s {
-		if c == utf8.RuneError || c >= 0xD800 && c <= 0xDFFF || t.unsafe[c] || t.multiPrefix[string(c)] || t.prefixed[c] != nil {
-			simple = false
-			break
+		if t.notSimple(c) {
+			return Prepared{S: s} // compared with Compare, which stops early
 		}
 	}
 	if !utf8.ValidString(s) { // WTF-8 lone surrogates
-		simple = false
+		return Prepared{S: s}
 	}
-	if !simple {
-		return Prepared{S: s} // compared with Compare, which stops early
+	return Prepared{S: s, key: &lazyKey{rest: s}}
+}
+
+func (t *table) notSimple(c rune) bool {
+	if c <= 0xFFFF {
+		return t.notSimpleBMP[c>>6]&(1<<(c&63)) != 0
 	}
-	return Prepared{S: s, key: MakeKey(s), simple: true}
+	return t.notSimpleSlow(c)
+}
+
+func (t *table) notSimpleSlow(c rune) bool {
+	return c == utf8.RuneError || c >= 0xD800 && c <= 0xDFFF || t.unsafe[c] || t.multiPrefix[string(c)] || t.prefixed[c] != nil
 }
 
 // ComparePrepared is Compare(a.S, b.S).
 func ComparePrepared(a, b Prepared) int {
-	if a.simple && b.simple {
-		return CompareKeys(a.key, b.key)
+	if a.key == nil || b.key == nil {
+		return Compare(a.S, b.S)
 	}
-	return Compare(a.S, b.S)
+	if a.S == b.S {
+		return 0
+	}
+	// Primaries first, extending each key only while it is the shorter one
+	// and no difference has shown up.
+	for i := 0; ; i++ {
+		for i >= len(a.key.key.primary) && a.key.extend() {
+		}
+		for i >= len(b.key.key.primary) && b.key.extend() {
+		}
+		ap, bp := a.key.key.primary, b.key.key.primary
+		switch {
+		case i >= len(ap) && i >= len(bp):
+		case i >= len(ap):
+			return -1
+		case i >= len(bp):
+			return 1
+		case ap[i] != bp[i]:
+			if ap[i] < bp[i] {
+				return -1
+			}
+			return 1
+		default:
+			continue
+		}
+		break
+	}
+	// Equal primaries: both keys are complete.
+	if c := compareLevel(a.key.key.secondary, b.key.key.secondary); c != 0 {
+		return c
+	}
+	return compareLevel(a.key.key.tertiary, b.key.key.tertiary)
 }
 
 // Rules lists what the root data does beyond single code points, for tests
