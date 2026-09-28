@@ -57,6 +57,11 @@ jobs:
         # Go cache, so the runner's cache stays writable.
         run: |
           go test -c -o "$RUNNER_TEMP/difftest.test" ./difftest/
+          # The setuid-nobody cases run node dist/cli.js as nobody: every
+          # directory above the checkout must be searchable (the runner's
+          # home is 0750).
+          d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d=$(dirname "$d"); done
+          sudo chmod -R o+rX "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/package.json"
           cd difftest && sudo -E env "PATH=$PATH" GOCACHE="$RUNNER_TEMP/root-gocache" FAULTLINE_NODE_ORACLE=1 FAULTLINE_REQUIRE_ROOT=1 \
             "$RUNNER_TEMP/difftest.test" -test.run 'TestLiveCwdErrorsMatchNode' -test.count=1 -test.v
       - name: TimSort against V8
