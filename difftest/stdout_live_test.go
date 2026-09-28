@@ -71,12 +71,39 @@ elif scenario == "nonblocklater":
             if not chunk: return data
             data += chunk
     run(w, reader=slow)
+elif scenario == "pipereadend":
+    r, w = os.pipe(); run(r); os.close(w)
+elif scenario == "fifordonly":
+    path = os.path.join(tmp, "fifo"); os.mkfifo(path)
+    keep = os.open(path, os.O_RDWR)
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+    run(fd); os.close(keep)
+elif scenario == "ptyrdonly":
+    import pty
+    m, sl = pty.openpty(); fd = os.open(os.ttyname(sl), os.O_RDONLY | os.O_NOCTTY); os.close(sl)
+    run(fd); os.close(m)
+elif scenario == "ptyhangup":
+    # The first git call touches a marker and sleeps: the pty hangs up
+    # after startup and before the first write.
+    import pty
+    gitdir = os.path.join(tmp, "bin"); os.mkdir(gitdir); marker = os.path.join(tmp, "marker")
+    with open(os.path.join(gitdir, "git"), "w") as f:
+        f.write("#!/bin/sh\nif [ ! -f %s ]; then touch %s; sleep 0.5; fi\nexec /usr/bin/git \"$@\"\n" % (marker, marker))
+    os.chmod(os.path.join(gitdir, "git"), 0o755)
+    os.environ["PATH"] = gitdir + ":" + os.environ["PATH"]
+    m, sl = pty.openpty()
+    def hangup():
+        while not os.path.exists(marker): time.sleep(0.01)
+        os.close(m); return b""
+    run(sl, reader=hangup)
 print(json.dumps(res))
 `
 
 // Node builds process.stdout from uv_guess_handle: file and character
 // devices get a SyncWriteStream (one write per chunk, short counts ignored),
-// pipes and sockets a libuv stream, UDP and unknown handles a dummy writer.
+// pipes and sockets a libuv stream (not writable when the descriptor is
+// read-only), UDP and unknown handles a dummy writer, all on first use.
 // Compare what reaches stdout, stderr and the exit status.
 func TestLiveStdoutMatchesNode(t *testing.T) {
 	if runtime.GOOS != "linux" {
@@ -101,7 +128,8 @@ func TestLiveStdoutMatchesNode(t *testing.T) {
 	scenarios := map[string]string{
 		"devfull": demo, "closedpipe": demo, "fsize0": demo, "fsize10": demo, "fsize32": demo,
 		"fsize100": demo, "fsize170": demo, "udp": demo, "unixdgram": demo, "directory": demo,
-		"tcpunconnected": demo, "nonblocklater": big,
+		"tcpunconnected": demo, "nonblocklater": big, "pipereadend": demo, "fifordonly": demo,
+		"ptyrdonly": demo, "ptyhangup": filepath.Join(repo, "difftest", "testdata", "bases", "git-two-states"),
 	}
 	for name, bundle := range scenarios {
 		t.Run(name, func(t *testing.T) {

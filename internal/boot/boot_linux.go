@@ -34,23 +34,24 @@ var kernelDefault = func() []syscall.Signal {
 	return s
 }()
 
-// resetInherited sets kernelDefault to SIG_DFL, clears a signal mask fl
-// inherited, by executing itself
-// again with the mask empty (Go keeps the inherited mask for its threads and
-// for the processes it starts, so it must be empty from exec on), and sets
-// inherited SIG_IGN on the stop signals back to SIG_DFL, which Go leaves
-// alone and git would otherwise inherit.
+// resetInherited gives fl the dispositions and mask Node starts with. The
+// kernelDefault signals are set to SIG_DFL, and inherited SIG_IGN on the
+// stop signals, which Go leaves alone and git would otherwise inherit, is
+// reset. Then an inherited signal mask is cleared by executing fl again with
+// the mask empty: Go keeps the mask it started with for its threads and for
+// the processes it starts, so it must be empty from exec on. The
+// dispositions come first, so a signal that was pending under the mask
+// takes its default action when the mask is cleared, as it does in Node.
+// The new image is /proc/self/exe, which works when the binary has been
+// deleted or replaced; should exec still fail (a noexec mount), fl goes on
+// with the mask it inherited (KNOWN_DIFFERENCES.md).
+//
+// Node resets only signals 1 to 31, so a real-time signal inherited as
+// SIG_IGN stays ignored in Node and in git. Go has replaced that
+// disposition with its own handler before any package initializes and
+// keeps the original where it cannot be read, so real-time signals are set
+// to SIG_DFL whatever they were inherited as (KNOWN_DIFFERENCES.md).
 func resetInherited() {
-	var mask uint64
-	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 0, 0, uintptr(unsafe.Pointer(&mask)), 8, 0, 0)
-	if mask != 0 {
-		if exe, err := os.Executable(); err == nil {
-			var empty uint64
-			syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2 /* SIG_SETMASK */, uintptr(unsafe.Pointer(&empty)), 0, 8, 0, 0)
-			syscall.Exec(exe, os.Args, os.Environ())
-			syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2, uintptr(unsafe.Pointer(&mask)), 0, 8, 0, 0)
-		}
-	}
 	for _, sig := range kernelDefault {
 		sigexit.SetDefault(sig)
 	}
@@ -58,6 +59,14 @@ func resetInherited() {
 		if sigexit.IsIgnored(sig) {
 			sigexit.SetDefault(sig)
 		}
+	}
+	var mask uint64
+	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 0, 0, uintptr(unsafe.Pointer(&mask)), 8, 0, 0)
+	if mask != 0 {
+		var empty uint64
+		syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2 /* SIG_SETMASK */, uintptr(unsafe.Pointer(&empty)), 0, 8, 0, 0)
+		syscall.Exec("/proc/self/exe", os.Args, os.Environ())
+		syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2, uintptr(unsafe.Pointer(&mask)), 0, 8, 0, 0)
 	}
 }
 

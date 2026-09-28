@@ -8,4 +8,7 @@ import (
 )
 
 // Die exits with 128+sig; Windows has no signal deaths.
-func Die(sig syscall.Signal) { os.Exit(128 + int(sig)) }
+func Die(sig syscall.Signal) {
+	dying.Store(true)
+	os.Exit(128 + int(sig))
+}

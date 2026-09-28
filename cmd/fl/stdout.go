@@ -6,6 +6,7 @@ import (
 	"syscall"
 
 	"github.com/Mizore66/faultline/internal/nodefs"
+	"github.com/Mizore66/faultline/internal/sigexit"
 )
 
 // handleType is libuv's uv_guess_handle, which Node's
@@ -33,17 +34,32 @@ const (
 //
 // Node's pipes on Windows write synchronously too and report the file form.
 // The first error is kept, like the 'error' event.
+//
+// Node creates process.stdout on first use, which for verify is the first
+// write, after the checks have run, so the descriptor is classified then
+// and not at startup (a terminal can hang up in between). libuv opens a
+// terminal or pipe that fd 1 has read-only as a stream that is not
+// writable, and a write to it fails with EPIPE without reaching the
+// descriptor.
 type stdoutWriter struct {
-	f    *os.File
-	kind handleType
-	err  error
+	f          *os.File
+	kind       handleType
+	classified bool
+	err        error
 }
 
 func newStdoutWriter(f *os.File) *stdoutWriter {
-	return &stdoutWriter{f: f, kind: guessHandle(f)}
+	return &stdoutWriter{f: f}
 }
 
 func (s *stdoutWriter) Write(p []byte) (int, error) {
+	sigexit.Hold()
+	if !s.classified {
+		s.kind, s.classified = guessHandle(s.f), true
+		if (s.kind == handleTTY || s.kind == handlePipe) && readOnly(s.f) {
+			s.err = syscall.EPIPE
+		}
+	}
 	if s.err != nil {
 		return 0, s.err
 	}

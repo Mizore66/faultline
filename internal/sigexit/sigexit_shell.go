@@ -18,6 +18,7 @@ import (
 // exec keeps it ignored, and the shell exits 128+sig, the status a shell
 // reports for a signal death. Without /bin/sh, fl exits 128+sig itself.
 func Die(sig syscall.Signal) {
+	dying.Store(true)
 	n := strconv.Itoa(int(sig))
 	syscall.Exec("/bin/sh", []string{"sh", "-c", "kill -" + n + " $$; exit " + strconv.Itoa(128+int(sig))}, nil)
 	os.Exit(128 + int(sig))

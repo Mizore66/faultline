@@ -38,6 +38,7 @@ func IsIgnored(sig syscall.Signal) bool {
 // unblocked on this thread, then sent to it. Should the signal not end the
 // process, fl exits 128+sig.
 func Die(sig syscall.Signal) {
+	dying.Store(true)
 	runtime.LockOSThread()
 	SetDefault(sig)
 	set := uint64(1) << (sig - 1)

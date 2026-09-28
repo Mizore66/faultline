@@ -12,30 +12,44 @@ import (
 )
 
 // signalDriver starts `verify` with a slow fake git on PATH (which records
-// the signal state it inherited), optionally blocks or ignores signals
-// first, sends a signal 0.3 s in, and prints the wait status and git's
-// SigBlk/SigIgn lines.
-const signalDriver = `import os, signal, subprocess, sys, time
+// the signal state and descriptor limit it inherited), optionally blocks or
+// ignores signals or lowers the soft RLIMIT_NOFILE first, sends a signal
+// while git runs (or at once, left pending under the blocked mask), and prints
+// the wait status, the size and hash of stdout and stderr, and git's
+// SigBlk/SigIgn and open-files lines.
+const signalDriver = `import hashlib, os, resource, signal, subprocess, sys, time
 sig, mode, bundle, gitdir, argv = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
 def pre():
-    if mode == "block": signal.pthread_sigmask(signal.SIG_BLOCK, [s for s in (sig, signal.SIGALRM, signal.SIGUSR2) if s])
+    if mode in ("block", "pending"): signal.pthread_sigmask(signal.SIG_BLOCK, [s for s in (sig, signal.SIGALRM, signal.SIGUSR2) if s])
     if mode == "ignore":
         for s in (signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU, signal.SIGHUP, signal.SIGINT): signal.signal(s, signal.SIG_IGN)
+    if mode == "nofile":
+        hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, hard))
 status = os.path.join(gitdir, "status")
 if os.path.exists(status): os.remove(status)
 env = dict(os.environ, PATH=gitdir + ":/usr/bin:/bin")
-p = subprocess.Popen(argv + ["verify", bundle], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, preexec_fn=pre)
-time.sleep(0.3)
-if sig: p.send_signal(sig)
-p.wait()
-lines = open(status).read().split("\n")[:2] if os.path.exists(status) else []
-print(p.returncode, " ".join(lines))
+if mode == "pending": signal.pthread_sigmask(signal.SIG_BLOCK, [sig])
+p = subprocess.Popen(argv + ["verify", bundle], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, preexec_fn=pre)
+if mode == "pending":
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, [sig])
+    p.send_signal(sig)
+else:
+    deadline = time.time() + 20
+    while not os.path.exists(status) and p.poll() is None and time.time() < deadline: time.sleep(0.01)
+    time.sleep(0.1)
+    if sig: p.send_signal(sig)
+out, err = p.communicate()
+lines = open(status).read().split("\n")[:3] if os.path.exists(status) else []
+print(p.returncode, len(out), hashlib.sha256(out).hexdigest()[:16], len(err), hashlib.sha256(err).hexdigest()[:16], " ".join(lines))
 `
 
 // Node resets every signal to its default action and clears the signal
 // mask at startup, and libuv resets both in git. Compare how verify dies of
 // each signal whose default action ends the process (also when the parent
-// blocked it), and the dispositions and mask git inherits.
+// blocked it, or left it pending), what verify prints (a blocked mask must
+// not cost any output), and the dispositions, mask and descriptor limit
+// git inherits.
 func TestLiveSignalsMatchNode(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("reads /proc/self/status")
@@ -49,7 +63,7 @@ func TestLiveSignalsMatchNode(t *testing.T) {
 	gitdir := t.TempDir()
 	// The first git call records its signal state and sleeps; the rest run
 	// at once.
-	fake := "#!/bin/sh\nif [ ! -f " + gitdir + "/status ]; then grep -E '^Sig(Blk|Ign)' /proc/self/status > " + gitdir +
+	fake := "#!/bin/sh\nif [ ! -f " + gitdir + "/status ]; then { grep -E '^Sig(Blk|Ign)' /proc/self/status; grep 'open files' /proc/self/limits; } > " + gitdir +
 		"/status; sleep 1; fi\nexec /usr/bin/git \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(gitdir, "git"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
@@ -63,7 +77,10 @@ func TestLiveSignalsMatchNode(t *testing.T) {
 	for _, sig := range strings.Fields("1 3 12 14 15 26") {
 		cases = append(cases, tc{sig, "block"})
 	}
-	cases = append(cases, tc{"0", "ignore"}, tc{"0", "block"})
+	for _, sig := range strings.Fields("12 14 26") {
+		cases = append(cases, tc{sig, "pending"})
+	}
+	cases = append(cases, tc{"0", "ignore"}, tc{"0", "block"}, tc{"0", "nofile"})
 	for _, c := range cases {
 		t.Run(c.mode+"-"+c.sig, func(t *testing.T) {
 			run := func(argv ...string) string {

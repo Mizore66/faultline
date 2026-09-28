@@ -33,15 +33,36 @@ func guessHandle(f *os.File) handleType {
 	return handleUnknown
 }
 
+// readOnly is false: libuv on Windows does not check a handle's access.
+func readOnly(*os.File) bool { return false }
+
 // writeOnce is fs.writeSync: one WriteFile, whose count is not checked.
 func writeOnce(f *os.File, p []byte) error {
 	var n uint32
-	return syscall.WriteFile(syscall.Handle(f.Fd()), p, &n, nil)
+	return fsWriteErrno(syscall.WriteFile(syscall.Handle(f.Fd()), p, &n, nil))
 }
 
 // writeAll writes everything (Node's pipes and consoles write synchronously
-// on Windows).
+// on Windows, through fs__write like files).
 func writeAll(f *os.File, p []byte) error {
-	_, err := f.Write(p)
+	for len(p) > 0 {
+		var n uint32
+		if err := syscall.WriteFile(syscall.Handle(f.Fd()), p, &n, nil); err != nil {
+			return fsWriteErrno(err)
+		}
+		if n == 0 {
+			return nil
+		}
+		p = p[n:]
+	}
+	return nil
+}
+
+// fsWriteErrno is fs__write's rewrite of ERROR_ACCESS_DENIED (a handle not
+// opened for writing) to ERROR_INVALID_FLAGS, which libuv reports as EBADF.
+func fsWriteErrno(err error) error {
+	if err == syscall.ERROR_ACCESS_DENIED {
+		return syscall.Errno(1004) // ERROR_INVALID_FLAGS
+	}
 	return err
 }

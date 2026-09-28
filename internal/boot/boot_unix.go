@@ -23,15 +23,21 @@ import (
 // default action ends the process ends fl by that action (sigexit.Die).
 // SIGUSR1 (Node's inspector) and SIGPROF (the runtime's) are not emulated
 // (KNOWN_DIFFERENCES.md).
+//
+// The order matters. The handlers are in place before the mask is cleared,
+// so a signal left pending under the inherited mask gets Node's treatment,
+// and the re-exec happens before the standard descriptors are marked
+// close-on-exec, which would leave the new image with /dev/null on 0 to 2.
 func init() {
-	disableStdioInheritance()
-	resetInherited()
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, terminating...)
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE, syscall.SIGXFSZ)
 	go func() {
 		sigexit.Die((<-ch).(syscall.Signal))
 	}()
+	resetInherited()
+	disableStdioInheritance()
+	raiseNofile()
 }
 
 // disableStdioInheritance is libuv's uv_disable_stdio_inheritance, which

@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"runtime"
 	"syscall"
 	"unsafe"
 )
@@ -63,6 +64,13 @@ func isatty(fd int) bool {
 	return e == 0
 }
 
+// readOnly reports whether fd's access mode is O_RDONLY, which makes libuv
+// open a terminal or pipe as a stream that cannot be written to.
+func readOnly(f *os.File) bool {
+	fl, _, e := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), syscall.F_GETFL, 0)
+	return e == 0 && fl&syscall.O_ACCMODE == syscall.O_RDONLY
+}
+
 // writeOnce is fs.writeSync: one write(2), whose count is not checked.
 func writeOnce(f *os.File, p []byte) error {
 	for {
@@ -87,11 +95,21 @@ func writeAll(f *os.File, p []byte) error {
 		case nil:
 			p = p[n:]
 		case syscall.EINTR:
-		case syscall.EAGAIN:
+		case syscall.EAGAIN, syscall.ENOBUFS: // uv__try_write
 			waitWritable(fd)
 		default:
-			return err
+			return streamWriteErrno(err)
 		}
 	}
 	return nil
+}
+
+// streamWriteErrno is uv__try_write's error mapping: on Apple systems a
+// write to a socket being torn down fails with EPROTOTYPE, which libuv
+// reports as ECONNRESET.
+func streamWriteErrno(err error) error {
+	if err == syscall.EPROTOTYPE && (runtime.GOOS == "darwin" || runtime.GOOS == "ios") {
+		return syscall.ECONNRESET
+	}
+	return err
 }
