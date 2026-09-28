@@ -144,12 +144,7 @@ func (r remover) fixWinEPERM(raw, display string, original error, depth int) err
 // readRawNames is readdirSync(path, "buffer"): libuv sorts names on Unix and
 // returns directory order on Windows.
 func readRawNames(raw string) ([]string, error) {
-	f, err := os.Open(raw)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	names, err := f.Readdirnames(-1)
+	names, _, err := scandir(raw)
 	if err != nil {
 		return nil, err
 	}

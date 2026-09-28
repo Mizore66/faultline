@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"testing"
 )
 
@@ -196,5 +197,23 @@ func TestCwdRemovedDirectory(t *testing.T) {
 	os.Mkdir(dir, 0o755) // recreated: still not the directory we are in
 	if _, err := Cwd(); err == nil || err.Error() != "ENOENT: no such file or directory, uv_cwd" {
 		t.Fatalf("Cwd() after recreate error = %v", err)
+	}
+}
+
+// Node throws fs and uv_cwd errors from C++ (UVException): an errno libuv
+// has no name for prints as "Unknown system error -N" for both the code and
+// the description.
+func TestUnnamedErrno(t *testing.T) {
+	if isWindows {
+		t.Skip("Windows maps unknown errors to UNKNOWN")
+	}
+	errno := syscall.Errno(4095) // no libuv name on any Unix
+	err := wrap(errno, "mkdtemp", "/tmp/x-XXXXXX")
+	want := "Unknown system error -4095: Unknown system error -4095, mkdtemp '/tmp/x-XXXXXX'"
+	if err.Error() != want {
+		t.Errorf("got %q, want %q", err.Error(), want)
+	}
+	if got := readErr(errno).Error(); got != "Unknown system error -4095: Unknown system error -4095, read" {
+		t.Errorf("read error: %q", got)
 	}
 }

@@ -1,7 +1,6 @@
 package nodefs
 
 import (
-	"encoding/binary"
 	"syscall"
 	"unsafe"
 )
@@ -83,39 +82,9 @@ const _AT_FDCWD = -0x64
 // findEntry is the readdir loop of __getcwd_generic.
 func findEntry(fd int, dev, ino uint64, mountPoint bool) (string, syscall.Errno) {
 	useIno := true
-	buf := make([]byte, 32*1024)
-	var pending []byte
-	next := func() (string, uint64, bool, syscall.Errno) {
-		for {
-			if len(pending) == 0 {
-				n, err := syscall.Getdents(fd, buf)
-				if err != nil {
-					if err == syscall.ENOENT { // glibc readdir: a removed directory is EOF
-						return "", 0, false, 0
-					}
-					return "", 0, false, err.(syscall.Errno)
-				}
-				if n <= 0 {
-					return "", 0, false, 0
-				}
-				pending = buf[:n]
-			}
-			// struct linux_dirent64: d_ino, d_off, d_reclen, d_type, d_name
-			entIno := binary.NativeEndian.Uint64(pending[0:])
-			reclen := int(binary.NativeEndian.Uint16(pending[16:]))
-			nameBytes := pending[19:reclen]
-			pending = pending[reclen:]
-			for i, c := range nameBytes {
-				if c == 0 {
-					nameBytes = nameBytes[:i]
-					break
-				}
-			}
-			return string(nameBytes), entIno, true, 0
-		}
-	}
+	d := direntReader{fd: fd}
 	for {
-		name, entIno, ok, errno := next()
+		name, entIno, _, ok, errno := d.next()
 		if errno != 0 {
 			return "", errno
 		}
@@ -124,8 +93,8 @@ func findEntry(fd int, dev, ino uint64, mountPoint bool) (string, syscall.Errno)
 			if _, err := syscall.Seek(fd, 0, 0); err != nil {
 				return "", err.(syscall.Errno)
 			}
-			pending = nil
-			name, entIno, ok, errno = next()
+			d.pending = nil
+			name, entIno, _, ok, errno = d.next()
 			if errno != 0 {
 				return "", errno
 			}

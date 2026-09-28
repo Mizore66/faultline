@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -110,9 +111,13 @@ var descriptions = map[string]string{
 
 func (e *Error) Error() string {
 	if e.NoPath {
-		return e.Code + ": " + descriptions[e.Code] + ", " + e.Syscall
+		return e.Code + ": " + Describe(e.Code) + ", " + e.Syscall
 	}
-	return e.Code + ": " + descriptions[e.Code] + ", " + e.Syscall + " '" + e.Path + "'"
+	return e.Code + ": " + Describe(e.Code) + ", " + e.Syscall + " '" + e.Path + "'"
+}
+
+func unknownSystemError(errno syscall.Errno) string {
+	return "Unknown system error -" + strconv.Itoa(int(errno))
 }
 
 // ErrnoCode names err's errno the way Node's ErrnoException does (libuv's
@@ -122,14 +127,7 @@ func ErrnoCode(err error) string { return codeOf(err) }
 // SystemErrorName is util.getSystemErrorName for the errno err carries, as
 // ErrnoException prints it: libuv's name, or on Unix "Unknown system error
 // -N" for an errno libuv has no name for (libuv passes it through negated).
-func SystemErrorName(err error) string {
-	code := codeOf(err)
-	var errno syscall.Errno
-	if code == "UNKNOWN" && !isWindows && errors.As(err, &errno) {
-		return "Unknown system error -" + strconv.Itoa(int(errno))
-	}
-	return code
-}
+func SystemErrorName(err error) string { return codeOf(err) }
 
 func codeOf(err error) string {
 	var errno syscall.Errno
@@ -143,6 +141,10 @@ func codeOf(err error) string {
 		if code, ok := unixCodes[errno]; ok {
 			return code
 		}
+		// Node's fs and process errors are thrown from C++ (UVException),
+		// with uv_err_name and uv_strerror, which both give "Unknown
+		// system error -N" for an errno libuv has no name for.
+		return unknownSystemError(errno)
 	}
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -195,38 +197,64 @@ var ErrStringTooLong = errors.New("Cannot create a string longer than 0x1fffffe8
 // openRegular opens path the way readFileSync does: open(2) first, so a
 // directory without read permission fails with EACCES on open, and a
 // readable directory then fails with EISDIR on read.
-func openRegular(path string) (*os.File, int64, error) {
+func openRegular(path string) (*os.File, fs.FileInfo, error) {
 	f, err := os.Open(sysPath(path))
 	if err != nil {
-		return nil, 0, wrap(err, "open", path)
+		return nil, nil, wrap(err, "open", path)
 	}
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return nil, 0, wrap(err, "fstat", path)
+		return nil, nil, wrap(err, "fstat", path)
 	}
 	if info.IsDir() {
 		f.Close()
-		return nil, 0, &Error{Code: "EISDIR", Syscall: "read", NoPath: true}
+		return nil, nil, &Error{Code: "EISDIR", Syscall: "read", NoPath: true}
 	}
-	return f, info.Size(), nil
+	return f, info, nil
+}
+
+// readErr is a failed read(2): Node throws it from C++ without a path.
+func readErr(err error) error {
+	return &Error{Code: codeOf(err), Syscall: "read", NoPath: true}
 }
 
 // ReadBytes is readFileSync(path), including ERR_FS_FILE_TOO_LARGE.
 func ReadBytes(path string) ([]byte, error) {
-	f, size, err := openRegular(path)
+	f, info, err := openRegular(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	size := info.Size()
+	if !info.Mode().IsRegular() {
+		size = 0
+	}
 	if size > kIoMaxLength {
 		return nil, fmt.Errorf("File size (%d) is greater than 2 GiB", size)
 	}
-	b, err := io.ReadAll(f)
-	if err != nil {
-		return nil, wrap(err, "read", path)
+	if size == 0 { // not a regular file, or empty: read to EOF
+		b, err := io.ReadAll(f)
+		if err != nil {
+			return nil, readErr(err)
+		}
+		return b, nil
 	}
-	return b, nil
+	// A regular file is read up to the size fstat reported: bytes appended
+	// meanwhile are not read, and a file that shrank gives what was there.
+	b := make([]byte, size)
+	pos := 0
+	for pos < len(b) {
+		n, err := f.Read(b[pos:])
+		pos += n
+		if err == io.EOF || n == 0 && err == nil {
+			break
+		}
+		if err != nil {
+			return nil, readErr(err)
+		}
+	}
+	return b[:pos], nil
 }
 
 // ReadText is readFileSync(path, "utf8"). Node 22's ReadFileUtf8 reads the
@@ -234,17 +262,17 @@ func ReadBytes(path string) ([]byte, error) {
 // String::kMaxLength (src/util-inl.h ToV8Value: str.size() >= kMaxLength),
 // whatever the decoded length would be; it has no 2 GiB check.
 func ReadText(path string) (string, error) {
-	f, size, err := openRegular(path)
+	f, info, err := openRegular(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	if size >= maxStringLength {
+	if info.Size() >= maxStringLength {
 		return "", ErrStringTooLong
 	}
 	b, err := io.ReadAll(f)
 	if err != nil {
-		return "", wrap(err, "read", path)
+		return "", readErr(err)
 	}
 	if len(b) >= maxStringLength { // non-regular files report size 0
 		return "", ErrStringTooLong
@@ -272,24 +300,36 @@ func Exists(path string) bool {
 	return err == nil
 }
 
-// ReadDirNames is readdirSync(path): names sorted by byte order (libuv scandir).
+// ReadDirNames is readdirSync(path, { withFileTypes: true }) as the bundle
+// walkers use it: names sorted by byte order (libuv scandir), then decoded
+// as UTF-8 with replacement, so a name with invalid bytes no longer names
+// the file. An entry whose type the filesystem does not report
+// (DT_UNKNOWN: XFS without ftype, some NFS and FUSE) is lstat'ed by Node
+// inside readdirSync, in order, and the first failure is thrown from there.
 func ReadDirNames(path string) ([]string, error) {
-	f, err := os.Open(sysPath(path))
+	names, types, err := scandir(sysPath(path))
 	if err != nil {
 		return nil, wrap(err, "scandir", path)
 	}
-	defer f.Close()
-	names, err := f.Readdirnames(-1)
-	if err != nil {
-		return nil, wrap(err, "scandir", path)
+	order := make([]int, len(names))
+	for i := range order {
+		order[i] = i
 	}
-	// libuv sorts the raw names; Node then decodes each as UTF-8 with
-	// replacement, so a name with invalid bytes no longer names the file.
-	sort.Strings(names)
-	for i, name := range names {
-		names[i] = DecodeUTF8([]byte(name))
+	sort.Slice(order, func(i, j int) bool { return names[order[i]] < names[order[j]] })
+	sorted := make([]string, len(names))
+	for i, k := range order {
+		sorted[i] = DecodeUTF8([]byte(names[k]))
 	}
-	return names, nil
+	if types != nil {
+		for i, k := range order {
+			if types[k] == 0 { // DT_UNKNOWN
+				if _, err := Lstat(Join(path, sorted[i])); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return sorted, nil
 }
 
 // Tmpdir is os.tmpdir().
@@ -360,4 +400,9 @@ func Mkdtemp(prefix string) (string, error) {
 }
 
 // Describe is uv_strerror for a libuv error name.
-func Describe(code string) string { return descriptions[code] }
+func Describe(code string) string {
+	if strings.HasPrefix(code, "Unknown system error ") {
+		return code
+	}
+	return descriptions[code]
+}
