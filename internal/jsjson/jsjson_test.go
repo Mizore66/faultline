@@ -1,11 +1,16 @@
 package jsjson
 
 import (
+	"bytes"
 	"fmt"
 	"math"
+	"os"
+	"os/exec"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -333,4 +338,94 @@ func TestSlowElements(t *testing.T) {
 			t.Errorf("slowElements(%d, %d) = %v", tc.used, tc.length, got)
 		}
 	}
+}
+
+// An object with 22,369,622 or more index entries aborts only when V8
+// stores them in a dictionary; with a dense index range they go into a
+// FixedArray and V8 keeps every member, including the ones after them.
+// Probed against Node 22.22.2: {"0":0 ×22369623,"a":7} is {"0":0,"a":7}.
+func TestParseKeepsMembersPastIndexEntryLimit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("parses a 134 MB document")
+	}
+	entries := strings.Repeat(`"0":0,`, maxNamedEntries)
+	for _, tc := range []struct{ doc, key, want string }{
+		// The members after the entries are kept (TS VALID, Go was INVALID).
+		{"{" + entries + `"a":7}`, "a", "7"},
+		// A later duplicate still overrides an earlier value (TS INVALID,
+		// Go was VALID).
+		{`{"a":1,` + entries + `"a":"evil"}`, "a", `"evil"`},
+		// The last index entry wins, as in V8.
+		{"{" + entries + `"0":1}`, "0", "1"},
+	} {
+		v, err := Parse(tc.doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := Stringify(v.Get(tc.key)); got != tc.want {
+			t.Errorf("%.40q…: %s = %s, want %s", tc.doc, tc.key, got, tc.want)
+		}
+	}
+}
+
+// The V8 aborts sit at exact lengths; move one by one and an abort becomes a
+// verdict. Each case runs in a subprocess, since an abort ends it. Boundaries
+// probed against Node 22.22.2.
+func TestV8AbortThresholds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("V8's aborts are signal deaths; Windows has none")
+	}
+	if name := os.Getenv("FAULTLINE_ABORT_CASE"); name != "" {
+		abortCases[name]()
+		os.Exit(0)
+	}
+	for _, tc := range []struct {
+		name   string
+		signal syscall.Signal // 0: returns normally
+		header string
+	}{
+		{"fixedarray-2^27-1", 0, ""},
+		{"fixedarray-2^27", syscall.SIGTRAP, "# Fatal JavaScript invalid size error 134217728\n"},
+		{"dictionary-22369621", 0, ""},
+		{"dictionary-22369622", syscall.SIGABRT, "FATAL ERROR: invalid table size Allocation failed"},
+		{"fast-22369622", 0, ""},
+		{"split-2^27-1", 0, ""},
+		{"split-2^27", syscall.SIGTRAP, "# Fatal JavaScript invalid size error 134217728\n"},
+		{"split-2^27+1", syscall.SIGTRAP, "# Fatal JavaScript invalid size error 134217729\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestV8AbortThresholds$")
+			cmd.Env = append(os.Environ(), "FAULTLINE_ABORT_CASE="+tc.name)
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+			status := cmd.ProcessState.Sys().(syscall.WaitStatus)
+			if tc.signal == 0 {
+				if err != nil {
+					t.Fatalf("aborted: %v\n%s", err, stderr.String())
+				}
+				return
+			}
+			if !status.Signaled() || status.Signal() != tc.signal {
+				t.Fatalf("want death by %v, got %v\n%s", tc.signal, err, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tc.header) {
+				t.Fatalf("stderr %q lacks %q", stderr.String(), tc.header)
+			}
+		})
+	}
+}
+
+var abortCases = map[string]func(){
+	// A dense range: the FixedArray has max index + 1 slots.
+	"fixedarray-2^27-1": func() { checkElements(5_592_406, 134_217_726) },
+	"fixedarray-2^27":   func() { checkElements(5_592_406, 134_217_727) },
+	// A sparse range: a NumberDictionary sized for the entry count.
+	"dictionary-22369621": func() { checkElements(22_369_621, 4_000_000_000) },
+	"dictionary-22369622": func() { checkElements(22_369_622, 4_000_000_000) },
+	// As many entries, all at index 0: fast elements, no abort.
+	"fast-22369622": func() { checkElements(22_369_622, 0) },
+	"split-2^27-1":  func() { CheckSplitParts(1<<27 - 1) },
+	"split-2^27":    func() { CheckSplitParts(1 << 27) },
+	"split-2^27+1":  func() { CheckSplitParts(1<<27 + 1) },
 }

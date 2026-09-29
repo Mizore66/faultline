@@ -164,6 +164,15 @@ func checkElements(elements int, maxIndex uint32) {
 	}
 }
 
+// CheckSplitParts is the allocation String.prototype.split makes for its
+// result: n parts need a FixedArray of n slots, and 2^27 or more abort the
+// process as checkElements does.
+func CheckSplitParts(n int) {
+	if n >= maxArrayElements {
+		jsexc.FatalInvalidFixedArraySize(n)
+	}
+}
+
 // slowElements is ShouldConvertToSlowElements(used, capacity):
 // kPreferFastElementsSizeFactor (3) × ComputeCapacity(used) × kEntrySize
 // (3) <= capacity, where ComputeCapacity rounds used + used/2 up to a power
@@ -266,7 +275,12 @@ func (p *parser) parseValue() Value {
 				} else {
 					top.obj.namedEntries++
 				}
-				if top.obj.namedEntries < maxNamedEntries && top.elements < maxNamedEntries {
+				// Every member is kept: only an object that will abort when
+				// it closes (maxNamedEntries or more named entries) can drop
+				// them. Index entries past maxNamedEntries abort only in the
+				// dictionary branch (checkElements); in the FixedArray branch
+				// V8 keeps them and every member after them.
+				if top.obj.namedEntries < maxNamedEntries {
 					top.obj.Set(top.key, v)
 				}
 				if p.check(tokComma) {
