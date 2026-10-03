@@ -77,15 +77,27 @@ func start(file string, argv, env []string, files []*os.File) (*os.Process, stri
 	return p, ""
 }
 
+// shortPath is libuv's in-place GetShortPathNameW(cwd, cwd, cwd_len), whose
+// buffer holds exactly the long path and its NUL. An 8.3 alias can be longer
+// than its long name (".git" is "GIT~1"); GetShortPathNameW then returns the
+// size it would need, the buffer keeps the long path, and libuv goes on with
+// it. Only a return of 0 fails the spawn.
 func shortPath(long string) (string, error) {
+	return shortPathWith(long, syscall.GetShortPathName)
+}
+
+func shortPathWith(long string, get func(*uint16, *uint16, uint32) (uint32, error)) (string, error) {
 	p, err := syscall.UTF16FromString(long)
 	if err != nil {
 		return "", err
 	}
 	buf := make([]uint16, len(p))
-	n, err := syscall.GetShortPathName(&p[0], &buf[0], uint32(len(buf)))
+	n, err := get(&p[0], &buf[0], uint32(len(buf)))
 	if err != nil {
 		return "", err
+	}
+	if int(n) >= len(buf) {
+		return long, nil
 	}
 	return syscall.UTF16ToString(buf[:n]), nil
 }
