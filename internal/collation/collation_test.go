@@ -76,7 +76,7 @@ func TestMatchesNodeICU(t *testing.T) {
 func TestComparePreparedMatchesCompare(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
 	var alphabet []rune
-	for _, c := range "aAbBzZ09 -_./\u00e9\u20ac\u4e2d\ud55c\u017f\u00df\u00c6\u00e6\u00a0\u3000\U0001d504\U0001f600\u00ff\u0300\u1e00\u01c4" {
+	for _, c := range "aAbBzZ09 -_./\u00e9\u20ac\u4e2d\ud55c\u017f\u00df\u00c6\u00e6\u00a0\u3000\U0001d504\U0001f600\u00ff\u0300\u1e00\u01c4\x00\u00ad\u200b\ufdfa" {
 		if Prepare(string(c)).key != nil {
 			alphabet = append(alphabet, c)
 		}
@@ -84,8 +84,14 @@ func TestComparePreparedMatchesCompare(t *testing.T) {
 	if len(alphabet) < 20 {
 		t.Fatalf("simple alphabet %q", string(alphabet))
 	}
+	ignorable := []string{"\x00", "\u00ad", "\u200b"}
 	gen := func() string {
 		var b strings.Builder
+		if rng.IntN(4) == 0 { // a run of zero-primary code points across a chunk edge
+			for range 60 + rng.IntN(80) {
+				b.WriteString(ignorable[rng.IntN(len(ignorable))])
+			}
+		}
 		n := rng.IntN(3)
 		switch n {
 		case 0:

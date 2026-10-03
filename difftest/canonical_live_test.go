@@ -419,3 +419,89 @@ func TestLiveSortLocaleLong(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveSortLocaleSharedPrefix: simple keys that share long prefixes, with
+// first differences around the 64-code-point chunks of the lazy keys and
+// after runs of 64 or more zero-primary code points. Sorted and compared
+// pairwise against Node (round 5, row 11 and the §1 P3 test gap).
+func TestLiveSortLocaleSharedPrefix(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	r := rand.New(rand.NewPCG(111, 112))
+	prefixes := []string{
+		strings.Repeat("a", 1000),
+		strings.Repeat("ﷺ", 300),   // 18 collation elements each
+		strings.Repeat("\x00", 65), // completely ignorable
+		strings.Repeat("\u00ad", 130),
+		strings.Repeat("x\U0001D504", 100),
+		strings.Repeat("\u200b", 64) + "k",
+	}
+	tails := []string{"", "b", "B", "é", "\x00b", "\u00adb", "1", "10", "2", strings.Repeat("\x00", 70) + "c", "ﷺ", "z\u00ad"}
+	var keys []string
+	for _, prefix := range prefixes {
+		cps := []rune(prefix)
+		for _, cut := range []int{62, 63, 64, 65, 66, 126, 127, 128, 129, 130, len(cps)} {
+			if cut > len(cps) {
+				continue
+			}
+			head := string(cps[:cut])
+			for _, tail := range tails {
+				keys = append(keys, head+tail)
+			}
+		}
+	}
+	keys = append(keys, "\x00b", strings.Repeat("\x00", 65))
+	for _, k := range keys {
+		if !collation.Prepare(k).Simple() {
+			t.Fatalf("%+q is not simple: the test would not reach the lazy keys", k)
+		}
+	}
+	for round := range 4 {
+		order := slices.Clone(keys)
+		switch round {
+		case 1:
+			slices.Reverse(order)
+		case 2, 3:
+			r.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+		}
+		raw, err := c.Call("sort", `{"keys":`+quoteList(order)+`}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, _ := jsjson.Parse(raw)
+		got := canonical.SortLocale(order)
+		for i, item := range v.Items() {
+			if got[i] != item.Str() {
+				t.Fatalf("round %d: SortLocale differs from Node at %d: %+q vs %+q", round, i, got[i], item.Str())
+			}
+		}
+	}
+	var pairs [][2]string
+	for range 3000 {
+		pairs = append(pairs, [2]string{keys[r.IntN(len(keys))], keys[r.IntN(len(keys))]})
+	}
+	var b strings.Builder
+	b.WriteString(`{"pairs":[`)
+	for i, p := range pairs {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString("[" + jsjson.Quote(p[0]) + "," + jsjson.Quote(p[1]) + "]")
+	}
+	b.WriteString("]}")
+	raw, err := c.Call("compareMany", b.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := jsjson.Parse(raw)
+	for i, item := range v.Items() {
+		want := int(item.Num())
+		a, bb := pairs[i][0], pairs[i][1]
+		if got := collation.ComparePrepared(collation.Prepare(a), collation.Prepare(bb)); got != want {
+			t.Fatalf("ComparePrepared(%+q, %+q) = %d, Node %d", a, bb, got, want)
+		}
+		if got := collation.Compare(a, bb); got != want {
+			t.Fatalf("Compare(%+q, %+q) = %d, Node %d", a, bb, got, want)
+		}
+	}
+}

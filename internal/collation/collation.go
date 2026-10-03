@@ -535,6 +535,9 @@ func Prepare(s string) Prepared {
 	return Prepared{S: s, key: &lazyKey{rest: s}}
 }
 
+// Simple reports whether p takes the lazy-key path (for tests).
+func (p Prepared) Simple() bool { return p.key != nil }
+
 func (t *table) notSimple(c rune) bool {
 	if c <= 0xFFFF {
 		return t.notSimpleBMP[c>>6]&(1<<(c&63)) != 0
@@ -547,6 +550,14 @@ func (t *table) notSimpleSlow(c rune) bool {
 }
 
 // ComparePrepared is Compare(a.S, b.S).
+//
+// For two simple strings it first skips their identical prefix, as ICU's
+// doCompare does: the prefix contributes the same weights at every level to
+// both keys, so the suffixes compare the same way. A short prefix is
+// compared through the keys cached in a and b (sorting compares each string
+// many times); past lazyChunk bytes the suffixes get keys of their own, built
+// only as far as this comparison needs, so strings that share a long prefix
+// are neither expanded nor kept in full.
 func ComparePrepared(a, b Prepared) int {
 	if a.key == nil || b.key == nil {
 		return Compare(a.S, b.S)
@@ -554,14 +565,28 @@ func ComparePrepared(a, b Prepared) int {
 	if a.S == b.S {
 		return 0
 	}
-	// Primaries first, extending each key only while it is the shorter one
-	// and no difference has shown up.
+	p := 0
+	for p < len(a.S) && p < len(b.S) && a.S[p] == b.S[p] {
+		p++
+	}
+	for p > 0 && (p < len(a.S) && !utf8.RuneStart(a.S[p]) || p < len(b.S) && !utf8.RuneStart(b.S[p])) {
+		p--
+	}
+	if p < lazyChunk {
+		return compareLazy(a.key, b.key)
+	}
+	return compareLazy(&lazyKey{rest: a.S[p:]}, &lazyKey{rest: b.S[p:]})
+}
+
+// compareLazy compares two lazy keys: primaries first, extending each key
+// only while it is the shorter one and no difference has shown up.
+func compareLazy(a, b *lazyKey) int {
 	for i := 0; ; i++ {
-		for i >= len(a.key.key.primary) && a.key.extend() {
+		for i >= len(a.key.primary) && a.extend() {
 		}
-		for i >= len(b.key.key.primary) && b.key.extend() {
+		for i >= len(b.key.primary) && b.extend() {
 		}
-		ap, bp := a.key.key.primary, b.key.key.primary
+		ap, bp := a.key.primary, b.key.primary
 		switch {
 		case i >= len(ap) && i >= len(bp):
 		case i >= len(ap):
@@ -579,10 +604,10 @@ func ComparePrepared(a, b Prepared) int {
 		break
 	}
 	// Equal primaries: both keys are complete.
-	if c := compareLevel(a.key.key.secondary, b.key.key.secondary); c != 0 {
+	if c := compareLevel(a.key.secondary, b.key.secondary); c != 0 {
 		return c
 	}
-	return compareLevel(a.key.key.tertiary, b.key.key.tertiary)
+	return compareLevel(a.key.tertiary, b.key.tertiary)
 }
 
 // Rules lists what the root data does beyond single code points, for tests
