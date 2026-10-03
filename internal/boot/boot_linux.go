@@ -116,3 +116,9 @@ func setCloexec(fd int) bool {
 	_, _, e := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETFD, syscall.FD_CLOEXEC)
 	return e == 0
 }
+
+// fdFlags is fcntl(fd, F_GETFD); false if fd is not open.
+func fdFlags(fd int) (int, bool) {
+	r, _, e := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
+	return int(r), e == 0
+}

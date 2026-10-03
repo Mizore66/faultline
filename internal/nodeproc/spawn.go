@@ -174,15 +174,24 @@ func (s *stdio) closeParent() {
 func nodeEnv() []string {
 	environ := syscall.Environ()
 	if runtime.GOOS == "windows" {
-		env := make([]string, 0, len(environ))
+		// Keys come from the block (uv_os_environ), values from looking
+		// each kept key up again (uv_os_getenv, GetEnvironmentVariableW,
+		// which matches case-insensitively and returns the first match).
+		names := make([]string, 0, len(environ))
 		for _, entry := range environ {
 			i := strings.IndexByte(entry[min(1, len(entry)):], '=') + min(1, len(entry))
 			if entry == "" || entry[0] == '=' || i <= 0 || isArrayIndex(entry[:i]) {
 				continue
 			}
-			env = append(env, entry)
+			names = append(names, entry[:i])
 		}
-		return windowsEnvDedupe(env)
+		env := make([]string, 0, len(names))
+		for _, name := range windowsEnvDedupe(names) {
+			if units, ok := getenvUTF16(name); ok {
+				env = append(env, name+"="+decodeEnvValue(units))
+			}
+		}
+		return env
 	}
 	first := map[string]string{}
 	for _, entry := range environ {
@@ -224,25 +233,28 @@ func nodeEnv() []string {
 // Array.prototype.sort does) and only the first of those that uppercase
 // alike is kept. strings.ToUpper stands in for toUpperCase; it differs only
 // where a letter uppercases to several (ß to SS).
-func windowsEnvDedupe(env []string) []string {
-	name := func(entry string) string {
-		i := strings.IndexByte(entry[min(1, len(entry)):], '=') + min(1, len(entry))
-		return entry[:i]
-	}
-	sort.SliceStable(env, func(i, j int) bool {
-		return slices.Compare(jsstr.ToUTF16(name(env[i])), jsstr.ToUTF16(name(env[j]))) < 0
+func windowsEnvDedupe(names []string) []string {
+	sort.SliceStable(names, func(i, j int) bool {
+		return slices.Compare(jsstr.ToUTF16(names[i]), jsstr.ToUTF16(names[j])) < 0
 	})
 	seen := map[string]bool{}
-	out := env[:0]
-	for _, entry := range env {
-		upper := strings.ToUpper(name(entry))
+	out := names[:0]
+	for _, name := range names {
+		upper := strings.ToUpper(name)
 		if seen[upper] {
 			continue
 		}
 		seen[upper] = true
-		out = append(out, entry)
+		out = append(out, name)
 	}
 	return out
+}
+
+// decodeEnvValue is a value from GetEnvironmentVariableW as Node reads it:
+// libuv converts the UTF-16 to WTF-8 (a lone surrogate becomes 3 bytes)
+// and V8 decodes that as UTF-8, one U+FFFD per invalid byte.
+func decodeEnvValue(units []uint16) string {
+	return nodefs.DecodeUTF8([]byte(jsstr.FromUTF16(units)))
 }
 
 // lookupEnv is getenv over an envPairs list: the first match wins.

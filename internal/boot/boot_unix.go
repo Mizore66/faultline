@@ -44,9 +44,18 @@ func init() {
 // disableStdioInheritance is libuv's uv_disable_stdio_inheritance, which
 // Node calls at startup: descriptors 0 to 15 are marked close-on-exec
 // unconditionally, then each one above until the first that is not open,
-// so descriptors fl inherited do not reach git.
+// so descriptors fl inherited do not reach git. Node holds no descriptors
+// of its own by then; the Go runtime does (a cgroup file, netpoll's epoll
+// and eventfd), and they could fill the gap where libuv's scan stops. They
+// are close-on-exec already, which an inherited descriptor never is, so the
+// scan above 15 also stops at one.
 func disableStdioInheritance() {
 	for fd := 0; ; fd++ {
+		if fd > 15 {
+			if flags, ok := fdFlags(fd); !ok || flags&syscall.FD_CLOEXEC != 0 {
+				break
+			}
+		}
 		if !setCloexec(fd) && fd > 15 {
 			break
 		}

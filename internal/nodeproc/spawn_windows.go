@@ -169,3 +169,23 @@ func fileExists(path string) bool {
 	attrs, err := syscall.GetFileAttributes(p)
 	return err == nil && attrs&syscall.FILE_ATTRIBUTE_DIRECTORY == 0
 }
+
+// getenvUTF16 is GetEnvironmentVariableW(name), as uv_os_getenv calls it:
+// the raw UTF-16 value, false when the lookup fails.
+func getenvUTF16(name string) ([]uint16, bool) {
+	p, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return nil, false
+	}
+	buf := make([]uint16, 256)
+	for {
+		n, err := syscall.GetEnvironmentVariable(p, &buf[0], uint32(len(buf)))
+		if err != nil {
+			return nil, false
+		}
+		if n < uint32(len(buf)) {
+			return buf[:n], true
+		}
+		buf = make([]uint16, n)
+	}
+}

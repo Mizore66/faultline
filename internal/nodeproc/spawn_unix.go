@@ -207,3 +207,6 @@ func execvpDarwin(file string, argv []string, path string, exec execFunc) (*os.P
 	}
 	return nil, last
 }
+
+// getenvUTF16 is only used on Windows.
+func getenvUTF16(string) ([]uint16, bool) { return nil, false }

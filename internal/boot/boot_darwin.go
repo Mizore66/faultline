@@ -33,3 +33,9 @@ var terminating = []os.Signal{
 func resetInherited() {}
 
 func dieOfPending() {}
+
+// fdFlags is fcntl(fd, F_GETFD); false if fd is not open.
+func fdFlags(fd int) (int, bool) {
+	r, err := sysFcntl(fd, syscall.F_GETFD, 0)
+	return r, err == nil
+}
