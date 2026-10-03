@@ -128,3 +128,20 @@ func TestComparePreparedMatchesCompare(t *testing.T) {
 		}
 	}
 }
+
+// The BMP bitmap must classify every code point as the slow predicate does:
+// a wrong bit sends a string down the wrong compare path and can change a
+// digest (round 5, §8 F5).
+func TestNotSimpleBitmap(t *testing.T) {
+	tb := load()
+	for c := rune(0); c <= 0xFFFF; c++ {
+		if got, want := tb.notSimple(c), tb.notSimpleSlow(c); got != want {
+			t.Fatalf("notSimple(U+%04X) = %v, slow predicate %v", c, got, want)
+		}
+	}
+	for _, c := range []rune{0x10000, 0x1D504, 0x1F600, 0x10FFFF} {
+		if tb.notSimple(c) != tb.notSimpleSlow(c) {
+			t.Fatalf("notSimple(U+%04X) differs from the slow predicate", c)
+		}
+	}
+}
