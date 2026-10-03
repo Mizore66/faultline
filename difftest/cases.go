@@ -322,11 +322,17 @@ func resignLedgerJSON(ledger jsjson.Value) {
 // padTotal is the TS engine's padTotal: sparse files path-00000, ... of at
 // most 120 MiB (under the per-artifact cap) bring the bundle's regular
 // files, hashes.txt and ROOT.sha256 included, to exactly total bytes.
-func padTotal(root, base, path string, total int64) {
+// padTotal pads the bundle with zero files until its regular files add up
+// to total bytes; with declared, only the files hashes.txt catalogs count
+// (all but hashes.txt and ROOT.sha256), the total the git verifier checks.
+func padTotal(root, base, path string, total int64, declared bool) {
 	const chunk = 120 << 20
 	size := func() int64 {
 		var n int64
 		for _, f := range listFiles(root, "") {
+			if declared && (f == "hashes.txt" || f == "ROOT.sha256") {
+				continue
+			}
 			if st, err := os.Stat(filepath.Join(root, filepath.FromSlash(f))); err == nil {
 				n += st.Size()
 			}
@@ -543,7 +549,7 @@ func applyMutation(root string, c testCase) bool {
 			os.Truncate(p, int64(t.fields.Field("size").Num()))
 		}
 	case "pad-total":
-		padTotal(root, c.base, path, int64(t.fields.Field("total").Num()))
+		padTotal(root, c.base, path, int64(t.fields.Field("total").Num()), t.fields.Field("declared").Bool())
 	case "many-files":
 		os.MkdirAll(path, 0o755)
 		for i := 0; i < int(t.fields.Field("count").Num()); i++ {

@@ -80,7 +80,7 @@ func collectFiles(root, current string, budget *fileBudget) []string {
 		child := nodefs.Join(current, name)
 		stat := bundle.Must(nodefs.Lstat(child))
 		if isLink(stat) || (!stat.IsDir() && !stat.Mode().IsRegular()) {
-			bundle.Throw(errors.New(jsexc.Concat("Git proof bundle contains a symbolic link or special file: ", child)))
+			bundle.Throw(errors.New(jsexc.Concat("Git proof bundle contains a symbolic link or special file: ", child))) // coverage gate: race only (assertNoLinksOrSpecialFiles throws first)
 		}
 		if stat.IsDir() {
 			files = append(files, collectFiles(root, child, budget)...)

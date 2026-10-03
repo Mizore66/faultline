@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,6 +25,9 @@ var portedTypes = map[string]bool{"demo": true, "prevention": true, "git": true}
 // that anything written outside cli.Run's writers, and the exit status of the
 // real process, are compared too.
 var flBinary string
+
+// windowsUncreatable are the mutation ops a Windows runner cannot apply.
+var windowsUncreatable = map[string]bool{"symlink": true, "root-symlink": true, "fake-git": true}
 
 func TestMain(m *testing.M) {
 	// Corepack keeps pnpm under the real HOME; an empty one would make the
@@ -57,19 +61,55 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS == "windows" {
 		flBinary += ".exe"
 	}
-	build := exec.Command("go", "build", "-o", flBinary, "github.com/Mizore66/faultline/cmd/fl")
+	buildArgs := []string{"build", "-o", flBinary}
+	coverDir := ""
+	if os.Getenv("FAULTLINE_COVERAGE_GATE") == "1" {
+		coverDir, _ = os.MkdirTemp("", "faultline-cover-")
+		os.Setenv("GOCOVERDIR", coverDir)
+		buildArgs = append(buildArgs, "-cover", "-coverpkg="+coverPkgs)
+	}
+	build := exec.Command("go", append(buildArgs, "github.com/Mizore66/faultline/cmd/fl")...)
 	build.Stdout, build.Stderr = os.Stderr, os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "building fl:", err)
 		os.Exit(1)
 	}
+	if coverDir != "" {
+		// Write the coverage meta-data file once, before the replay: fl
+		// processes that start together otherwise race to rename it into
+		// place and print the failure on stderr.
+		exec.Command(flBinary, "help").Run()
+	}
 	code := m.Run()
+	if coverDir != "" {
+		if run := flag.Lookup("test.run"); code == 0 && run != nil && run.Value.String() == "" {
+			repo, _ := filepath.Abs("..")
+			if err := coverageGate(repo, coverDir); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				code = 1
+			}
+		}
+		os.RemoveAll(coverDir)
+	}
 	os.RemoveAll(home)
 	os.Exit(code)
 }
 
 // runFl runs the built fl binary like gen-goldens.ts runs dist/cli.js.
 func runFl(t *testing.T, repo string, env map[string]string, args ...string) (string, string, int) {
+	for try := 1; ; try++ {
+		stdout, stderr, code := runFlOnce(t, repo, env, args...)
+		// Under the coverage gate, about one fl process in 20,000 fails to
+		// write the coverage meta-data file although it already exists (seen
+		// only in a loaded Linux VM) and reports it on stderr, without its
+		// counters. Run it again rather than compare that output.
+		if try == 3 || os.Getenv("GOCOVERDIR") == "" || !strings.Contains(stderr, "error: coverage meta-data emit failed") {
+			return stdout, stderr, code
+		}
+	}
+}
+
+func runFlOnce(t *testing.T, repo string, env map[string]string, args ...string) (string, string, int) {
 	cmd := exec.Command(flBinary, args...)
 	cmd.Dir = repo
 	cmd.Env = os.Environ()
@@ -217,7 +257,9 @@ func TestGoldenReplay(t *testing.T) {
 					bundle := filepath.Join(work, "bundle")
 					copyTree(t, root, bundle)
 					if !applyMutation(bundle, c) {
-						if runtime.GOOS != "windows" {
+						// Only Windows, and only symlinks and the POSIX fake
+						// gits; any other skip would hide a case (round 5, §8 F9).
+						if runtime.GOOS != "windows" || !windowsUncreatable[c.tpl.str("op")] {
 							t.Fatal("could not apply the mutation")
 						}
 						t.Skip("platform cannot create this case (symlink, or a POSIX fake git)")

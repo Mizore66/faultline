@@ -1,0 +1,16 @@
+#!/bin/sh
+# Fake git for difftest: `git bundle verify` fails with three diagnostic
+# lines (the shape of a bundle missing prerequisites), surrounded by blanks
+# that the trim removes, so a port that drops, joins or reorders lines shows
+# (round 5, §8 F8: real-git stderr is masked to one token).
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+# Commands in the temporary repository start with -C <dir>.
+if [ "$1" = -C ]; then c1=$3; c2=$4; else c1=$1; c2=$2; fi
+if [ "$c1" = bundle ] && [ "$c2" = verify ]; then
+  printf '\n  error: Repository lacks these prerequisite commits:\nerror: 1111111111111111111111111111111111111111\nerror: 2222222222222222222222222222222222222222\n\n' >&2
+  exit 1
+fi
+exec git "$@"

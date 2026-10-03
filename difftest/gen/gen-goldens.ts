@@ -73,7 +73,11 @@ async function golden(c: Case, root: string, rootDigest: string): Promise<string
 }
 
 const basesDir = join(repo, "difftest/testdata/bases");
+// FAULTLINE_GOLDEN_BASES=a,b regenerates only those bases (for local
+// iteration; CI regenerates every base and checks for drift).
+const only = process.env.FAULTLINE_GOLDEN_BASES?.split(",");
 for (const base of readdirSync(basesDir).sort()) {
+  if (only && !only.includes(base)) continue;
   const root = join(basesDir, base);
   const cases = expandCases(base, root, templates);
   const rootDigest = baseRoot(root, base);

@@ -46,7 +46,7 @@ func collectFilesAt(directory, current string, depth int) []string {
 		path := nodefs.Join(current, name)
 		stat := bundle.Must(nodefs.Lstat(path))
 		if isLink(stat) || (!stat.IsDir() && !stat.Mode().IsRegular()) {
-			bundle.Throw(errors.New(jsexc.Concat("bundle contains a symbolic link or special file: ", path)))
+			bundle.Throw(errors.New(jsexc.Concat("bundle contains a symbolic link or special file: ", path))) // coverage gate: race only (assertNoLinksOrSpecialFiles throws first)
 		}
 		if stat.IsDir() {
 			sub := collectFilesAt(directory, path, depth+1)

@@ -8,7 +8,7 @@ export type Template = {
   find?: string; replace?: string; hex?: string; key?: string; value?: unknown; rehash?: boolean;
   bases?: string[]; jsonPath?: Array<string | number>; valueFrom?: Array<string | number>; swapWith?: Array<string | number>;
   delete?: boolean; first?: boolean; to?: string; prefix?: string; suffix?: string; depth?: number; count?: number;
-  edits?: JsonEdit[]; size?: number; from?: string; fakeGit?: string; resignLedger?: boolean; total?: number;
+  edits?: JsonEdit[]; size?: number; from?: string; fakeGit?: string; resignLedger?: boolean; total?: number; declared?: boolean;
   // alsoEdit: json-edit steps for other files of the same case.
   alsoEdit?: Array<{ file: string; edits: JsonEdit[] }>;
   // rebindLifecycle: after a ledger edit, rebind manifest.lifecycle to the
@@ -267,9 +267,14 @@ function resignLedgerJson(ledger: LedgerJson): void {
 // padTotal adds sparse files path-00000, ... of at most 120 MiB (under the
 // per-artifact cap) so that the bundle's regular files, hashes.txt and
 // ROOT.sha256 included, total exactly `total` bytes.
-function padTotal(root: string, base: string, path: string, total: number): void {
+// padTotal pads the bundle with zero files until its regular files add up to
+// total bytes; with declared, only the files hashes.txt catalogs count (all
+// but hashes.txt and ROOT.sha256), the total the git verifier checks.
+function padTotal(root: string, base: string, path: string, total: number, declared: boolean): void {
   const chunk = 120 * 1024 * 1024;
-  const size = () => listFiles(root).reduce((n, f) => n + statSync(join(root, f)).size, 0);
+  const size = () => listFiles(root)
+    .filter((f) => !declared || (f !== "hashes.txt" && f !== "ROOT.sha256"))
+    .reduce((n, f) => n + statSync(join(root, f)).size, 0);
   rehash(root, base);
   let need = total - size();
   let last = "";
@@ -369,7 +374,7 @@ export function applyMutation(root: string, c: Case): void {
       }
       break;
     }
-    case "pad-total": padTotal(root, c.base, path, t.total!); break;
+    case "pad-total": padTotal(root, c.base, path, t.total!, t.declared === true); break;
     case "many-files": {
       mkdirSync(path, { recursive: true });
       for (let i = 0; i < t.count!; i++) writeFileSync(join(path, `${String(i).padStart(5, "0")}.txt`), t.content!);

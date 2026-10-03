@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/Mizore66/faultline/difftest/oracle"
 )
 
 // os.tmpdir() reads TMPDIR, TMP and TEMP through SafeGetenv, which ignores
@@ -18,7 +16,7 @@ import (
 // goes to /tmp. Round 5, row 10. Needs root to give the process a real gid
 // other than its effective one.
 func TestLiveTmpdirSetidMatchesNode(t *testing.T) {
-	oracle.Start(t).Close() // skip unless FAULTLINE_NODE_ORACLE=1
+	startRootOracle(t)
 	if os.Geteuid() != 0 {
 		if os.Getenv("FAULTLINE_REQUIRE_ROOT") != "" {
 			t.Fatal("FAULTLINE_REQUIRE_ROOT is set but the test is not root")

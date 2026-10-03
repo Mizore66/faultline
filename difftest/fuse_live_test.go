@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/Mizore66/faultline/difftest/oracle"
 )
 
 // TestLiveFuseMatchesNode mounts a bundle through lyingfs (testdata/fuse), a
@@ -30,7 +28,7 @@ import (
 // glibc 2.36 sees, whatever C library this host's Node uses; an entry that
 // is also opened by name needs Node on glibc 2.36 or older.
 func TestLiveFuseMatchesNode(t *testing.T) {
-	oracle.Start(t).Close() // skip unless FAULTLINE_NODE_ORACLE=1
+	startRootOracle(t)
 	require := os.Getenv("FAULTLINE_REQUIRE_ROOT") != ""
 	skip := func(why string) {
 		if require {

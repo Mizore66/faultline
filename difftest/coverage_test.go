@@ -44,7 +44,26 @@ var unreachableLiterals = map[string]string{
 // ...) and local error-adding closures (such as
 // `add := func(s string) { errs = append(errs, s) }`) in internal/bundle.
 func errorLiterals(t *testing.T, dir string) map[string]string {
+	sites, err := errorSites(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	out := map[string]string{}
+	for _, s := range sites {
+		out[s.text] = s.pos
+	}
+	return out
+}
+
+// errorSite is one error literal and where it is: errorLiterals keys them by
+// text, the statement-coverage gate (coverageGate) by position.
+type errorSite struct {
+	text, pos, file string
+	line            int
+}
+
+func errorSites(dir string) ([]errorSite, error) {
+	var out []errorSite
 	fset := token.NewFileSet()
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -97,7 +116,8 @@ func errorLiterals(t *testing.T, dir string) map[string]string {
 						// Short literals ("; expected", "sequence") are glue
 						// around the longer literal of the same message.
 						if len(messageFragments(s)) > 0 {
-							out[s] = fset.Position(lit.Pos()).String()
+							p := fset.Position(lit.Pos())
+							out = append(out, errorSite{s, p.String(), p.Filename, p.Line})
 						}
 					}
 					return true
@@ -107,10 +127,7 @@ func errorLiterals(t *testing.T, dir string) map[string]string {
 		})
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
+	return out, err
 }
 
 func appendsToErrors(e ast.Expr) bool { return strings.Contains(strings.ToLower(exprString(e)), "err") }

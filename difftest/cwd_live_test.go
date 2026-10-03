@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/Mizore66/faultline/difftest/oracle"
 )
 
 // process.cwd() errors come from libc's getcwd through libuv's uv_cwd. Run
@@ -26,10 +24,7 @@ func TestLiveCwdErrorsMatchNode(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the scenarios use Linux mounts, chroot and setpriv")
 	}
-	oracle.Start(t).Close() // skip unless FAULTLINE_NODE_ORACLE=1
-	if os.Getenv("FAULTLINE_REQUIRE_ROOT") != "" && os.Geteuid() != 0 {
-		t.Fatal("FAULTLINE_REQUIRE_ROOT is set but the test is not running as root")
-	}
+	startRootOracle(t)
 	repo, _ := filepath.Abs("..")
 	cli := filepath.Join(repo, "dist", "cli.js")
 	base, err := os.MkdirTemp("/tmp", "fl-cwd-")
@@ -45,6 +40,7 @@ func TestLiveCwdErrorsMatchNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bundle := filepath.Join(repo, "difftest", "testdata", "bases", "demo-replay")
 	fl := filepath.Join(base, "fl")
 	copyFile(t, flBinary, fl)
 	os.Chmod(fl, 0o755)
@@ -77,22 +73,25 @@ func TestLiveCwdErrorsMatchNode(t *testing.T) {
 		{name: "deleted", post: []any{[]any{"delete", false}}},
 		{name: "recreated", post: []any{[]any{"delete", true}}},
 		{name: "chroot", chroot: true},
-		{name: "self0600", nobody: true, post: []any{[]any{"chmod", ".", 0o600}}},
-		{name: "parent0311", nobody: true, post: []any{[]any{"chmod", "..", 0o311}}},
+		// Past PATH_MAX, so that the kernel's getcwd fails and the C
+		// library's walk, which permissions can stop, runs (round 5, §3 P3).
+		{name: "self0600", cwdLen: 4200, seg: 200, nobody: true, post: []any{[]any{"chmod", ".", 0o600}}},
+		{name: "parent0311", cwdLen: 4200, seg: 200, nobody: true, post: []any{[]any{"chmod", "..", 0o311}}},
 	}
 	for _, n := range []int{4094, 4095, 4096, 4097, 4200} {
 		for _, seg := range []int{1, 2, 200} {
 			scenarios = append(scenarios, scenario{name: "len" + strconv.Itoa(n) + "seg" + strconv.Itoa(seg), cwdLen: n, seg: seg})
 		}
-		scenarios = append(scenarios,
-			scenario{name: "gone" + strconv.Itoa(n), cwdLen: n, seg: 200, post: []any{[]any{"delete", false}}},
-			scenario{name: "locked" + strconv.Itoa(n), cwdLen: n, seg: 200, nobody: true, post: []any{[]any{"chmod", "..", 0o311}}},
-		)
+		scenarios = append(scenarios, scenario{name: "gone" + strconv.Itoa(n), cwdLen: n, seg: 200, post: []any{[]any{"delete", false}}})
+		if n >= 4096 { // below PATH_MAX the kernel's getcwd ignores permissions
+			scenarios = append(scenarios, scenario{name: "locked" + strconv.Itoa(n), cwdLen: n, seg: 200, nobody: true, post: []any{[]any{"chmod", "..", 0o311}}})
+		}
 	}
 	// The driver builds the tree with relative mkdir/chdir (shells cannot cd
-	// past PATH_MAX), applies the operations, optionally chroots and drops to
-	// uid 65534, and execs the command in place.
-	const driver = `import json, os, sys
+	// past PATH_MAX), copies a valid bundle to ../bundle (so a wrongly
+	// resolved cwd cannot print VALID), applies the operations, optionally
+	// chroots and drops to uid 65534, and execs the command in place.
+	const driver = `import json, os, shutil, sys
 spec = json.loads(sys.argv[1]); argv = sys.argv[2:]
 uid = spec["uid"]
 os.makedirs(spec["root"]); os.chdir(spec["root"])
@@ -101,6 +100,10 @@ for s in spec["segs"]:
     os.mkdir(s)
     if uid is not None: os.chown(s, uid, uid)
     os.chdir(s)
+shutil.copytree(spec["bundle"], os.path.join("..", "bundle"), symlinks=True)
+if uid is not None:
+    for d, dirs, files in os.walk(os.path.join("..", "bundle")):
+        for n in [d] + [os.path.join(d, f) for f in dirs + files]: os.lchown(n, uid, uid)
 for op in spec["post"]:
     if op[0] == "delete":
         parent = os.open("..", os.O_RDONLY)
@@ -129,7 +132,7 @@ os.execv(argv[0], argv)
 				if sc.cwdLen > 0 {
 					segs = segments(len(root), sc.cwdLen, sc.seg)
 				}
-				spec := map[string]any{"root": root, "segs": segs, "post": sc.post, "uid": nil, "chroot": nil}
+				spec := map[string]any{"root": root, "segs": segs, "post": sc.post, "uid": nil, "chroot": nil, "bundle": bundle}
 				if sc.post == nil {
 					spec["post"] = []any{}
 				}

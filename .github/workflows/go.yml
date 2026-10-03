@@ -23,7 +23,11 @@ jobs:
       # Windows needs well over the 10m default. -count=1: replay builds
       # cmd/fl in a subprocess, which Go's test cache cannot see, so a cached
       # PASS could hide a change to main.
+      # On ubuntu-latest the replay also builds fl with coverage and fails
+      # if a verifier error site is never reached (difftest/covergate_test.go).
       - run: go test -count=1 -timeout 60m ./...
+        env:
+          FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
 
   difftest-live:
     name: difftest live (frozen TS oracle)
@@ -55,7 +59,11 @@ jobs:
         # strace -e inject; it fails rather than skips without strace in CI.
         run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
       - name: Live property tests
-        run: FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run TestLive -v -timeout 45m
+        # Only the cases that need root may skip here; they run below.
+        run: |
+          set -o pipefail
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run TestLive -v -timeout 45m | tee "$RUNNER_TEMP/live.log"
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^(TestLiveCwdErrorsMatchNode/(chroot|self0600|parent0311|locked[0-9]+)|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode)$'
       - name: Install FUSE
         # TestLiveFuseMatchesNode mounts bundles through a FUSE filesystem
         # that misreports d_ino, d_type, sizes and errors.
@@ -70,15 +78,22 @@ jobs:
           # home is 0750).
           d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d=$(dirname "$d"); done
           sudo chmod -R o+rX "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/package.json"
-          cd difftest && sudo -E env "PATH=$PATH" GOCACHE="$RUNNER_TEMP/root-gocache" FAULTLINE_NODE_ORACLE=1 FAULTLINE_REQUIRE_ROOT=1 \
-            "$RUNNER_TEMP/difftest.test" -test.run 'TestLiveCwdErrorsMatchNode|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode' -test.count=1 -test.v
+          # ubuntu-latest's glibc (2.39) lists d_ino 0 entries, so the FUSE
+          # case that needs Node on glibc <= 2.36 skips (KNOWN_DIFFERENCES).
+          set -o pipefail
+          (cd difftest && sudo -E env "PATH=$PATH" GOCACHE="$RUNNER_TEMP/root-gocache" FAULTLINE_NODE_ORACLE=1 FAULTLINE_REQUIRE_ROOT=1 \
+            "$RUNNER_TEMP/difftest.test" -test.run 'TestLiveCwdErrorsMatchNode|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode' -test.count=1 -test.v) | tee "$RUNNER_TEMP/root.log"
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/root.log" '^TestLiveFuseMatchesNode/zero-declared-demo$'
       - name: TimSort against V8
         run: FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -v
 
   stack-live:
     # The V8 stack, spread and rimraf limits are fitted per platform
     # (internal/jsjson/stack.go); check them against the pinned Node on the
-    # other platforms they model, with the stdout and signal emulation.
+    # other platforms they model, with the signal, stdout, stderr and
+    # RLIMIT_NOFILE emulation. On macOS the rimraf chain cannot reach V8's
+    # depth (PATH_MAX), and the signal and stdout scenarios that read /proc
+    # or Linux devices skip; the group-signal, NOFILE and stderr tests run.
     name: stack thresholds vs Node (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -97,5 +112,10 @@ jobs:
           go-version: "1.27"
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run 'TestLiveStackThresholdsMatchNode|TestLiveSpreadLimitsMatchNode|TestLiveRimrafDepthMatchesNode|TestLiveStdoutMatchesNode|TestLiveSignalsMatchNode|TestLiveNofileMatchesNode|TestLiveGroupSignalMatchesNode|TestLiveStderrMatchesNode' -v -timeout 45m
+      - name: Live platform tests
+        run: |
+          set -o pipefail
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run 'TestLiveStackThresholdsMatchNode|TestLiveSpreadLimitsMatchNode|TestLiveRimrafDepthMatchesNode|TestLiveStdoutMatchesNode|TestLiveSignalsMatchNode|TestLiveNofileMatchesNode|TestLiveGroupSignalMatchesNode|TestLiveStderrMatchesNode' -v -timeout 45m | tee "$RUNNER_TEMP/live.log"
+          if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode)$'; else allowed='^$'; fi
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" "$allowed"
       - run: FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -v
