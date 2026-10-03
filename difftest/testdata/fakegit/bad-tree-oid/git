@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake git for difftest: tree resolution prints something that is not an
+# object id (commit resolution works).
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+for a in "$@"; do case "$a" in *"^{tree}") echo zz-not-an-oid; exit 0;; esac; done
+exec git "$@"

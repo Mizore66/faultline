@@ -1,0 +1,101 @@
+name: Go
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    name: go test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest, windows-11-arm]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: go mod tidy -diff
+      - run: go vet ./...
+      # Golden replay runs the fl binary once per invocation and git ~20k times;
+      # Windows needs well over the 10m default. -count=1: replay builds
+      # cmd/fl in a subprocess, which Go's test cache cannot see, so a cached
+      # PASS could hide a change to main.
+      - run: go test -count=1 -timeout 60m ./...
+
+  difftest-live:
+    name: difftest live (frozen TS oracle)
+    runs-on: ubuntu-latest
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          # Pinned: the collation data (ICU 78) and the stack calibration
+          # (internal/jsjson/stack.go) follow this Node release.
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Regenerate goldens and require no drift
+        # porcelain also catches untracked files (a new base's golden).
+        run: |
+          pnpm exec tsx difftest/gen/gen-goldens.ts
+          git status --porcelain difftest/testdata
+          test -z "$(git status --porcelain difftest/testdata)"
+      - name: Install strace
+        # TestLiveFaultInjectionMatchesNode fails single syscalls with
+        # strace -e inject; it fails rather than skips without strace in CI.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
+      - name: Live property tests
+        run: FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run TestLive -v -timeout 45m
+      - name: Install FUSE
+        # TestLiveFuseMatchesNode mounts bundles through a FUSE filesystem
+        # that misreports d_ino, d_type, sizes and errors.
+        run: sudo apt-get install -y -qq fuse3 libfuse2t64 python3-fusepy
+      - name: Cases that need root (chroot, setuid, FUSE)
+        # A test binary built as the runner user, run as root with its own
+        # Go cache, so the runner's cache stays writable.
+        run: |
+          go test -c -o "$RUNNER_TEMP/difftest.test" ./difftest/
+          # The setuid-nobody cases run node dist/cli.js as nobody: every
+          # directory above the checkout must be searchable (the runner's
+          # home is 0750).
+          d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d=$(dirname "$d"); done
+          sudo chmod -R o+rX "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/package.json"
+          cd difftest && sudo -E env "PATH=$PATH" GOCACHE="$RUNNER_TEMP/root-gocache" FAULTLINE_NODE_ORACLE=1 FAULTLINE_REQUIRE_ROOT=1 \
+            "$RUNNER_TEMP/difftest.test" -test.run 'TestLiveCwdErrorsMatchNode|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode' -test.count=1 -test.v
+      - name: TimSort against V8
+        run: FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -v
+
+  stack-live:
+    # The V8 stack, spread and rimraf limits are fitted per platform
+    # (internal/jsjson/stack.go); check them against the pinned Node on the
+    # other platforms they model, with the stdout and signal emulation.
+    name: stack thresholds vs Node (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, macos-latest]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run 'TestLiveStackThresholdsMatchNode|TestLiveSpreadLimitsMatchNode|TestLiveRimrafDepthMatchesNode|TestLiveStdoutMatchesNode|TestLiveSignalsMatchNode|TestLiveNofileMatchesNode|TestLiveGroupSignalMatchesNode|TestLiveStderrMatchesNode' -v -timeout 45m
+      - run: FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -v

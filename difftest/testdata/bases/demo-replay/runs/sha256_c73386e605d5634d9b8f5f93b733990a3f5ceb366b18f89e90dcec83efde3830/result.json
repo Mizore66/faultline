@@ -1,0 +1,13 @@
+{
+  "id": "sha256:c73386e605d5634d9b8f5f93b733990a3f5ceb366b18f89e90dcec83efde3830",
+  "stateId": "cedar-turn-6",
+  "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+  "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+  "verdict": "FAIL",
+  "reasonCode": "WITNESS_ASSERTION_FAILED",
+  "stdout": "",
+  "stderr": "expected settlement USD; received EUR\n",
+  "durationMs": 0,
+  "executionKind": "CACHED",
+  "executedAt": "2026-07-14T09:05:00.000Z"
+}
