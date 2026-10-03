@@ -32,6 +32,3 @@ func raiseNofile() {
 	lim.Cur = lo
 	syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim)
 }
-
-// rlimInfinity is RLIM_INFINITY, all ones on every Unix Go supports.
-const rlimInfinity = ^uint64(0)
