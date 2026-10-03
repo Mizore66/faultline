@@ -255,7 +255,11 @@ func expandCases(base, root string, templates []template) []testCase {
 	cases := []testCase{{id: base, base: base}}
 	for i := range templates {
 		t := templates[i]
+		// git-shape-* bases pin one history shape each (round 5): only the
+		// templates that name them run there, not the generic ones.
 		if bases, ok := t.fields.Get("bases"); ok && !slices.ContainsFunc(bases.Items(), func(b jsjson.Value) bool { return b.Str() == base }) {
+			continue
+		} else if !ok && strings.HasPrefix(base, "git-shape-") {
 			continue
 		}
 		var targets []string

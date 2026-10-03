@@ -136,7 +136,9 @@ export function expandCases(base: string, root: string, templates: Template[]): 
   const files = listFiles(root);
   const cases: Case[] = [{ id: base, base }];
   for (const t of templates) {
-    if (t.bases && !t.bases.includes(base)) continue;
+    // git-shape-* bases pin one history shape each (round 5): only the
+    // templates that name them run there, not the generic ones.
+    if (t.bases ? !t.bases.includes(base) : base.startsWith("git-shape-")) continue;
     const targets = PATH_OPS.has(t.op)
       ? [t.path ?? "."]
       : files.filter((f) => matches(t.file!, f));
