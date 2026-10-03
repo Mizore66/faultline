@@ -264,6 +264,19 @@ func TestLiveSandbox(t *testing.T) {
 				seeds = append(seeds, oracleText(t, c, "sandboxVariant", `{"text":`+jsjson.Quote(docker)+`,"variant":"`+v+`"}`))
 				variants++
 			}
+			// A name repeated in each environment list, re-signed (round 5,
+			// §8 F3: the duplicate-name check had no input).
+			for _, list := range []string{"passed", "allowedKeys", "redactedKeys", "fixedKeys"} {
+				v, _ := jsjson.Parse(seeds[len(seeds)-1])
+				env := v.Get("environment").Obj()
+				items := env.Field(list).Items()
+				if len(items) == 0 {
+					continue
+				}
+				env.Set(list, jsjson.MakeArray(append(slices.Clone(items), items[0])))
+				seeds = append(seeds, oracleText(t, c, "resignSandbox", `{"text":`+jsjson.Quote(jsjson.Stringify(v))+`,"legacy":false}`))
+				variants++
+			}
 			// Each policy limit at its maximum and one past it, re-signed, so
 			// an off-by-one comparison changes the verdict here.
 			for _, limit := range []struct {
