@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"syscall"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/Mizore66/faultline/internal/nodefs"
 	"github.com/Mizore66/faultline/internal/sigexit"
@@ -32,7 +34,8 @@ const (
 //   - UDP sockets and anything libuv cannot classify get Node's dummy
 //     Writable, which discards everything.
 //
-// Node's pipes on Windows write synchronously too and report the file form.
+// Node's pipes on Windows write synchronously too and report the file form;
+// a Windows console is written as UTF-16 with WriteConsoleW (writeTTY).
 // The first error is kept, like the 'error' event.
 //
 // Node creates process.stdout on first use, which for verify is the first
@@ -72,6 +75,12 @@ func (s *stdoutWriter) Write(p []byte) (int, error) {
 			return 0, err
 		}
 		return len(p), nil
+	case handleTTY:
+		if err := writeTTY(s.f, p); err != nil {
+			s.err = err
+			return 0, err
+		}
+		return len(p), nil
 	}
 	if err := writeAll(s.f, p); err != nil {
 		s.err = err
@@ -97,4 +106,55 @@ func (s *stdoutWriter) errorLine() string {
 // fileFormLine is uvException's message for a failed fs.writeSync.
 func fileFormLine(code string) string {
 	return "Error: " + code + ": " + nodefs.Describe(code) + ", write"
+}
+
+// stderrWriter is process.stderr for the CLI's own error output. Unlike
+// process.stdout, Node creates it while its modules load (util/colors reads
+// it), so fd 2 is classified at startup. A UDP socket or a descriptor libuv
+// cannot classify (an AF_UNIX datagram or SOCK_SEQPACKET socket) gets the
+// dummy Writable, which discards everything; otherwise the bytes go to fd 2
+// as before. V8's fatal reports and the stdout error line are printed with C
+// stdio in Node and reach fd 2 whatever it is, so they do not come here.
+type stderrWriter struct {
+	f       *os.File
+	discard bool
+}
+
+func newStderrWriter(f *os.File) *stderrWriter {
+	kind := guessHandle(f)
+	return &stderrWriter{f: f, discard: kind == handleUDP || kind == handleUnknown}
+}
+
+func (s *stderrWriter) Write(p []byte) (int, error) {
+	if s.discard {
+		return len(p), nil
+	}
+	return s.f.Write(p)
+}
+
+// consoleUTF16 is the text conversion in libuv's uv__tty_write_bufs
+// (src/win/tty.c) for a Windows console: UTF-8 to UTF-16, with its EOL
+// conversion. An LF not preceded by CR is written as CR LF, a CR right after
+// an LF is dropped, and any other CR or LF is written as it is. eol is
+// tty.wr.previous_eol, kept across writes.
+func consoleUTF16(p []byte, eol *rune) []uint16 {
+	var units []uint16
+	for len(p) > 0 {
+		r, size := utf8.DecodeRune(p)
+		p = p[size:]
+		if r == '\n' || r == '\r' {
+			switch {
+			case r == '\n' && *eol != '\r':
+				units = append(units, '\r', '\n')
+			case r == '\r' && *eol == '\n':
+			default:
+				units = append(units, uint16(r))
+			}
+			*eol = r
+			continue
+		}
+		*eol = 0
+		units = utf16.AppendRune(units, r)
+	}
+	return units
 }

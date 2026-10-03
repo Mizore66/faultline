@@ -113,3 +113,6 @@ func streamWriteErrno(err error) error {
 	}
 	return err
 }
+
+// writeTTY is writeAll: a terminal is a libuv stream on Unix.
+func writeTTY(f *os.File, p []byte) error { return writeAll(f, p) }

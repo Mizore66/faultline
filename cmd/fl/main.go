@@ -11,8 +11,9 @@ import (
 
 func main() {
 	args := nodeArgv()
+	stderr := newStderrWriter(os.Stderr)
 	stdout := newStdoutWriter(os.Stdout)
-	code := cli.Run(args, stdout, os.Stderr)
+	code := cli.Run(args, stdout, stderr)
 	sigexit.Hold()
 	if stdout.err != nil {
 		io.WriteString(os.Stderr, stdout.errorLine()+"\n")

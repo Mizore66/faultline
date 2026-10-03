@@ -66,3 +66,24 @@ func fsWriteErrno(err error) error {
 	}
 	return err
 }
+
+// eolState is libuv's tty.wr.previous_eol, kept across writes.
+var eolState rune
+
+// writeTTY is libuv's uv__tty_write_bufs (src/win/tty.c): consoleUTF16,
+// then WriteConsoleW. Errors are libuv's stream errors
+// (uv_translate_sys_error), not fs__write's.
+func writeTTY(f *os.File, p []byte) error {
+	units := consoleUTF16(p, &eolState)
+	for len(units) > 0 {
+		var n uint32
+		if err := syscall.WriteConsole(syscall.Handle(f.Fd()), &units[0], uint32(len(units)), &n, nil); err != nil {
+			return err
+		}
+		if n == 0 {
+			return nil
+		}
+		units = units[n:]
+	}
+	return nil
+}
