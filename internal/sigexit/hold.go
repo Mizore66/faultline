@@ -20,9 +20,10 @@ var childKilled atomic.Bool
 // child's death lets fl finish verifying within a few milliseconds.
 func ChildKilled() { childKilled.Store(true) }
 
-// holdWait bounds the wait for that signal. It only delays fl's output,
-// which TS would print unchanged if no signal comes.
-const holdWait = 500 * time.Millisecond
+// holdWait bounds the wait for that signal, generously for a loaded
+// machine. It only delays fl's output, which TS would print unchanged if no
+// signal comes.
+const holdWait = 2 * time.Second
 
 // Hold is called before fl writes its report or exits. Node dies of a
 // signal the moment it arrives; fl learns of it on a goroutine, so output

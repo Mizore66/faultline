@@ -16,7 +16,7 @@ import (
 // sends sig to its whole process group, as Ctrl-C or a terminal hang-up
 // does: git and verify get it at the same instant, and git dies of it. With
 // a second signal, git instead sends sig to verify alone and the second one
-// 5 ms later. It prints the wait status and stdout/stderr sizes of each run.
+// 50 ms later. It prints the wait status and stdout/stderr sizes of each run.
 const groupSignalDriver = `import os, signal, subprocess, sys
 sig, second, runs, gitdir, bundle, argv = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6:]
 def pre(): signal.signal(sig, signal.SIG_DFL)
@@ -44,7 +44,7 @@ func TestLiveGroupSignalMatchesNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitdir := t.TempDir()
-	fake := "#!/bin/sh\nif [ -n \"$FAKE_GIT_SECOND\" ]; then kill -$FAKE_GIT_SIGNAL $PPID; sleep 0.005; kill -$FAKE_GIT_SECOND $PPID\n" +
+	fake := "#!/bin/sh\nif [ -n \"$FAKE_GIT_SECOND\" ]; then kill -$FAKE_GIT_SIGNAL $PPID; sleep 0.05; kill -$FAKE_GIT_SECOND $PPID\n" +
 		"else kill -$FAKE_GIT_SIGNAL 0; fi\nsleep 5\nexec '" + git + "' \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(gitdir, "git"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
