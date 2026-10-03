@@ -3,6 +3,7 @@ package jsjson
 import (
 	"bytes"
 	"fmt"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"math"
 	"os"
 	"os/exec"
@@ -428,4 +429,24 @@ var abortCases = map[string]func(){
 	"split-2^27-1":  func() { CheckSplitParts(1<<27 - 1) },
 	"split-2^27":    func() { CheckSplitParts(1 << 27) },
 	"split-2^27+1":  func() { CheckSplitParts(1<<27 + 1) },
+}
+
+// V8 grows a pushed-to array to n + n/2 + 16 for the n elements the push
+// needs, up to FixedArray's
+// 2^27 - 1 slots: the push to length 112,813,859 throws a catchable
+// RangeError (round 5, row 6: hashes.txt's .filter(Boolean)).
+func TestCheckGrownLength(t *testing.T) {
+	capacity, last := 0, 0 // an empty array has no backing store
+	for capacity <= 1<<27-1 {
+		last = capacity
+		capacity = (capacity + 1) + (capacity+1)/2 + 16 // from the length the push needs
+	}
+	if last+1 != maxGrownArrayLength {
+		t.Fatalf("growth sequence ends at %d, constant is %d", last, maxGrownArrayLength)
+	}
+	CheckGrownLength(maxGrownArrayLength - 1)
+	err := jsexc.Try(func() { CheckGrownLength(maxGrownArrayLength) })
+	if err == nil || err.Error() != "Invalid array length" {
+		t.Fatalf("at %d: %v, want RangeError Invalid array length", maxGrownArrayLength, err)
+	}
 }

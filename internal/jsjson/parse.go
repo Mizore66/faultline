@@ -164,6 +164,27 @@ func checkElements(elements int, maxIndex uint32) {
 	}
 }
 
+// maxGrownArrayLength is the first length an array grown one push at a time
+// from empty cannot reach: V8 grows a full fast array's backing store to
+// n + n/2 + 16 for the n elements the push needs
+// (CalculateNewElementsCapacity), which from 0 runs 17, 43, ... 75,209,227,
+// 112,813,858, then 169,220,804, past FixedArray::kMaxCapacity (2^27 - 1),
+// so the push that would make the array 112,813,859 long throws instead
+// (measured on Node 22.22.2).
+const maxGrownArrayLength = 112_813_859
+
+// ErrInvalidArrayLength is the catchable RangeError such a push throws.
+var ErrInvalidArrayLength = &RangeError{"Invalid array length"}
+
+// CheckGrownLength throws ErrInvalidArrayLength where building an array of n
+// elements one push at a time (Array.prototype.filter, push in a loop)
+// throws in V8.
+func CheckGrownLength(n int) {
+	if n >= maxGrownArrayLength {
+		jsexc.Throw(ErrInvalidArrayLength)
+	}
+}
+
 // CheckSplitParts is the allocation String.prototype.split makes for its
 // result: n parts need a FixedArray of n slots, and 2^27 or more abort the
 // process as checkElements does.

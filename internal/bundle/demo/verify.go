@@ -414,7 +414,17 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	// V8's split aborts the process when the result needs 2^27 or more
 	// elements (a FixedArray), before any line is looked at.
 	jsjson.CheckSplitParts(strings.Count(trimmed, "\n") + 1)
-	for _, line := range strings.Split(trimmed, "\n") {
+	lines := strings.Split(trimmed, "\n")
+	// .filter(Boolean) builds the kept lines one push at a time, and throws
+	// once there are too many for V8 to grow the array to.
+	kept := 0
+	for _, line := range lines {
+		if line != "" {
+			kept++
+		}
+	}
+	jsjson.CheckGrownLength(kept)
+	for _, line := range lines {
 		if line == "" {
 			continue
 		}
