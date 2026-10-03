@@ -227,3 +227,10 @@ func classifyReparse(buf []byte) error {
 	}
 	return errSymlinkNotSupport
 }
+
+// exists is existsSync on Windows: uv_fs_access, then uv_fs_stat following
+// links; the stat covers both.
+func exists(raw string) bool {
+	_, err := statRaw(raw, true)
+	return err == nil
+}

@@ -30,7 +30,19 @@ func scandirOnce(path string) ([]string, []uint8, error) {
 
 func openDir(path string) (*os.File, error) {
 	if isWindows {
-		return os.Open(path)
+		// libuv's fs__scandir opens anything with
+		// FILE_FLAG_BACKUP_SEMANTICS, and NtQueryDirectoryFile on a
+		// non-directory gives STATUS_INVALID_PARAMETER, which it reports
+		// as UV_ENOTDIR itself (src/win/fs.c, not_a_directory_error).
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		if info, err := f.Stat(); err == nil && !info.IsDir() {
+			f.Close()
+			return nil, uvCode("ENOTDIR")
+		}
+		return f, nil
 	}
 	fd, err := syscall.Open(path, syscall.O_RDONLY|oDirectory|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
 	if err != nil {

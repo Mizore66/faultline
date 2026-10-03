@@ -115,6 +115,12 @@ func (e *Error) Error() string {
 	return e.Code + ": " + Describe(e.Code) + ", " + e.Syscall + " '" + e.Path + "'"
 }
 
+// uvCode is an error libuv sets by its uv code directly, not through
+// uv_translate_sys_error.
+type uvCode string
+
+func (c uvCode) Error() string { return string(c) }
+
 func unknownSystemError(errno syscall.Errno) string {
 	return "Unknown system error -" + strconv.Itoa(int(errno))
 }
@@ -129,6 +135,10 @@ func ErrnoCode(err error) string { return codeOf(err) }
 func SystemErrorName(err error) string { return codeOf(err) }
 
 func codeOf(err error) string {
+	var uv uvCode
+	if errors.As(err, &uv) {
+		return string(uv)
+	}
 	var errno syscall.Errno
 	if errors.As(err, &errno) {
 		if isWindows {
@@ -345,19 +355,31 @@ func Lstat(path string) (fs.FileInfo, error) {
 	return info, nil
 }
 
-// Exists is existsSync(path): uv_fs_access, and on Windows also uv_fs_stat
-// (following links), must succeed.
+// Exists is existsSync(path): uv_fs_access(path, F_OK), and on Windows
+// also uv_fs_stat (following links), must succeed.
 func Exists(path string) bool {
-	_, err := statRaw(sysPath(path), true)
-	return err == nil
+	return exists(sysPath(path))
+}
+
+// direntTypeKnown is whether libuv's uv__fs_get_dirent_type names d_type:
+// FIFO, CHR, DIR, BLK, REG, LNK and SOCK. Every other value, DT_UNKNOWN (0)
+// included, is UV_DIRENT_UNKNOWN, and Node lstats the entry
+// (lib/internal/fs/utils.js getDirents).
+func direntTypeKnown(t uint8) bool {
+	switch t {
+	case 1, 2, 4, 6, 8, 10, 12:
+		return true
+	}
+	return false
 }
 
 // ReadDirNames is readdirSync(path, { withFileTypes: true }) as the bundle
 // walkers use it: names sorted by byte order (libuv scandir), then decoded
 // as UTF-8 with replacement, so a name with invalid bytes no longer names
-// the file. An entry whose type the filesystem does not report
-// (DT_UNKNOWN: XFS without ftype, some NFS and FUSE) is lstat'ed by Node
-// inside readdirSync, in order, and the first failure is thrown from there.
+// the file. An entry whose type libuv cannot name (DT_UNKNOWN on XFS
+// without ftype, some NFS and FUSE, or a type outside libuv's seven) is
+// lstat'ed by Node inside readdirSync, in order, and the first failure is
+// thrown from there.
 func ReadDirNames(path string) ([]string, error) {
 	names, types, err := scandir(sysPath(path))
 	if err != nil {
@@ -374,7 +396,7 @@ func ReadDirNames(path string) ([]string, error) {
 	}
 	if types != nil {
 		for i, k := range order {
-			if types[k] == 0 { // DT_UNKNOWN
+			if !direntTypeKnown(types[k]) {
 				if _, err := Lstat(Join(path, sorted[i])); err != nil {
 					return nil, err
 				}
@@ -406,7 +428,12 @@ func Tmpdir() string {
 		}
 		return path
 	}
-	// GetTempDir: the first non-empty of TMPDIR, TMP, TEMP.
+	// GetTempDir: the first non-empty of TMPDIR, TMP, TEMP, read through
+	// SafeGetenv, which ignores them in setuid, setgid and AT_SECURE
+	// processes.
+	if envUnsafe() {
+		return "/tmp"
+	}
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		if dir := os.Getenv(key); dir != "" {
 			dir = DecodeUTF8([]byte(dir))

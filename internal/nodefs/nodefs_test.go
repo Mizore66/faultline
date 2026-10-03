@@ -217,3 +217,14 @@ func TestUnnamedErrno(t *testing.T) {
 		t.Errorf("read error: %q", got)
 	}
 }
+
+// libuv's uv__fs_get_dirent_type names seven d_types; Node lstats every
+// other entry (round 5, row 10).
+func TestDirentTypeKnown(t *testing.T) {
+	known := map[uint8]bool{1: true, 2: true, 4: true, 6: true, 8: true, 10: true, 12: true}
+	for d := 0; d < 256; d++ {
+		if got := direntTypeKnown(uint8(d)); got != known[uint8(d)] {
+			t.Errorf("direntTypeKnown(%d) = %v", d, got)
+		}
+	}
+}

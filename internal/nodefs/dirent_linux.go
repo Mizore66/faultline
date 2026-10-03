@@ -57,7 +57,8 @@ func (d *direntReader) next() (name string, ino uint64, typ uint8, ok bool, errn
 }
 
 // scandir is libuv's uv_fs_scandir over glibc: opendir (O_DIRECTORY, so a
-// non-directory fails with ENOTDIR and a FIFO does not block), every entry
+// non-directory fails with ENOTDIR and a FIFO does not block, then fstat),
+// every entry
 // but "." and "..", with d_type (0 is DT_UNKNOWN); the caller sorts.
 func scandir(path string) (names []string, types []uint8, err error) {
 	// An EINTR anywhere re-runs the whole scandir, as uv__fs_work re-runs
@@ -73,6 +74,15 @@ func scandirOnce(path string) ([]string, []uint8, error) {
 		return nil, nil, err
 	}
 	defer syscall.Close(fd)
+	// glibc's opendir_tail fstats the new descriptor (for st_blksize) and
+	// checks S_ISDIR; a failing fstat fails the scandir with its errno.
+	var st syscall.Stat_t
+	if err := syscall.Fstat(fd, &st); err != nil {
+		return nil, nil, err
+	}
+	if st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
+		return nil, nil, syscall.ENOTDIR
+	}
 	d := direntReader{fd: fd}
 	var ents []rawDirent
 	for {

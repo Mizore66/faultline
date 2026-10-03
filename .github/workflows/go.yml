@@ -67,7 +67,7 @@ jobs:
           d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d=$(dirname "$d"); done
           sudo chmod -R o+rX "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/package.json"
           cd difftest && sudo -E env "PATH=$PATH" GOCACHE="$RUNNER_TEMP/root-gocache" FAULTLINE_NODE_ORACLE=1 FAULTLINE_REQUIRE_ROOT=1 \
-            "$RUNNER_TEMP/difftest.test" -test.run 'TestLiveCwdErrorsMatchNode' -test.count=1 -test.v
+            "$RUNNER_TEMP/difftest.test" -test.run 'TestLiveCwdErrorsMatchNode|TestLiveTmpdirSetidMatchesNode' -test.count=1 -test.v
       - name: TimSort against V8
         run: FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -v
 

@@ -20,7 +20,9 @@ import (
 //     close (uv__fs_work), so an interrupted read fails in Node, and an
 //     interrupted getdents64 or openat re-runs the whole scandir;
 //   - readFileSync(p, "utf8") never calls fstat (ReadFileUtf8), so the first
-//     stat-family call on manifest.json is the walker's lstat in both.
+//     stat-family call on manifest.json is the walker's lstat in both;
+//   - existsSync(p) is access(p, F_OK), which a filesystem can fail where
+//     stat succeeds.
 func TestLiveFaultInjectionMatchesNode(t *testing.T) {
 	oracle.Start(t).Close() // skip unless FAULTLINE_NODE_ORACLE=1
 	strace, err := exec.LookPath("strace")
@@ -46,6 +48,9 @@ func TestLiveFaultInjectionMatchesNode(t *testing.T) {
 		{"read-hashes-EIO", "demo-replay", "hashes.txt", "read,pread64", "EIO"},
 		{"stat-manifest-EIO", "prevention-verified", "manifest.json", stats, "EIO"},
 		{"stat-hashes-EIO", "demo-replay", "hashes.txt", stats, "EIO"},
+		// existsSync is access(F_OK), not stat (row 10).
+		{"access-hashes-EIO", "demo-replay", "hashes.txt", "access,faccessat,faccessat2", "EIO"},
+		{"access-root-EACCES", "git-two-states", "", "access,faccessat,faccessat2", "EACCES"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(argv ...string) (string, int) {
