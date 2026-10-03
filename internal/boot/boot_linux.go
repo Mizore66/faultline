@@ -34,31 +34,39 @@ var kernelDefault = func() []syscall.Signal {
 	return s
 }()
 
-// resetInherited gives fl the dispositions and mask Node starts with. The
-// kernelDefault signals are set to SIG_DFL, and inherited SIG_IGN on the
-// stop signals, which Go leaves alone and git would otherwise inherit, is
-// reset. Then an inherited signal mask is cleared by executing fl again with
-// the mask empty: Go keeps the mask it started with for its threads and for
-// the processes it starts, so it must be empty from exec on. The
-// dispositions come first, so a signal that was pending under the mask
-// takes its default action when the mask is cleared, as it does in Node.
-// The new image is /proc/self/exe, which works when the binary has been
-// deleted or replaced; should exec still fail (a noexec mount), fl goes on
-// with the mask it inherited (KNOWN_DIFFERENCES.md).
+// resetInherited gives fl the dispositions and mask Node starts with.
+//
+// Node's PlatformInit clears the mask first and resets the dispositions
+// after (src/node.cc), so a signal pending under the inherited mask meets
+// the disposition fl inherited: SIG_DFL ends the process, SIG_IGN discards
+// the signal. fl does the same where that disposition is still known:
+//   - inherited SIG_IGN on the stop signals (TSTP, TTIN, TTOU, CONT), which
+//     Go leaves alone, is reset only after the mask is cleared, so a pending
+//     one is discarded rather than stopping fl;
+//   - a pending PIPE or XFSZ, which fl catches (boot_unix.go), ends fl as
+//     it ends Node (dieOfPending).
+//
+// The other signals had their disposition replaced by the Go runtime before
+// any package initialized, so fl cannot tell an inherited SIG_IGN from
+// SIG_DFL: they are set to SIG_DFL first, and a pending one ends fl even
+// where Node, which inherited SIG_IGN, would discard it
+// (KNOWN_DIFFERENCES.md).
+//
+// The mask is cleared by executing fl again with the mask empty: Go keeps
+// the mask it started with for its threads and for the processes it
+// starts, so it must be empty from exec on. Pending signals are delivered
+// when this thread unblocks them, before the exec. The new image is
+// /proc/self/exe, which works when the binary has been deleted or
+// replaced; should exec still fail (no /proc), fl goes on with the mask it
+// inherited (KNOWN_DIFFERENCES.md).
 //
 // Node resets only signals 1 to 31, so a real-time signal inherited as
 // SIG_IGN stays ignored in Node and in git. Go has replaced that
-// disposition with its own handler before any package initializes and
-// keeps the original where it cannot be read, so real-time signals are set
-// to SIG_DFL whatever they were inherited as (KNOWN_DIFFERENCES.md).
+// disposition with its own handler, so real-time signals are set to
+// SIG_DFL whatever they were inherited as (KNOWN_DIFFERENCES.md).
 func resetInherited() {
 	for _, sig := range kernelDefault {
 		sigexit.SetDefault(sig)
-	}
-	for _, sig := range []syscall.Signal{syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU, syscall.SIGCONT} {
-		if sigexit.IsIgnored(sig) {
-			sigexit.SetDefault(sig)
-		}
 	}
 	var mask uint64
 	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 0, 0, uintptr(unsafe.Pointer(&mask)), 8, 0, 0)
@@ -68,6 +76,39 @@ func resetInherited() {
 		syscall.Exec("/proc/self/exe", os.Args, os.Environ())
 		syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2, uintptr(unsafe.Pointer(&mask)), 0, 8, 0, 0)
 	}
+	for _, sig := range []syscall.Signal{syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU, syscall.SIGCONT} {
+		if sigexit.IsIgnored(sig) {
+			sigexit.SetDefault(sig)
+		}
+	}
+}
+
+// dieOfPending runs before os/signal sees PIPE and XFSZ: registering them
+// unblocks them on the runtime's signal thread, where a pending one would be
+// caught and dropped. Node meets such a signal with its inherited
+// disposition, SIG_DFL unless the parent ignored it, and dies of it. So when
+// PIPE or XFSZ is pending under the inherited mask, the dispositions are set
+// as Node has them at that moment (SIG_DFL, inherited SIG_IGN kept on the
+// stop signals) and the mask is cleared on this thread: the kernel then
+// delivers the pending signals in its own order, as it does to Node.
+func dieOfPending() {
+	var mask, pending uint64
+	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 0, 0, uintptr(unsafe.Pointer(&mask)), 8, 0, 0)
+	syscall.RawSyscall(syscall.SYS_RT_SIGPENDING, uintptr(unsafe.Pointer(&pending)), 8, 0)
+	fatal := pending & mask & (1<<(syscall.SIGPIPE-1) | 1<<(syscall.SIGXFSZ-1))
+	if fatal == 0 {
+		return
+	}
+	for _, sig := range append(kernelDefault, syscall.SIGPIPE, syscall.SIGXFSZ) {
+		sigexit.SetDefault(sig)
+	}
+	var empty uint64
+	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2 /* SIG_SETMASK */, uintptr(unsafe.Pointer(&empty)), 0, 8, 0, 0)
+	sig := syscall.SIGPIPE
+	if fatal&(1<<(syscall.SIGPIPE-1)) == 0 {
+		sig = syscall.SIGXFSZ
+	}
+	sigexit.Die(sig) // not reached: the pending signal has ended fl
 }
 
 // setCloexec is uv__cloexec: FD_CLOEXEC on fd, false if fd is not open.

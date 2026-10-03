@@ -14,6 +14,8 @@ var terminating = []os.Signal{
 
 func resetInherited() {}
 
+func dieOfPending() {}
+
 func raiseNofile() {}
 
 func setCloexec(fd int) bool {

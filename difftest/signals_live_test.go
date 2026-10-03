@@ -14,7 +14,9 @@ import (
 // signalDriver starts `verify` with a slow fake git on PATH (which records
 // the signal state and descriptor limit it inherited), optionally blocks or
 // ignores signals or lowers the soft RLIMIT_NOFILE first, sends a signal
-// while git runs (or at once, left pending under the blocked mask), and prints
+// while git runs (or at once, left pending under the blocked mask), or
+// raises a blocked signal in the child before exec with a given
+// disposition (raise-dfl, raise-ign), and prints
 // the wait status, the size and hash of stdout and stderr, and git's
 // SigBlk/SigIgn and open-files lines.
 const signalDriver = `import hashlib, os, resource, signal, subprocess, sys, time
@@ -23,6 +25,10 @@ def pre():
     if mode in ("block", "pending"): signal.pthread_sigmask(signal.SIG_BLOCK, [s for s in (sig, signal.SIGALRM, signal.SIGUSR2) if s])
     if mode == "ignore":
         for s in (signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU, signal.SIGHUP, signal.SIGINT): signal.signal(s, signal.SIG_IGN)
+    if mode in ("raise-dfl", "raise-ign"):
+        os.setpgid(0, 0)  # a group of its own whose parent is outside it: not orphaned, so stop signals stop it
+        signal.signal(sig, signal.SIG_IGN if mode == "raise-ign" else signal.SIG_DFL)
+        signal.pthread_sigmask(signal.SIG_BLOCK, [sig]); os.kill(os.getpid(), sig)
     if mode == "nofile":
         hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
         resource.setrlimit(resource.RLIMIT_NOFILE, (64, hard))
@@ -38,8 +44,9 @@ else:
     deadline = time.time() + 20
     while not os.path.exists(status) and p.poll() is None and time.time() < deadline: time.sleep(0.01)
     time.sleep(0.1)
-    if sig: p.send_signal(sig)
-out, err = p.communicate()
+    if sig and not mode.startswith("raise"): p.send_signal(sig)
+try: out, err = p.communicate(timeout=30)
+except subprocess.TimeoutExpired: p.kill(); out, err = p.communicate()
 lines = open(status).read().split("\n")[:3] if os.path.exists(status) else []
 print(p.returncode, len(out), hashlib.sha256(out).hexdigest()[:16], len(err), hashlib.sha256(err).hexdigest()[:16], " ".join(lines))
 `
@@ -79,6 +86,14 @@ func TestLiveSignalsMatchNode(t *testing.T) {
 	}
 	for _, sig := range strings.Fields("12 14 26") {
 		cases = append(cases, tc{sig, "pending"})
+	}
+	// Pending from before exec, under the disposition fl inherits (round 5,
+	// row 8): Node meets it with that disposition, before resetting any.
+	for _, sig := range strings.Fields("12 13 14 25") {
+		cases = append(cases, tc{sig, "raise-dfl"})
+	}
+	for _, sig := range strings.Fields("20 21 22") {
+		cases = append(cases, tc{sig, "raise-ign"})
 	}
 	cases = append(cases, tc{"0", "ignore"}, tc{"0", "block"}, tc{"0", "nofile"})
 	for _, c := range cases {

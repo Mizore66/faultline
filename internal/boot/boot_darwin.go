@@ -31,3 +31,5 @@ var terminating = []os.Signal{
 // mask and inherited SIG_IGN on the stop signals stay as they are on macOS
 // (KNOWN_DIFFERENCES.md).
 func resetInherited() {}
+
+func dieOfPending() {}
