@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Mizore66/faultline/internal/jsstr"
-	"io"
 	"io/fs"
 	"math/rand/v2"
 	"os"
@@ -194,36 +193,69 @@ const maxStringLength = 0x1fffffe8
 // decode to more UTF-16 units than V8 allows in one string.
 var ErrStringTooLong = errors.New("Cannot create a string longer than 0x1fffffe8 characters")
 
-// openRegular opens path the way readFileSync does: open(2) first, so a
-// directory without read permission fails with EACCES on open, and a
-// readable directory then fails with EISDIR on read.
-func openRegular(path string) (*os.File, fs.FileInfo, error) {
+// retryEINTR re-runs fn while it fails with EINTR, as libuv's uv__fs_work
+// does for every synchronous fs request except read and close
+// (src/unix/fs.c: "} while (r == -1 && errno == EINTR && retry_on_eintr)").
+func retryEINTR(fn func() error) error {
+	for {
+		if err := fn(); !errors.Is(err, syscall.EINTR) {
+			return err
+		}
+	}
+}
+
+// openRead opens path as uv_fs_open does for readFileSync: open(2) and
+// nothing else, so a directory without read permission fails with EACCES
+// here, and a readable one with EISDIR from the first read.
+func openRead(path string) (*os.File, error) {
 	f, err := os.Open(sysPath(path))
 	if err != nil {
-		return nil, nil, wrap(err, "open", path)
+		return nil, wrap(err, "open", path)
 	}
-	info, err := f.Stat()
-	if err != nil {
+	if err := checkReadable(f); err != nil {
 		f.Close()
-		return nil, nil, wrap(err, "fstat", path)
+		return nil, err
 	}
-	if info.IsDir() {
-		f.Close()
-		return nil, nil, &Error{Code: "EISDIR", Syscall: "read", NoPath: true}
-	}
-	return f, info, nil
+	return f, nil
 }
+
+// leaked holds the files ReadBytes leaves open, as Node does, so that
+// their finalizers do not close them.
+var leaked []*os.File
 
 // readErr is a failed read(2): Node throws it from C++ without a path.
 func readErr(err error) error {
 	return &Error{Code: codeOf(err), Syscall: "read", NoPath: true}
 }
 
-// ReadBytes is readFileSync(path), including ERR_FS_FILE_TOO_LARGE.
+// readChunk is one uv_fs_read with position -1: a single read(2), whose
+// EINTR libuv does not retry. n is 0 at end of file.
+func readChunk(f *os.File, b []byte) (int, error) {
+	n, err := readRaw(f, b)
+	if err != nil {
+		return 0, readErr(err)
+	}
+	return n, nil
+}
+
+// ReadBytes is readFileSync(path), including ERR_FS_FILE_TOO_LARGE: open,
+// fstat (whose failure Node throws without a path: binding.fstat's
+// do_not_throw_error flag reads the wrong argument, so it throws), then
+// reads up to the size fstat reported for a regular file, or 8 KiB at a
+// time to EOF for anything else.
 func ReadBytes(path string) ([]byte, error) {
-	f, info, err := openRegular(path)
+	f, err := openRead(path)
 	if err != nil {
 		return nil, err
+	}
+	var info fs.FileInfo
+	err = retryEINTR(func() (e error) { info, e = f.Stat(); return })
+	if err != nil {
+		// The throw leaves tryStatSync before its closeSync, so Node never
+		// closes the descriptor; on a filesystem that fails getattr while
+		// a file is open, later lstats of it fail too.
+		leaked = append(leaked, f)
+		return nil, &Error{Code: codeOf(err), Syscall: "fstat", NoPath: true}
 	}
 	defer f.Close()
 	size := info.Size()
@@ -233,48 +265,68 @@ func ReadBytes(path string) ([]byte, error) {
 	if size > kIoMaxLength {
 		return nil, fmt.Errorf("File size (%d) is greater than 2 GiB", size)
 	}
-	if size == 0 { // not a regular file, or empty: read to EOF
-		b, err := io.ReadAll(f)
-		if err != nil {
-			return nil, readErr(err)
+	if size == 0 { // not a regular file, or empty: "the kernel lies about many files"
+		var out []byte
+		chunk := make([]byte, 8192)
+		for {
+			n, err := readChunk(f, chunk)
+			if err != nil {
+				return nil, err
+			}
+			if n == 0 {
+				return out, nil
+			}
+			out = append(out, chunk[:n]...)
 		}
-		return b, nil
 	}
 	// A regular file is read up to the size fstat reported: bytes appended
 	// meanwhile are not read, and a file that shrank gives what was there.
 	b := make([]byte, size)
 	pos := 0
 	for pos < len(b) {
-		n, err := f.Read(b[pos:])
-		pos += n
-		if err == io.EOF || n == 0 && err == nil {
+		n, err := readChunk(f, b[pos:])
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
 			break
 		}
-		if err != nil {
-			return nil, readErr(err)
-		}
+		pos += n
 	}
 	return b[:pos], nil
 }
 
-// ReadText is readFileSync(path, "utf8"). Node 22's ReadFileUtf8 reads the
-// raw bytes and throws ERR_STRING_TOO_LONG when their count is at least V8's
-// String::kMaxLength (src/util-inl.h ToV8Value: str.size() >= kMaxLength),
-// whatever the decoded length would be; it has no 2 GiB check.
+// ReadText is readFileSync(path, "utf8"), Node 22's ReadFileUtf8
+// (src/node_file.cc): open, then read(2) 8 KiB at a time until a read
+// returns 0, with no fstat, so neither a failing fstat nor the size it
+// reports matters. The bytes are then converted, and ERR_STRING_TOO_LONG is
+// thrown when their count is at least V8's String::kMaxLength
+// (src/util-inl.h ToV8Value: str.size() >= kMaxLength), whatever the
+// decoded length would be. Bytes past that limit are only counted: Node
+// would keep them, then throw.
 func ReadText(path string) (string, error) {
-	f, info, err := openRegular(path)
+	f, err := openRead(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	if info.Size() >= maxStringLength {
-		return "", ErrStringTooLong
+	var b []byte
+	total := 0
+	chunk := make([]byte, 8192)
+	for {
+		n, err := readChunk(f, chunk)
+		if err != nil {
+			return "", err
+		}
+		if n == 0 {
+			break
+		}
+		total += n
+		if total < maxStringLength {
+			b = append(b, chunk[:n]...)
+		}
 	}
-	b, err := io.ReadAll(f)
-	if err != nil {
-		return "", readErr(err)
-	}
-	if len(b) >= maxStringLength { // non-regular files report size 0
+	if total >= maxStringLength {
 		return "", ErrStringTooLong
 	}
 	return DecodeUTF8(b), nil

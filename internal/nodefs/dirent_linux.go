@@ -59,7 +59,15 @@ func (d *direntReader) next() (name string, ino uint64, typ uint8, ok bool, errn
 // scandir is libuv's uv_fs_scandir over glibc: opendir (O_DIRECTORY, so a
 // non-directory fails with ENOTDIR and a FIFO does not block), every entry
 // but "." and "..", with d_type (0 is DT_UNKNOWN); the caller sorts.
-func scandir(path string) ([]string, []uint8, error) {
+func scandir(path string) (names []string, types []uint8, err error) {
+	// An EINTR anywhere re-runs the whole scandir, as uv__fs_work re-runs
+	// uv__fs_scandir (glibc's scandir fails with the errno opendir or
+	// readdir set).
+	err = retryEINTR(func() (e error) { names, types, e = scandirOnce(path); return })
+	return
+}
+
+func scandirOnce(path string) ([]string, []uint8, error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, err
