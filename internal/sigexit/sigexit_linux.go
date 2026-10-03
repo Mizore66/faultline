@@ -26,6 +26,22 @@ func SetDefault(sig syscall.Signal) {
 	syscall.RawSyscall6(syscall.SYS_RT_SIGACTION, uintptr(sig), uintptr(unsafe.Pointer(&act)), 0, 8, 0, 0)
 }
 
+// setIgnore sets sig's disposition to SIG_IGN in the kernel.
+func setIgnore(sig syscall.Signal) {
+	act := sigaction{handler: 1} // SIG_IGN
+	syscall.RawSyscall6(syscall.SYS_RT_SIGACTION, uintptr(sig), uintptr(unsafe.Pointer(&act)), 0, 8, 0, 0)
+}
+
+// runtimeSignal is a signal the Go runtime needs while fl dies: faults in
+// Go code, preemption (URG), and the C library's 32 to 34.
+func runtimeSignal(sig syscall.Signal) bool {
+	switch sig {
+	case syscall.SIGSEGV, syscall.SIGBUS, syscall.SIGFPE, syscall.SIGILL, syscall.SIGURG, 32, 33, 34:
+		return true
+	}
+	return false
+}
+
 // IsIgnored reports whether sig's kernel disposition is SIG_IGN.
 func IsIgnored(sig syscall.Signal) bool {
 	var old sigaction
@@ -40,6 +56,13 @@ func IsIgnored(sig syscall.Signal) bool {
 func Die(sig syscall.Signal) {
 	dying.Store(true)
 	runtime.LockOSThread()
+	// Node dies of the first signal; one that arrives while fl is dying of
+	// it must not take its place.
+	for other := syscall.Signal(1); other <= 64; other++ {
+		if other != sig && other != syscall.SIGKILL && other != syscall.SIGSTOP && !runtimeSignal(other) {
+			setIgnore(other)
+		}
+	}
 	SetDefault(sig)
 	set := uint64(1) << (sig - 1)
 	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 1 /* SIG_UNBLOCK */, uintptr(unsafe.Pointer(&set)), 0, 8, 0, 0)

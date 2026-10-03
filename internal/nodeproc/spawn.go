@@ -13,10 +13,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
+	"github.com/Mizore66/faultline/internal/sigexit"
 )
 
 // Result mirrors spawnSync's { status, stdout, stderr, error }.
@@ -101,7 +103,9 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 	var closeOnce sync.Once
 	closePipes := func() { closeOnce.Do(io.closeParent) }
 	o := &output{maxBuffer: maxBuffer}
+	var killed atomic.Bool
 	o.onOverrun = func() {
+		killed.Store(true)
 		// SyncProcessRunner::Kill: send killSignal (SIGTERM), close the pipes.
 		if runtime.GOOS == "windows" {
 			proc.Kill()
@@ -118,6 +122,11 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 	readers.Wait()
 	state, _ := proc.Wait()
 	closePipes()
+	if state != nil && !killed.Load() {
+		if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			sigexit.ChildKilled()
+		}
+	}
 	result := Result{Stdout: stdout.buf, Stderr: stderr.buf}
 	o.mu.Lock()
 	overflow := o.overflow
