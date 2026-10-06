@@ -423,7 +423,8 @@ func TestLiveSortLocaleLong(t *testing.T) {
 // TestLiveSortLocaleSharedPrefix: simple keys that share long prefixes, with
 // first differences around the 64-code-point chunks of the lazy keys and
 // after runs of 64 or more zero-primary code points. Sorted and compared
-// pairwise against Node (round 5, row 11 and the §1 P3 test gap).
+// pairwise against Node (round 5, row 11 and the §1 P3 test gap), plus
+// long keys that tie past the cached part of their keys (round 6).
 func TestLiveSortLocaleSharedPrefix(t *testing.T) {
 	c := oracle.Start(t)
 	defer c.Close()
@@ -451,6 +452,15 @@ func TestLiveSortLocaleSharedPrefix(t *testing.T) {
 		}
 	}
 	keys = append(keys, "\x00b", strings.Repeat("\x00", 65))
+	// Keys that tie on primaries far past what a Prepared caches, differing
+	// first in case or accents within the first lazy chunk (round 6).
+	for _, body := range []string{strings.Repeat("ﷺ", 300), strings.Repeat("ab", 1200)} {
+		for _, head := range []string{"a", "A", "\u00e1", "a\u00ad", "\u200ba"} {
+			for _, tail := range []string{"", "b", "B", "\u00e9"} {
+				keys = append(keys, "src/"+head+body+tail)
+			}
+		}
+	}
 	for _, k := range keys {
 		if !collation.Prepare(k).Simple() {
 			t.Fatalf("%+q is not simple: the test would not reach the lazy keys", k)

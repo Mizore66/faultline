@@ -499,6 +499,14 @@ type lazyKey struct {
 
 const lazyChunk = 64 // code points per extension
 
+// maxCachedPrimaries bounds the key a Prepared keeps: a comparison that
+// needs more of it builds keys of its own for that comparison only, as ICU
+// does for every comparison. Without the bound, strings that tie for a long
+// stretch without being identical (case or accents differing early, before
+// thousands of expansions such as U+FDFA's 18 CEs) kept their whole keys:
+// 2 GB for 2,000 such strings where Node needs 210 MB (round 6).
+const maxCachedPrimaries = 512
+
 // extend adds the next chunk's weights; false when the key is complete.
 func (k *lazyKey) extend() bool {
 	if k.rest == "" {
@@ -573,31 +581,50 @@ func ComparePrepared(a, b Prepared) int {
 		p--
 	}
 	if p < lazyChunk {
-		return compareLazy(a.key, b.key)
+		if c, ok := compareLazy(a.key, b.key, maxCachedPrimaries); ok {
+			return c
+		}
 	}
-	return compareLazy(&lazyKey{rest: a.S[p:]}, &lazyKey{rest: b.S[p:]})
+	c, _ := compareLazy(&lazyKey{rest: a.S[p:]}, &lazyKey{rest: b.S[p:]}, -1)
+	return c
 }
 
 // compareLazy compares two lazy keys: primaries first, extending each key
-// only while it is the shorter one and no difference has shown up.
-func compareLazy(a, b *lazyKey) int {
-	for i := 0; ; i++ {
-		for i >= len(a.key.primary) && a.extend() {
+// only while it is the shorter one and no difference has shown up. With a
+// limit of 0 or more, a key that holds that many primaries is not extended
+// further, and compareLazy gives up (false) if it would have to be.
+func compareLazy(a, b *lazyKey, limit int) (int, bool) {
+	grow := func(k *lazyKey) bool {
+		if limit >= 0 && len(k.key.primary) >= limit && k.rest != "" {
+			return false
 		}
-		for i >= len(b.key.primary) && b.extend() {
+		return true
+	}
+	for i := 0; ; i++ {
+		for i >= len(a.key.primary) && a.rest != "" {
+			if !grow(a) {
+				return 0, false
+			}
+			a.extend()
+		}
+		for i >= len(b.key.primary) && b.rest != "" {
+			if !grow(b) {
+				return 0, false
+			}
+			b.extend()
 		}
 		ap, bp := a.key.primary, b.key.primary
 		switch {
 		case i >= len(ap) && i >= len(bp):
 		case i >= len(ap):
-			return -1
+			return -1, true
 		case i >= len(bp):
-			return 1
+			return 1, true
 		case ap[i] != bp[i]:
 			if ap[i] < bp[i] {
-				return -1
+				return -1, true
 			}
-			return 1
+			return 1, true
 		default:
 			continue
 		}
@@ -605,9 +632,9 @@ func compareLazy(a, b *lazyKey) int {
 	}
 	// Equal primaries: both keys are complete.
 	if c := compareLevel(a.key.secondary, b.key.secondary); c != 0 {
-		return c
+		return c, true
 	}
-	return compareLevel(a.key.tertiary, b.key.tertiary)
+	return compareLevel(a.key.tertiary, b.key.tertiary), true
 }
 
 // Rules lists what the root data does beyond single code points, for tests

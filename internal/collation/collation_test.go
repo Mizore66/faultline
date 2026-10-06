@@ -4,6 +4,7 @@ import (
 	"math/rand/v2"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Mizore66/faultline/internal/jsstr"
 )
@@ -142,6 +143,63 @@ func TestNotSimpleBitmap(t *testing.T) {
 	for _, c := range []rune{0x10000, 0x1D504, 0x1F600, 0x10FFFF} {
 		if tb.notSimple(c) != tb.notSimpleSlow(c) {
 			t.Fatalf("notSimple(U+%04X) differs from the slow predicate", c)
+		}
+	}
+}
+
+// Strings that tie on primaries far past maxCachedPrimaries (case or accent
+// differences, ignorables) take the uncached path; the result must not
+// change, the cached keys must stay bounded, and a Prepared reused across
+// comparisons must give the same answers (round 6: 2,000 such keys used to
+// keep 2 GB of keys).
+func TestComparePreparedLongTies(t *testing.T) {
+	rng := rand.New(rand.NewPCG(3, 4))
+	body := []rune("abz09 -_.\u00e9\u4e2d\ud55c\ufdfa\U0001f600")
+	variants := [][2]string{{"a", "A"}, {"e", "\u00e9"}, {"a", "a\u00ad"}, {"z", "Z"}, {"", "\u200b"}}
+	var prepared []Prepared
+	for range 300 {
+		var b strings.Builder
+		for range 600 + rng.IntN(2500) {
+			b.WriteRune(body[rng.IntN(len(body))])
+		}
+		common := b.String()
+		v := variants[rng.IntN(len(variants))]
+		at := rng.IntN(len(common) + 1)
+		if rng.IntN(3) == 0 {
+			at = rng.IntN(4) // early, before lazyChunk
+		}
+		for at < len(common) && !utf8.RuneStart(common[at]) {
+			at++
+		}
+		x, y := common[:at]+v[0]+common[at:], common[:at]+v[1]+common[at:]
+		if rng.IntN(5) == 0 {
+			y += "k" // a primary difference at the very end
+		}
+		px, py := Prepare(x), Prepare(y)
+		if !px.Simple() || !py.Simple() {
+			t.Fatalf("not simple: %q / %q", v[0], v[1])
+		}
+		want := Compare(x, y)
+		for range 2 { // the second time with whatever the first cached
+			if got := ComparePrepared(px, py); got != want {
+				t.Fatalf("ComparePrepared = %d, Compare = %d (variant %q at %d)", got, want, v, at)
+			}
+			if got := -ComparePrepared(py, px); got != want {
+				t.Fatalf("reversed ComparePrepared = %d, Compare = %d (variant %q at %d)", -got, want, v, at)
+			}
+		}
+		prepared = append(prepared, px, py)
+	}
+	for i := range prepared { // against unrelated strings, with the caches as they are
+		j := rng.IntN(len(prepared))
+		if got, want := ComparePrepared(prepared[i], prepared[j]), Compare(prepared[i].S, prepared[j].S); got != want {
+			t.Fatalf("pair %d,%d: ComparePrepared = %d, Compare = %d", i, j, got, want)
+		}
+	}
+	for _, p := range prepared {
+		// At most the bound plus one chunk of 64 code points of up to 18 CEs.
+		if n := len(p.key.key.primary); n > 512+64*18 {
+			t.Fatalf("cached %d primaries", n)
 		}
 	}
 }
