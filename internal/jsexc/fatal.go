@@ -34,3 +34,15 @@ func FatalOOM(what string) {
 		" Allocation failed - JavaScript heap out of memory\n----- Native stack trace -----\n\n")
 	abort()
 }
+
+// FatalCheck reproduces a failed CHECK in Node's C++ (node::Assert): the
+// assertion header with the process title (argv[0] until a script sets
+// process.title) and id, the function and source location
+// as a Linux build of Node 22.22.2 prints them, and the failed expression,
+// then death by SIGABRT (exit status 134 on Unix). Node's native and
+// JavaScript stack traces are not reproduced.
+func FatalCheck(where, expr string) {
+	os.Stderr.WriteString("\n  #  " + os.Args[0] + "[" + strconv.Itoa(os.Getpid()) + "]: " + where + "\n  #  Assertion failed: " + expr +
+		"\n\n----- Native stack trace -----\n\n")
+	abort()
+}

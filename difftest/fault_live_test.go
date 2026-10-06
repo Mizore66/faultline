@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
@@ -22,7 +24,13 @@ import (
 //   - readFileSync(p, "utf8") never calls fstat (ReadFileUtf8), so the first
 //     stat-family call on manifest.json is the walker's lstat in both;
 //   - existsSync(p) is access(p, F_OK), which a filesystem can fail where
-//     stat succeeds.
+//     stat succeeds;
+//   - close(2) failing other than with EINTR aborts a utf8 read and fails
+//     a Buffer read (round 6).
+var nodePid = regexp.MustCompile(`#  \S+\[[0-9]+\]`)
+
+const nativeStack = "----- Native stack trace -----"
+
 func TestLiveFaultInjectionMatchesNode(t *testing.T) {
 	oracle.Start(t).Close() // skip unless FAULTLINE_NODE_ORACLE=1
 	strace, err := exec.LookPath("strace")
@@ -51,6 +59,15 @@ func TestLiveFaultInjectionMatchesNode(t *testing.T) {
 		// existsSync is access(F_OK), not stat (row 10).
 		{"access-hashes-EIO", "demo-replay", "hashes.txt", "access,faccessat,faccessat2", "EIO"},
 		{"access-root-EACCES", "git-two-states", "", "access,faccessat,faccessat2", "EACCES"},
+		// A failing close(2) aborts readFileSync(p, "utf8") on a CHECK and
+		// is thrown by readFileSync(p); EINTR counts as success (round 6).
+		// strace counts when=1 per thread, so only files read once are
+		// used: Go may close a second read of a file on another thread,
+		// which strace would fail again (investigation.json, analysis.json).
+		{"close-hashes-EIO", "demo-replay", "hashes.txt", "close", "EIO"},
+		{"close-report-EIO", "demo-replay", "report.md", "close", "EIO"},
+		{"close-manifest-ENOSPC", "prevention-verified", "manifest.json", "close", "ENOSPC"},
+		{"close-hashes-EINTR", "demo-replay", "hashes.txt", "close", "EINTR"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(argv ...string) (string, int) {
@@ -68,7 +85,18 @@ func TestLiveFaultInjectionMatchesNode(t *testing.T) {
 				if b, _ := os.ReadFile(trace); !strings.Contains(string(b), "INJECTED") {
 					t.Fatalf("%s: nothing injected on %s\n%s", argv[0], target, out)
 				}
-				return strings.ReplaceAll(string(out), dir, "<BUNDLE>"), cmd.ProcessState.ExitCode()
+				text := strings.ReplaceAll(string(out), dir, "<BUNDLE>")
+				// Node's failed-CHECK report: argv[0] and the pid differ, and the
+				// stack traces that follow are not reproduced.
+				text = nodePid.ReplaceAllString(text, "#  ARGV0[PID]")
+				if i := strings.Index(text, nativeStack); i >= 0 {
+					text = text[:i+len(nativeStack)]
+				}
+				code := cmd.ProcessState.ExitCode()
+				if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+					code = 128 + int(ws.Signal()) // ExitCode is -1 for both
+				}
+				return text, code
 			}
 			tsOut, tsCode := run(node, filepath.Join(repo, "dist", "cli.js"))
 			goOut, goCode := run(flBinary)

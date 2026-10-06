@@ -3,6 +3,7 @@ package nodefs
 import (
 	"errors"
 	"fmt"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"io/fs"
 	"math/rand/v2"
@@ -229,6 +230,16 @@ func openRead(path string) (*os.File, error) {
 	return f, nil
 }
 
+// closeFile is uv_fs_close: close(2), where EINTR and EINPROGRESS count as
+// success (the descriptor is gone either way).
+func closeFile(f *os.File) error {
+	err := f.Close()
+	if err == nil || errors.Is(err, syscall.EINTR) || errors.Is(err, syscall.EINPROGRESS) {
+		return nil
+	}
+	return err
+}
+
 // leaked holds the files ReadBytes leaves open, as Node does, so that
 // their finalizers do not close them.
 var leaked []*os.File
@@ -253,7 +264,7 @@ func readChunk(f *os.File, b []byte) (int, error) {
 // do_not_throw_error flag reads the wrong argument, so it throws), then
 // reads up to the size fstat reported for a regular file, or 8 KiB at a
 // time to EOF for anything else.
-func ReadBytes(path string) ([]byte, error) {
+func ReadBytes(path string) (data []byte, err error) {
 	f, err := openRead(path)
 	if err != nil {
 		return nil, err
@@ -267,7 +278,14 @@ func ReadBytes(path string) ([]byte, error) {
 		leaked = append(leaked, f)
 		return nil, &Error{Code: codeOf(err), Syscall: "fstat", NoPath: true}
 	}
-	defer f.Close()
+	// readFileSync closes the descriptor with closeSync after reading, and
+	// in a finally after a failed read or ERR_FS_FILE_TOO_LARGE: an error
+	// from close replaces any other.
+	defer func() {
+		if cerr := closeFile(f); cerr != nil {
+			data, err = nil, &Error{Code: codeOf(cerr), Syscall: "close", NoPath: true}
+		}
+	}()
 	size := info.Size()
 	if !info.Mode().IsRegular() {
 		size = 0
@@ -319,7 +337,14 @@ func ReadText(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	// ReadFileUtf8 closes on leaving its scope, after a read error too,
+	// with CHECK_EQ(0, uv_fs_close(...)): a failing close aborts Node.
+	defer func() {
+		if closeFile(f) != nil {
+			jsexc.FatalCheck("node::fs::ReadFileUtf8(const v8::FunctionCallbackInfo<v8::Value>&)::<lambda()> at ../src/node_file.cc:2605",
+				"(0) == (uv_fs_close(nullptr, &req, file, nullptr))")
+		}
+	}()
 	var b []byte
 	total := 0
 	chunk := make([]byte, 8192)
