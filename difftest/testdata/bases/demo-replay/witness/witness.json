@@ -1,0 +1,20 @@
+{
+  "id": "refund-settlement-currency",
+  "version": 1,
+  "behavior": "Completed refunds preserve the order settlement currency.",
+  "command": "node witness.mjs",
+  "overlay": [
+    "witness.mjs"
+  ],
+  "policy": {
+    "network": "disabled",
+    "credentials": "redacted",
+    "runner": "built-in-sample",
+    "timeoutSeconds": 2,
+    "note": "Only the built-in, reviewed sample is executed by the judge fixture."
+  },
+  "proposedBeforeLocalization": true,
+  "approvedAt": "2026-07-14T09:00:00.000Z",
+  "incidentPacketDigest": "sha256:5054f5c78e5d5dc1f75b461b68b05b9601fe5a403d4932441e8516fb845c82e8",
+  "digest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c"
+}

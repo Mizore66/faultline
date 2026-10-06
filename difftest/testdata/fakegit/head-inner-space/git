@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fake git for difftest: `git bundle list-heads` prints a head whose ref
+# contains a space, which the head-line pattern (\S+ up to the end) rejects
+# (round 6: dropping that check passed replay).
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+if [ "$1" = bundle ] && [ "$2" = list-heads ]; then
+  echo '605b78bb4efa28b156ca53f3f0add4e599713d1a refs/heads/a b'
+  exit 0
+fi
+exec git "$@"

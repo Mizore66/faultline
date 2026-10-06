@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fake git for difftest: not executable, so exec fails with EACCES (the case
+# puts only this directory and a missing one on PATH).
+exit 0

@@ -1,0 +1,14 @@
+#!/bin/sh
+# Fake git for difftest: `git bundle list-heads` writes diagnostics to stderr
+# and more than the 4 MiB maxBuffer to stdout, so the error carries both the
+# stderr text and spawnSync's ENOBUFS, in that order (round 6, mutant M24).
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+if [ "$1" = bundle ] && [ "$2" = list-heads ]; then
+  printf 'hint: planted hint\nwarning: planted warning\n' >&2
+  head -c 5000000 /dev/zero | tr '\0' x
+  exit 0
+fi
+exec git "$@"

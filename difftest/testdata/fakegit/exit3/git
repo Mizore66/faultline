@@ -1,0 +1,10 @@
+#!/bin/sh
+# Fake git for difftest: a silent failure, so FaultLine reports the exit status.
+# Everything but `git bundle list-heads` runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+if [ "$1" = bundle ] && [ "$2" = list-heads ]; then
+  exit 3
+fi
+exec git "$@"
