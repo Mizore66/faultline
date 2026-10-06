@@ -330,8 +330,11 @@ func ReadBytes(path string) (data []byte, err error) {
 // reports matters. The bytes are then converted, and ERR_STRING_TOO_LONG is
 // thrown when their count is at least V8's String::kMaxLength
 // (src/util-inl.h ToV8Value: str.size() >= kMaxLength), whatever the
-// decoded length would be. Bytes past that limit are only counted: Node
-// would keep them, then throw.
+// decoded length would be. Bytes past that limit are only counted, although
+// Node keeps them all: past the memory Node could have (physical memory, or
+// the cgroup's limit), fl dies as Node would have been killed, so a file
+// that never ends (a link to /dev/zero) ends both (round 6: counting alone
+// spun forever).
 func ReadText(path string) (string, error) {
 	f, err := openRead(path)
 	if err != nil {
@@ -359,6 +362,9 @@ func ReadText(path string) (string, error) {
 		total += n
 		if total < maxStringLength {
 			b = append(b, chunk[:n]...)
+		} else if uint64(total) > memoryLimit() {
+			// Node would hold all of it by now and have been killed.
+			outOfMemory()
 		}
 	}
 	if total >= maxStringLength {

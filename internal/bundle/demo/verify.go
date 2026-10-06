@@ -356,8 +356,16 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	if expected {
 		status = "MISMATCH"
 	}
+	// errors is built one push at a time: the push that would make it
+	// 112,813,859 long throws (one error per hashes.txt line can get
+	// there), and so does the catch block's own push, so that RangeError
+	// leaves the verifier (round 6).
+	push := func(e string) {
+		jsjson.CheckGrownLength(len(errs) + 1)
+		errs = append(errs, e)
+	}
 	defer bundle.Catch(func(err error) {
-		errs = append(errs, jsexc.Concat("bundle verification failed safely: ", jsexc.Message(err)))
+		push(jsexc.Concat("bundle verification failed safely: ", jsexc.Message(err)))
 		result = bundle.Result{Errors: errs, RootDigest: rootDigest, ExternalRootStatus: status}
 	})
 
@@ -376,7 +384,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	calculated := "sha256:" + canonical.SHA256Hex(hashes)
 	rootDigest = &calculated
 	if jsstr.Trim(bundle.Must(nodefs.ReadText(rootPath))) != calculated {
-		errs = append(errs, "ROOT.sha256 does not match hashes.txt")
+		push("ROOT.sha256 does not match hashes.txt")
 	}
 	status = "NOT_PROVIDED"
 	if expected {
@@ -386,25 +394,25 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		}
 	}
 	if status == "MISMATCH" {
-		errs = append(errs, "externally supplied bundle root does not match")
+		push("externally supplied bundle root does not match")
 	}
 	manifest, manifestErr := bundle.ParseFile(manifestPath, manifestSchema)
 	if manifestErr != nil {
-		errs = append(errs, jsexc.Concat("manifest validation failed: ", jsexc.Message(manifestErr)))
+		push(jsexc.Concat("manifest validation failed: ", jsexc.Message(manifestErr)))
 	}
 	analysis, analysisErr := bundle.ParseFile(analysisPath, demoAnalysisSchema)
 	if analysisErr != nil {
-		errs = append(errs, jsexc.Concat("analysis validation failed: ", jsexc.Message(analysisErr)))
+		push(jsexc.Concat("analysis validation failed: ", jsexc.Message(analysisErr)))
 	}
 	if manifestErr == nil && analysisErr == nil {
 		if manifest.Get("analysisDigest").Str() != bundle.Must(canonical.DigestJSON(analysis)) {
-			errs = append(errs, "manifest analysisDigest does not match analysis.json")
+			push("manifest analysisDigest does not match analysis.json")
 		}
 		if manifest.Get("fixtureId").Str() != analysis.Get("fixture", "id").Str() {
-			errs = append(errs, "manifest fixtureId does not match analysis.json")
+			push("manifest fixtureId does not match analysis.json")
 		}
 		if manifest.Get("witnessDigest").Str() != analysis.Get("witness", "digest").Str() {
-			errs = append(errs, "manifest witnessDigest does not match analysis.json")
+			push("manifest witnessDigest does not match analysis.json")
 		}
 		validateAnalysisCoverage(analysis, &errs)
 	}
@@ -430,15 +438,15 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		}
 		digest, file, ok := parseHashLine(line)
 		if !ok {
-			errs = append(errs, jsexc.Concat("invalid hash entry: ", line))
+			push(jsexc.Concat("invalid hash entry: ", line))
 			continue
 		}
 		if _, dup := declared[file]; dup {
-			errs = append(errs, jsexc.Concat("duplicate declared file: ", file))
+			push(jsexc.Concat("duplicate declared file: ", file))
 			continue
 		}
 		if invalidDeclaredPath(file) {
-			errs = append(errs, jsexc.Concat("invalid declared path: ", file))
+			push(jsexc.Concat("invalid declared path: ", file))
 			continue
 		}
 		jsexc.MapSet(declared, file, digest)
@@ -448,12 +456,12 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		required := newSet(requiredDeclaredFiles(analysis)...)
 		for _, file := range required.order {
 			if _, ok := declared[file]; !ok {
-				errs = append(errs, jsexc.Concat("required evidence file is not declared: ", file))
+				push(jsexc.Concat("required evidence file is not declared: ", file))
 			}
 		}
 		for _, file := range declaredOrder {
 			if !required.has[file] {
-				errs = append(errs, jsexc.Concat("undeclared-schema file is present in hashes.txt: ", file))
+				push(jsexc.Concat("undeclared-schema file is present in hashes.txt: ", file))
 			}
 		}
 	}
@@ -461,21 +469,21 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		path := nodefs.Resolve(output, file)
 		local := nodefs.Relative(output, path)
 		if strings.HasPrefix(local, "..") || nodefs.IsAbsolute(local) {
-			errs = append(errs, jsexc.Concat("declared path escapes bundle: ", file))
+			push(jsexc.Concat("declared path escapes bundle: ", file))
 			continue
 		}
 		if !nodefs.Exists(path) {
-			errs = append(errs, jsexc.Concat("declared file is missing: ", file))
+			push(jsexc.Concat("declared file is missing: ", file))
 			continue
 		}
 		if canonical.SHA256HexBytes(bundle.Must(nodefs.ReadBytes(path))) != declared[file] {
-			errs = append(errs, jsexc.Concat("digest mismatch: ", file))
+			push(jsexc.Concat("digest mismatch: ", file))
 		}
 	}
 	expectedPhysical := newSet(append(slices.Clone(declaredOrder), "hashes.txt", "ROOT.sha256")...)
 	for _, file := range collectFiles(output, output) {
 		if !expectedPhysical.has[file] {
-			errs = append(errs, jsexc.Concat("undeclared file exists in bundle: ", file))
+			push(jsexc.Concat("undeclared file exists in bundle: ", file))
 		}
 	}
 	if analysisErr == nil {

@@ -171,7 +171,7 @@ func checkElements(elements int, maxIndex uint32) {
 // 112,813,858, then 169,220,804, past FixedArray::kMaxCapacity (2^27 - 1),
 // so the push that would make the array 112,813,859 long throws instead
 // (measured on Node 22.22.2).
-const maxGrownArrayLength = 112_813_859
+var maxGrownArrayLength = 112_813_859
 
 // ErrInvalidArrayLength is the catchable RangeError such a push throws.
 var ErrInvalidArrayLength = &RangeError{"Invalid array length"}
@@ -185,11 +185,29 @@ func CheckGrownLength(n int) {
 	}
 }
 
+// maxSplitParts is maxArrayElements, apart for SetSplitLimitForTest.
+var maxSplitParts = maxArrayElements
+
+// SetSplitLimitForTest lowers the split limit as SetGrownLimitForTest does.
+func SetSplitLimitForTest(n int) (restore func()) {
+	old := maxSplitParts
+	maxSplitParts = n
+	return func() { maxSplitParts = old }
+}
+
+// SetGrownLimitForTest lowers the grown-array limit, so tests can reach the
+// code that checks it with small inputs; the returned func restores it.
+func SetGrownLimitForTest(n int) (restore func()) {
+	old := maxGrownArrayLength
+	maxGrownArrayLength = n
+	return func() { maxGrownArrayLength = old }
+}
+
 // CheckSplitParts is the allocation String.prototype.split makes for its
 // result: n parts need a FixedArray of n slots, and 2^27 or more abort the
 // process as checkElements does.
 func CheckSplitParts(n int) {
-	if n >= maxArrayElements {
+	if n >= maxSplitParts {
 		jsexc.FatalInvalidFixedArraySize(n)
 	}
 }
