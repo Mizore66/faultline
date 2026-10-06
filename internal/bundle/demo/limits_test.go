@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -67,15 +66,13 @@ func TestGrownArrayLimitCallSites(t *testing.T) {
 }
 
 // String.prototype.split aborts the process at the FixedArray limit, before
-// any line is looked at; run that in a child process.
+// any line is looked at; run that in a child process (a signal death on
+// Unix, exit status 0x80000003 on Windows).
 func TestSplitLimitCallSite(t *testing.T) {
 	if os.Getenv("FL_SPLIT_CHILD") != "" {
 		jsjson.SetSplitLimitForTest(10)
 		Verify(demoWithHashes(t, 10), "", false)
 		return
-	}
-	if runtime.GOOS == "windows" {
-		t.Skip("the abort is a signal death on Unix")
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSplitLimitCallSite$")
 	cmd.Env = append(os.Environ(), "FL_SPLIT_CHILD=1")
