@@ -11,7 +11,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest, windows-11-arm]
+        # Pinned images: ubuntu-latest moves to Ubuntu 26 on 2026-10-19, whose
+        # glibc can change the directory-listing cases (KNOWN_DIFFERENCES).
+        # macos-15-intel covers darwin/amd64, which no other job runs.
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest, windows-11-arm]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
@@ -23,7 +26,7 @@ jobs:
       # Windows needs well over the 10m default. -count=1: replay builds
       # cmd/fl in a subprocess, which Go's test cache cannot see, so a cached
       # PASS could hide a change to main.
-      # On ubuntu-latest the replay also builds fl with coverage and fails
+      # On ubuntu-24.04 the replay also builds fl with coverage and fails
       # if a verifier error site is never reached (difftest/covergate_test.go).
       # Only oracle tests (no Node here) and per-platform cases may skip.
       - name: go test
@@ -40,11 +43,11 @@ jobs:
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status
         env:
-          FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+          FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-24.04' && '1' || '' }}
 
   difftest-live:
     name: difftest live (frozen TS oracle)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       LC_ALL: C.UTF-8
     steps:
@@ -94,7 +97,7 @@ jobs:
           # home is 0750).
           d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d=$(dirname "$d"); done
           sudo chmod -R o+rX "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/package.json"
-          # ubuntu-latest's glibc (2.39) lists d_ino 0 entries, so the FUSE
+          # Ubuntu 24.04's glibc (2.39) lists d_ino 0 entries, so the FUSE
           # case that needs Node on glibc <= 2.36 skips (KNOWN_DIFFERENCES).
           set -o pipefail
           status=0

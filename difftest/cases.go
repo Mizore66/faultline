@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
@@ -238,7 +239,7 @@ func fixturesDir() string {
 }
 
 // pathOps target a path in the bundle (or the bundle itself), not an existing file.
-var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "remove-root": true, "sparse-file": true, "many-files": true, "fake-git": true, "pad-total": true}
+var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "remove-root": true, "fifo": true, "sparse-file": true, "many-files": true, "fake-git": true, "pad-total": true}
 
 // latin1 is Buffer.from(s, "latin1") for the ASCII find/replace strings.
 func latin1(s string) []byte {
@@ -356,12 +357,29 @@ func padTotal(root, base, path string, total int64, declared bool) {
 	rehash(root, base)
 }
 
-// rebindLifecycle is the TS engine's rebindLifecycle: manifest.lifecycle
-// bound to the edited ledger as the writer's bindLifecycleLedger does.
+// rebindLifecycle is the TS engine's rebindLifecycle, the writer's
+// bindLifecycleLedger: the binding takes its transport from SESSION_STARTED,
+// and where the writer would refuse to bind the manifest keeps its old
+// binding (round 5, row 13).
 func rebindLifecycle(root string, ledger jsjson.Value) {
 	investigation, _ := parseObjectFile(filepath.Join(root, "investigation.json"))
 	manifestPath := filepath.Join(root, "manifest.json")
 	manifest, _ := parseObjectFile(manifestPath)
+	verification := gitproof.VerifyCodexLifecycleLedger(ledger)
+	if !verification.Valid || verification.HeadHash == nil {
+		return
+	}
+	events := ledger.Get("events").Items()
+	var sessionStarted jsjson.Value
+	for _, event := range events {
+		if event.Get("event", "type").Str() == "SESSION_STARTED" {
+			sessionStarted = event
+			break
+		}
+	}
+	if sessionStarted.Kind() != jsjson.Object {
+		return
+	}
 	stateByCommit := map[string]jsjson.Value{}
 	states := investigation.Field("states").Items()
 	for _, st := range states {
@@ -369,14 +387,18 @@ func rebindLifecycle(root string, ledger jsjson.Value) {
 	}
 	var bindings []jsjson.Value
 	covered := map[float64]bool{}
-	for _, event := range ledger.Get("events").Items() {
-		cp := event.Get("event", "payload", "checkpoint")
-		if event.Get("event", "type").Str() != "WORKTREE_CHECKPOINT" || cp.Kind() != jsjson.Object {
+	descendant := false
+	for _, event := range events {
+		if event.Get("event", "type").Str() != "WORKTREE_CHECKPOINT" {
 			continue
 		}
+		cp := event.Get("event", "payload", "checkpoint")
 		state, ok := stateByCommit[cp.Get("headCommit").Str()]
 		if !ok {
 			continue
+		}
+		if cp.Get("treeDigest").Str() != state.Get("tree").Str() {
+			return
 		}
 		b := jsjson.NewObj()
 		b.Set("sequence", event.Get("sequence"))
@@ -384,19 +406,24 @@ func rebindLifecycle(root string, ledger jsjson.Value) {
 		b.Set("checkpointDigest", cp.Get("digest"))
 		bindings = append(bindings, jsjson.MakeObject(b))
 		covered[state.Get("index").Num()] = true
+		d := investigation.Field("resolvedRange").Get("descendant", "index") // undefined matches no index
+		descendant = descendant || d.Kind() == jsjson.Number && state.Get("index").Num() == d.Num()
+	}
+	if len(bindings) == 0 || !descendant {
+		return
 	}
 	status := "PARTIALLY_BOUND"
 	if len(covered) == len(states) {
 		status = "FULLY_BOUND"
 	}
-	events := ledger.Get("events").Items()
 	lifecycle := jsjson.NewObj()
 	for _, k := range manifest.Field("lifecycle").Obj().Keys() {
 		lifecycle.Set(k, manifest.Field("lifecycle").Get(k))
 	}
 	lifecycle.Set("status", jsjson.MakeString(status))
 	lifecycle.Set("ledgerDigest", jsjson.MakeString(bundleMustString(canonical.DigestJSON(ledger))))
-	lifecycle.Set("headHash", events[len(events)-1].Get("hash"))
+	lifecycle.Set("headHash", jsjson.MakeString(*verification.HeadHash))
+	lifecycle.Set("transport", sessionStarted.Get("event", "payload", "transport"))
 	lifecycle.Set("checkpointBindings", jsjson.MakeArray(bindings))
 	manifest.Set("lifecycle", jsjson.MakeObject(lifecycle))
 	writeJSON(manifestPath, jsjson.MakeObject(manifest))
@@ -475,6 +502,10 @@ func applyMutation(root string, c testCase) bool {
 	t := *c.tpl
 	path := filepath.Join(root, filepath.FromSlash(c.file))
 	switch t.str("op") {
+	case "fifo": // a named pipe: a special file the verifiers must refuse
+		if err := mkfifo(path); err != nil {
+			return false
+		}
 	case "remove-root": // the bundle directory does not exist
 		if err := os.Rename(root, root+"-gone"); err != nil {
 			return false
@@ -658,6 +689,8 @@ func treeDigest(root string) string {
 			case info.IsDir():
 				lines = append(lines, "D "+r)
 				walk(r)
+			case !info.Mode().IsRegular(): // a FIFO: reading it would block
+				lines = append(lines, "S "+r)
 			default:
 				b, _ := os.ReadFile(path)
 				lines = append(lines, "F "+r+" "+canonical.SHA256HexBytes(b))

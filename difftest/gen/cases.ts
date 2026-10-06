@@ -1,7 +1,9 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { digestJson, sha256 } from "../../src/canonical.js";
+import { verifyCodexLifecycleLedger } from "../../src/ledger.js";
 
 export type Template = {
   id: string; op: string; file?: string; path?: string; offset?: number; target?: string; content?: string;
@@ -130,7 +132,7 @@ function matches(pattern: string, file: string): boolean {
 }
 
 // Ops whose target is a path in the bundle (or the bundle itself), not an existing file.
-const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "sparse-file", "many-files", "fake-git", "pad-total"]);
+const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "fifo", "sparse-file", "many-files", "fake-git", "pad-total"]);
 
 export function expandCases(base: string, root: string, templates: Template[]): Case[] {
   const files = listFiles(root);
@@ -290,28 +292,42 @@ function padTotal(root: string, base: string, path: string, total: number, decla
   rehash(root, base);
 }
 
-// rebindLifecycle binds manifest.lifecycle to the ledger as the writer's
-// bindLifecycleLedger does: the ledger digest, the last event hash, one
-// binding per checkpoint whose head commit is an investigation state, and
-// FULLY_BOUND when every state is covered.
+// rebindLifecycle is the writer's bindLifecycleLedger
+// (src/git-proof-bundle.ts:580): the binding takes its transport from
+// SESSION_STARTED, and where the writer would refuse to bind (an invalid
+// ledger, no SESSION_STARTED, a checkpoint tree that disagrees with its
+// commit, no checkpoint of an investigated state, none of the descendant)
+// the manifest keeps its old binding (round 5, row 13).
 function rebindLifecycle(root: string, ledger: LedgerJson): void {
-  const investigation = JSON.parse(readFileSync(join(root, "investigation.json"), "utf8")) as { states: Array<{ index: number; commit: string }> };
+  const investigation = JSON.parse(readFileSync(join(root, "investigation.json"), "utf8")) as {
+    states: Array<{ index: number; commit: string; tree: string }>; resolvedRange?: { descendant?: { index: number } };
+  };
   const manifestPath = join(root, "manifest.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { lifecycle: Record<string, unknown> };
+  const verification = verifyCodexLifecycleLedger(ledger);
+  if (!verification.valid || verification.headHash === null) return;
+  type Event = { sequence: number; event: { type: string; payload?: { transport?: string; checkpoint?: { headCommit?: string; treeDigest?: string; digest?: string } } } };
+  const events = ledger.events as Event[];
+  const sessionStarted = events.find((e) => e.event.type === "SESSION_STARTED");
+  if (!sessionStarted) return;
   const stateByCommit = new Map(investigation.states.map((s) => [s.commit, s]));
   const bindings: Array<{ sequence: number; stateIndex: number; checkpointDigest: string }> = [];
-  for (const event of ledger.events as Array<{ sequence: number; event: { type: string; payload?: { checkpoint?: { headCommit?: string; digest?: string } } } }>) {
-    const checkpoint = event.event.payload?.checkpoint;
-    if (event.event.type !== "WORKTREE_CHECKPOINT" || !checkpoint) continue;
+  for (const event of events) {
+    if (event.event.type !== "WORKTREE_CHECKPOINT") continue;
+    const checkpoint = event.event.payload!.checkpoint!;
     const state = stateByCommit.get(checkpoint.headCommit!);
-    if (state) bindings.push({ sequence: event.sequence, stateIndex: state.index, checkpointDigest: checkpoint.digest! });
+    if (!state) continue;
+    if (checkpoint.treeDigest !== state.tree) return;
+    bindings.push({ sequence: event.sequence, stateIndex: state.index, checkpointDigest: checkpoint.digest! });
   }
+  if (bindings.length === 0 || !bindings.some((b) => b.stateIndex === investigation.resolvedRange?.descendant?.index)) return;
   const covered = new Set(bindings.map((b) => b.stateIndex));
   manifest.lifecycle = {
     ...manifest.lifecycle,
     status: covered.size === investigation.states.length ? "FULLY_BOUND" : "PARTIALLY_BOUND",
     ledgerDigest: digestJson(ledger),
-    headHash: ledger.events.at(-1)!.hash,
+    headHash: verification.headHash,
+    transport: sessionStarted.event.payload!.transport,
     checkpointBindings: bindings
   };
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -324,6 +340,7 @@ export function applyMutation(root: string, c: Case): void {
   if (!t) return;
   const path = join(root, c.file!);
   switch (t.op) {
+    case "fifo": execFileSync("mkfifo", [path]); break; // a named pipe: a special file the verifiers must refuse
     case "remove-root": renameSync(root, `${root}-gone`); break; // the bundle directory does not exist
     case "root-symlink": {
       const real = `${root}-real`;
@@ -431,6 +448,7 @@ export function treeDigest(root: string): string {
       const stat = lstatSync(path);
       if (stat.isSymbolicLink()) lines.push(`L ${r} ${readlinkSync(path)}`);
       else if (stat.isDirectory()) { lines.push(`D ${r}`); walk(r); }
+      else if (!stat.isFile()) lines.push(`S ${r}`); // a FIFO: reading it would block
       else lines.push(`F ${r} ${sha256(readFileSync(path))}`);
     }
   };

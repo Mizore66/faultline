@@ -27,7 +27,7 @@ var portedTypes = map[string]bool{"demo": true, "prevention": true, "git": true}
 var flBinary string
 
 // windowsUncreatable are the mutation ops a Windows runner cannot apply.
-var windowsUncreatable = map[string]bool{"symlink": true, "root-symlink": true, "fake-git": true}
+var windowsUncreatable = map[string]bool{"symlink": true, "root-symlink": true, "fake-git": true, "fifo": true}
 
 func TestMain(m *testing.M) {
 	// Corepack keeps pnpm under the real HOME; an empty one would make the
@@ -257,12 +257,12 @@ func TestGoldenReplay(t *testing.T) {
 					bundle := filepath.Join(work, "bundle")
 					copyTree(t, root, bundle)
 					if !applyMutation(bundle, c) {
-						// Only Windows, and only symlinks and the POSIX fake
+						// Only Windows, and only symlinks, named pipes and the POSIX fake
 						// gits; any other skip would hide a case (round 5, §8 F9).
 						if runtime.GOOS != "windows" || !windowsUncreatable[c.tpl.str("op")] {
 							t.Fatal("could not apply the mutation")
 						}
-						t.Skip("platform cannot create this case (symlink, or a POSIX fake git)")
+						t.Skip("platform cannot create this case (symlink, named pipe, or a POSIX fake git)")
 					}
 					digest := treeDigest(bundle)
 					type invocation struct {
