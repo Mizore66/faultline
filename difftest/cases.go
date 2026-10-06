@@ -238,7 +238,7 @@ func fixturesDir() string {
 }
 
 // pathOps target a path in the bundle (or the bundle itself), not an existing file.
-var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "sparse-file": true, "many-files": true, "fake-git": true, "pad-total": true}
+var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "remove-root": true, "sparse-file": true, "many-files": true, "fake-git": true, "pad-total": true}
 
 // latin1 is Buffer.from(s, "latin1") for the ASCII find/replace strings.
 func latin1(s string) []byte {
@@ -475,6 +475,10 @@ func applyMutation(root string, c testCase) bool {
 	t := *c.tpl
 	path := filepath.Join(root, filepath.FromSlash(c.file))
 	switch t.str("op") {
+	case "remove-root": // the bundle directory does not exist
+		if err := os.Rename(root, root+"-gone"); err != nil {
+			return false
+		}
 	case "root-symlink":
 		real := root + "-real"
 		if err := os.Rename(root, real); err != nil {

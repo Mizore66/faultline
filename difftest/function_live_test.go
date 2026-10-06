@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -201,6 +202,8 @@ func liveWitnessOverlays(t *testing.T) string {
 // Ledger seeds: the two committed ledgers plus a TS-built one with every
 // event type (baseline and turn snapshots, tool use). Half of the mutated
 // ledgers are re-signed by TS so the semantic checks run behind a valid chain.
+var ledgerDigest = regexp.MustCompile(`"digest":"sha256:[0-9a-f]{64}"`)
+
 func TestLiveLedger(t *testing.T) {
 	seeds := seedTexts(t, "git-partially-bound/lifecycle/ledger.json", "git-fully-bound/lifecycle/ledger.json")
 	var rich string
@@ -215,7 +218,14 @@ func TestLiveLedger(t *testing.T) {
 		}
 		text := seeds[r.IntN(len(seeds))]
 		if i >= len(seeds) {
-			if r.IntN(2) == 0 {
+			if digests := ledgerDigest.FindAllStringIndex(text, -1); len(digests) > 0 && r.IntN(8) == 0 {
+				// One checkpoint or snapshot digest that no longer matches
+				// its contents, behind a re-signed chain (round 6: no input
+				// reached those two checks).
+				at := digests[r.IntN(len(digests))]
+				text = text[:at[0]] + `"digest":"sha256:` + strings.Repeat("1", 64) + `"` + text[at[1]:]
+				text = oracleText(t, c, "resignLedger", `{"text":`+jsjson.Quote(text)+"}")
+			} else if r.IntN(2) == 0 {
 				// A structural event change behind a re-signed chain
 				// reaches the lifecycle state machine.
 				for n := r.IntN(2); n >= 0; n-- {

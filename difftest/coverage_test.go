@@ -18,9 +18,9 @@ import (
 // produce, each with the reason. Everything else must appear in some golden
 // output, so a dropped or reworded check fails replay.
 var unreachableLiterals = map[string]string{
-	"declared path escapes bundle:":                                           "only a Windows drive-relative path (C:x) resolves outside the bundle after invalidDeclaredPath",
+	"Git proof bundle directory does not exist":                               "a Git bundle is only recognised by reading its manifest.json, so its directory exists (short of a race)",
+	"Prevention proof directory does not exist":                               "a prevention bundle is only recognised by reading its manifest.json, so its directory exists (short of a race)",
 	"Unsafe artifact path:":                                                   "metadata and manifest paths are schema-checked with the same safe-path rule first",
-	"Artifact path escapes its bundle:":                                       "unreachable after the safe-path check (no .. or absolute segments)",
 	"Git range patch exceeds FaultLine's portable artifact limit.":            "git diff output past the 4 MiB maxBuffer fails with ENOBUFS before the 128 MiB artifact limit is checked",
 	"AGENT_DRAFT evidence cannot be exported as a Git proof bundle":           "proof.evidenceGrade is a zod enum without AGENT_DRAFT",
 	"witness digest is invalid":                                               "SandboxAuditSchema requires sha256 digests, and verify parses it first",
@@ -74,7 +74,25 @@ func errorSites(dir string) ([]errorSite, error) {
 			return err
 		}
 		adders := errorClosures(f)
+		collect := func(exprs []ast.Expr) { collectLiterals(fset, exprs, &out) }
 		ast.Inspect(f, func(n ast.Node) bool {
+			// Error lists built as literals: Result{Errors: []string{"…"}}
+			// and `return []string{"…"}` (round 6: seven such messages
+			// were never collected).
+			var lists []ast.Expr
+			switch n := n.(type) {
+			case *ast.KeyValueExpr:
+				if key, ok := n.Key.(*ast.Ident); ok && key.Name == "Errors" {
+					lists = append(lists, n.Value)
+				}
+			case *ast.ReturnStmt:
+				lists = n.Results
+			}
+			for _, e := range lists {
+				if lit, ok := e.(*ast.CompositeLit); ok && isStringSlice(lit.Type) {
+					collect(lit.Elts)
+				}
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -102,32 +120,37 @@ func errorSites(dir string) ([]errorSite, error) {
 			default:
 				return true
 			}
-			for _, a := range args {
-				ast.Inspect(a, func(m ast.Node) bool {
-					// Literals inside other calls (v.Get("key")) are not
-					// message text; jsexc.Concat builds the message itself.
-					if inner, ok := m.(*ast.CallExpr); ok {
-						sel, ok := inner.Fun.(*ast.SelectorExpr)
-						return ok && sel.Sel.Name == "Concat"
-					}
-					if lit, ok := m.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-						s, _ := strconv.Unquote(lit.Value)
-						s = strings.TrimSpace(s)
-						// Short literals ("; expected", "sequence") are glue
-						// around the longer literal of the same message.
-						if len(messageFragments(s)) > 0 {
-							p := fset.Position(lit.Pos())
-							out = append(out, errorSite{s, p.String(), p.Filename, p.Line})
-						}
-					}
-					return true
-				})
-			}
+			collect(args)
 			return true
 		})
 		return nil
 	})
 	return out, err
+}
+
+// collectLiterals adds the message literals in exprs to out.
+func collectLiterals(fset *token.FileSet, exprs []ast.Expr, out *[]errorSite) {
+	for _, a := range exprs {
+		ast.Inspect(a, func(m ast.Node) bool {
+			// Literals inside other calls (v.Get("key")) are not
+			// message text; jsexc.Concat builds the message itself.
+			if inner, ok := m.(*ast.CallExpr); ok {
+				sel, ok := inner.Fun.(*ast.SelectorExpr)
+				return ok && sel.Sel.Name == "Concat"
+			}
+			if lit, ok := m.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				s, _ := strconv.Unquote(lit.Value)
+				s = strings.TrimSpace(s)
+				// Short literals ("; expected", "sequence") are glue
+				// around the longer literal of the same message.
+				if len(messageFragments(s)) > 0 {
+					p := fset.Position(lit.Pos())
+					*out = append(*out, errorSite{s, p.String(), p.Filename, p.Line})
+				}
+			}
+			return true
+		})
+	}
 }
 
 func appendsToErrors(e ast.Expr) bool { return strings.Contains(strings.ToLower(exprString(e)), "err") }
@@ -171,6 +194,11 @@ func messageFragments(s string) []string {
 		}
 	}
 	return out
+}
+
+func isStringSlice(e ast.Expr) bool {
+	arr, ok := e.(*ast.ArrayType)
+	return ok && arr.Len == nil && exprString(arr.Elt) == "string"
 }
 
 func exprString(e ast.Expr) string {

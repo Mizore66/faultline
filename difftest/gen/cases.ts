@@ -1,4 +1,4 @@
-import { copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { digestJson, sha256 } from "../../src/canonical.js";
@@ -130,7 +130,7 @@ function matches(pattern: string, file: string): boolean {
 }
 
 // Ops whose target is a path in the bundle (or the bundle itself), not an existing file.
-const PATH_OPS = new Set(["add-file", "root-symlink", "sparse-file", "many-files", "fake-git", "pad-total"]);
+const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "sparse-file", "many-files", "fake-git", "pad-total"]);
 
 export function expandCases(base: string, root: string, templates: Template[]): Case[] {
   const files = listFiles(root);
@@ -324,6 +324,7 @@ export function applyMutation(root: string, c: Case): void {
   if (!t) return;
   const path = join(root, c.file!);
   switch (t.op) {
+    case "remove-root": renameSync(root, `${root}-gone`); break; // the bundle directory does not exist
     case "root-symlink": {
       const real = `${root}-real`;
       renameSync(root, real);
@@ -422,6 +423,7 @@ export function caseEnv(c: Case, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export function treeDigest(root: string): string {
   const lines: string[] = [];
+  if (!existsSync(root)) return sha256(""); // remove-root; Go lists nothing either
   const walk = (rel: string) => {
     for (const name of readdirSync(join(root, rel)).sort(byCodeUnit)) {
       const r = rel ? `${rel}/${name}` : name;
