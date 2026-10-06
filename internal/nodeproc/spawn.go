@@ -124,7 +124,7 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 	closePipes()
 	if state != nil && !killed.Load() {
 		if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			sigexit.ChildKilled()
+			sigexit.ChildKilled(ws.Signal())
 		}
 	}
 	result := Result{Stdout: stdout.buf, Stderr: stderr.buf}
