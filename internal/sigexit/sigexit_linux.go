@@ -26,6 +26,10 @@ func SetDefault(sig syscall.Signal) {
 	syscall.RawSyscall6(syscall.SYS_RT_SIGACTION, uintptr(sig), uintptr(unsafe.Pointer(&act)), 0, 8, 0, 0)
 }
 
+// SetIgnored sets sig's disposition to SIG_IGN in the kernel, which also
+// discards it if it is pending.
+func SetIgnored(sig syscall.Signal) { setIgnore(sig) }
+
 // setIgnore sets sig's disposition to SIG_IGN in the kernel.
 func setIgnore(sig syscall.Signal) {
 	act := sigaction{handler: 1} // SIG_IGN

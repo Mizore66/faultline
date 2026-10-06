@@ -24,7 +24,7 @@ sig, mode, bundle, gitdir, argv = int(sys.argv[1]), sys.argv[2], sys.argv[3], sy
 def pre():
     if mode in ("block", "pending"): signal.pthread_sigmask(signal.SIG_BLOCK, [s for s in (sig, signal.SIGALRM, signal.SIGUSR2) if s])
     if mode == "ignore":
-        for s in (signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU, signal.SIGHUP, signal.SIGINT): signal.signal(s, signal.SIG_IGN)
+        for s in (signal.SIGTSTP, signal.SIGTTIN, signal.SIGTTOU, signal.SIGHUP, signal.SIGINT, 40): signal.signal(s, signal.SIG_IGN)
     if mode in ("raise-dfl", "raise-ign"):
         os.setpgid(0, 0)  # a group of its own whose parent is outside it: not orphaned, so stop signals stop it
         signal.signal(sig, signal.SIG_IGN if mode == "raise-ign" else signal.SIG_DFL)
@@ -92,7 +92,9 @@ func TestLiveSignalsMatchNode(t *testing.T) {
 	for _, sig := range strings.Fields("12 13 14 25") {
 		cases = append(cases, tc{sig, "raise-dfl"})
 	}
-	for _, sig := range strings.Fields("20 21 22") {
+	// Ignored and pending: Node discards them (round 6; needs fl built with
+	// cgo, which records the inherited dispositions before the runtime).
+	for _, sig := range strings.Fields("12 13 20 21 22 25 40") {
 		cases = append(cases, tc{sig, "raise-ign"})
 	}
 	cases = append(cases, tc{"0", "ignore"}, tc{"0", "block"}, tc{"0", "nofile"})

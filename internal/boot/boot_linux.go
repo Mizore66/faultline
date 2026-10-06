@@ -2,6 +2,8 @@ package boot
 
 import (
 	"os"
+	"os/signal"
+	"strconv"
 	"syscall"
 	"unsafe" // go:linkname
 
@@ -22,6 +24,10 @@ var terminating = []os.Signal{syscall.SIGSEGV, syscall.SIGBUS, syscall.SIGFPE, s
 // is: the runtime has already installed its handler and does not install it
 // again for os/signal, and this takes microseconds where each os/signal
 // registration takes a round trip to the runtime's signal thread.
+// ignoredEnv carries the inherited-SIG_IGN record across the exec that
+// clears an inherited mask (ignored_cgo_linux.go).
+const ignoredEnv = "FAULTLINE_BOOT_IGNORED"
+
 var kernelDefault = func() []syscall.Signal {
 	s := []syscall.Signal{
 		syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGABRT, syscall.SIGUSR2,
@@ -65,16 +71,44 @@ var kernelDefault = func() []syscall.Signal {
 // disposition with its own handler, so real-time signals are set to
 // SIG_DFL whatever they were inherited as (KNOWN_DIFFERENCES.md).
 func resetInherited() {
+	ignored, known := inheritedIgnored()
+	os.Unsetenv(ignoredEnv) // the record passed by the first image; git must not see it
+	// Node clears the mask with the inherited dispositions still in place:
+	// a pending signal the parent ignored is discarded, and the others end
+	// it. Where the record is known (built with cgo), the ignored ones are
+	// set back to SIG_IGN until the mask is clear.
 	for _, sig := range kernelDefault {
-		sigexit.SetDefault(sig)
+		if known && ignored&(1<<(sig-1)) != 0 {
+			sigexit.SetIgnored(sig)
+		} else {
+			sigexit.SetDefault(sig)
+		}
 	}
 	var mask uint64
 	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 0, 0, uintptr(unsafe.Pointer(&mask)), 8, 0, 0)
 	if mask != 0 {
 		var empty uint64
 		syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2 /* SIG_SETMASK */, uintptr(unsafe.Pointer(&empty)), 0, 8, 0, 0)
+		if known {
+			os.Setenv(ignoredEnv, strconv.FormatUint(ignored, 16))
+		}
 		syscall.Exec("/proc/self/exe", os.Args, os.Environ())
+		os.Unsetenv(ignoredEnv)
 		syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2, uintptr(unsafe.Pointer(&mask)), 0, 8, 0, 0)
+	}
+	// Node then resets signals 1 to 31 to SIG_DFL and leaves the real-time
+	// ones as inherited, and libuv resets only 1 to 31 in git, so an ignored
+	// real-time signal stays ignored in git too. signal.Ignore, unlike the
+	// raw SIG_IGN above, also tells the runtime, whose fork would otherwise
+	// reset the signal to SIG_DFL in the child.
+	for _, sig := range kernelDefault {
+		if known && ignored&(1<<(sig-1)) != 0 {
+			if sig <= 31 {
+				sigexit.SetDefault(sig)
+			} else {
+				signal.Ignore(sig)
+			}
+		}
 	}
 	for _, sig := range []syscall.Signal{syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU, syscall.SIGCONT} {
 		if sigexit.IsIgnored(sig) {
@@ -96,6 +130,16 @@ func dieOfPending() {
 	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 0, 0, uintptr(unsafe.Pointer(&mask)), 8, 0, 0)
 	syscall.RawSyscall(syscall.SYS_RT_SIGPENDING, uintptr(unsafe.Pointer(&pending)), 8, 0)
 	fatal := pending & mask & (1<<(syscall.SIGPIPE-1) | 1<<(syscall.SIGXFSZ-1))
+	if ignored, known := inheritedIgnored(); known {
+		// The parent ignored it: Node's unmasking discards it, and so does
+		// setting SIG_IGN (Node ignores PIPE and XFSZ from then on).
+		for _, sig := range []syscall.Signal{syscall.SIGPIPE, syscall.SIGXFSZ} {
+			if fatal&ignored&(1<<(sig-1)) != 0 {
+				sigexit.SetIgnored(sig)
+				fatal &^= 1 << (sig - 1)
+			}
+		}
+	}
 	if fatal == 0 {
 		return
 	}
