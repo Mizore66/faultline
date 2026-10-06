@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"sync"
 	"syscall"
 )
 
@@ -74,6 +75,7 @@ var eolState rune
 // then WriteConsoleW. Errors are libuv's stream errors
 // (uv_translate_sys_error), not fs__write's.
 func writeTTY(f *os.File, p []byte) error {
+	vtermOnce.Do(func() { enableVTerm(syscall.Handle(f.Fd())) })
 	units := consoleUTF16(p, &eolState)
 	for len(units) > 0 {
 		var n uint32
@@ -87,3 +89,22 @@ func writeTTY(f *os.File, p []byte) error {
 	}
 	return nil
 }
+
+var vtermOnce sync.Once
+
+// enableVTerm is libuv's uv__determine_vterm_state, which uv_tty_init runs
+// once for the first console handle Node opens for writing (process.stdout
+// on its first write): it turns on ENABLE_VIRTUAL_TERMINAL_PROCESSING, so
+// the console itself interprets ANSI escape sequences in the output, and
+// leaves it on after Node exits (round 6). Consoles that refuse the mode get
+// libuv's own ANSI parser under Node, which is not ported (KNOWN_DIFFERENCES).
+func enableVTerm(h syscall.Handle) {
+	const enableVirtualTerminalProcessing = 0x0004
+	var mode uint32
+	if syscall.GetConsoleMode(h, &mode) != nil {
+		return
+	}
+	procSetConsoleMode.Call(uintptr(h), uintptr(mode|enableVirtualTerminalProcessing))
+}
+
+var procSetConsoleMode = syscall.NewLazyDLL("kernel32.dll").NewProc("SetConsoleMode")
