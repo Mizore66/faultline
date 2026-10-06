@@ -5,11 +5,15 @@
 # matches nothing exits 0). With LIST, a file of top-level test names (the
 # output of `go test -list`), every one of them must report a result, so a
 # renamed test cannot drop out of a -run alternation unnoticed (round 6).
-# Each problem is also reported as a check-run annotation.
+# Each problem, and each failed test, is also reported as a check-run
+# annotation.
 log=$1
 allowed=$2
 list=$3
 fail=0
+# Failed tests become annotations too: job logs need repository access,
+# annotations do not.
+grep -E -- '--- FAIL: ' "$log" | sed 's/^ *//' | head -20 | while read -r line; do echo "::error title=test failed::$line"; done
 unexpected=$(grep -oE -- '--- SKIP: [^ ]+' "$log" | sed 's/^--- SKIP: //' | grep -vE "$allowed" || true)
 for name in $unexpected; do echo "::error title=unexpected skip::$name"; fail=1; done
 if grep -q 'no tests to run' "$log"; then

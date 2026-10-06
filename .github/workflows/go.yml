@@ -30,13 +30,15 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          go test -count=1 -timeout 60m -v ./... | tee "$RUNNER_TEMP/go.log"
+          status=0
+          go test -count=1 -timeout 60m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
           allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestEchoRoundTripsLoneSurrogate'
           case "$RUNNER_OS" in
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
             Windows) allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestGoldenReplay/.+" ;;
           esac
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$"
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
+          exit $status
         env:
           FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
 
@@ -73,9 +75,11 @@ jobs:
         # Only the cases that need root may skip here; they run below.
         run: |
           set -o pipefail
+          status=0
           go test -list 'TestLive' ./difftest/ > "$RUNNER_TEMP/live.list"
-          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run TestLive -v -timeout 45m | tee "$RUNNER_TEMP/live.log"
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^(TestLiveCwdErrorsMatchNode/(chroot|self0600|parent0311|locked[0-9]+)|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode)$' "$RUNNER_TEMP/live.list"
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run TestLive -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^(TestLiveCwdErrorsMatchNode/(chroot|self0600|parent0311|locked[0-9]+)|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode)$' "$RUNNER_TEMP/live.list" || status=1
+          exit $status
       - name: Install FUSE
         # TestLiveFuseMatchesNode mounts bundles through a FUSE filesystem
         # that misreports d_ino, d_type, sizes and errors.
@@ -93,16 +97,20 @@ jobs:
           # ubuntu-latest's glibc (2.39) lists d_ino 0 entries, so the FUSE
           # case that needs Node on glibc <= 2.36 skips (KNOWN_DIFFERENCES).
           set -o pipefail
+          status=0
           printf '%s\n' TestLiveCwdErrorsMatchNode TestLiveTmpdirSetidMatchesNode TestLiveFuseMatchesNode > "$RUNNER_TEMP/root.list"
           (cd difftest && sudo -E env "PATH=$PATH" GOCACHE="$RUNNER_TEMP/root-gocache" FAULTLINE_NODE_ORACLE=1 FAULTLINE_REQUIRE_ROOT=1 \
-            "$RUNNER_TEMP/difftest.test" -test.run 'TestLiveCwdErrorsMatchNode|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode' -test.count=1 -test.v) | tee "$RUNNER_TEMP/root.log"
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/root.log" '^TestLiveFuseMatchesNode/zero-declared-demo$' "$RUNNER_TEMP/root.list"
+            "$RUNNER_TEMP/difftest.test" -test.run 'TestLiveCwdErrorsMatchNode|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode' -test.count=1 -test.v) | tee "$RUNNER_TEMP/root.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/root.log" '^TestLiveFuseMatchesNode/zero-declared-demo$' "$RUNNER_TEMP/root.list" || status=1
+          exit $status
       - name: TimSort against V8
         run: |
           set -o pipefail
-          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -run TestSortMatchesV8 -v | tee "$RUNNER_TEMP/v8sort.log"
+          status=0
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -run TestSortMatchesV8 -v | tee "$RUNNER_TEMP/v8sort.log" || status=$?
           echo TestSortMatchesV8 > "$RUNNER_TEMP/v8sort.list"
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/v8sort.log" '^$' "$RUNNER_TEMP/v8sort.list"
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/v8sort.log" '^$' "$RUNNER_TEMP/v8sort.list" || status=1
+          exit $status
 
   stack-live:
     # The V8 stack, spread and rimraf limits are fitted per platform
@@ -132,14 +140,18 @@ jobs:
       - name: Live platform tests
         run: |
           set -o pipefail
+          status=0
           tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
-          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 45m | tee "$RUNNER_TEMP/live.log"
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
           if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode)$'; else allowed='^$'; fi
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" "$allowed" "$RUNNER_TEMP/live.list"
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" "$allowed" "$RUNNER_TEMP/live.list" || status=1
+          exit $status
       - name: TimSort against V8
         run: |
           set -o pipefail
-          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -run TestSortMatchesV8 -v | tee "$RUNNER_TEMP/v8sort.log"
+          status=0
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -run TestSortMatchesV8 -v | tee "$RUNNER_TEMP/v8sort.log" || status=$?
           echo TestSortMatchesV8 > "$RUNNER_TEMP/v8sort.list"
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/v8sort.log" '^$' "$RUNNER_TEMP/v8sort.list"
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/v8sort.log" '^$' "$RUNNER_TEMP/v8sort.list" || status=1
+          exit $status
