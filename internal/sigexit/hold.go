@@ -10,9 +10,14 @@ import (
 // dying is set once Die has started.
 var dying atomic.Bool
 
-// holdUntil is, in Unix nanoseconds, holdWait after the last child fl
-// started died of a signal fl did not send it; 0 if none did.
+// holdUntil is holdWait after the last child fl started died of a signal
+// fl did not send it, in nanoseconds on the monotonic clock since
+// processStart; 0 if none did.
 var holdUntil atomic.Int64
+
+// processStart anchors holdUntil to the monotonic clock: the wall clock can
+// step, and on Windows ticks coarsely.
+var processStart = time.Now()
 
 // ChildKilled records that a child died of a signal fl did not send. That
 // signal most likely came with fl's process group (Ctrl-C, a terminal
@@ -27,7 +32,7 @@ func ChildKilled(sig syscall.Signal) {
 	case syscall.SIGSEGV, syscall.SIGBUS, syscall.SIGILL, syscall.SIGFPE, syscall.SIGTRAP, syscall.SIGABRT:
 		return
 	}
-	holdUntil.Store(time.Now().Add(holdWait).UnixNano())
+	holdUntil.Store(int64(time.Since(processStart) + holdWait))
 }
 
 // holdWait bounds the wait for that signal, generously for a loaded
@@ -45,7 +50,7 @@ const holdWait = 2 * time.Second
 func Hold() {
 	runtime.Gosched()
 	if until := holdUntil.Load(); until != 0 {
-		for !dying.Load() && time.Now().UnixNano() < until {
+		for !dying.Load() && int64(time.Since(processStart)) < until {
 			time.Sleep(time.Millisecond)
 		}
 	}
