@@ -25,7 +25,7 @@
 | Release timing | No Go release until full parity (end of slice 5). Until then the published npm package stays at the frozen TS version. |
 | Distribution | Static binaries on GitHub Releases, plus the `@mizore66/faultline` npm package rebuilt as a thin wrapper with per-platform optional dependencies (esbuild/biome pattern). `npx fl`, the README, and the Codex plugin keep working. The composite Action downloads the release binary instead of installing Node. |
 | Platforms | linux, darwin, windows × amd64, arm64. |
-| Toolchain | Go 1.27; stdlib plus `golang.org/x/text`. Go shells out to the `git` CLI exactly as TS does (no go-git), so Git behavior stays identical. |
+| Toolchain | Go 1.27; standard library only. Go shells out to the `git` CLI exactly as TS does (no go-git), so Git behavior stays identical. |
 | Repository layout | Go module at the repo root (`github.com/Mizore66/faultline`), `cmd/fl`, `internal/...`, `difftest/`. TS stays in `src/` until deletion. |
 | Deadline | None. |
 
@@ -51,7 +51,7 @@ Every one of the ~40 subcommands dispatched in `src/cli-app.ts` must be assigned
 
 ## Known program risks
 
-- **Collation parity.** `golang.org/x/text/collate` must match Node ICU `localeCompare` for every key TS can produce. Mitigated by live property tests (slice 1).
+- **Collation parity.** `internal/collation` (an ICU port that replaced `golang.org/x/text/collate`) must match Node ICU `localeCompare` for every key TS can produce. Mitigated by live property tests (slice 1).
 - **zod message parity.** Go reproduces zod v3 issue messages for the issue kinds the schemas use. Any kind excluded from exact matching is documented.
 - **Node error text.** Node filesystem error messages that reach CLI output must be reproduced.
 - **Windows behavior.** Path separators and symlink permissions differ; covered by the Windows CI job.

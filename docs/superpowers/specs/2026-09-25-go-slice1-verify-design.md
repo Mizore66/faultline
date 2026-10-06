@@ -57,14 +57,14 @@ internal/cli/                argument helpers, verify command, error formatting
 difftest/                    harness, generators, corpus, goldens (Section 4)
 ```
 
-Dependencies: stdlib and `golang.org/x/text`. No CLI framework; `internal/cli` reproduces the TS helpers:
+Dependencies: the standard library only (collation is `internal/collation`, ported from ICU; `golang.org/x/text` was dropped when it could not match Node's ICU). No CLI framework; `internal/cli` reproduces the TS helpers:
 
 - `hasFlag(args, flag)` → `args` contains `flag`
 - `option(args, flag)` → the element after the first occurrence of `flag`, or absent
 
 ## 2. Canonical JSON and text semantics
 
-Behavior below was confirmed against Node v22.23.2. Go's `encoding/json` differs on each point, so it is not used on any digest path.
+Behavior below was confirmed against Node v22.22.2, the version CI pins. Go's `encoding/json` differs on each point, so it is not used on any digest path.
 
 ### 2.1 Parsing (`internal/jsjson`)
 
@@ -156,7 +156,7 @@ Go must produce the same normalized value, so plain `encoding/json` struct decod
 ### 4.2 Generators (Node, frozen TS)
 
 - `difftest/gen/gen-bases.ts`: writes synthetic bases. Generators are TypeScript run with the existing `tsx` dev dependency, so they import the same frozen `src/` code that `dist/` is built from.
-- `difftest/gen/gen-goldens.ts`: for each case, copies the base to a temp directory, applies the mutation with the Node applier, records `treeDigest` (sha256 over the byte-sorted list of `/`-separated relative paths, each with its entry type and its contents, or its link target for symlinks), runs `node dist/cli.js verify <dir>` for each of the three invocations, normalizes (4.5), and writes the golden lines.
+- `difftest/gen/gen-goldens.ts`: for each case, copies the base to a temp directory, applies the mutation with the Node applier, records `treeDigest` (sha256 over the byte-sorted list of `/`-separated relative paths, each with its entry type and its contents, or its link target for symlinks), runs `node dist/cli.js verify <dir>` for each of its invocations (five for a base case, one for a mutated one), normalizes (4.5), and writes the golden lines.
 
 ### 4.3 Go test
 
@@ -175,7 +175,7 @@ This suite needs no Node and remains the regression oracle after TS is deleted.
   - arbitrary JSON values → `canonicalJson` output and `digestJson`
   - schema inputs (valid values and random corruptions of them) → success, normalized output, and issue `code`/`path` lists (full messages where exact matching applies)
 - 10,000 generated cases per property per CI run, seeded from the edge cases in Section 2. Generators whose input space is small produce fewer distinct inputs; each test logs its distinct count (for example about 5,500 for `verifyFrozenWitnessRecord` and 714 per named schema), and the count, not the 10,000 attempts, is what a run covers.
-- Process-level live tests run `verify` under both runtimes and compare stdout, stderr and exit status: the stack-overflow thresholds at every call site (bisected), stdout on files, devices, pipes and sockets, signal deaths and the signal state git inherits, and broken working directories. They are Linux-only except the stack test, which also runs on macOS.
+- Process-level live tests run `verify` under both runtimes and compare stdout, stderr and exit status: the stack-overflow thresholds at every call site (bisected), stdout on files, devices, pipes and sockets, signal deaths and the signal state git inherits, and broken working directories. Most are Linux-only; the stack, spread, `RLIMIT_NOFILE`, group-signal and stderr tests also run on macOS (`stack-live`).
 
 ### 4.5 Normalizations (the complete list)
 

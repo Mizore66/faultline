@@ -6,13 +6,13 @@
 
 **Architecture:** Leaf packages reproduce JavaScript semantics (`jsstr` strings, `jsjson` JSON.parse/stringify with V8 error text, `canonical` digests with `localeCompare` ordering, `nodefs` Node file reading and error text). A zod-subset `schema` package reproduces zod v3 parsing, normalization, and issue messages. Three verifier packages are line-by-line ports of the TS verifiers. `difftest` generates goldens from frozen TS and replays every case against Go.
 
-**Tech Stack:** Go 1.27, `golang.org/x/text` v0.42.0 (collation), TypeScript generators run with the repo's existing `tsx`, Node 22, git.
+**Tech Stack:** Go 1.27 (standard library only; the `golang.org/x/text` v0.42.0 collation planned below was later replaced by `internal/collation`), TypeScript generators run with the repo's existing `tsx`, Node 22, git.
 
 **Spec:** [docs/superpowers/specs/2026-09-25-go-slice1-verify-design.md](../specs/2026-09-25-go-slice1-verify-design.md) (parent: [overview](../specs/2026-09-25-go-migration-overview.md)). Read both before starting any task.
 
 ## Global Constraints
 
-- Go 1.27; module `github.com/Mizore66/faultline`; only dependency `golang.org/x/text` v0.42.0.
+- Go 1.27; module `github.com/Mizore66/faultline`; no dependencies (the plan's `golang.org/x/text` v0.42.0 was later dropped for `internal/collation`).
 - Never use `encoding/json` on any value that is hashed, compared canonically, or printed. Use `internal/jsjson`.
 - Frozen TS (`src/`, `package.json`, `pnpm-lock.yaml`) is never modified. The TS oracle is `node dist/cli.js`, built with `pnpm build`.
 - All Go strings that hold JS values are WTF-8 (see `internal/jsstr`). Convert with `jsstr.ToUTF8` before writing to stdout/stderr or hashing a JS string.
@@ -7297,7 +7297,7 @@ FAULTLINE_NODE_ORACLE=1 go test ./difftest/ -run TestLive -v -timeout 30m
 
 Expected: PASS, with 10,000 cases per property.
 
-Push the branch and confirm both CI jobs (`go` on three OSes, `difftest-live`) pass before calling slice 1 done.
+Push the branch and confirm the CI jobs (`go` on five runners, `difftest-live`, `stack-live`) pass before calling slice 1 done.
 
 - [x] **Step 5: Commit**
 
