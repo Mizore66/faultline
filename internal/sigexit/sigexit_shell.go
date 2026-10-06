@@ -20,6 +20,15 @@ import (
 // reports for a signal death. Without /bin/sh, fl exits 128+sig itself.
 func Die(sig syscall.Signal) {
 	dying.Store(true)
+	if runtimeKills[sig] && !ignoredAtStart[sig] {
+		// The runtime's own handler dies of these when nothing catches
+		// them (dieFromSignal: SIG_DFL, unblock, raise), without an exec:
+		// the shell crashed with SIGILL at start-up in about 1 in 40
+		// group-signal deaths on a loaded Mac (round 6).
+		signal.Reset(sig)
+		syscall.Kill(syscall.Getpid(), sig)
+		select {} // dieFromSignal ends the process
+	}
 	// Node dies of the first signal. Ignoring the others here keeps them
 	// ignored across exec, so one that arrives while the shell starts
 	// cannot take its place; sig itself is caught and so reset to SIG_DFL.
@@ -42,4 +51,23 @@ var catchable = []syscall.Signal{
 	syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTRAP, syscall.SIGABRT, syscall.SIGEMT,
 	syscall.SIGSYS, syscall.SIGPIPE, syscall.SIGALRM, syscall.SIGTERM, syscall.SIGTSTP, syscall.SIGTTIN,
 	syscall.SIGTTOU, syscall.SIGXCPU, syscall.SIGXFSZ, syscall.SIGVTALRM, syscall.SIGUSR1, syscall.SIGUSR2,
+}
+
+// runtimeKills are the signals the Go runtime itself dies of when no
+// os/signal channel wants them (_SigKill in runtime/signal_darwin.go and the
+// BSDs' tables).
+var runtimeKills = map[syscall.Signal]bool{syscall.SIGHUP: true, syscall.SIGINT: true, syscall.SIGTERM: true}
+
+// ignoredAtStart holds the runtimeKills signals fl inherited as SIG_IGN:
+// the runtime installs no handler for SIGINT and SIGHUP then, so Reset
+// would put SIG_IGN back and the signal would be lost.
+var ignoredAtStart = map[syscall.Signal]bool{}
+
+// RecordIgnored must run before any signal.Notify.
+func RecordIgnored() {
+	for sig := range runtimeKills {
+		if signal.Ignored(sig) {
+			ignoredAtStart[sig] = true
+		}
+	}
 }

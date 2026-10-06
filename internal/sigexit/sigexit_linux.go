@@ -69,3 +69,7 @@ func Die(sig syscall.Signal) {
 	syscall.Tgkill(syscall.Getpid(), syscall.Gettid(), sig)
 	os.Exit(128 + int(sig))
 }
+
+// RecordIgnored is only needed where Die resets dispositions through
+// os/signal.
+func RecordIgnored() {}

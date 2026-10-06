@@ -31,6 +31,7 @@ import (
 func init() {
 	dieOfPending()
 	stripSecureEnv()
+	sigexit.RecordIgnored()
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, terminating...)
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE, syscall.SIGXFSZ)
