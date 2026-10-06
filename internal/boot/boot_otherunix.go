@@ -18,6 +18,9 @@ func dieOfPending() {}
 
 func raiseNofile() {}
 
+// BeforeSpawn: nothing deferred here.
+func BeforeSpawn() {}
+
 func setCloexec(fd int) bool {
 	_, _, e := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_SETFD, syscall.FD_CLOEXEC)
 	return e == 0

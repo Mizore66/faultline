@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
+	"github.com/Mizore66/faultline/internal/boot"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
 	"github.com/Mizore66/faultline/internal/sigexit"
@@ -85,6 +86,7 @@ func spawnError(file, code string) error { return errors.New("spawnSync " + file
 // Arguments are JS strings: they reach the child as UTF-8 with each lone
 // surrogate replaced by U+FFFD, as Node encodes them.
 func SpawnSync(file string, args []string, maxBuffer int) Result {
+	boot.BeforeSpawn() // the children must see Node's RLIMIT_NOFILE
 	argv := make([]string, 0, len(args)+1)
 	argv = append(argv, jsstr.ToUTF8(file))
 	for _, arg := range args {

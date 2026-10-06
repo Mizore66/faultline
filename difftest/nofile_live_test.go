@@ -16,7 +16,9 @@ import (
 // PlatformInit raises the soft limit to the hard one, or bisects it below
 // 2^20 when the hard limit is RLIM_INFINITY (2^63 - 1 on darwin, all ones
 // on Linux). It reads no /proc, so it also runs on macOS, where the hard
-// limit is infinite by default (round 5, row 9).
+// limit is infinite by default (round 5, row 9). Go's runtime has replaced
+// the inherited soft limit by the time fl runs, so with an infinite hard
+// limit fl asks a shell for it before the first git (boot.BeforeSpawn).
 func TestLiveNofileMatchesNode(t *testing.T) {
 	oracle.Start(t).Close() // skip unless FAULTLINE_NODE_ORACLE=1
 	repo, _ := filepath.Abs("..")
@@ -32,6 +34,12 @@ func TestLiveNofileMatchesNode(t *testing.T) {
 		{"soft-256", "ulimit -Sn 256"},
 		{"hard-4096", "ulimit -Sn 256 && ulimit -Hn 4096"},
 		{"soft-equals-hard", "ulimit -Sn \"$(ulimit -Hn)\""},
+		// At or above 2^20 Node's bisection starts above its ceiling and
+		// wraps (round 6); with a finite hard limit the shell refuses these
+		// and the case repeats the default limits.
+		{"soft-2^20", "{ ulimit -Sn 1048576 2>/dev/null || true; }"},
+		{"soft-2^20+1", "{ ulimit -Sn 1048577 2>/dev/null || true; }"},
+		{"soft-2000000", "{ ulimit -Sn 2000000 2>/dev/null || true; }"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(argv ...string) string {
