@@ -30,6 +30,7 @@ import (
 // close-on-exec, which would leave the new image with /dev/null on 0 to 2.
 func init() {
 	dieOfPending()
+	stripSecureEnv()
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, terminating...)
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE, syscall.SIGXFSZ)

@@ -39,3 +39,6 @@ func fdFlags(fd int) (int, bool) {
 	r, err := sysFcntl(fd, syscall.F_GETFD, 0)
 	return r, err == nil
 }
+
+// stripSecureEnv: no loader-stripped variables to emulate here.
+func stripSecureEnv() {}

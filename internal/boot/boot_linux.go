@@ -3,7 +3,7 @@ package boot
 import (
 	"os"
 	"syscall"
-	"unsafe"
+	"unsafe" // go:linkname
 
 	"github.com/Mizore66/faultline/internal/sigexit"
 )
@@ -121,4 +121,30 @@ func setCloexec(fd int) bool {
 func fdFlags(fd int) (int, bool) {
 	r, _, e := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
 	return int(r), e == 0
+}
+
+//go:linkname getAuxv runtime.getAuxv
+func getAuxv() []uintptr
+
+// unsecureEnvvars is glibc's UNSECURE_ENVVARS (sysdeps/generic/unsecvars.h)
+// as glibc 2.36's loader applies it, measured with a setcap'd Node 22.22.2.
+var unsecureEnvvars = []string{
+	"GCONV_PATH", "GETCONF_DIR", "HOSTALIASES", "LD_AUDIT", "LD_DEBUG", "LD_DEBUG_OUTPUT", "LD_DYNAMIC_WEAK",
+	"LD_HWCAP_MASK", "LD_LIBRARY_PATH", "LD_ORIGIN_PATH", "LD_PRELOAD", "LD_PROFILE", "LOCALDOMAIN", "LOCPATH",
+	"MALLOC_TRACE", "MALLOC_CHECK_", "NIS_PATH", "NLSPATH", "RESOLV_HOST_CONF", "RES_OPTIONS", "TMPDIR", "TZDIR",
+}
+
+// stripSecureEnv is what glibc's dynamic loader does before Node starts
+// when getauxval(AT_SECURE) is set (setuid, setgid or file capabilities):
+// it deletes these variables, so neither Node's os.tmpdir() nor git sees
+// them. A static Go binary has no loader to do it (round 6).
+func stripSecureEnv() {
+	for a := getAuxv(); len(a) >= 2; a = a[2:] {
+		if a[0] == 23 && a[1] != 0 { // AT_SECURE
+			for _, name := range unsecureEnvvars {
+				os.Unsetenv(name)
+			}
+			return
+		}
+	}
 }

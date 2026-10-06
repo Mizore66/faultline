@@ -67,7 +67,7 @@ jobs:
       - name: Install FUSE
         # TestLiveFuseMatchesNode mounts bundles through a FUSE filesystem
         # that misreports d_ino, d_type, sizes and errors.
-        run: sudo apt-get install -y -qq fuse3 libfuse2t64 python3-fusepy
+        run: sudo apt-get install -y -qq fuse3 libfuse2t64 python3-fusepy libcap2-bin
       - name: Cases that need root (chroot, setuid, FUSE)
         # A test binary built as the runner user, run as root with its own
         # Go cache, so the runner's cache stays writable.

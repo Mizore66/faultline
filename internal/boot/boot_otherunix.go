@@ -28,3 +28,6 @@ func fdFlags(fd int) (int, bool) {
 	r, _, e := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), syscall.F_GETFD, 0)
 	return int(r), e == 0
 }
+
+// stripSecureEnv: no loader-stripped variables to emulate here.
+func stripSecureEnv() {}
