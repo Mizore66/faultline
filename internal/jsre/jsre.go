@@ -9,8 +9,11 @@
 //   - the i flag folds ASCII letters only, as JS does without u (RE2's (?i)
 //     folds ſ to s and K (U+212A) to k);
 //   - offsets are UTF-16 code units;
-//   - a capture inside a repeated group is not translated (JS clears it at
-//     each iteration, RE2 keeps the last value).
+//   - a capture under a quantifier is not translated (JS clears it at each
+//     iteration and refuses an empty iteration of a min-0 quantifier; RE2
+//     keeps the last value and allows the empty one);
+//   - \B is not translated (it holds between the two units of a pair, where
+//     RE2 has no position).
 //
 // Code units against code points. JS without u matches code units, RE2 code
 // points: an astral character is two JS units (a surrogate pair) but one
@@ -21,10 +24,19 @@
 // an RE2 rune run over the same text cover the same extent), and accepts a
 // wide class only in a "wide run" (see wideRun) whose follow set cannot
 // consume a surrogate unit or end between the two units of a pair (see
-// checkFollow). In a wide run, JS can neither start nor stop inside a code
-// point where RE2 could not, so both find the same matches. Anything else
-// that touches a wide class (a single wide atom, a bounded repetition, a
-// lazy run at the end of the pattern, two runs back to back) panics.
+// checkFollow).
+//
+// What the gate guarantees, given that the only assertions are ^, $ and \b
+// (none of which holds between the two units of a pair, since both are
+// non-word characters): JS never starts or ends a match, or a capture,
+// between the two units of a pair, nor ends a wide run there, so every JS
+// match boundary is a code-point boundary and JS and RE2 return the same
+// matches and groups. A match cannot start on the second unit: whatever
+// precedes the run there matches the empty string with only ^ or \b, which
+// fail between the units, or through nullable non-wide terms, in which case
+// the same match also starts one unit earlier and wins as leftmost. Anything
+// else that touches a wide class (a single wide atom, a bounded repetition,
+// a lazy run at the end of the pattern, two runs back to back) panics.
 package jsre
 
 import (
@@ -138,7 +150,7 @@ type nodeKind int
 const (
 	nLit    nodeKind = iota // one character, emitted as is
 	nSet                    // a class, after case folding and negation
-	nAssert                 // ^ $ \b \B
+	nAssert                 // ^ $ \b
 	nGroup                  // (...) or (?:...)
 	nRepeat                 // sub quantified
 )
@@ -268,8 +280,8 @@ func (p *parser) check(n *node, follow [][]*node, repeated bool) {
 			}
 		}
 	case nRepeat:
-		if n.max != 1 && n.hasCapture() {
-			p.fail("capture inside a repeated group (JS clears it at each iteration)")
+		if n.hasCapture() {
+			p.fail("capture under a quantifier (JS clears it at each iteration and refuses an empty one)")
 		}
 		if n.wideRun() {
 			if repeated {
@@ -295,8 +307,8 @@ func (p *parser) checkFollow(follow [][]*node, lazy bool) {
 				return // only at the end, or between a word character and a non-word one
 			case m.kind == nAssert && m.assert == "^":
 				continue
-			case m.hasWide() || m.kind == nAssert:
-				p.fail("a run of a class that matches surrogates may be followed by one, or by \\B")
+			case m.hasWide():
+				p.fail("a run of a class that matches surrogates may be followed by one")
 			case !m.nullable():
 				return
 			}
@@ -475,8 +487,11 @@ func (p *parser) atom() *node {
 		e := p.peek()
 		p.pos++
 		switch e {
-		case 'b', 'B':
-			return &node{kind: nAssert, assert: `\` + string(e)}
+		case 'b':
+			return &node{kind: nAssert, assert: `\b`}
+		case 'B':
+			p.pos--
+			p.fail(`\B is not translated (it holds inside a surrogate pair)`)
 		}
 		if s, ok := classEscape(e); ok {
 			return p.class(s)

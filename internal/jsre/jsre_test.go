@@ -60,6 +60,12 @@ func TestUnsupportedPanics(t *testing.T) {
 		{`(?:\\.|x)*"`, ""}, {`(?:a.+)+`, ""},
 		// Captures inside a repeated group: JS clears them at each iteration.
 		{`(?:(a)|b)+`, ""}, {`(a)*b`, ""}, {`(?:x(a)){2}`, ""},
+		// \B holds between the two units of a pair (review round 2).
+		{`\B.+`, "g"}, {`\B.*x`, "g"}, {`\B(?:\\.|[^"])*x`, "g"}, {`(?:\B|y).+`, "g"}, {`\B[^a]+`, "g"},
+		{`\B(?:\\[\s\S]|[^a])+`, "g"}, {`a\B`, ""},
+		// A capture in a nullable group under ?: ECMAScript refuses the empty
+		// iteration, so the group stays undefined.
+		{`"("?)?`, "g"}, {`x(a)?`, ""},
 	} {
 		func() {
 			defer func() {
