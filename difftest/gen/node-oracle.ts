@@ -18,6 +18,7 @@ import { validateSandboxPlanAudit } from "../../src/sandbox.js";
 import { resignLedger, richLedger } from "./ledger-seed.js";
 import { resignSandbox, sandboxVariant } from "./sandbox-seed.js";
 import { makeWitness, resignWitness } from "./witness-seed.js";
+import { redactText, redactValue } from "../../src/redaction.js";
 import { classifyFromWitnessResult, resolveWitnessResultFromStdout, witnessResultConsistentWithExitCode } from "../../src/witness-result.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
@@ -158,6 +159,20 @@ export const handlers: Record<string, Handler> = {
   resolveWitnessResultFromStdout: ({ stdout }: { stdout: string }) => canonicalJson(resolveWitnessResultFromStdout(stdout)),
   classifyFromWitnessResult: ({ outcome }: { outcome: any }) => canonicalJson(classifyFromWitnessResult(outcome)),
   witnessResultConsistentWithExitCode: ({ outcome, exitCode }: { outcome: any; exitCode: number }) => canonicalJson(witnessResultConsistentWithExitCode(outcome, exitCode)),
+  // [...text.matchAll(re)] (the g flag is added when missing); undefined
+  // groups come back as null.
+  jsreExec: ({ source, flags, text }: { source: string; flags: string; text: string }) => {
+    const re = new RegExp(source, flags.includes("g") ? flags : `${flags}g`);
+    return [...text.matchAll(re)].map((m) => ({ start: m.index, end: m.index + m[0].length, groups: m.slice(1) }));
+  },
+  redactText: ({ text, location }: { text: string; location: string }) => {
+    const result = redactText(text, location);
+    return { value: result.value, report: canonicalJson(result.report) };
+  },
+  redactValue: ({ text }: { text: string }) => {
+    const result = redactValue(JSON.parse(text));
+    return { value: JSON.stringify(result.value), report: canonicalJson(result.report) };
+  },
   sortCodePoints: () => {
     const all: string[] = [];
     for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));
