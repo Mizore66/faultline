@@ -26,45 +26,60 @@ const nameMax = 255
 // slots: each is a socketpair. Node shuts down its end of stdin at once, so
 // the child reads EOF.
 func newStdio() (*stdio, error) {
-	var fds [3][2]int
-	var err error
-	syscall.ForkLock.RLock()
-	for i := range fds {
-		if fds[i], err = syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0); err != nil {
-			for j := 0; j < i; j++ {
-				syscall.Close(fds[j][0])
-				syscall.Close(fds[j][1])
-			}
-			syscall.ForkLock.RUnlock()
-			return nil, err
-		}
-		syscall.CloseOnExec(fds[i][0])
-		syscall.CloseOnExec(fds[i][1])
-		// uv__process_init_stdio sizes both ends' buffers to 64 KiB.
-		for _, fd := range fds[i] {
-			syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 65536)
-			syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_SNDBUF, 65536)
-		}
-	}
-	syscall.ForkLock.RUnlock()
 	parent := make([]*os.File, 3)
 	child := make([]*os.File, 3)
-	for i := range fds {
-		syscall.SetNonblock(fds[i][0], true)
-		parent[i] = os.NewFile(uintptr(fds[i][0]), "|0")
-		child[i] = os.NewFile(uintptr(fds[i][1]), "|1")
+	for i := range parent {
+		p, c, err := socketPair()
+		if err != nil {
+			for j := 0; j < i; j++ {
+				parent[j].Close()
+				child[j].Close()
+			}
+			return nil, err
+		}
+		parent[i], child[i] = p, c
 	}
-	syscall.Shutdown(fds[0][0], syscall.SHUT_WR)
+	shutdownWrite(parent[0])
 	return &stdio{stdin: parent[0], stdout: parent[1], stderr: parent[2], child: child}, nil
+}
+
+// socketPair is one UV_CREATE_PIPE slot: a close-on-exec socketpair whose
+// buffers uv__process_init_stdio sizes to 64 KiB, the parent's end
+// non-blocking.
+func socketPair() (parent, child *os.File, err error) {
+	syscall.ForkLock.RLock()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err == nil {
+		syscall.CloseOnExec(fds[0])
+		syscall.CloseOnExec(fds[1])
+	}
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, fd := range fds {
+		syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 65536)
+		syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_SNDBUF, 65536)
+	}
+	syscall.SetNonblock(fds[0], true)
+	return os.NewFile(uintptr(fds[0]), "|0"), os.NewFile(uintptr(fds[1]), "|1"), nil
+}
+
+func shutdownWrite(f *os.File) {
+	if raw, err := f.SyscallConn(); err == nil {
+		raw.Control(func(fd uintptr) { syscall.Shutdown(int(fd), syscall.SHUT_WR) })
+	}
 }
 
 // start runs file the way libuv's child does. On Linux libuv calls the
 // C library's execvp, which Node's official builds take from glibc (see
 // execvpGlibc); on macOS it is libuv's own uv__spawn_resolve_and_spawn loop
-// over posix_spawn (see execvpDarwin).
-func start(file string, argv, env []string, files []*os.File) (*os.Process, string) {
+// over posix_spawn (see execvpDarwin). A dir that is not "" is the
+// child's working directory: changing to it fails each attempt, so a
+// missing one ends the search with ENOENT.
+func start(file string, argv, env []string, files []*os.File, dir string) (*os.Process, string) {
 	closeInheritedFds()
-	attr := &os.ProcAttr{Env: env, Files: files}
+	attr := &os.ProcAttr{Dir: dir, Env: env, Files: files}
 	exec := func(path string, argv []string) (*os.Process, syscall.Errno) {
 		p, err := os.StartProcess(path, argv, attr)
 		if err != nil {

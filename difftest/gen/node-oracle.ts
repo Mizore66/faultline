@@ -2,6 +2,7 @@
 // one JSON response per stdout line. Run: pnpm exec tsx difftest/gen/node-oracle.ts
 import { createInterface } from "node:readline";
 import nodePath from "node:path";
+import { spawn } from "node:child_process";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { buildZod } from "./schema-dsl.js";
 import { PreventionProofBodySchema, PreventionProofManifestSchema, PreventionRepairedRunsArtifactSchema } from "../../src/prevention-proof.js";
@@ -35,7 +36,7 @@ export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   CodexLifecycleLedgerSchema,
 };
 
-type Handler = (args: any) => unknown;
+type Handler = (args: any) => unknown; // may return a Promise
 export const handlers: Record<string, Handler> = {
   echo: (args) => args,
   makeWitness: ({ paths }: { paths: string[] }) => makeWitness(paths),
@@ -113,6 +114,46 @@ export const handlers: Record<string, Handler> = {
       process.env = savedEnv;
     }
   },
+  // child_process.spawn as the hardened Git and sandbox runners call it:
+  // records the error/exit/close events in order, the code and signal the
+  // call sites settle on (the first of 'error' and 'close'), the arguments
+  // of 'close', and both outputs; optionally kills after the first stdout
+  // chunk.
+  spawnProbe: ({ file, args, cwd, env, stdin, stdout, stderr, kill }: {
+    file: string; args: string[]; cwd?: string; env?: Record<string, string>; stdin?: string;
+    stdout: "pipe" | "ignore"; stderr: "pipe" | "ignore"; kill?: NodeJS.Signals;
+  }) => new Promise((resolveProbe) => {
+    const events: string[] = [];
+    let out = "";
+    let err = "";
+    let settled: { code: number | null; signal: string | null; error: string | null } | undefined;
+    const child = spawn(file, args, {
+      ...(cwd === undefined ? {} : { cwd }),
+      ...(env === undefined ? {} : { env }),
+      shell: false,
+      windowsHide: true,
+      stdio: [stdin === undefined ? "ignore" : "pipe", stdout, stderr]
+    });
+    child.stdout?.on("data", (chunk: Buffer) => {
+      out += chunk.toString("latin1");
+      if (kill !== undefined && events.length === 0 && !child.killed) child.kill(kill);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => { err += chunk.toString("latin1"); });
+    child.on("error", (error) => {
+      events.push("error");
+      settled ??= { code: null, signal: null, error: error.message };
+    });
+    child.on("exit", () => events.push("exit"));
+    child.on("close", (code, signal) => {
+      events.push("close");
+      settled ??= { code, signal, error: null };
+      resolveProbe({ events, ...settled, close: [code, signal], stdout: out, stderr: err });
+    });
+    if (stdin !== undefined) {
+      child.stdin?.once("error", () => {});
+      child.stdin?.end(Buffer.from(stdin, "latin1"));
+    }
+  }),
   sortCodePoints: () => {
     const all: string[] = [];
     for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));
@@ -124,14 +165,16 @@ export const handlers: Record<string, Handler> = {
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
-rl.on("line", (line) => {
+rl.on("line", async (line) => {
   let id: unknown = null;
   try {
     const request = JSON.parse(line) as { id: unknown; op: string; args: unknown };
     id = request.id;
     const handler = handlers[request.op];
     if (!handler) throw new Error(`unknown op: ${request.op}`);
-    process.stdout.write(`${JSON.stringify({ id, ok: true, result: handler(request.args) })}\n`);
+    // The client sends one request at a time, so awaiting keeps responses in order.
+    const result = await handler(request.args);
+    process.stdout.write(`${JSON.stringify({ id, ok: true, result })}\n`);
   } catch (error) {
     process.stdout.write(`${JSON.stringify({ id, ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
   }

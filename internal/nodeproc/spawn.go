@@ -96,7 +96,7 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 	if err != nil {
 		return Result{Err: spawnError(file, nodefs.SystemErrorName(err))}
 	}
-	proc, code := start(jsstr.ToUTF8(file), argv, nodeEnv(), io.child)
+	proc, code := start(jsstr.ToUTF8(file), argv, nodeEnv(), io.child, "")
 	io.closeChild()
 	if code != "" {
 		io.closeParent()
