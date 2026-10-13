@@ -12,6 +12,9 @@
 //   - a capture under a quantifier is not translated (JS clears it at each
 //     iteration and refuses an empty iteration of a min-0 quantifier; RE2
 //     keeps the last value and allows the empty one);
+//   - a quantifier over something that can match the empty string is not
+//     translated (JS refuses an empty iteration and backtracks into the
+//     body; RE2 accepts it, so the two can choose different matches);
 //   - \B is not translated (it holds between the two units of a pair, where
 //     RE2 has no position).
 //
@@ -26,17 +29,21 @@
 // consume a surrogate unit or end between the two units of a pair (see
 // checkFollow).
 //
-// What the gate guarantees, given that the only assertions are ^, $ and \b
+// What the gate guarantees. Given that the only assertions are ^, $ and \b
 // (none of which holds between the two units of a pair, since both are
-// non-word characters): JS never starts or ends a match, or a capture,
-// between the two units of a pair, nor ends a wide run there, so every JS
-// match boundary is a code-point boundary and JS and RE2 return the same
-// matches and groups. A match cannot start on the second unit: whatever
-// precedes the run there matches the empty string with only ^ or \b, which
-// fail between the units, or through nullable non-wide terms, in which case
-// the same match also starts one unit earlier and wins as leftmost. Anything
-// else that touches a wide class (a single wide atom, a bounded repetition,
-// a lazy run at the end of the pattern, two runs back to back) panics.
+// non-word characters), that no capture is under a quantifier, and that no
+// quantified body can match the empty string (so JS's refusal of empty
+// iterations never changes the outcome), JS and RE2 explore the same
+// alternatives in the same order. JS never starts or ends a match or a
+// capture between the two units of a pair, nor ends a wide run there, so
+// every JS match boundary is a code-point boundary and JS and RE2 return the
+// same matches and groups. A match cannot start on the second unit:
+// whatever precedes the run there matches the empty string with only ^ or
+// \b, which fail between the units, or through nullable non-wide terms, in
+// which case the same match also starts one unit earlier and wins as
+// leftmost. Anything else that touches a wide class (a single wide atom, a
+// bounded repetition, a lazy run at the end of the pattern, two runs back to
+// back) panics.
 package jsre
 
 import (
@@ -280,6 +287,9 @@ func (p *parser) check(n *node, follow [][]*node, repeated bool) {
 			}
 		}
 	case nRepeat:
+		if n.sub.nullable() {
+			p.fail("quantifier over something that can match the empty string (JS refuses an empty iteration)")
+		}
 		if n.hasCapture() {
 			p.fail("capture under a quantifier (JS clears it at each iteration and refuses an empty one)")
 		}

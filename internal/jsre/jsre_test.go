@@ -66,6 +66,8 @@ func TestUnsupportedPanics(t *testing.T) {
 		// A capture in a nullable group under ?: ECMAScript refuses the empty
 		// iteration, so the group stays undefined.
 		{`"("?)?`, "g"}, {`x(a)?`, ""},
+		// A quantified body that can match the empty string (review round 3).
+		{`\\(?:\\*|\s)?`, "g"}, {`\w(?:a?|"*)+`, "g"}, {`\\+(?:(?:x|)|\w)+`, "g"}, {`(?:.*?|\s?)?\\`, "g"},
 	} {
 		func() {
 			defer func() {
