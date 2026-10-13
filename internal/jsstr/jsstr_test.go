@@ -64,3 +64,10 @@ func TestToUTF8InvalidBytesLikeWHATWG(t *testing.T) {
 		}
 	}
 }
+
+func TestCompareUTF16(t *testing.T) {
+	// U+FFFF sorts above an astral code point in UTF-16 (surrogates 0xD8xx).
+	if CompareUTF16("\U0001F600", "￿") != -1 || CompareUTF16("a", "a") != 0 || CompareUTF16("ab", "a") != 1 {
+		t.Fatal("CompareUTF16 order wrong")
+	}
+}

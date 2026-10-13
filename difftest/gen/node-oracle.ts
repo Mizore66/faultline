@@ -18,6 +18,7 @@ import { validateSandboxPlanAudit } from "../../src/sandbox.js";
 import { resignLedger, richLedger } from "./ledger-seed.js";
 import { resignSandbox, sandboxVariant } from "./sandbox-seed.js";
 import { makeWitness, resignWitness } from "./witness-seed.js";
+import { classifyFromWitnessResult, resolveWitnessResultFromStdout, witnessResultConsistentWithExitCode } from "../../src/witness-result.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -154,6 +155,9 @@ export const handlers: Record<string, Handler> = {
       child.stdin?.end(Buffer.from(stdin, "latin1"));
     }
   }),
+  resolveWitnessResultFromStdout: ({ stdout }: { stdout: string }) => canonicalJson(resolveWitnessResultFromStdout(stdout)),
+  classifyFromWitnessResult: ({ outcome }: { outcome: any }) => canonicalJson(classifyFromWitnessResult(outcome)),
+  witnessResultConsistentWithExitCode: ({ outcome, exitCode }: { outcome: any; exitCode: number }) => canonicalJson(witnessResultConsistentWithExitCode(outcome, exitCode)),
   sortCodePoints: () => {
     const all: string[] = [];
     for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));

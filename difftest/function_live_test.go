@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/schema"
+	"github.com/Mizore66/faultline/internal/witnessresult"
 )
 
 // seedTexts reads files relative to difftest/testdata/bases.
@@ -349,4 +351,120 @@ func envTag(text string) string {
 		return "+env"
 	}
 	return ""
+}
+
+// Witness-result stdouts: random mixes of marker and bare lines, valid and
+// broken JSON, extra keys, long details (counted in UTF-16 units), CRLF, and
+// duplicate or conflicting results. The three witness-result ops are compared.
+func TestLiveWitnessResult(t *testing.T) {
+	outcomes := []string{"PREDICATE_PASS", "PREDICATE_FAIL", "INCOMPATIBLE_STATE", "HARNESS_ERROR", "INFRASTRUCTURE_ERROR", "BOGUS", ""}
+	detailOf := func(r *rand.Rand) string {
+		switch r.IntN(6) {
+		case 0:
+			return `"detail":"` + strings.Repeat("a", 4094+r.IntN(5)) + `"`
+		case 1:
+			return `"detail":"` + strings.Repeat("\U0001F600", 2046+r.IntN(5)) + `"`
+		case 2:
+			return `"detail":"x\ud800y\n"`
+		case 3:
+			return `"detail":7`
+		case 4:
+			return `"detail":"` + string(rune('a'+r.IntN(3))) + `"`
+		}
+		return ""
+	}
+	lineOf := func(r *rand.Rand) string {
+		protocol := `"protocol":"faultline.witness-result.v1"`
+		if r.IntN(12) == 0 {
+			protocol = `"protocol":"faultline.witness-result.v2"`
+		}
+		parts := []string{protocol, `"outcome":"` + outcomes[r.IntN(len(outcomes))] + `"`}
+		if d := detailOf(r); d != "" {
+			parts = append(parts, d)
+		}
+		if r.IntN(10) == 0 {
+			parts = append(parts, `"extra":1`)
+		}
+		if r.IntN(15) == 0 {
+			parts = slices.Delete(parts, 0, 1)
+		}
+		r.Shuffle(len(parts), func(i, j int) { parts[i], parts[j] = parts[j], parts[i] })
+		body := "{" + strings.Join(parts, ",") + "}"
+		switch r.IntN(8) {
+		case 0:
+			body = body[:len(body)-1]
+		case 1:
+			body = "  " + body + "\t"
+		case 2:
+			body = "[" + body + "]"
+		}
+		switch r.IntN(4) {
+		case 0:
+			return "FAULTLINE_WITNESS_RESULT=" + body
+		case 1:
+			return "FAULTLINE_WITNESS_RESULT= " + body
+		case 2:
+			return "x " + body
+		}
+		return body
+	}
+	toValue := func(p witnessresult.Parsed) jsjson.Value {
+		o := jsjson.NewObj()
+		o.Set("ok", jsjson.MakeBool(p.Ok))
+		switch {
+		case !p.Ok:
+			o.Set("reason", jsjson.MakeString(p.Reason))
+		case p.Result == nil:
+			o.Set("result", jsjson.MakeNull())
+		default:
+			r := jsjson.NewObj()
+			r.Set("protocol", jsjson.MakeString(witnessresult.Protocol))
+			r.Set("outcome", jsjson.MakeString(p.Result.Outcome))
+			if p.Result.HasDetail {
+				r.Set("detail", jsjson.MakeString(p.Result.Detail))
+			}
+			o.Set("result", jsjson.MakeObject(r))
+		}
+		return jsjson.MakeObject(o)
+	}
+	liveCompare(t, "resolveWitnessResultFromStdout", func(c *oracle.Client, r *rand.Rand, i int) (string, string) {
+		var lines []string
+		for n := r.IntN(4); n >= 0; n-- {
+			switch r.IntN(5) {
+			case 0:
+				lines = append(lines, "state=bad")
+			case 1:
+				lines = append(lines, "")
+			default:
+				line := lineOf(r)
+				lines = append(lines, line)
+				if r.IntN(4) == 0 {
+					lines = append(lines, line)
+				}
+			}
+		}
+		stdout := strings.Join(lines, []string{"\n", "\r\n"}[r.IntN(2)])
+		if r.IntN(2) == 0 {
+			stdout += "\n"
+		}
+		args := `{"stdout":` + jsjson.Quote(stdout) + "}"
+		p := witnessresult.Resolve(stdout)
+		if p.Ok && p.Result != nil {
+			exit := r.IntN(3)
+			got := canonicalOf(jsjson.MakeBool(witnessresult.ConsistentWithExitCode(*p.Result, exit)))
+			want := oracleText(t, c, "witnessResultConsistentWithExitCode", `{"outcome":"`+p.Result.Outcome+`","exitCode":`+strconv.Itoa(exit)+"}")
+			if got != want {
+				t.Fatalf("consistent(%s,%d): got %s want %s", p.Result.Outcome, exit, got, want)
+			}
+			cl := witnessresult.Classify(p.Result.Outcome)
+			o := jsjson.NewObj()
+			o.Set("verdict", jsjson.MakeString(cl.Verdict))
+			o.Set("reason", jsjson.MakeString(cl.Reason))
+			want = oracleText(t, c, "classifyFromWitnessResult", `{"outcome":"`+p.Result.Outcome+`"}`)
+			if got := canonicalOf(jsjson.MakeObject(o)); got != want {
+				t.Fatalf("classify(%s): got %s want %s", p.Result.Outcome, got, want)
+			}
+		}
+		return args, canonicalOf(toValue(p))
+	})
 }
