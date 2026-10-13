@@ -49,6 +49,14 @@
 
 Every one of the ~40 subcommands dispatched in `src/cli-app.ts` must be assigned to a slice spec before slice 5 closes.
 
+## Slice 5 decisions (recorded 2026-10-14)
+
+Decided after slice 1 merged (PR #205); slice 5's own spec builds on them.
+
+1. **Linux release binaries are static and musl-linked, built with cgo.** Since slice 1, a C constructor in `internal/boot` records the signal dispositions the parent left before the Go runtime replaces them (KNOWN_DIFFERENCES: signals). A plain `CGO_ENABLED=0` build cannot, so the release links cgo statically against musl (for example `CC="zig cc -target <arch>-linux-musl"` with `-linkmode external -extldflags -static`). The binary then runs on glibc and musl systems alike, and in `FROM scratch` images. `CGO_ENABLED=0` stays a supported fallback build, with the documented signal difference. macOS and Windows builds are unchanged.
+2. **The error hint becomes `Next: fl help`.** Slice 1 keeps TS's `Next: pnpm fl help` byte for byte, because the harness compares with the frozen TS. Slice 5 ports `help` and then changes the hint, with a golden update and a harness normalization for the remaining comparisons with TS. The `Note: Do not place '--' ... Use 'pnpm fl <command>'` hint changes the same way.
+3. **`--json` output mode for agents (optional).** Slice 5 may add `--json` to `verify` and other report commands: one JSON object on stdout with the verdict, status fields and the error list, and the same exit code. It is new surface with no TS counterpart, so it is tested directly rather than against goldens.
+
 ## Known program risks
 
 - **Collation parity.** `internal/collation` (an ICU port that replaced `golang.org/x/text/collate`) must match Node ICU `localeCompare` for every key TS can produce. Mitigated by live property tests (slice 1).
