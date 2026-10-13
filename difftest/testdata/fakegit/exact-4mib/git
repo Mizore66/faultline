@@ -1,0 +1,12 @@
+#!/bin/sh
+# Fake git for difftest: `git bundle list-heads` prints exactly the 4 MiB
+# maxBuffer, which spawnSync still accepts (round 6, mutant M28).
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+if [ "$1" = bundle ] && [ "$2" = list-heads ]; then
+  head -c 4194304 /dev/zero | tr '\0' x
+  exit 0
+fi
+exec git "$@"

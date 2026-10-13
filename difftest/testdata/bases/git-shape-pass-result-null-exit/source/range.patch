@@ -1,0 +1,7 @@
+diff --git a/state.txt b/state.txt
+index 67be85f1274474029aad8a75b823592324305aa4..f2dd796b4cf67574bfe6cb34f25e0b4e43d52a59 100644
+--- a/state.txt
++++ b/state.txt
+@@ -1 +1 @@
+-bad
++repaired

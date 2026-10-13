@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake git for difftest: `git init` fails with hint:, warning: and fatal:
+# lines, all of which the error must keep (round 6, mutant M25).
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+if [ "$1" = init ]; then { printf 'hint: planted hint\nwarning: planted warning\nfatal: planted failure\n' >&2; exit 128; }; fi
+exec git "$@"

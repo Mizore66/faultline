@@ -1,0 +1,11 @@
+#!/bin/sh
+# Fake git for difftest: stdout over the 4 MiB maxBuffer, so spawnSync reports ENOBUFS.
+# Everything but `git bundle list-heads` runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+if [ "$1" = bundle ] && [ "$2" = list-heads ]; then
+  head -c 5000000 /dev/zero | tr '\0' x
+  exit 0
+fi
+exec git "$@"

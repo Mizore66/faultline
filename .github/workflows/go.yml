@@ -1,0 +1,160 @@
+name: Go
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    name: go test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned images: ubuntu-latest moves to Ubuntu 26 on 2026-10-19, whose
+        # glibc can change the directory-listing cases (KNOWN_DIFFERENCES).
+        # macos-15-intel covers darwin/amd64, which no other job runs.
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest, windows-11-arm]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: go mod tidy -diff
+      - run: go vet ./...
+      # Golden replay runs the fl binary once per invocation and git ~20k times;
+      # Windows needs well over the 10m default. -count=1: replay builds
+      # cmd/fl in a subprocess, which Go's test cache cannot see, so a cached
+      # PASS could hide a change to main.
+      # On ubuntu-24.04 the replay also builds fl with coverage and fails
+      # if a verifier error site is never reached (difftest/covergate_test.go).
+      # Only oracle tests (no Node here) and per-platform cases may skip.
+      - name: go test
+        shell: bash
+        run: |
+          set -o pipefail
+          status=0
+          go test -count=1 -timeout 60m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
+          allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestEchoRoundTripsLoneSurrogate'
+          case "$RUNNER_OS" in
+            macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
+            Windows) allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestGoldenReplay/.+" ;;
+          esac
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
+          exit $status
+        env:
+          FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-24.04' && '1' || '' }}
+
+  difftest-live:
+    name: difftest live (frozen TS oracle)
+    runs-on: ubuntu-24.04
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          # Pinned: the collation data (ICU 78) and the stack calibration
+          # (internal/jsjson/stack.go) follow this Node release.
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Regenerate goldens and require no drift
+        # porcelain also catches untracked files (a new base's golden).
+        run: |
+          pnpm exec tsx difftest/gen/gen-goldens.ts
+          git status --porcelain difftest/testdata
+          test -z "$(git status --porcelain difftest/testdata)"
+      - name: Install strace
+        # TestLiveFaultInjectionMatchesNode fails single syscalls with
+        # strace -e inject; it fails rather than skips without strace in CI.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
+      - name: Live property tests
+        # Only the cases that need root may skip here; they run below.
+        run: |
+          set -o pipefail
+          status=0
+          go test -list 'TestLive' ./difftest/ > "$RUNNER_TEMP/live.list"
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run TestLive -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^(TestLiveCwdErrorsMatchNode/(chroot|self0600|parent0311|locked[0-9]+)|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode)$' "$RUNNER_TEMP/live.list" || status=1
+          exit $status
+      - name: Install FUSE
+        # TestLiveFuseMatchesNode mounts bundles through a FUSE filesystem
+        # that misreports d_ino, d_type, sizes and errors.
+        run: sudo apt-get install -y -qq fuse3 libfuse2t64 python3-fusepy libcap2-bin
+      - name: Cases that need root (chroot, setuid, FUSE)
+        # A test binary built as the runner user, run as root with its own
+        # Go cache, so the runner's cache stays writable.
+        run: |
+          go test -c -o "$RUNNER_TEMP/difftest.test" ./difftest/
+          # The setuid-nobody cases run node dist/cli.js as nobody: every
+          # directory above the checkout must be searchable (the runner's
+          # home is 0750).
+          d="$GITHUB_WORKSPACE"; while [ "$d" != / ]; do sudo chmod o+x "$d"; d=$(dirname "$d"); done
+          sudo chmod -R o+rX "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/node_modules" "$GITHUB_WORKSPACE/package.json"
+          # Ubuntu 24.04's glibc (2.39) lists d_ino 0 entries, so the FUSE
+          # case that needs Node on glibc <= 2.36 skips (KNOWN_DIFFERENCES).
+          set -o pipefail
+          status=0
+          printf '%s\n' TestLiveCwdErrorsMatchNode TestLiveTmpdirSetidMatchesNode TestLiveFuseMatchesNode > "$RUNNER_TEMP/root.list"
+          (cd difftest && sudo -E env "PATH=$PATH" GOCACHE="$RUNNER_TEMP/root-gocache" FAULTLINE_NODE_ORACLE=1 FAULTLINE_REQUIRE_ROOT=1 \
+            "$RUNNER_TEMP/difftest.test" -test.run 'TestLiveCwdErrorsMatchNode|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode' -test.count=1 -test.v) | tee "$RUNNER_TEMP/root.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/root.log" '^TestLiveFuseMatchesNode/zero-declared-demo$' "$RUNNER_TEMP/root.list" || status=1
+          exit $status
+      - name: TimSort against V8
+        run: |
+          set -o pipefail
+          status=0
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -run TestSortMatchesV8 -v | tee "$RUNNER_TEMP/v8sort.log" || status=$?
+          echo TestSortMatchesV8 > "$RUNNER_TEMP/v8sort.list"
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/v8sort.log" '^$' "$RUNNER_TEMP/v8sort.list" || status=1
+          exit $status
+
+  stack-live:
+    # The V8 stack, spread and rimraf limits are fitted per platform
+    # (internal/jsjson/stack.go); check them against the pinned Node on the
+    # other platforms they model, with the signal, stdout, stderr and
+    # RLIMIT_NOFILE emulation. On macOS the rimraf chain cannot reach V8's
+    # depth (PATH_MAX), and the signal and stdout scenarios that read /proc
+    # or Linux devices skip; the group-signal, NOFILE and stderr tests run.
+    name: stack thresholds vs Node (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, macos-latest]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Live platform tests
+        run: |
+          set -o pipefail
+          status=0
+          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode'
+          printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
+          if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode)$'; else allowed='^$'; fi
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" "$allowed" "$RUNNER_TEMP/live.list" || status=1
+          exit $status
+      - name: TimSort against V8
+        run: |
+          set -o pipefail
+          status=0
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -run TestSortMatchesV8 -v | tee "$RUNNER_TEMP/v8sort.log" || status=$?
+          echo TestSortMatchesV8 > "$RUNNER_TEMP/v8sort.list"
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/v8sort.log" '^$' "$RUNNER_TEMP/v8sort.list" || status=1
+          exit $status

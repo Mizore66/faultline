@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fake git for difftest: resolving a tree (`rev-parse --verify <x>^{tree}`) fails.
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+for a in "$@"; do case "$a" in *'^{tree}') { echo "fatal: planted failure" >&2; exit 128; };; esac; done
+exec git "$@"

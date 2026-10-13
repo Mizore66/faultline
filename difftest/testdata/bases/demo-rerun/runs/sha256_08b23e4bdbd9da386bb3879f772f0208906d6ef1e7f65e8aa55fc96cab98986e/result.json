@@ -1,0 +1,13 @@
+{
+  "id": "sha256:08b23e4bdbd9da386bb3879f772f0208906d6ef1e7f65e8aa55fc96cab98986e",
+  "stateId": "cedar-turn-4",
+  "witnessDigest": "sha256:3d0d826bb1fd9901b290475201303c560a961df34e2faa374cc66310cb70327c",
+  "environmentDigest": "sha256:7de997bc873dc0e1909a6aa3bf7a5a40fe4958fbb0bb66b3c624e4c75074d334",
+  "verdict": "PASS",
+  "reasonCode": "PREDICATE_PASS",
+  "stdout": "settlement currency preserved\n{\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n",
+  "stderr": "",
+  "durationMs": 35,
+  "executionKind": "EXECUTED",
+  "executedAt": "2026-09-25T17:20:55.546Z"
+}

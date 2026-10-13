@@ -1,0 +1,64 @@
+{
+  "artifacts": {
+    "frozenWitness": "witness/frozen.json",
+    "gitBundle": "source/descendant.bundle",
+    "investigation": "investigation.json",
+    "rangePatch": "source/range.patch",
+    "runs": [
+      {
+        "path": "runs/f7cf1a1ed3a901d797ddee3aa6525c79dc45392e55d4041044d6947f55616288.json",
+        "runId": "sha256:f7cf1a1ed3a901d797ddee3aa6525c79dc45392e55d4041044d6947f55616288"
+      },
+      {
+        "path": "runs/5cb0a5406cdfa13202f4f721ae5c679bb3b5146536a35c44966870af9ab6d5b7.json",
+        "runId": "sha256:5cb0a5406cdfa13202f4f721ae5c679bb3b5146536a35c44966870af9ab6d5b7"
+      },
+      {
+        "path": "runs/8a4b2fb9e548f2c5b63f069707dcbbda4053a8c672255da2d5f7cf5518bd4862.json",
+        "runId": "sha256:8a4b2fb9e548f2c5b63f069707dcbbda4053a8c672255da2d5f7cf5518bd4862"
+      },
+      {
+        "path": "runs/cd3fb9de73126080cd7579295aa4eab8812c8b315651fef9e7639b1621d1bb86.json",
+        "runId": "sha256:cd3fb9de73126080cd7579295aa4eab8812c8b315651fef9e7639b1621d1bb86"
+      },
+      {
+        "path": "runs/128fba39e24aea495bb2aa28274f4eadf7eb504f8ca3b8d4d511fab2ab18c620.json",
+        "runId": "sha256:128fba39e24aea495bb2aa28274f4eadf7eb504f8ca3b8d4d511fab2ab18c620"
+      },
+      {
+        "path": "runs/4917fffe15ce75487d0871aee486e1d05b97cf19b0146088581fd43298f02433.json",
+        "runId": "sha256:4917fffe15ce75487d0871aee486e1d05b97cf19b0146088581fd43298f02433"
+      }
+    ],
+    "sourceMetadata": "source/metadata.json",
+    "transitions": [
+      {
+        "index": 0,
+        "path": "transitions/0000.json"
+      }
+    ],
+    "verification": "VERIFY.md"
+  },
+  "frozenDigest": "sha256:ee0b4bccdc9dfe0d4550ace4ef3a43e67de3d0d38104d1e8a31f49cf6ee7779a",
+  "generatedAt": "2026-07-16T11:03:00.000Z",
+  "integrityScope": "complete-declared-file-set",
+  "investigationDigest": "sha256:db098648e0e866b141eb0af4332de0df8d1139de9fe7151e6a4db49c70cb6547",
+  "lifecycle": {
+    "limitation": "No caller-supplied Codex lifecycle ledger is bound to this Git investigation package.",
+    "status": "UNBOUND"
+  },
+  "resolvedRange": {
+    "ancestor": {
+      "commit": "406304cf895d3d42832828d2f7af122d9ff7350f",
+      "index": 0,
+      "tree": "a1d82cc5cc0c3976e651069980545f9fc85b0f25"
+    },
+    "descendant": {
+      "commit": "605b78bb4efa28b156ca53f3f0add4e599713d1a",
+      "index": 1,
+      "tree": "93953cf812ae1d2eaaa34b45158e81b0de6db908"
+    }
+  },
+  "schemaVersion": "faultline.git-proof-bundle.v1",
+  "witnessDigest": "sha256:c77625fa19f36be4ff3785135c0f0547b51189750c4d4dff2f46227fa5a3f31c"
+}
