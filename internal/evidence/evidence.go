@@ -32,19 +32,13 @@ var TurnPathEvidenceLabelsExperimental = []string{
 	TurnPathEvidenceLabelExperimentalLegacy,
 }
 
-// TurnProofPromotionChecklist documents src/turn-proof-promotion.ts:11-32
-// (criterion name -> satisfied). Only multiOsSoak is open (issue #152).
-var TurnProofPromotionChecklist = map[string]bool{
-	"externalValidation":          true,
-	"turnBoundaryCounterfactuals": true,
-	"preventionIntegration":       true,
-	"multiOsSoak":                 false,
-}
-
+// The checklist in src/turn-proof-promotion.ts:11-32, kept as documentation:
+// externalValidation, turnBoundaryCounterfactuals and preventionIntegration
+// are satisfied; multiOsSoak is open (issue #152).
 // Port of src/turn-proof-promotion.ts:58 promotionCriteriaSatisfied. Only the
 // default-checklist call is reachable from turnPathEvidence, and the checklist
-// is frozen with multiOsSoak unsatisfied, so this is the constant false. The
-// checklist above is kept for documentation (soakRowsSatisfyPromotion,
+// is frozen with multiOsSoak unsatisfied, so this is the constant false.
+// (soakRowsSatisfyPromotion,
 // 48-56, is unreachable and not ported).
 func promotionCriteriaSatisfied() bool { return false }
 
