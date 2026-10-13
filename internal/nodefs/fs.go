@@ -3,10 +3,10 @@ package nodefs
 import (
 	"errors"
 	"fmt"
+	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"io/fs"
-	"math/rand/v2"
 	"os"
 	"sort"
 	"strconv"
@@ -477,19 +477,13 @@ func Tmpdir() string {
 	return "/tmp"
 }
 
-const tempChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
 // Mkdtemp is mkdtempSync(prefix): uv_fs_mkdtemp on prefix + "XXXXXX", with
 // Node's error text naming the template. Node does not namespace the
 // template on Windows.
 func Mkdtemp(prefix string) (string, error) {
 	var err error
 	for range 100 {
-		b := make([]byte, 6)
-		for i := range b {
-			b[i] = tempChars[rand.IntN(len(tempChars))]
-		}
-		path := prefix + string(b)
+		path := prefix + clock.TempSuffix()
 		if err = os.Mkdir(jsstr.ToUTF8(path), 0o700); err == nil {
 			return path, nil
 		}

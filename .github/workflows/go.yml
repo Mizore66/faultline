@@ -21,7 +21,8 @@ jobs:
         with:
           go-version: "1.27"
       - run: go mod tidy -diff
-      - run: go vet ./...
+      - run: go vet $(go list ./... | grep -v /difftest)
+      - run: go vet -tags faultline_test ./...
       # Golden replay runs the fl binary once per invocation and git ~20k times;
       # Windows needs well over the 10m default. -count=1: replay builds
       # cmd/fl in a subprocess, which Go's test cache cannot see, so a cached
@@ -34,7 +35,10 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          go test -count=1 -timeout 60m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
+          # difftest builds only with the faultline_test tag (seeded clock);
+          # everything else also runs untagged, which is what release builds see.
+          go test -count=1 -timeout 60m -v $(go list ./... | grep -v /difftest) | tee "$RUNNER_TEMP/go.log" || status=$?
+          go test -tags faultline_test -count=1 -timeout 60m -v ./internal/clock/ ./difftest/... | tee -a "$RUNNER_TEMP/go.log" || status=$?
           allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestEchoRoundTripsLoneSurrogate'
           case "$RUNNER_OS" in
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
@@ -79,8 +83,8 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          go test -list 'TestLive' ./difftest/ > "$RUNNER_TEMP/live.list"
-          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run TestLive -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
+          go test -tags faultline_test -list 'TestLive' ./difftest/ > "$RUNNER_TEMP/live.list"
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run TestLive -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^(TestLiveCwdErrorsMatchNode/(chroot|self0600|parent0311|locked[0-9]+)|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode)$' "$RUNNER_TEMP/live.list" || status=1
           exit $status
       - name: Install FUSE
@@ -91,7 +95,7 @@ jobs:
         # A test binary built as the runner user, run as root with its own
         # Go cache, so the runner's cache stays writable.
         run: |
-          go test -c -o "$RUNNER_TEMP/difftest.test" ./difftest/
+          go test -tags faultline_test -c -o "$RUNNER_TEMP/difftest.test" ./difftest/
           # The setuid-nobody cases run node dist/cli.js as nobody: every
           # directory above the checkout must be searchable (the runner's
           # home is 0750).
@@ -146,7 +150,7 @@ jobs:
           status=0
           tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
-          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
           if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode)$'; else allowed='^$'; fi
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" "$allowed" "$RUNNER_TEMP/live.list" || status=1
           exit $status

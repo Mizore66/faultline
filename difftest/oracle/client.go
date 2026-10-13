@@ -40,12 +40,18 @@ func RepoRoot(t testing.TB) string {
 	}
 }
 
-// Start launches the oracle; the test is skipped unless FAULTLINE_NODE_ORACLE=1.
-func Start(t testing.TB) *Client {
+// Skip skips the test unless FAULTLINE_NODE_ORACLE=1.
+func Skip(t testing.TB) {
 	t.Helper()
 	if os.Getenv("FAULTLINE_NODE_ORACLE") != "1" {
 		t.Skip("set FAULTLINE_NODE_ORACLE=1 to run live oracle tests")
 	}
+}
+
+// Start launches the oracle; the test is skipped unless FAULTLINE_NODE_ORACLE=1.
+func Start(t testing.TB) *Client {
+	t.Helper()
+	Skip(t)
 	cmd := exec.Command("pnpm", "exec", "tsx", "difftest/gen/node-oracle.ts")
 	cmd.Dir = RepoRoot(t)
 	cmd.Env = append(os.Environ(), "LC_ALL=C.UTF-8")

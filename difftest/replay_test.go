@@ -61,7 +61,7 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS == "windows" {
 		flBinary += ".exe"
 	}
-	buildArgs := []string{"build", "-o", flBinary}
+	buildArgs := []string{"build", "-tags", "faultline_test", "-o", flBinary}
 	coverDir := ""
 	if os.Getenv("FAULTLINE_COVERAGE_GATE") == "1" {
 		coverDir, _ = os.MkdirTemp("", "faultline-cover-")
