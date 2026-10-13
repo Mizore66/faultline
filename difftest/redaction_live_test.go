@@ -37,6 +37,7 @@ var livePatterns = [][2]string{
 	{`\r?\n`, "g"},
 	{`(?:^|\b)(?:run|suggested|try|command)\s*[:\-]\s*(.+)$`, "i"},
 	{"`([^`]+)`", ""},
+	{`\s`, ""},
 }
 
 // Pieces that the patterns care about, and the characters where JS and RE2
@@ -172,7 +173,12 @@ func secretText(r *rand.Rand) string {
 		}
 		return s
 	}
-	switch r.IntN(16) {
+	switch r.IntN(17) {
+	case 15: // a backslash before an astral character or a lone surrogate inside a quoted value (the \\. path)
+		q := pick(r, `"`, "'")
+		return pick(r, "password", "aws_secret_access_key", "token") + pick(r, "=", ": ") + q + randomRun(r, alnum, r.IntN(4)) +
+			`\` + pick(r, "\U0001F600", "\xed\xa0\x80", "\xed\xb0\x80", "\ufffd") + randomRun(r, alnum, r.IntN(4)) +
+			pick(r, "", `\`+pick(r, "\U0001F600", "\xed\xa0\x80")) + q
 	case 0:
 		return "sk-" + pick(r, "", "proj-", "svcacct-") + randomRun(r, alnum+"_-", 12+r.IntN(30))
 	case 1:

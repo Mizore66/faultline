@@ -8,14 +8,23 @@
 //     only \n);
 //   - the i flag folds ASCII letters only, as JS does without u (RE2's (?i)
 //     folds ſ to s and K (U+212A) to k);
-//   - offsets are UTF-16 code units.
+//   - offsets are UTF-16 code units;
+//   - a capture inside a repeated group is not translated (JS clears it at
+//     each iteration, RE2 keeps the last value).
 //
-// RE2 matches code points, JS (without u) code units. They agree whenever a
-// class that can match a surrogate also matches every astral character and
-// U+FFFD (a lone surrogate in WTF-8 reaches RE2 as three invalid bytes, each
-// read as U+FFFD), and such a class never stands where the number of units
-// it consumes matters: under a bounded quantifier, next to another such
-// class, or repeated around a capture. Compile checks all of that.
+// Code units against code points. JS without u matches code units, RE2 code
+// points: an astral character is two JS units (a surrogate pair) but one
+// RE2 rune, and a lone surrogate is one JS unit but three invalid WTF-8
+// bytes, which RE2 reads as three U+FFFD runes. A class is "wide" when it
+// can match a surrogate unit. Compile requires every wide class to treat all
+// surrogates, U+FFFD and all astral characters alike (so a JS unit run and
+// an RE2 rune run over the same text cover the same extent), and accepts a
+// wide class only in a "wide run" (see wideRun) whose follow set cannot
+// consume a surrogate unit or end between the two units of a pair (see
+// checkFollow). In a wide run, JS can neither start nor stop inside a code
+// point where RE2 could not, so both find the same matches. Anything else
+// that touches a wide class (a single wide atom, a bounded repetition, a
+// lazy run at the end of the pattern, two runs back to back) panics.
 package jsre
 
 import (
@@ -58,14 +67,15 @@ func MustCompile(source, flags string) *Regexp {
 			p.fail("non-ASCII character in pattern")
 		}
 	}
-	t := p.alternation()
-	if p.pos < len(source) {
+	root := &node{kind: nGroup, alts: p.alternation()}
+	if p.more() {
 		p.fail("unbalanced )")
 	}
-	if t.nullable {
+	if root.nullable() {
 		p.fail("pattern can match the empty string (matchAll's empty-match stepping differs from RE2)")
 	}
-	return &Regexp{source: source, re: regexp.MustCompile(t.re2)}
+	p.check(root, nil, false)
+	return &Regexp{source: source, re: regexp.MustCompile(root.emitAlts())}
 }
 
 // Test is re.test(s) for a non-global regexp.
@@ -123,14 +133,235 @@ func unitOffsets(s string) []int {
 	return out
 }
 
-// term is a translated piece: its RE2 source, whether it can match the
-// empty string, whether it can consume a surrogate code unit, and whether
-// it contains a capture.
-type term struct {
-	re2      string
-	nullable bool
-	wide     bool
-	captures bool
+type nodeKind int
+
+const (
+	nLit    nodeKind = iota // one character, emitted as is
+	nSet                    // a class, after case folding and negation
+	nAssert                 // ^ $ \b \B
+	nGroup                  // (...) or (?:...)
+	nRepeat                 // sub quantified
+)
+
+type node struct {
+	kind     nodeKind
+	lit      rune
+	set      set
+	wide     bool // nSet: matches the surrogates
+	assert   string
+	capture  bool
+	alts     [][]*node
+	sub      *node
+	min, max int // max -1 = unbounded
+	lazy     bool
+}
+
+func (n *node) nullable() bool {
+	switch n.kind {
+	case nAssert:
+		return true
+	case nGroup:
+		for _, alt := range n.alts {
+			if seqNullable(alt) {
+				return true
+			}
+		}
+		return false
+	case nRepeat:
+		return n.min == 0 || n.sub.nullable()
+	}
+	return false
+}
+
+func seqNullable(seq []*node) bool {
+	for _, n := range seq {
+		if !n.nullable() {
+			return false
+		}
+	}
+	return true
+}
+
+// hasWide reports whether n contains a wide class.
+func (n *node) hasWide() bool {
+	return n.any(func(m *node) bool { return m.kind == nSet && m.wide })
+}
+
+func (n *node) hasCapture() bool {
+	return n.any(func(m *node) bool { return m.kind == nGroup && m.capture })
+}
+
+func (n *node) any(f func(*node) bool) bool {
+	if f(n) {
+		return true
+	}
+	if n.sub != nil && n.sub.any(f) {
+		return true
+	}
+	for _, alt := range n.alts {
+		for _, m := range alt {
+			if m.any(f) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// wideRun reports whether n is one of the two shapes in which a wide class
+// is translated:
+//
+//  1. W* or W+ (greedy or lazy) for a wide class W. A JS run of W over a
+//     stretch of text and an RE2 run over the same stretch cover the same
+//     extent, since W takes both units of a pair (and RE2 takes the
+//     character) and all three U+FFFD bytes of a lone surrogate. It can
+//     start where RE2 can: from the first unit of a pair, W* reaches
+//     whatever it reaches from the second.
+//  2. (?:A1|...|An)* or + over alternatives that are each a single class or
+//     non-nullable non-wide atoms ending in one wide class, with at least one
+//     alternative a single wide class C, and no capture. It is case 1 with
+//     some runs broken up by the non-wide prefixes: when JS ends an
+//     iteration on the first unit of a pair (the trailing wide class takes
+//     it), the next iteration takes the second unit through C, while RE2
+//     takes the whole character in the trailing class. The follow check
+//     keeps JS from stopping in between. This is `(?:\\.|[^"\\\r\n])*` in
+//     the quoted-value alternatives of redaction.ts:150-151.
+func (n *node) wideRun() bool {
+	if n.kind != nRepeat || n.min > 1 || n.max != -1 {
+		return false
+	}
+	if n.sub.kind == nSet {
+		return n.sub.wide
+	}
+	g := n.sub
+	if g.kind != nGroup || g.capture {
+		return false
+	}
+	continuation := false
+	for _, alt := range g.alts {
+		last := len(alt) - 1
+		if last < 0 || alt[last].kind != nSet {
+			return false
+		}
+		for _, m := range alt[:last] {
+			if m.nullable() || m.hasWide() || m.hasCapture() {
+				return false
+			}
+		}
+		if last == 0 && alt[0].wide {
+			continuation = true
+		}
+	}
+	return continuation
+}
+
+func (p *parser) check(n *node, follow [][]*node, repeated bool) {
+	switch n.kind {
+	case nSet:
+		if n.wide {
+			p.fail("a class that matches surrogates outside W*, W+ or an escaped-run group")
+		}
+	case nGroup:
+		for _, alt := range n.alts {
+			for i, m := range alt {
+				p.check(m, append([][]*node{alt[i+1:]}, follow...), repeated)
+			}
+		}
+	case nRepeat:
+		if n.max != 1 && n.hasCapture() {
+			p.fail("capture inside a repeated group (JS clears it at each iteration)")
+		}
+		if n.wideRun() {
+			if repeated {
+				p.fail("a run of a class that matches surrogates inside a repetition")
+			}
+			p.checkFollow(follow, n.lazy)
+			return
+		}
+		p.check(n.sub, follow, repeated || n.max != 1)
+	}
+}
+
+// checkFollow requires that what may come after a wide run cannot consume a
+// surrogate unit or hold between the two units of a pair, so JS has no
+// reason to end the run inside a code point. A lazy run must be followed
+// by something that consumes or by $: at the end of the pattern it would
+// stop after one unit.
+func (p *parser) checkFollow(follow [][]*node, lazy bool) {
+	for _, seq := range follow {
+		for _, m := range seq {
+			switch {
+			case m.kind == nAssert && (m.assert == "$" || m.assert == `\b`):
+				return // only at the end, or between a word character and a non-word one
+			case m.kind == nAssert && m.assert == "^":
+				continue
+			case m.hasWide() || m.kind == nAssert:
+				p.fail("a run of a class that matches surrogates may be followed by one, or by \\B")
+			case !m.nullable():
+				return
+			}
+		}
+	}
+	if lazy {
+		p.fail("a lazy run of a class that matches surrogates at the end of the pattern")
+	}
+}
+
+func (n *node) emitAlts() string {
+	parts := make([]string, len(n.alts))
+	for i, alt := range n.alts {
+		var b strings.Builder
+		for _, m := range alt {
+			b.WriteString(m.emit())
+		}
+		parts[i] = b.String()
+	}
+	return strings.Join(parts, "|")
+}
+
+func (n *node) emit() string {
+	switch n.kind {
+	case nLit:
+		return regexp.QuoteMeta(string(n.lit))
+	case nSet:
+		var b strings.Builder
+		b.WriteByte('[')
+		// Surrogates never reach RE2 as code points; leave them out.
+		for _, r := range complement(complement(n.set).union(set{{0xD800, 0xDFFF}})) {
+			fmt.Fprintf(&b, `\x{%x}`, r.lo)
+			if r.hi != r.lo {
+				fmt.Fprintf(&b, `-\x{%x}`, r.hi)
+			}
+		}
+		b.WriteByte(']')
+		return b.String()
+	case nAssert:
+		return n.assert
+	case nGroup:
+		if n.capture {
+			return "(" + n.emitAlts() + ")"
+		}
+		return "(?:" + n.emitAlts() + ")"
+	}
+	var q string
+	switch {
+	case n.min == 0 && n.max == -1:
+		q = "*"
+	case n.min == 1 && n.max == -1:
+		q = "+"
+	case n.min == 0 && n.max == 1:
+		q = "?"
+	case n.max == -1:
+		q = "{" + strconv.Itoa(n.min) + ",}"
+	case n.min == n.max:
+		q = "{" + strconv.Itoa(n.min) + "}"
+	default:
+		q = "{" + strconv.Itoa(n.min) + "," + strconv.Itoa(n.max) + "}"
+	}
+	if n.lazy {
+		q += "?"
+	}
+	return "(?:" + n.sub.emit() + ")" + q
 }
 
 type parser struct {
@@ -146,51 +377,25 @@ func (p *parser) fail(msg string) {
 func (p *parser) more() bool { return p.pos < len(p.src) }
 func (p *parser) peek() byte { return p.src[p.pos] }
 
-func (p *parser) alternation() term {
-	var parts []string
-	out := term{}
-	for i := 0; ; i++ {
-		seq := p.sequence()
-		parts = append(parts, seq.re2)
-		out.nullable = out.nullable || seq.nullable
-		out.wide = out.wide || seq.wide
-		out.captures = out.captures || seq.captures
+func (p *parser) alternation() [][]*node {
+	var alts [][]*node
+	for {
+		var seq []*node
+		for p.more() && p.peek() != '|' && p.peek() != ')' {
+			seq = append(seq, p.quantified())
+		}
+		alts = append(alts, seq)
 		if !p.more() || p.peek() != '|' {
-			break
+			return alts
 		}
 		p.pos++
 	}
-	out.re2 = strings.Join(parts, "|")
-	return out
 }
 
-func (p *parser) sequence() term {
-	out := term{nullable: true}
-	var b strings.Builder
-	lastWide := false
-	for p.more() && p.peek() != '|' && p.peek() != ')' {
-		t := p.quantified()
-		if t.wide {
-			if lastWide {
-				p.fail("two classes that match surrogates are adjacent")
-			}
-			lastWide = true
-		} else if !t.nullable {
-			lastWide = false
-		}
-		b.WriteString(t.re2)
-		out.nullable = out.nullable && t.nullable
-		out.wide = out.wide || t.wide
-		out.captures = out.captures || t.captures
-	}
-	out.re2 = b.String()
-	return out
-}
-
-func (p *parser) quantified() term {
-	t, assertion := p.atom()
+func (p *parser) quantified() *node {
+	n := p.atom()
 	if !p.more() {
-		return t
+		return n
 	}
 	min, max := -1, -1 // max -1 = unbounded
 	switch p.peek() {
@@ -206,38 +411,16 @@ func (p *parser) quantified() term {
 	case '{':
 		min, max = p.braces()
 	default:
-		return t
+		return n
 	}
-	if assertion {
+	if n.kind == nAssert {
 		p.fail("quantified assertion")
 	}
-	lazy := ""
-	if p.more() && p.peek() == '?' {
-		lazy = "?"
+	lazy := p.more() && p.peek() == '?'
+	if lazy {
 		p.pos++
 	}
-	if t.wide && (min > 1 || max > 1) {
-		p.fail("bounded repetition of a class that matches surrogates")
-	}
-	if t.wide && t.captures && max != 1 {
-		p.fail("repeated capture around a class that matches surrogates")
-	}
-	var q string
-	switch {
-	case min == 0 && max == -1:
-		q = "*"
-	case min == 1 && max == -1:
-		q = "+"
-	case min == 0 && max == 1:
-		q = "?"
-	case max == -1:
-		q = "{" + strconv.Itoa(min) + ",}"
-	case min == max:
-		q = "{" + strconv.Itoa(min) + "}"
-	default:
-		q = "{" + strconv.Itoa(min) + "," + strconv.Itoa(max) + "}"
-	}
-	return term{re2: "(?:" + t.re2 + ")" + q + lazy, nullable: min == 0 || t.nullable, wide: t.wide, captures: t.captures}
+	return &node{kind: nRepeat, sub: n, min: min, max: max, lazy: lazy}
 }
 
 // braces parses {n}, {n,} or {n,m}. JS (Annex B) reads any other { as a
@@ -271,20 +454,19 @@ func (p *parser) braces() (int, int) {
 	return min, max
 }
 
-// atom returns the next atom and whether it is an assertion.
-func (p *parser) atom() (term, bool) {
+func (p *parser) atom() *node {
 	c := p.peek()
 	switch c {
 	case '^', '$':
 		p.pos++
-		return term{re2: string(c), nullable: true}, true
+		return &node{kind: nAssert, assert: string(c)}
 	case '.':
 		p.pos++
-		return p.class(complement(set{{'\n', '\n'}, {'\r', '\r'}, {0x2028, 0x2029}})), false
+		return p.class(complement(set{{'\n', '\n'}, {'\r', '\r'}, {0x2028, 0x2029}}))
 	case '[':
-		return p.bracket(), false
+		return p.bracket()
 	case '(':
-		return p.group(), false
+		return p.group()
 	case '\\':
 		p.pos++
 		if !p.more() {
@@ -294,17 +476,17 @@ func (p *parser) atom() (term, bool) {
 		p.pos++
 		switch e {
 		case 'b', 'B':
-			return term{re2: `\` + string(e), nullable: true}, true
+			return &node{kind: nAssert, assert: `\` + string(e)}
 		}
 		if s, ok := classEscape(e); ok {
-			return p.class(s), false
+			return p.class(s)
 		}
-		return p.literal(p.escapedChar(e)), false
+		return p.literal(p.escapedChar(e))
 	case '*', '+', '?', '{', '}', ']', ')', '|':
 		p.fail("unexpected " + string(c))
 	}
 	p.pos++
-	return p.literal(rune(c)), false
+	return p.literal(rune(c))
 }
 
 // escapedChar is a character escape: a control escape or an identity escape
@@ -330,14 +512,14 @@ func (p *parser) escapedChar(e byte) rune {
 	return rune(e)
 }
 
-func (p *parser) literal(c rune) term {
+func (p *parser) literal(c rune) *node {
 	if p.fold && isLetter(c) {
 		return p.class(set{{c, c}})
 	}
-	return term{re2: regexp.QuoteMeta(string(c))}
+	return &node{kind: nLit, lit: c}
 }
 
-func (p *parser) group() term {
+func (p *parser) group() *node {
 	p.pos++
 	capture := true
 	if strings.HasPrefix(p.src[p.pos:], "?:") {
@@ -346,21 +528,15 @@ func (p *parser) group() term {
 	} else if p.more() && p.peek() == '?' {
 		p.fail("lookaround and named groups are not translated")
 	}
-	inner := p.alternation()
+	alts := p.alternation()
 	if !p.more() || p.peek() != ')' {
 		p.fail("missing )")
 	}
 	p.pos++
-	if capture {
-		inner.re2 = "(" + inner.re2 + ")"
-		inner.captures = true
-	} else {
-		inner.re2 = "(?:" + inner.re2 + ")"
-	}
-	return inner
+	return &node{kind: nGroup, capture: capture, alts: alts}
 }
 
-func (p *parser) bracket() term {
+func (p *parser) bracket() *node {
 	p.pos++
 	negate := p.more() && p.peek() == '^'
 	if negate {
@@ -395,7 +571,7 @@ func (p *parser) bracket() term {
 		}
 	}
 	if negate {
-		return p.classNegated(s)
+		return p.class(complement(p.folded(s)))
 	}
 	return p.class(s)
 }
@@ -422,11 +598,7 @@ func (p *parser) classAtom() (rune, set) {
 	return p.escapedChar(e), nil
 }
 
-func (p *parser) classNegated(s set) term {
-	return p.class(complement(p.folded(s)))
-}
-
-func (p *parser) class(s set) term {
+func (p *parser) class(s set) *node {
 	s = normalize(p.folded(s))
 	// Lone surrogates arrive as U+FFFD bytes, astral characters as one
 	// code point; both must stand or fall with the surrogate units.
@@ -436,21 +608,10 @@ func (p *parser) class(s set) term {
 	if surrogates == partial || astral == partial || surrogates != astral || surrogates != replacement {
 		p.fail("class treats surrogates, U+FFFD and astral characters differently")
 	}
-	var b strings.Builder
-	b.WriteByte('[')
-	empty := true
-	for _, r := range complement(complement(s).union(set{{0xD800, 0xDFFF}})) {
-		empty = false
-		fmt.Fprintf(&b, `\x{%x}`, r.lo)
-		if r.hi != r.lo {
-			fmt.Fprintf(&b, `-\x{%x}`, r.hi)
-		}
-	}
-	if empty {
+	if len(complement(complement(s).union(set{{0xD800, 0xDFFF}}))) == 0 {
 		p.fail("empty class")
 	}
-	b.WriteByte(']')
-	return term{re2: b.String(), wide: surrogates == all}
+	return &node{kind: nSet, set: s, wide: surrogates == all}
 }
 
 // folded adds the other case of every ASCII letter (JS i without u: no

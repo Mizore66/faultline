@@ -53,6 +53,13 @@ func TestUnsupportedPanics(t *testing.T) {
 		{`a`, "s"}, {`a`, "y"}, {`é`, ""}, {`\x41`, ""}, {`a{`, ""}, {`[\b]`, ""},
 		{`a*`, "g"}, {`(?:a|)`, ""}, {`..`, ""}, {`[^a]{2}`, ""}, {`\cA`, ""}, {`[z-a]`, ""}, {`(a`, ""},
 		{`a)`, ""}, {`*a`, ""}, {`[a`, ""}, {`\p{L}`, ""}, {`a\`, ""}, {`[\ud800]`, ""},
+		// Code units against code points (review round 1): a single wide atom
+		// (JS can end or start inside a pair), a lazy wide run at the end, a
+		// wide run followed by \B or by a wide atom.
+		{`a.`, ""}, {`[^a]b`, ""}, {`x.+?`, ""}, {`x\S`, ""}, {`x.?y`, ""}, {`x.+\B`, ""}, {`x.+.`, ""},
+		{`(?:\\.|x)*"`, ""}, {`(?:a.+)+`, ""},
+		// Captures inside a repeated group: JS clears them at each iteration.
+		{`(?:(a)|b)+`, ""}, {`(a)*b`, ""}, {`(?:x(a)){2}`, ""},
 	} {
 		func() {
 			defer func() {
@@ -65,18 +72,32 @@ func TestUnsupportedPanics(t *testing.T) {
 	}
 }
 
-// Every pattern the ported modules use translates (redaction.ts 109, 144-151,
-// 210; sandbox.ts 56, 83, 91, 270, 789; autonomous-session.ts 133-138).
+// Every pattern the slice runs compiles: redaction.ts 109, 144-151, 210;
+// sandbox.ts 56-59, 83, 91, 270, 789; autonomous-session.ts 133-138.
 func TestPortedPatternsCompile(t *testing.T) {
 	for _, p := range [][2]string{
 		{`^<FAULTLINE_REDACTED:[A-Z_]+:sha256:[a-f0-9]{64}>$`, ""},
 		{`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----`, "g"},
 		{`\bBearer[ \t]+([A-Za-z0-9\-._~+/]+=*)`, "gi"},
+		{`\bBasic[ \t]+([A-Za-z0-9+/]{4,}={0,2})`, "gi"},
+		{`\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{16,}\b`, "g"},
+		{`\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b|\bgithub_pat_[A-Za-z0-9_]{20,}\b`, "g"},
+		{`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`, "g"},
+		{`\b(?:aws[-_])?secret[-_]?access[-_]?key\s*(?:=|:)\s*(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|([^\s,;}&]+))`, "gi"},
+		{`\b(?:api[-_]?key|apikey|secret(?:[-_]?key)?|token|access[-_]?token|refresh[-_]?token|id[-_]?token|password|passwd|pwd|credential(?:s)?|authorization|access[-_]?key|private[-_]?key|client[-_]?secret|session[-_]?token)\b\s*(?:=|:)\s*(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|([^\s,;}&]+))`, "gi"},
 		{`^(?:null|undefined|true|false)$`, "i"},
+		{`(api[_-]?key|auth|bearer|cookie|credential|passwd|password|private[_-]?key|secret|session|token)`, "i"},
+		{`^[A-Z_][A-Z0-9_]*$`, ""},
+		{`^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[a-f0-9]{64}$`, ""},
+		{`^sha256:[a-f0-9]{64}$`, ""},
+		{`(?:cannot connect to the docker daemon|is the docker daemon running|error during connect|docker daemon is not running|error response from daemon|unable to find image|pull access denied|no such image)`, "i"},
+		{`(?:SyntaxError|TS\d{4}\s*:|error\s+TS\d{4}|failed to compile|error\[E\d{4}\]|could not compile ` + "`" + `|cargo:.*error|rustc.*error:|ModuleNotFoundError|ImportError:\s*No module named)`, "i"},
+		{`[\r\n,]`, ""},
+		{`(?:command not found|not found|no such file|cannot find module|permission denied)`, "i"},
+		{`\r?\n`, "g"},
 		{`(?:^|\b)(?:run|suggested|try|command)\s*[:\-]\s*(.+)$`, "i"},
 		{"`([^`]+)`", ""},
-		{`\r?\n`, "g"},
-		{`(?:SyntaxError|TS\d{4}\s*:|error\s+TS\d{4}|failed to compile|error\[E\d{4}\]|could not compile ` + "`" + `|cargo:.*error|rustc.*error:|ModuleNotFoundError|ImportError:\s*No module named)`, "i"},
+		{`\s`, ""},
 	} {
 		MustCompile(p[0], p[1])
 	}
