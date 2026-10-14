@@ -23,6 +23,7 @@ var writerScenarios = map[string]bool{
 	"witness-overlay-policies":   true,
 	"witness-nooverlay-policies": true,
 	"git-two-states-bundle":      true,
+	"ledger-bound":               true,
 }
 
 // copyScenario fills the workspace ws from a committed scenario:

@@ -16,6 +16,7 @@ import (
 	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/ledgerbind"
 	"github.com/Mizore66/faultline/internal/schema"
 	"github.com/Mizore66/faultline/internal/witnessresult"
 )
@@ -250,6 +251,91 @@ func TestLiveLedger(t *testing.T) {
 	if !strings.Contains(rich, "TURN_TREE_SNAPSHOT") || !strings.Contains(rich, "TOOL_USE_STARTED") || !strings.Contains(rich, "SESSION_BASELINE_SNAPSHOT") {
 		t.Fatalf("rich ledger seed lacks snapshot or tool-use events")
 	}
+}
+
+// Ledger-bound investigations: the record `fl ledger bind` wrote, then
+// deeply corrupted copies. Half are re-signed by TS (bindingDigest
+// recomputed) so the ledger, investigation and state-binding checks run
+// behind a matching digest. The expected digest is absent, the record's own,
+// malformed, or a well-formed digest of something else.
+func TestLiveLedgerBinding(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(oracle.RepoRoot(t), "difftest", "testdata", "scenarios", "ledger-bound", "tree", "bound.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := string(raw)
+	var extras []string
+	outputs := liveCompare(t, "verifyLedgerBoundInvestigation", func(c *oracle.Client, r *rand.Rand, i int) (string, string) {
+		text := seed
+		if extras == nil {
+			extras = ledgerBoundDuplicates(t, c, seed)
+		}
+		if i > 0 && i <= len(extras) {
+			text = extras[i-1]
+		} else if i > 0 {
+			text = gen.CorruptDeep(r, text)
+			if r.IntN(2) == 0 {
+				text = oracleText(t, c, "resignBound", `{"text":`+jsjson.Quote(text)+"}")
+			}
+		}
+		value, _ := jsjson.Parse(text)
+		expected, provided := "", false
+		switch r.IntN(4) {
+		case 1:
+			expected, provided = value.Get("bindingDigest").Str(), true
+		case 2:
+			expected, provided = "nope", true
+		case 3:
+			expected, provided = "sha256:"+strings.Repeat("0", 64), true
+		}
+		args := `{"text":` + jsjson.Quote(text)
+		if provided {
+			args += `,"expected":` + jsjson.Quote(expected)
+		}
+		return args + "}", canonicalOf(ledgerbind.Verify(value, expected, provided))
+	})
+	requireReached(t, "../ledgerbind/ledgerbind.go", outputs)
+}
+
+// ledgerBoundDuplicates are two re-signed variants random corruption does not
+// reach: the investigation's last state repeated (duplicate Git state, and a
+// checkpoint that matches two states), and a checkpoint event repeated in
+// the ledger (duplicate checkpoint facts).
+func ledgerBoundDuplicates(t *testing.T, c *oracle.Client, seed string) []string {
+	clone := func(v jsjson.Value) jsjson.Value {
+		out, err := jsjson.Parse(jsjson.Stringify(v))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	states := func() string {
+		v, _ := jsjson.Parse(seed)
+		list := v.Get("investigation", "states").Items()
+		dup := clone(list[len(list)-1])
+		dup.Obj().Set("index", jsjson.MakeNumber(float64(len(list))))
+		v.Get("investigation").Obj().Set("states", jsjson.MakeArray(append(slices.Clone(list), dup)))
+		return jsjson.Stringify(v)
+	}()
+	events := func() string {
+		v, _ := jsjson.Parse(seed)
+		list := v.Get("ledger", "events").Items()
+		for _, event := range list {
+			if event.Get("event", "type").Str() == "WORKTREE_CHECKPOINT" {
+				dup := clone(event)
+				dup.Obj().Set("sequence", jsjson.MakeNumber(float64(len(list)+1)))
+				dup.Obj().Set("eventId", jsjson.MakeString("duplicate-checkpoint"))
+				v.Get("ledger").Obj().Set("events", jsjson.MakeArray(append(slices.Clone(list), dup)))
+				break
+			}
+		}
+		return jsjson.Stringify(v)
+	}()
+	var out []string
+	for _, text := range []string{states, events} {
+		out = append(out, oracleText(t, c, "resignBound", `{"text":`+jsjson.Quote(text)+"}"))
+	}
+	return out
 }
 
 // Sandbox seeds: the committed Docker audits plus TS-signed legacy v1,

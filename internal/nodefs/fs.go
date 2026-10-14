@@ -18,6 +18,8 @@ import (
 type Error struct {
 	Code, Syscall, Path string
 	NoPath              bool
+	// Dest is the second path of a two-path call (rename 'a' -> 'b').
+	Dest string
 }
 
 // descriptions is uv_strerror: libuv 1.51 include/uv.h UV_ERRNO_MAP.
@@ -112,6 +114,9 @@ var descriptions = map[string]string{
 func (e *Error) Error() string {
 	if e.NoPath {
 		return e.Code + ": " + Describe(e.Code) + ", " + e.Syscall
+	}
+	if e.Dest != "" {
+		return e.Code + ": " + Describe(e.Code) + ", " + e.Syscall + " '" + e.Path + "' -> '" + e.Dest + "'"
 	}
 	return e.Code + ": " + Describe(e.Code) + ", " + e.Syscall + " '" + e.Path + "'"
 }

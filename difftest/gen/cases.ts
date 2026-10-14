@@ -504,6 +504,8 @@ export function normalizeWriter(text: string, roots: { ws: string; tmp: string; 
     out = out.split(path).join(mask);
   }
   out = out.replace(/127\.0\.0\.1:[0-9]+/g, "127.0.0.1:<PORT>");
+  // The process id in an atomic write's staged name (.<name>.<pid>.<uuid>.tmp).
+  out = out.replace(/\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp/g, ".<pid>.$1.tmp");
   return maskGitOutput(out, true);
 }
 

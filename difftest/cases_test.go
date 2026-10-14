@@ -39,6 +39,15 @@ func TestNormalizeWriter(t *testing.T) {
 	}
 }
 
+func TestNormalizeWriterMasksStagedPID(t *testing.T) {
+	r := writerRoots{ws: "/c/ws", tmp: "/c/tmp", home: "/c/home"}
+	in := "rename '/c/ws/.out.json.48213.00000000-0000-4000-8000-000000000001.tmp' -> '/c/ws/out.json'"
+	want := "rename '<WS>/.out.json.<pid>.00000000-0000-4000-8000-000000000001.tmp' -> '<WS>/out.json'"
+	if got := normalizeWriter(in, r); got != want {
+		t.Errorf("normalizeWriter:\n got %q\nwant %q", got, want)
+	}
+}
+
 // On Windows the path after a mask keeps Node's "\" separators, escaped in
 // JSON; both become "/" to compare with Linux goldens.
 func TestSlashesAfter(t *testing.T) {

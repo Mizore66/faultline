@@ -205,6 +205,42 @@ const POLICY_FILES: Record<string, string> = {
 };
 const POLICY_FREEZES = [policyFreeze("p-ok", "node witness.mjs", "60"), policyFreeze("p-cmd", "node other.mjs", "60"), policyFreeze("p-timeout", "node witness.mjs", "10")];
 
+// Ledger-binding scenario (Task 9): the committed fully bound ledger and Git
+// investigation, a partially bound ledger (valid, but without a checkpoint
+// for every state), investigations that break the binding, and a bound
+// record `fl ledger bind` writes; `after` derives tampered copies of it.
+const baseText = (rel: string): string => readFileSync(join(repo, "difftest", "testdata", "bases", rel), "utf8");
+const flipLast = (hex: string): string => `${hex.slice(0, -1)}${hex.endsWith("0") ? "1" : "0"}`;
+const jsonText = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
+const editedJson = (rel: string, edit: (v: any) => void): string => {
+  const value = JSON.parse(baseText(rel));
+  edit(value);
+  return jsonText(value);
+};
+const LEDGER_BOUND_FILES: Record<string, string> = {
+  "ledger.json": baseText("git-fully-bound/lifecycle/ledger.json"),
+  "ledger-partial.json": baseText("git-partially-bound/lifecycle/ledger.json"),
+  "ledger-tampered.json": editedJson("git-fully-bound/lifecycle/ledger.json", (v) => { v.events[0].hash = flipLast(v.events[0].hash); }),
+  "ledger-invalid.json": editedJson("git-fully-bound/lifecycle/ledger.json", (v) => { delete v.ledgerId; }),
+  "investigation.json": baseText("git-fully-bound/investigation.json"),
+  "investigation-tree-mismatch.json": editedJson("git-fully-bound/investigation.json", (v) => { v.states[0].tree = flipLast(v.states[0].tree); }),
+  "investigation-invalid.json": editedJson("git-fully-bound/investigation.json", (v) => { delete v.schemaVersion; }),
+  "not-json.txt": "{\n",
+  "out.json/keep": "occupied\n"
+};
+const LEDGER_BIND = ["ledger", "bind", "--ledger", "ledger.json", "--investigation", "investigation.json", "--output", "bound.json"];
+function tamperBound(ws: string): void {
+  const bound = JSON.parse(readFileSync(join(ws, "bound.json"), "utf8"));
+  const write = (name: string, edit: (v: any) => void): void => {
+    const copy = JSON.parse(JSON.stringify(bound));
+    edit(copy);
+    writeFileSync(join(ws, name), `${canonicalJson(copy)}\n`);
+  };
+  write("bound-digest-tampered.json", (v) => { v.bindingDigest = `sha256:${flipLast(v.bindingDigest.slice(7))}`; });
+  write("bound-schema-tampered.json", (v) => { v.nativeCodexInterception = true; });
+  write("bound-binding-tampered.json", (v) => { v.stateBindings[0].checkpointEventSequence += 1; });
+}
+
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
@@ -222,7 +258,8 @@ export const SCENARIOS: Record<string, Scenario> = {
   "witness-nooverlay-policies": { files: { "proposal.json": `${JSON.stringify(NO_OVERLAY_INPUT, null, 2)}\n`, ...POLICY_FILES }, argv: [PROPOSE, ...POLICY_FREEZES] },
   // A Git proof bundle: `fl verify bundle` runs git, so it checks the
   // recorders and the argv normalization.
-  "git-two-states-bundle": { bases: { bundle: "git-two-states" }, files: {}, argv: [] }
+  "git-two-states-bundle": { bases: { bundle: "git-two-states" }, files: {}, argv: [] },
+  "ledger-bound": { files: LEDGER_BOUND_FILES, argv: [LEDGER_BIND], after: tamperBound }
 };
 
 // A scenario is committed as <name>/dirs.txt, every directory of the

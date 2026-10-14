@@ -14,6 +14,7 @@ import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witnes
 import { EnvironmentFingerprintSchema } from "../../src/environment-fingerprint.js";
 import { MaterializedOverlaySchema } from "../../src/safe-overlay.js";
 import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../src/ledger.js";
+import { ledgerBoundInvestigationDigest, verifyLedgerBoundInvestigation } from "../../src/ledger-binding.js";
 import { validateSandboxPlanAudit } from "../../src/sandbox.js";
 import { resignLedger, richLedger } from "./ledger-seed.js";
 import { resignSandbox, sandboxVariant } from "./sandbox-seed.js";
@@ -90,6 +91,18 @@ export const handlers: Record<string, Handler> = {
   verifyFrozenWitnessRecord: ({ text, expected }: { text: string; expected?: string }) =>
     canonicalJson(verifyFrozenWitnessRecord(JSON.parse(text), expected)),
   verifyCodexLifecycleLedger: ({ text }: { text: string }) => canonicalJson(verifyCodexLifecycleLedger(JSON.parse(text))),
+  verifyLedgerBoundInvestigation: ({ text, expected }: { text: string; expected?: string }) =>
+    canonicalJson(verifyLedgerBoundInvestigation(JSON.parse(text), expected)),
+  // Recomputes bindingDigest, so a mutated record reaches the checks behind it.
+  resignBound: ({ text }: { text: string }) => {
+    const value = JSON.parse(text);
+    try {
+      value.bindingDigest = ledgerBoundInvestigationDigest(value);
+    } catch {
+      return text;
+    }
+    return JSON.stringify(value);
+  },
   // Verify runs the run-fact schema before the audit check, so the oracle does too.
   validateSandboxPlanAudit: ({ text }: { text: string }) => {
     const parsed = GitInvestigationRunFactSchema.shape.sandbox.safeParse(JSON.parse(text));

@@ -521,3 +521,7 @@ func VerifyCodexLifecycleLedger(value jsjson.Value) LedgerVerification {
 // CanonicalTimestamp is `new Date(value).toISOString() === value` for a
 // finite date (the refinement of src/authenticated-witness-approval.ts:27).
 func CanonicalTimestamp(value string) bool { return canonicalTimestamp(value) }
+
+// IssueLines is `issues.map((i) => prefix + (i.path.join(".") || "root") +
+// ": " + i.message)`, the form ledger-binding.ts builds from zod issues.
+func IssueLines(prefix string, issues []s.Issue) []string { return issueLines(prefix, issues) }

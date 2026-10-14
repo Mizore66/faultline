@@ -815,6 +815,7 @@ func normalizeWriter(text string, roots writerRoots) string {
 		}
 	}
 	out = loopbackPort.ReplaceAllString(out, "127.0.0.1:<PORT>")
+	out = stagedPID.ReplaceAllString(out, ".<pid>.$1.tmp")
 	out = maskGitOutput(out, true)
 	if runtime.GOOS == "windows" {
 		for _, m := range masks {
@@ -825,6 +826,10 @@ func normalizeWriter(text string, roots writerRoots) string {
 }
 
 var loopbackPort = regexp.MustCompile(`127\.0\.0\.1:[0-9]+`)
+
+// stagedPID masks the process id in an atomic write's staged name
+// (.<name>.<pid>.<uuid>.tmp), which a failed rename prints.
+var stagedPID = regexp.MustCompile(`\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp`)
 
 // maskGitOutput replaces git's temporary verifier directories with <GITTMP>
 // and, with maskGit, git's own diagnostics after each gitLabels failure.
