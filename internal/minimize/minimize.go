@@ -372,10 +372,9 @@ func derivePatchUnits(repository string, before, after counterfactualState) ([]P
 	}
 	var output []PatchUnit
 	for index := 0; index < len(parts); index += 2 {
+		// TS refuses a missing element (`!statusBytes || !pathBytes`); an
+		// empty Buffer is truthy, and the even count rules out a missing one.
 		statusBytes, pathBytes := parts[index], parts[index+1]
-		if len(statusBytes) == 0 || len(pathBytes) == 0 {
-			return nil, errors.New("Git --name-status -z omitted a changed path.")
-		}
 		path, err := assertUtf8Path(pathBytes)
 		if err != nil {
 			return nil, err
@@ -865,10 +864,12 @@ func (r *run) executeCandidate(direction string, candidateIDs []string, role str
 			}
 		}
 		if status := application.Get("status").Str(); status == "APPLIED" || status == "NO_PATCHES" {
-			var err error
-			if overlays, err = gitinv.MaterializeFrozenOverlays(worktree, r.frozenWitness, *materialized); err != nil {
+			// A failure leaves TS's `overlays` at [] for the unresolved run.
+			materializedOverlays, err := gitinv.MaterializeFrozenOverlays(worktree, r.frozenWitness, *materialized)
+			if err != nil {
 				return err
 			}
+			overlays = materializedOverlays
 			var plan sandbox.Plan
 			planErr := attempt(func() error {
 				var err error

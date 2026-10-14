@@ -4,9 +4,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"io/fs"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/bundle/gitproof"
@@ -81,7 +83,7 @@ func externalDigestStatus(expected string, provided bool, resultDigest *string, 
 // validateCandidateIds ports src/git-minimization.ts:1535.
 func validateCandidateIDs(ids []string, units map[string]jsjson.Value, errs *[]string, label string) {
 	seen := map[string]bool{}
-	previousOrdinal := -1
+	previousOrdinal := -1.0
 	for _, id := range ids {
 		if seen[id] {
 			*errs = append(*errs, jsexc.Concat(label, " contains duplicate patch unit id: ", id))
@@ -92,7 +94,7 @@ func validateCandidateIDs(ids []string, units map[string]jsjson.Value, errs *[]s
 			*errs = append(*errs, jsexc.Concat(label, " references a patch unit that is not in this result: ", id))
 			continue
 		}
-		ordinal := int(unit.Get("ordinal").Num())
+		ordinal := unit.Get("ordinal").Num()
 		if ordinal <= previousOrdinal {
 			*errs = append(*errs, label+" patch unit ids are not in canonical ordinal order")
 		}
@@ -269,11 +271,8 @@ func Verify(value jsjson.Value, expected string, provided bool) Verification {
 	thrown := jsexc.Try(func() { out = verify(value, expected, provided, &errs, &resultDigest) })
 	if thrown != nil {
 		errs = append(errs, "minimization result verification failed safely: "+jsexc.Message(thrown))
-		return Verification{
-			Errors:               errs,
-			ResultDigest:         resultDigest,
-			ExternalDigestStatus: externalDigestStatus(expected, provided, resultDigest, &errs),
-		}
+		status := externalDigestStatus(expected, provided, resultDigest, &errs)
+		return Verification{Errors: errs, ResultDigest: resultDigest, ExternalDigestStatus: status}
 	}
 	return *out
 }
@@ -282,11 +281,8 @@ func verify(value jsjson.Value, expected string, provided bool, errs *[]string, 
 	parsed, issues, ok := schema.Parse(ResultSchema, value)
 	if !ok {
 		*errs = append(*errs, "minimization result schema validation failed: "+schema.ErrorMessage(issues))
-		return &Verification{
-			Errors:               *errs,
-			ResultDigest:         *resultDigest,
-			ExternalDigestStatus: externalDigestStatus(expected, provided, *resultDigest, errs),
-		}
+		status := externalDigestStatus(expected, provided, *resultDigest, errs)
+		return &Verification{Errors: *errs, ResultDigest: *resultDigest, ExternalDigestStatus: status}
 	}
 	result := parsed
 	digest := digestJSON(result)
@@ -295,7 +291,7 @@ func verify(value jsjson.Value, expected string, provided bool, errs *[]string, 
 	units := map[string]jsjson.Value{}
 	for index, unit := range result.Get("patchUnits").Items() {
 		id := unit.Get("id").Str()
-		if int(unit.Get("ordinal").Num()) != index {
+		if unit.Get("ordinal").Num() != float64(index) {
 			*errs = append(*errs, "patch unit ordinal is not contiguous at offset "+strconv.Itoa(index))
 		}
 		if _, duplicate := units[id]; duplicate {
@@ -455,7 +451,7 @@ func verify(value jsjson.Value, expected string, provided bool, errs *[]string, 
 			usedExecutions++
 		}
 	}
-	if int(result.Get("budget", "usedExecutions").Num()) != usedExecutions {
+	if result.Get("budget", "usedExecutions").Num() != float64(usedExecutions) {
 		*errs = append(*errs, "used execution budget does not match recorded sandbox executions")
 	}
 	if result.Get("budget", "usedExecutions").Num() > result.Get("budget", "maxExecutions").Num() {
@@ -465,8 +461,7 @@ func verify(value jsjson.Value, expected string, provided bool, errs *[]string, 
 	referencedRuns := map[string]bool{}
 	attemptsByRunID := map[string]jsjson.Value{}
 	for index, attempt := range result.Get("attempts").Items() {
-		ordinal := int(attempt.Get("ordinal").Num())
-		if ordinal != index+1 {
+		if attempt.Get("ordinal").Num() != float64(index+1) {
 			*errs = append(*errs, "attempt ordinal is not contiguous at offset "+strconv.Itoa(index))
 		}
 		validateCandidateIDs(bundle.Strings(attempt.Get("candidateUnitIds")), units, errs,
@@ -516,7 +511,7 @@ func verify(value jsjson.Value, expected string, provided bool, errs *[]string, 
 		}
 	}
 	enumeration := result.Get("minimality", "enumeration")
-	if int(enumeration.Get("searchedCandidateSets").Num()) != len(enumerationAttempts) {
+	if enumeration.Get("searchedCandidateSets").Num() != float64(len(enumerationAttempts)) {
 		*errs = append(*errs, "enumeration searched-candidate count does not match retained enumeration attempts")
 	}
 	enumerationOutcomes := map[string]string{}
@@ -550,8 +545,10 @@ func verify(value jsjson.Value, expected string, provided bool, errs *[]string, 
 			distinctEnumeratedUnits[id] = true
 		}
 	}
+	// TS materializes boundedProperSubsets(ids) only for its length, 2^n - 2;
+	// only the count is computed here.
 	if enumeration.Get("status").Str() == "COMPLETED" && len(distinctEnumeratedUnits) >= 2 &&
-		len(enumerationAttempts) != (1<<len(distinctEnumeratedUnits))-2 {
+		float64(len(enumerationAttempts)) != math.Exp2(float64(len(distinctEnumeratedUnits)))-2 {
 		*errs = append(*errs, "completed enumeration does not retain every proper subset attempt")
 	}
 	for _, minimalSet := range enumeration.Get("distinctMinimalSets").Items() {
@@ -677,10 +674,8 @@ func VerifyFile(filePath, expected string, provided bool) Verification {
 	if out != nil {
 		return *out
 	}
-	return Verification{
-		Errors:               errs,
-		ExternalDigestStatus: externalDigestStatus(expected, provided, nil, &errs),
-	}
+	status := externalDigestStatus(expected, provided, nil, &errs)
+	return Verification{Errors: errs, ExternalDigestStatus: status}
 }
 
 // lstatIfPresent ports src/git-minimization.ts:625: null for ENOENT.
@@ -747,22 +742,7 @@ func ensureRealOutputDirectory(directory string) {
 
 // splitPathParts is `suffix.split(/[\\/]+/).filter(Boolean)`.
 func splitPathParts(suffix string) []string {
-	var out []string
-	current := ""
-	for _, r := range suffix {
-		if r == '/' || r == '\\' {
-			if current != "" {
-				out = append(out, current)
-				current = ""
-			}
-			continue
-		}
-		current += string(r)
-	}
-	if current != "" {
-		out = append(out, current)
-	}
-	return out
+	return strings.FieldsFunc(suffix, func(r rune) bool { return r == '/' || r == '\\' })
 }
 
 // WriteResult ports writeGitMinimizationResult (src/git-minimization.ts:2030):

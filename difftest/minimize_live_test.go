@@ -31,6 +31,7 @@ type minimizeCase struct {
 	before, after  string // "" takes the first and last commit
 	budget         int    // 0 keeps the schema default
 	expectedDigest string // "" takes the witness's own frozen digest
+	notesOverlay   bool   // the witness also overlays notes.txt
 }
 
 func lines(count int, bad int) string {
@@ -126,6 +127,12 @@ func minimizeCases() []minimizeCase {
 			{Files: map[string]string{"state.txt": "good\n"}},
 			{Files: map[string]string{"state.txt": "bad\n"}},
 		}},
+		// notes.txt is a tracked symlink in the base commit, so materializing
+		// the witness's notes.txt overlay fails: an unresolved run with [] overlays.
+		{label: "overlay-symlink-target", fake: "odd-bad", notesOverlay: true, commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": "good\n"}, Symlinks: map[string]string{"notes.txt": "state.txt"}},
+			{Files: map[string]string{"state.txt": "bad\n"}},
+		}},
 		{label: "bad-range", fake: "odd-bad", before: "no-such-revision", commits: []gitinv.RepoCommitForTest{
 			{Files: map[string]string{"state.txt": "good\n"}},
 			{Files: map[string]string{"state.txt": "bad\n"}},
@@ -138,9 +145,20 @@ func minimizeCases() []minimizeCase {
 	}
 }
 
+// liveMinimizeWitnesses are the plain witness and one that also overlays
+// notes.txt; they read the clock, so build them before a compared sequence.
+func liveMinimizeWitnesses(t *testing.T) [2]jsjson.Value {
+	return [2]jsjson.Value{gitinv.FrozenWitnessForTest(t),
+		gitinv.FrozenWitnessWithOverlaysForTest(t, []string{"notes.txt"}, []string{"overlay notes\n"})}
+}
+
 // minimizeRequest builds a case's repository and its request.
-func minimizeRequest(t *testing.T, c minimizeCase, frozen jsjson.Value) jsjson.Value {
+func minimizeRequest(t *testing.T, c minimizeCase, witnesses [2]jsjson.Value) jsjson.Value {
 	t.Helper()
+	frozen := witnesses[0]
+	if c.notesOverlay {
+		frozen = witnesses[1]
+	}
 	repo, ids := gitinv.BuildRepoForTest(t, "sha1", "", c.commits)
 	before, after := ids[0], ids[len(ids)-1]
 	if c.before != "" {
@@ -178,7 +196,7 @@ func TestLiveMinimize(t *testing.T) {
 	oracle.Skip(t)
 	// The witness reads the clock, so it is built before the compared sequence.
 	clock.ResetForTest("live-minimize-witness")
-	frozen := gitinv.FrozenWitnessForTest(t)
+	frozen := liveMinimizeWitnesses(t)
 	cases := minimizeCases()
 	requests := make([]jsjson.Value, len(cases))
 	for i, c := range cases {
@@ -266,7 +284,7 @@ func TestLiveMinimize(t *testing.T) {
 		}
 	}
 	t.Logf("statuses %v", statuses)
-	for _, status := range []string{"COMPLETED", "BUDGET_EXHAUSTED", "BASELINE_NOT_PASS", "FULL_PATCH_NOT_FAIL", "NO_PATCHES",
+	for _, status := range []string{"COMPLETED", "EXECUTION_ERROR", "BUDGET_EXHAUSTED", "BASELINE_NOT_PASS", "FULL_PATCH_NOT_FAIL", "NO_PATCHES",
 		"SANDBOX_UNAVAILABLE", "RANGE_ERROR", "INVALID_WITNESS"} {
 		if statuses[status] == 0 {
 			t.Errorf("no case reached %s", status)
@@ -280,7 +298,7 @@ func minimizationSeeds(t *testing.T) []string {
 	t.Helper()
 	root := oracle.RepoRoot(t)
 	clock.ResetForTest("live-minimization-verify-seeds")
-	frozen := gitinv.FrozenWitnessForTest(t)
+	frozen := liveMinimizeWitnesses(t)
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatal(err)
