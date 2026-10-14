@@ -801,6 +801,10 @@ func maskedForms(path string, jsonEscaped bool) []string {
 	return paths
 }
 
+// writerRoots are the directories a writer case owns (makeWriterRoots in
+// writer_test.go); normalizeWriter masks them.
+type writerRoots struct{ root, ws, home, tmp, argvLog string }
+
 // normalizeWriter masks a writer case's own directories (slice 2 spec 2.3):
 // the workspace, its TMPDIR and HOME, a judge-proof server port, then the
 // git masks verify uses. Digests are never masked. On Windows the

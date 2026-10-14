@@ -51,9 +51,6 @@ type writerResult struct {
 	contents map[string][]byte
 }
 
-// writerRoots are the directories a case owns (see makeWriterRoots).
-type writerRoots struct{ root, ws, home, tmp, argvLog string }
-
 var (
 	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "env", "posixOnly", "mutations"}
 	writerIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)

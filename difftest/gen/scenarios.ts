@@ -277,7 +277,7 @@ export function copyScenario(name: string, ws: string): void {
 // calls it once its scenario and mutations are in place, so the workspace
 // fl starts from never depends on the checkout or on how the harness wrote
 // it (Node's 0o666/0o777 defaults vs Go's 0o644/0o755 under umask 0); the Go
-// twin is resetModes in difftest/scenarios.go.
+// twin is resetModes in difftest/scenarios_test.go.
 export function resetModes(root: string, rel = ""): void {
   for (const name of readdirSync(join(root, rel))) {
     const r = rel ? `${rel}/${name}` : name;
