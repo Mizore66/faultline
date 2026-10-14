@@ -228,3 +228,25 @@ func TestDirentTypeKnown(t *testing.T) {
 		}
 	}
 }
+
+// TestErrorPathReplacesLoneSurrogate pins Node 22's text: fs errors print
+// the path through UTF-8, so a lone surrogate shows as U+FFFD.
+func TestErrorPathReplacesLoneSurrogate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows prints the namespaced path (errorPath's Windows branch)")
+	}
+	dir := filepath.Join(t.TempDir(), "missing")
+	path, shown := dir+"/\xed\xb0\x80", dir+"/�"
+	if _, err := ReadText(path); err == nil || err.Error() != "ENOENT: no such file or directory, open '"+shown+"'" {
+		t.Errorf("ReadText error = %v", err)
+	}
+	if err := WriteFileUTF8(path, "x", 0o600, false); err == nil || err.Error() != "ENOENT: no such file or directory, open '"+shown+"'" {
+		t.Errorf("WriteFileUTF8 error = %v", err)
+	}
+	if err := Rename(path, path+"b"); err == nil || err.Error() != "ENOENT: no such file or directory, rename '"+shown+"' -> '"+shown+"b'" {
+		t.Errorf("Rename error = %v", err)
+	}
+	if err := Mkdir(path, 0o700); err == nil || err.Error() != "ENOENT: no such file or directory, mkdir '"+shown+"'" {
+		t.Errorf("Mkdir error = %v", err)
+	}
+}

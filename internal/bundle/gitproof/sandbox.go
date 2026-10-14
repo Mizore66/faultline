@@ -25,14 +25,17 @@ type NamedLimit struct {
 	Maximum float64
 }
 
-// MaxSandboxLimits keeps Object.entries(MAX_SANDBOX_LIMITS) order.
-var MaxSandboxLimits = []NamedLimit{
-	{"timeoutMs", 300_000},
-	{"maxOutputBytes", 8_388_608},
-	{"cpuCount", 4},
-	{"memoryBytes", 2_147_483_648},
-	{"pidsLimit", 512},
-	{"tmpfsBytes", 536_870_912},
+// MaxSandboxLimits is MAX_SANDBOX_LIMITS in Object.entries order. Each call
+// returns a fresh copy, so no caller can loosen the security maxima.
+func MaxSandboxLimits() []NamedLimit {
+	return []NamedLimit{
+		{"timeoutMs", 300_000},
+		{"maxOutputBytes", 8_388_608},
+		{"cpuCount", 4},
+		{"memoryBytes", 2_147_483_648},
+		{"pidsLimit", 512},
+		{"tmpfsBytes", 536_870_912},
+	}
 }
 
 // DeterministicEnvironment is DETERMINISTIC_ENVIRONMENT in literal order.
@@ -164,7 +167,7 @@ func ValidateSandboxPlanAudit(audit jsjson.Value) []string {
 	}
 	runtime := audit.Get("runtime")
 	limits := runtime.Get("limits")
-	for _, limit := range MaxSandboxLimits {
+	for _, limit := range MaxSandboxLimits() {
 		value := limits.Get(limit.Name)
 		if !isInteger(value) || value.Num() <= 0 || value.Num() > limit.Maximum {
 			add(jsexc.Concat("sandbox limit ", limit.Name, " is outside the allowed policy range"))

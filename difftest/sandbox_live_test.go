@@ -90,7 +90,7 @@ func randomSandboxRequest(r *rand.Rand, valid, invalid []string) string {
 	}
 	if r.IntN(2) == 0 {
 		limits := jsjson.NewObj()
-		for _, l := range gitproof.MaxSandboxLimits {
+		for _, l := range gitproof.MaxSandboxLimits() {
 			if r.IntN(3) != 0 {
 				continue
 			}

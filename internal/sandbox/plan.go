@@ -142,7 +142,7 @@ func validateImage(image string) (string, error) {
 // result is a limits object in DEFAULT_SANDBOX_LIMITS key order.
 func resolveLimits(overrides jsjson.Value) (jsjson.Value, error) {
 	limits := jsjson.NewObj()
-	for i, limit := range gitproof.MaxSandboxLimits {
+	for i, limit := range gitproof.MaxSandboxLimits() {
 		value := jsjson.MakeNumber(defaultSandboxLimits[i])
 		if overrides.Kind() == jsjson.Object {
 			if v, ok := overrides.Obj().Get(limit.Name); ok {
