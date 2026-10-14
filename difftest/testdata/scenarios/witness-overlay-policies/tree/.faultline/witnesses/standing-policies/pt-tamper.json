@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "faultline.standing-approval-policy.v1",
+  "policyId": "pt-tamper",
+  "frozenBy": "ops@example.test",
+  "frozenAt": "2026-07-16T11:00:00.000Z",
+  "allowedCommands": [
+    "node witness.mjs"
+  ],
+  "allowedOverlayTemplates": [
+    {
+      "path": "witness.mjs",
+      "bytesBase64": "ZXhwb3J0IGNvbnN0IGZhdWx0TGluZVdpdG5lc3MgPSAnYXBwcm92ZWQtZXhhY3QtYnl0ZXMnOwo="
+    }
+  ],
+  "maxTimeoutSeconds": 61,
+  "network": "disabled",
+  "credentials": "redacted",
+  "policyDigest": "sha256:46e1ce37de975c38965cb15a79a8708b3fbde056c722513d9fa08e9a9593579d"
+}

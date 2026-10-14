@@ -2,6 +2,10 @@ package cli
 
 import (
 	"errors"
+	"math"
+	"strings"
+
+	"github.com/Mizore66/faultline/internal/clock"
 
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
@@ -72,8 +76,52 @@ func witnessCommand(e *env, args []string) error {
 	}
 	store := witnessStore(args)
 	switch action {
-	case "implement", "review", "policy", "resolve-autonomous", "ratify":
+	case "implement", "review":
 		return fail("not yet ported: witness %s", action)
+	case "policy":
+		return e.witnessPolicy(store, args, proposalID)
+	case "resolve-autonomous":
+		if proposalID == "" {
+			return fail("Usage: fl witness resolve-autonomous <proposal-id> [--policy-id <id>]")
+		}
+		var policy *jsjson.Value
+		if policyID, ok := option(args, "--policy-id"); ok {
+			read, err := witness.ReadPolicy(store, policyID)
+			if err != nil {
+				return err
+			}
+			policy = &read
+		}
+		result, err := witness.ResolveAutonomous(store, proposalID, policy)
+		if err != nil {
+			return err
+		}
+		e.printJSON(result)
+		return nil
+	case "ratify":
+		if proposalID == "" {
+			return fail("Usage: fl witness ratify <proposal-id> --executed-digest <sha256:…> --ratified-by <actor>")
+		}
+		var o witness.RatifyOptions
+		if note, ok := option(args, "--note"); ok {
+			o.Note = &note
+		}
+		var err error
+		if o.ExecutedWitnessDigest, err = requiredOption(args, "--executed-digest"); err != nil {
+			return err
+		}
+		if o.RatifiedBy, err = requiredOption(args, "--ratified-by"); err != nil {
+			return err
+		}
+		result, err := witness.Ratify(store, proposalID, o)
+		if err != nil {
+			return err
+		}
+		e.printJSON(obj("status", "APPROVED_AFTER_EXECUTION", "proposalId", proposalID,
+			"ratificationDigest", result.Get("ratification", "ratificationDigest"),
+			"frozenDigest", result.Get("frozen", "frozenDigest"),
+			"approvedBy", result.Get("frozen", "approval", "approvedBy")))
+		return nil
 	case "propose":
 		return e.witnessPropose(store, args)
 	case "approve":
@@ -232,4 +280,70 @@ func (e *env) witnessPropose(store string, args []string) error {
 		"proposalDigest", proposal.Get("proposalDigest"), "incidentPacketDigest", proposal.Get("incidentPacketDigest"),
 		"privacy", report.JSON()))
 	return nil
+}
+
+// witnessPolicy ports the "policy" case (src/cli-app.ts:1272).
+func (e *env) witnessPolicy(store string, args []string, action string) error {
+	switch action {
+	case "freeze":
+		policyID, err := requiredOption(args, "--policy-id")
+		if err != nil {
+			return err
+		}
+		frozenBy, err := requiredOption(args, "--frozen-by")
+		if err != nil {
+			return err
+		}
+		command, err := requiredOption(args, "--command")
+		if err != nil {
+			return err
+		}
+		timeout := "60"
+		if v, ok := option(args, "--max-timeout"); ok {
+			timeout = v
+		}
+		maxTimeout := jsjson.ToNumber(timeout)
+		if math.IsNaN(maxTimeout) || math.IsInf(maxTimeout, 0) || maxTimeout != math.Trunc(maxTimeout) || maxTimeout < 1 {
+			return fail("--max-timeout must be a positive integer.")
+		}
+		input := obj("schemaVersion", "faultline.standing-approval-policy.v1", "policyId", policyID, "frozenBy", frozenBy,
+			"frozenAt", clock.ISO(clock.Now()), "allowedCommands", stringList(command),
+			"allowedOverlayTemplates", jsjson.MakeArray(nil), "maxTimeoutSeconds", jsjson.MakeNumber(maxTimeout),
+			"network", "disabled", "credentials", "redacted")
+		policy, err := witness.BuildPolicy(input)
+		if err != nil {
+			return err
+		}
+		if _, err := witness.WritePolicy(store, policy); err != nil {
+			return err
+		}
+		e.printJSON(obj("status", "STANDING_POLICY_FROZEN", "policyId", policy.Get("policyId"), "policyDigest", policy.Get("policyDigest")))
+		return nil
+	case "apply":
+		var target string
+		if len(args) > 2 {
+			target = args[2]
+		}
+		if target == "" || strings.HasPrefix(target, "--") {
+			return fail("Usage: fl witness policy apply <proposal-id> --policy-id <id>")
+		}
+		policyID, err := requiredOption(args, "--policy-id")
+		if err != nil {
+			return err
+		}
+		result, err := witness.TryAutoFreeze(store, target, policyID)
+		if err != nil {
+			return err
+		}
+		if result.Frozen == nil {
+			e.printJSON(obj("status", "STANDING_POLICY_NO_MATCH", "reasons", stringList(result.Reasons...)))
+			e.exitCode = 1
+			return nil
+		}
+		e.printJSON(obj("status", "FROZEN_BY_STANDING_POLICY", "proposalId", target,
+			"approvedBy", witness.PolicyApprovedBy(result.Policy),
+			"frozenDigest", result.Frozen.Get("frozenDigest"), "policyDigest", result.Policy.Get("policyDigest")))
+		return nil
+	}
+	return fail("Usage: fl witness policy freeze --policy-id <id> --frozen-by <actor> --command <exact> [--max-timeout <seconds>] | fl witness policy apply <proposal-id> --policy-id <id>")
 }

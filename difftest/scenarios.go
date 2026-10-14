@@ -12,15 +12,17 @@ import (
 // scenario: both sides copy the committed files, which frozen TS wrote under
 // the seed preload.
 var writerScenarios = map[string]bool{
-	"empty":                 true,
-	"witness-proposed":      true,
-	"witness-approved":      true,
-	"witness-frozen":        true,
-	"witness-approved-keys": true,
-	"witness-frozen-keys":   true,
-	"witness-signed":        true,
-	"witness-signed-forged": true,
-	"git-two-states-bundle": true,
+	"empty":                      true,
+	"witness-proposed":           true,
+	"witness-approved":           true,
+	"witness-frozen":             true,
+	"witness-approved-keys":      true,
+	"witness-frozen-keys":        true,
+	"witness-signed":             true,
+	"witness-signed-forged":      true,
+	"witness-overlay-policies":   true,
+	"witness-nooverlay-policies": true,
+	"git-two-states-bundle":      true,
 }
 
 // copyScenario fills the workspace ws from a committed scenario:

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "faultline.standing-approval-policy.v1",
+  "policyId": "p-timeout",
+  "frozenBy": "ops@example.test",
+  "frozenAt": "2026-07-16T12:00:00.000Z",
+  "allowedCommands": [
+    "node witness.mjs"
+  ],
+  "allowedOverlayTemplates": [],
+  "maxTimeoutSeconds": 10,
+  "network": "disabled",
+  "credentials": "redacted",
+  "policyDigest": "sha256:8eb02692ab331e9dfe3671c6848a465115dd40e37cc672761778657a275611db"
+}

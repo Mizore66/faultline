@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "faultline.standing-approval-policy.v1",
+  "policyId": "p-cmd",
+  "frozenBy": "ops@example.test",
+  "frozenAt": "2026-07-16T12:00:00.000Z",
+  "allowedCommands": [
+    "node other.mjs"
+  ],
+  "allowedOverlayTemplates": [],
+  "maxTimeoutSeconds": 60,
+  "network": "disabled",
+  "credentials": "redacted",
+  "policyDigest": "sha256:b43ebf383c92140b6ab0ca08513a5beecb667a12af6dde63f5a2fefa6f34e9a6"
+}

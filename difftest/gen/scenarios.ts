@@ -179,6 +179,32 @@ function forgeSignature(ws: string): void {
   writeFileSync(path, `${canonicalJson(receipt)}\n`);
 }
 
+
+// Standing-policy scenarios (Task 8). policyFile hand-writes a policy the
+// CLI cannot (overlay templates, a tampered digest); the others are frozen
+// through `fl witness policy freeze`, whose policies never carry templates.
+const NO_OVERLAY_INPUT = { ...PROPOSAL_INPUT, witness: { ...PROPOSAL_INPUT.witness, overlays: [] } };
+const WITNESS_BYTES = PROPOSAL_INPUT.witness.overlays[0]!.bytesBase64;
+const policyFreeze = (id: string, command: string, maxTimeout: string): string[] =>
+  ["witness", "policy", "freeze", "--policy-id", id, "--frozen-by", "ops@example.test", "--command", command, "--max-timeout", maxTimeout];
+const POLICY_DIR = ".faultline/witnesses/standing-policies";
+function policyFile(policyId: string, templates: object[], maxTimeoutSeconds: number, digestOf = maxTimeoutSeconds): string {
+  const body = (timeout: number) => ({
+    schemaVersion: "faultline.standing-approval-policy.v1", policyId, frozenBy: "ops@example.test", frozenAt: "2026-07-16T11:00:00.000Z",
+    allowedCommands: ["node witness.mjs"], allowedOverlayTemplates: templates, maxTimeoutSeconds: timeout, network: "disabled", credentials: "redacted"
+  });
+  return `${JSON.stringify({ ...body(maxTimeoutSeconds), policyDigest: digestJson(body(digestOf)) }, null, 2)}\n`;
+}
+const POLICY_FILES: Record<string, string> = {
+  [`${POLICY_DIR}/pt-match.json`]: policyFile("pt-match", [{ path: "witness.mjs", bytesBase64: WITNESS_BYTES }], 60),
+  [`${POLICY_DIR}/pt-bytes.json`]: policyFile("pt-bytes", [{ path: "witness.mjs", bytesBase64: "b3RoZXI=" }], 60),
+  [`${POLICY_DIR}/pt-count.json`]: policyFile("pt-count", [{ path: "a.mjs", bytesBase64: "" }, { path: "witness.mjs", bytesBase64: WITNESS_BYTES }], 60),
+  [`${POLICY_DIR}/pt-tamper.json`]: policyFile("pt-tamper", [{ path: "witness.mjs", bytesBase64: WITNESS_BYTES }], 61, 60),
+  [`${POLICY_DIR}/pt-badschema.json`]: `${JSON.stringify({ schemaVersion: "faultline.standing-approval-policy.v1", policyId: "pt-badschema" }, null, 2)}\n`,
+  [`${POLICY_DIR}/pt-badjson.json`]: "{\n"
+};
+const POLICY_FREEZES = [policyFreeze("p-ok", "node witness.mjs", "60"), policyFreeze("p-cmd", "node other.mjs", "60"), policyFreeze("p-timeout", "node witness.mjs", "10")];
+
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
@@ -192,6 +218,8 @@ export const SCENARIOS: Record<string, Scenario> = {
   "witness-frozen-keys": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE] },
   "witness-signed": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE, SIGN] },
   "witness-signed-forged": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE, SIGN], after: forgeSignature },
+  "witness-overlay-policies": { files: { ...PROPOSAL_FILES, ...POLICY_FILES }, argv: [PROPOSE, ...POLICY_FREEZES] },
+  "witness-nooverlay-policies": { files: { "proposal.json": `${JSON.stringify(NO_OVERLAY_INPUT, null, 2)}\n`, ...POLICY_FILES }, argv: [PROPOSE, ...POLICY_FREEZES] },
   // A Git proof bundle: `fl verify bundle` runs git, so it checks the
   // recorders and the argv normalization.
   "git-two-states-bundle": { bases: { bundle: "git-two-states" }, files: {}, argv: [] }

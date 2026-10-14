@@ -1,0 +1,19 @@
+{
+  "proposalId": "demo-1",
+  "incidentPacket": {
+    "symptom": "The repository state must not be bad.",
+    "ciLog": "state.txt became bad",
+    "repositoryLanguage": "Text",
+    "repositorySummary": "Temporary repository for the writer replay."
+  },
+  "witness": {
+    "behavior": "state.txt must not be bad",
+    "command": "node witness.mjs",
+    "overlays": [],
+    "policy": {
+      "network": "disabled",
+      "credentials": "redacted",
+      "timeoutSeconds": 30
+    }
+  }
+}
