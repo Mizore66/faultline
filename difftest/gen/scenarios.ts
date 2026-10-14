@@ -49,7 +49,7 @@ export type CaseRoots = { root: string; ws: string; home: string; tmp: string; a
 export function makeCaseRoots(): CaseRoots {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "faultline-writer-")));
   const roots = { root, ws: join(root, "ws"), home: join(root, "home"), tmp: join(root, "tmp"), argvLog: join(root, "argv.log") };
-  for (const dir of [roots.ws, roots.home, roots.tmp]) mkdirSync(dir);
+  for (const dir of [roots.ws, roots.home, roots.tmp]) mkdirSync(dir, { mode: 0o755 });
   writeFileSync(join(roots.home, "empty.gitconfig"), "");
   return roots;
 }
@@ -134,12 +134,14 @@ export function copyScenario(name: string, ws: string): void {
   const dir = join(scenariosDir, name);
   for (const rel of readFileSync(join(dir, "dirs.txt"), "utf8").split("\n").filter(Boolean)) mkdirSync(join(ws, rel), { recursive: true });
   if (existsSync(join(dir, "tree"))) cpSync(join(dir, "tree"), ws, { recursive: true });
-  resetModes(ws);
 }
 
-// resetModes makes a copied scenario's modes independent of the checkout:
-// directories 0755, files 0644 (the Go twin does the same).
-function resetModes(root: string, rel = ""): void {
+// resetModes sets directories to 0755 and files to 0644 under root. A case
+// calls it once its scenario and mutations are in place, so the workspace
+// fl starts from never depends on the checkout or on how the harness wrote
+// it (Node's 0o666/0o777 defaults vs Go's 0o644/0o755 under umask 0); the Go
+// twin is resetModes in difftest/scenarios.go.
+export function resetModes(root: string, rel = ""): void {
   for (const name of readdirSync(join(root, rel))) {
     const r = rel ? `${rel}/${name}` : name;
     const stat = lstatSync(join(root, r));
@@ -190,7 +192,8 @@ async function buildScenario(name: string): Promise<void> {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  process.umask(0o022);
+  // Umask 0, like gen-writers.ts: fl's modes reach the files as requested.
+  process.umask(0);
   requireOracleNode();
   requireFreshBuild();
   for (const entry of existsSync(scenariosDir) ? readdirSync(scenariosDir) : []) {

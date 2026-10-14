@@ -57,6 +57,9 @@ type writerRoots struct{ root, ws, home, tmp, argvLog string }
 var (
 	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "env", "posixOnly", "mutations"}
 	writerIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	// fileEntry is a regular file's tree entry: its SHA-256, then its mode
+	// except on Windows.
+	fileEntry = regexp.MustCompile(`^[0-9a-f]{64}(?: [0-7]{1,4})?$`)
 )
 
 func loadWriterTemplates(t *testing.T, repo string) []writerTemplate {
@@ -383,6 +386,7 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 			t.Fatalf("could not apply mutation %s", m.str("op"))
 		}
 	}
+	resetModes(t, r.ws)
 	var out []writerResult
 	for inv, argv := range tpl.Argv {
 		before := treeEntries(t, r.ws)
@@ -408,7 +412,7 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 			res.Argv = append(res.Argv, normalizeRecord(record, r))
 		}
 		for rel, entry := range res.Files {
-			if !strings.HasPrefix(entry, "symlink:") && len(entry) >= 64 && !strings.HasPrefix(entry, "dir") {
+			if fileEntry.MatchString(entry) {
 				res.contents[rel], _ = os.ReadFile(filepath.Join(r.ws, filepath.FromSlash(rel)))
 			}
 		}
@@ -481,7 +485,7 @@ func orNone(s string) string {
 }
 
 func TestWriterReplay(t *testing.T) {
-	setWriterUmask()
+	setWriterUmask(t)
 	repo := repoRoot(t)
 	templates := loadWriterTemplates(t, repo)
 	goldens := loadWriterGoldens(t, repo)

@@ -7,7 +7,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync,
 import { join, resolve } from "node:path";
 import { sha256 } from "../../src/canonical.js";
 import { PATH_OPS, applyMutation, normalizeWriter, treeDigest, type Template } from "./cases.js";
-import { copyScenario, makeCaseRoots, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
+import { copyScenario, makeCaseRoots, resetModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
 
 export type WriterTemplate = {
   id: string; scenario: string; argv: string[][]; fakeDocker?: string; env?: Record<string, string>;
@@ -102,6 +102,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     for (const m of t.mutations ?? []) {
       applyMutation(roots.ws, { id: t.id, base: "writer", template: m, file: PATH_OPS.has(m.op) ? m.path ?? "." : m.file! });
     }
+    resetModes(roots.ws);
     const env = Object.fromEntries(Object.entries(t.env ?? {}).map(([k, v]) => [k, substitute(v, roots)]));
     const lines: string[] = [];
     for (const [inv, argv] of t.argv.entries()) {
@@ -126,8 +127,9 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
 
 requireOracleNode();
 requireFreshBuild();
-// Modes are compared: fl's own and the harness's files follow the umask.
-process.umask(0o022);
+// Modes are compared under umask 0, so the mode fl asks for is the mode on
+// disk: a 0o666 (Node's default) and a 0o644 do not collapse (Go: difftest/umask_unix.go).
+process.umask(0);
 const repo = resolve(".");
 const templates = JSON.parse(readFileSync(join(repo, "difftest/testdata/writers.json"), "utf8")) as WriterTemplate[];
 checkTemplates(templates);

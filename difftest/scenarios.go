@@ -43,24 +43,6 @@ func copyScenario(t *testing.T, repo, name, ws string) {
 	if _, err := os.Stat(filepath.Join(dir, "tree")); err == nil {
 		copyTree(t, filepath.Join(dir, "tree"), ws)
 	}
-	// Modes independent of the checkout and the umask: directories 0755,
-	// files 0644 (scenarios.ts resetModes).
-	err = filepath.WalkDir(ws, func(path string, d os.DirEntry, err error) error {
-		switch {
-		case err != nil:
-			return err
-		case path == ws:
-			return nil
-		case d.IsDir():
-			return os.Chmod(path, 0o755)
-		case d.Type().IsRegular():
-			return os.Chmod(path, 0o644)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 }
 
 // checkScenarioDirs fails when a committed scenario directory has no
@@ -75,5 +57,29 @@ func checkScenarioDirs(t *testing.T, repo string) {
 		if !writerScenarios[e.Name()] {
 			t.Errorf("difftest/testdata/scenarios/%s has no builder: run difftest/gen/scenarios.ts", e.Name())
 		}
+	}
+}
+
+// resetModes sets directories to 0755 and files to 0644 under root, once a
+// case's scenario and mutations are in place (scenarios.ts resetModes), so
+// the workspace fl starts from never depends on the checkout or on how the
+// harness wrote it.
+func resetModes(t *testing.T, root string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case path == root:
+			return nil
+		case d.IsDir():
+			return os.Chmod(path, 0o755)
+		case d.Type().IsRegular():
+			return os.Chmod(path, 0o644)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
