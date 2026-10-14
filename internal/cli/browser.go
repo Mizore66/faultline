@@ -74,9 +74,12 @@ func openLocalDemoURL(e *env, url string) {
 // KNOWN_DIFFERENCES.md).
 func awaitServeInterrupt(close func() error, serveMs *float64, onStop func()) {
 	signals := make(chan os.Signal, 2)
+	// Notify first: a signal arriving between the two calls then reaches
+	// this channel (and boot's handler dies of it, as Node would before the
+	// listeners exist) rather than being lost.
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	sigexit.Intercept(syscall.SIGINT)
 	sigexit.Intercept(syscall.SIGTERM)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	var timer <-chan time.Time
 	if serveMs != nil && !math.IsInf(*serveMs, 0) && !math.IsNaN(*serveMs) && *serveMs >= 0 {
 		timer = time.After(timeoutDuration(*serveMs))
@@ -100,4 +103,29 @@ func timeoutDuration(ms float64) time.Duration {
 		ms = 1
 	}
 	return time.Duration(ms * float64(time.Millisecond))
+}
+
+// startShell starts child_process.exec(command)'s child: /bin/sh -c
+// command on POSIX; on Windows process.env.comspec (or cmd.exe) with the
+// verbatim arguments /d /s /c "<command>" and windowsHide false. All three
+// stdio slots are pipes (exec buffers stdout and stderr; the openers print
+// far below its maxBuffer; stdin gets no data). wait reports whether exec's
+// callback gets an error: a spawn failure, a non-zero exit or a signal.
+func startShell(command string) (wait func() bool) {
+	file, args := "/bin/sh", []string{"-c", command}
+	o := nodeproc.SpawnOptions{StdinPipe: true, Stdout: nodeproc.StdioPipe, Stderr: nodeproc.StdioPipe}
+	if runtime.GOOS == "windows" {
+		if file = processEnv("comspec"); file == "" {
+			file = "cmd.exe"
+		}
+		args = []string{"/d", "/s", "/c", `"` + command + `"`}
+		o.WindowsVerbatimArguments, o.WindowsShow = true, true
+	}
+	discard := func([]byte) {}
+	o.OnStdout, o.OnStderr = discard, discard
+	child := nodeproc.Spawn(file, args, o)
+	return func() bool {
+		exit := child.Wait()
+		return exit.Err != nil || exit.Signal != "" || exit.Code == nil || *exit.Code != 0
+	}
 }

@@ -57,6 +57,7 @@ func TestRequestPathname(t *testing.T) {
 	for in, want := range map[string]string{
 		"/": "/", "/?a=1": "/", "/x/..": "/", "/%2e": "/", "/x/%2E%2e": "/", "/x": "/x",
 		`\`: "/", "/./": "/", "/../": "/", "/x/": "/x/", "/#f": "/",
+		"//host/": "/", "//host": "/", "//host/x": "/x", `\\host\`: "/",
 	} {
 		if got := requestPathname(in); got != want {
 			t.Errorf("requestPathname(%q) = %q, want %q", in, got, want)

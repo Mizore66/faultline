@@ -77,7 +77,7 @@ func shutdownWrite(f *os.File) {
 // over posix_spawn (see execvpDarwin). A dir that is not "" is the
 // child's working directory: changing to it fails each attempt, so a
 // missing one ends the search with ENOENT.
-func start(file string, argv, env []string, files []*os.File, dir string) (*os.Process, string) {
+func start(file string, argv, env []string, files []*os.File, dir string, _ startOptions) (*os.Process, string) {
 	closeInheritedFds()
 	attr := &os.ProcAttr{Dir: dir, Env: env, Files: files}
 	exec := func(path string, argv []string) (*os.Process, syscall.Errno) {

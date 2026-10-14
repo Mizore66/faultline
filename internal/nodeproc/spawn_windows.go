@@ -49,7 +49,7 @@ func pipe64k() (*os.File, *os.File, error) {
 // cwd of MAX_PATH or more shortened to its 8.3 form, and put in libuv's
 // kill-on-close job object. CreateProcess errors go through libuv's
 // uv_translate_sys_error table.
-func start(file string, argv, env []string, files []*os.File, dir string) (*os.Process, string) {
+func start(file string, argv, env []string, files []*os.File, dir string, o startOptions) (*os.Process, string) {
 	cwd := dir
 	if dir == "" {
 		var err error
@@ -72,8 +72,19 @@ func start(file string, argv, env []string, files []*os.File, dir string) (*os.P
 		return nil, "ENOENT"
 	}
 	const createNoWindow = 0x08000000
-	p, err := os.StartProcess(path, argv, &os.ProcAttr{Dir: dir, Env: env, Files: files,
-		Sys: &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}})
+	sys := &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	if o.show {
+		// windowsHide: false: libuv passes SW_SHOWDEFAULT, which is what
+		// leaving STARTF_USESHOWWINDOW unset means.
+		sys = &syscall.SysProcAttr{}
+	}
+	if o.verbatim {
+		// libuv's make_program_args with verbatim_arguments: every
+		// argument, the program name included, copied as is and joined
+		// with spaces.
+		sys.CmdLine = strings.Join(argv, " ")
+	}
+	p, err := os.StartProcess(path, argv, &os.ProcAttr{Dir: dir, Env: env, Files: files, Sys: sys})
 	if err != nil {
 		return nil, nodefs.ErrnoCode(err)
 	}

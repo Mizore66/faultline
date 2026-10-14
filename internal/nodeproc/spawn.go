@@ -96,7 +96,7 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 	if err != nil {
 		return Result{Err: spawnError(file, nodefs.SystemErrorName(err))}
 	}
-	proc, code := start(jsstr.ToUTF8(file), argv, nodeEnv(), io.child, "")
+	proc, code := start(jsstr.ToUTF8(file), argv, nodeEnv(), io.child, "", startOptions{})
 	io.closeChild()
 	if code != "" {
 		io.closeParent()
@@ -303,3 +303,7 @@ func Getenv(name string) (value string, ok bool) {
 	}
 	return nodefs.DecodeUTF8([]byte(raw)), true
 }
+
+// startOptions are the Windows-only spawn options (windowsVerbatimArguments,
+// windowsHide: false); POSIX ignores them.
+type startOptions struct{ verbatim, show bool }

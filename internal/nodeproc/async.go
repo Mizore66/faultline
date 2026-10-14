@@ -23,7 +23,7 @@ const (
 )
 
 // SpawnOptions are the child_process.spawn options FaultLine's call sites
-// use, always with shell: false and windowsHide: true.
+// use, always with shell: false; windowsHide is true unless WindowsShow.
 type SpawnOptions struct {
 	Cwd       string   // "" inherits fl's cwd
 	Env       []string // "KEY=value" pairs in object order; nil means nodeEnv() (process.env)
@@ -34,6 +34,14 @@ type SpawnOptions struct {
 	// OnStdout and OnStderr are the 'data' listeners. They are called on
 	// one goroutine, in arrival order, and may call Kill.
 	OnStdout, OnStderr func(chunk []byte)
+	// WindowsVerbatimArguments is windowsVerbatimArguments: on Windows
+	// libuv joins file and args with spaces without quoting any of them
+	// (child_process.exec passes `/d /s /c "<command>"` this way). Ignored
+	// elsewhere.
+	WindowsVerbatimArguments bool
+	// WindowsShow is windowsHide: false (exec's default): the child gets
+	// no CREATE_NO_WINDOW and no SW_HIDE. Ignored elsewhere.
+	WindowsShow bool
 }
 
 // Exit is what the call sites learn from 'close', or from 'error' when the
@@ -91,7 +99,7 @@ func Spawn(file string, args []string, o SpawnOptions) *Child {
 	if err != nil {
 		return fail(nodefs.SystemErrorName(err))
 	}
-	proc, code := start(jsstr.ToUTF8(file), argv, env, io.child, jsstr.ToUTF8(o.Cwd))
+	proc, code := start(jsstr.ToUTF8(file), argv, env, io.child, jsstr.ToUTF8(o.Cwd), startOptions{verbatim: o.WindowsVerbatimArguments, show: o.WindowsShow})
 	io.closeChild()
 	if code != "" {
 		io.closeParent()
