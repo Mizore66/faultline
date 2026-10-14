@@ -37,11 +37,13 @@ func codexThreadIDs(args []string) (*gitproof.CodexThreadIDs, error) {
 		flag string
 		dest **string
 	}{{"--witness-draft-thread-id", &ids.WitnessDraftThreadID}, {"--repair-thread-id", &ids.RepairThreadID}} {
-		value, ok := option(args, f.flag)
-		if !ok {
+		if !hasFlag(args, f.flag) {
 			continue
 		}
-		if !validCodexThreadID(value) {
+		// Go-only flags, so stricter than option(): a flag without a value
+		// (last, or followed by another flag) is refused too.
+		value, ok := option(args, f.flag)
+		if !ok || !validCodexThreadID(value) {
 			return nil, fail("%s must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).", f.flag)
 		}
 		*f.dest = &value

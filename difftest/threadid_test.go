@@ -21,13 +21,18 @@ func TestThreadIDsBindUnderRoot(t *testing.T) {
 	if !strings.Contains(string(manifest), `"codex":{"repairThreadId":"thr:02","witnessDraftThreadId":"thr_01.draft"}`) {
 		t.Fatalf("manifest %s", manifest)
 	}
-	for _, verifier := range []func(string) (string, int){goVerify(t), tsVerify(t)} {
-		if out, code := verifier(dir); code != 0 || !strings.Contains(out, "VALID") {
+	// TS checks the same bundle when the oracle is on; Go's run regardless.
+	verifiers := []func(string) (string, int){goVerify(t)}
+	if os.Getenv("FAULTLINE_NODE_ORACLE") == "1" {
+		verifiers = append(verifiers, tsVerify(t))
+	}
+	for _, verifier := range verifiers {
+		if out, code := verifier(dir); code != 0 || !strings.Contains(out, "Integrity: VALID") {
 			t.Fatalf("fresh bundle: %d %s", code, out)
 		}
 	}
 	tamperManifestField(t, dir, "codex.repairThreadId", "thr:03")
-	for _, verifier := range []func(string) (string, int){goVerify(t), tsVerify(t)} {
+	for _, verifier := range verifiers {
 		if _, code := verifier(dir); code == 0 {
 			t.Fatal("edited thread id still verifies")
 		}

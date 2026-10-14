@@ -97,66 +97,74 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 // makes that file's digest, and every digest computed over it (the bundle
 // catalog, its root, a ledger-bound record's bindingDigest), depend on where
 // the case ran. relocation finds those path-dependent digests in the tree
-// after an invocation: the SHA-256 of every file that holds a case path or
-// an already path-dependent digest, and, inside such a JSON file, the
-// digestJson of every object or array that does, and every "sha256:<hex>"
-// member that is the digestJson of the rest of its object (a self-digest:
-// checkpoint digest, event hash, bindingDigest). It repeats until nothing
-// new is found. text() masks the case paths (normalizeWriter) and then
-// each path-dependent digest as <PATHDIGEST>; fileDigest() hashes a
-// path-dependent file's masked text and any other file's bytes. The
-// derived digests are checked anyway: the generator verifies every bundle
-// TS wrote against the root it printed, and the Go replay does the same.
-// The Go twin is relocation in difftest/writer_test.go.
+// after an invocation and names each by where it was first derived:
+//   file:<rel>               the SHA-256 of workspace file rel
+//   json:<rel>#<pointer>     the digestJson of that object or array of rel
+//   self:<rel>#<pointer>     a "sha256:<hex>" member equal to the digestJson
+//                            of the rest of its object (checkpoint digest,
+//                            event hash, bindingDigest)
+// A file is derived from when it holds a case path or a digest found in the
+// previous pass (files sorted by code unit, JSON members in document order,
+// .git directories skipped); passes repeat until nothing new is found, and
+// the first name a digest gets is kept. text() masks the case paths
+// (normalizeWriter) and then each such digest as <PATHDIGEST:name>;
+// fileDigest() hashes a path-dependent file's masked text and any other
+// file's bytes. The derived digests are also checked directly: the
+// generator verifies every bundle TS wrote against the root it printed, the
+// Go replay does the same, and TestWriterSameDirectory compares a subset
+// unmasked. The Go twin is relocation in difftest/writer_test.go.
 export type Relocation = { text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string };
 const SELF_DIGEST = /^sha256:[0-9a-f]{64}$/;
+const pointerToken = (key: string | number): string => String(key).split("~").join("~0").split("/").join("~1");
 
 export function relocation(roots: CaseRoots): Relocation {
-  const files = new Map<string, Buffer>();
+  const files: [string, Buffer, string][] = [];
   const walk = (rel: string) => {
     for (const name of readdirSync(join(roots.ws, rel)).sort(byCodeUnit)) {
       const r = rel ? `${rel}/${name}` : name;
       const stat = lstatSync(join(roots.ws, r));
-      if (stat.isDirectory()) walk(r);
-      else if (stat.isFile()) files.set(r, readFileSync(join(roots.ws, r)));
+      if (stat.isDirectory()) { if (name !== ".git") walk(r); }
+      else if (stat.isFile()) { const bytes = readFileSync(join(roots.ws, r)); files.push([r, bytes, bytes.toString("utf8")]); }
     }
   };
   if (existsSync(roots.ws)) walk("");
-  const digests = new Set<string>();
-  const tainted = (text: string) => text.includes(roots.root) || [...digests].some((d) => text.includes(d));
-  const visit = (value: unknown): void => {
+  const names = new Map<string, string>();
+  let found: string[] = [];
+  const add = (hex: string, name: string) => { if (!names.has(hex)) { names.set(hex, name); found.push(hex); } };
+  const tainted = (text: string) => text.includes(roots.root) || [...names.keys()].some((d) => text.includes(d));
+  const visit = (value: unknown, rel: string, pointer: string): void => {
     if (value === null || typeof value !== "object") return;
-    const text = canonicalJson(value);
-    if (!tainted(text)) return;
-    digests.add(digestJson(value).slice(7));
+    if (!tainted(canonicalJson(value))) return;
+    add(digestJson(value).slice(7), `json:${rel}#${pointer}`);
     if (!Array.isArray(value)) {
       const record = value as Record<string, unknown>;
       for (const [key, member] of Object.entries(record)) {
         if (typeof member !== "string" || !SELF_DIGEST.test(member)) continue;
         const { [key]: _self, ...rest } = record;
-        if (digestJson(rest) === member) digests.add(member.slice(7));
+        if (digestJson(rest) === member) add(member.slice(7), `self:${rel}#${pointer}/${pointerToken(key)}`);
       }
     }
-    for (const member of Object.values(value)) visit(member);
+    for (const [key, member] of Object.entries(value)) visit(member, rel, `${pointer}/${pointerToken(key)}`);
   };
-  for (let size = -1; size !== digests.size;) {
-    size = digests.size;
-    for (const bytes of files.values()) {
-      const text = bytes.toString("utf8");
-      if (!tainted(text)) continue;
-      digests.add(sha256(bytes));
-      try { visit(JSON.parse(text)); } catch { /* not JSON */ }
+  let frontier = [roots.root];
+  while (frontier.length > 0) {
+    found = [];
+    for (const [rel, bytes, text] of files) {
+      if (!frontier.some((needle) => text.includes(needle))) continue;
+      add(sha256(bytes), `file:${rel}`);
+      try { visit(JSON.parse(text), rel, ""); } catch { /* not JSON */ }
     }
+    frontier = found;
   }
-  const sorted = [...digests].sort(byCodeUnit);
+  const sorted = [...names.keys()].sort(byCodeUnit);
   const text = (s: string): string => {
     let out = normalizeWriter(s, roots);
-    for (const d of sorted) out = out.split(d).join("<PATHDIGEST>");
+    for (const d of sorted) out = out.split(d).join(`<PATHDIGEST:${names.get(d)}>`);
     return out;
   };
   return {
     text,
-    fileDigest: (_rel, bytes) => (digests.has(sha256(bytes)) ? sha256(text(bytes.toString("utf8"))) : sha256(bytes))
+    fileDigest: (_rel, bytes) => (names.has(sha256(bytes)) ? sha256(text(bytes.toString("utf8"))) : sha256(bytes))
   };
 }
 
@@ -214,13 +222,15 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       const r = await runCli(roots, argv.map((a) => substitute(a, roots)), writerEnv(roots, t.id, t.fakeDocker, env));
       const reloc = relocation(roots);
       const after = treeEntries(roots.ws, reloc.fileDigest);
+      const tree = treeDigest(roots.ws, reloc.fileDigest);
       const records = readArgvLog(roots.argvLog);
+      // After the tree and the argv log are read, like the Go replay.
       await crossVerify(t.id, inv, roots, r.stdout);
       // Windows runs no sh recorder: a case that records argv is POSIX-only.
       if (records.length > 0 && !t.posixOnly) throw new Error(`${t.id}: records git/docker argv but is not posixOnly`);
       lines.push(JSON.stringify({
         case: t.id, inv, stdout: reloc.text(r.stdout), stderr: reloc.text(r.stderr), exit: r.exit,
-        tree: treeDigest(roots.ws, reloc.fileDigest), modes: modesDigest(after), files: changedFiles(before, after),
+        tree, modes: modesDigest(after), files: changedFiles(before, after),
         argv: records.map((record) => normalizeRecord(record, roots, reloc))
       }));
     }

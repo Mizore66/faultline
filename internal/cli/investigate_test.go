@@ -36,6 +36,10 @@ func TestInvestigateUsageAndGuards(t *testing.T) {
 		{[]string{"investigate", "git"}, "FaultLine error: Missing required option: --proposal\nNext: pnpm fl help\n"},
 		{[]string{"investigate", "git", "--proposal", "p", "--repair-thread-id", "-bad"},
 			"FaultLine error: --repair-thread-id must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).\nNext: pnpm fl help\n"},
+		{[]string{"investigate", "git", "--proposal", "p", "--repair-thread-id"},
+			"FaultLine error: --repair-thread-id must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).\nNext: pnpm fl help\n"},
+		{[]string{"investigate", "git", "--witness-draft-thread-id", "--proposal", "p"},
+			"FaultLine error: --witness-draft-thread-id must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).\nNext: pnpm fl help\n"},
 		{[]string{"investigate", "git", "--witness-draft-thread-id", "", "--repair-thread-id", "-bad"},
 			"FaultLine error: --witness-draft-thread-id must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).\nNext: pnpm fl help\n"},
 	} {

@@ -51,9 +51,6 @@ type writerResult struct {
 	Argv           []string
 	// contents are the bytes of the regular files in Files, for the report.
 	contents map[string][]byte
-	// bundle and rootDigest are the proof bundle the invocation wrote and
-	// the root it printed ("" when none), for the cross-verification.
-	bundle, rootDigest string
 }
 
 var (
@@ -403,18 +400,28 @@ func changedFiles(before, after map[string]string) map[string]string {
 
 // relocated is gen-writers.ts relocation: see there.
 type relocated struct {
-	roots   writerRoots
-	digests map[string]bool
-	sorted  []string
+	roots  writerRoots
+	names  map[string]string // digest hex -> provenance name
+	sorted []string
 }
 
 var selfDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
+// pointerToken escapes a JSON pointer reference token.
+func pointerToken(key string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(key, "~", "~0"), "/", "~1")
+}
+
 // relocation ports gen-writers.ts relocation: the digests in the tree that
-// depend on the case paths, to mask as <PATHDIGEST>.
+// depend on the case paths, each named by where it was first derived.
 func relocation(t *testing.T, r writerRoots) *relocated {
 	t.Helper()
-	var files [][]byte
+	type file struct {
+		rel   string
+		bytes []byte
+		text  string
+	}
+	var files []file
 	var walk func(rel string)
 	walk = func(rel string) {
 		names, err := nodefs.ReadDirNames(filepath.Join(r.ws, filepath.FromSlash(rel)))
@@ -433,25 +440,34 @@ func relocation(t *testing.T, r writerRoots) *relocated {
 			}
 			switch {
 			case info.IsDir():
-				walk(rr)
+				if name != ".git" {
+					walk(rr)
+				}
 			case info.Mode().IsRegular():
 				b, err := os.ReadFile(path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				files = append(files, b)
+				files = append(files, file{rr, b, jsstr.DecodeUTF8(b)})
 			}
 		}
 	}
 	if _, err := os.Stat(r.ws); err == nil {
 		walk("")
 	}
-	rel := &relocated{roots: r, digests: map[string]bool{}}
+	rel := &relocated{roots: r, names: map[string]string{}}
+	var found []string
+	add := func(hex, name string) {
+		if _, ok := rel.names[hex]; !ok {
+			rel.names[hex] = name
+			found = append(found, hex)
+		}
+	}
 	tainted := func(text string) bool {
 		if strings.Contains(text, r.root) {
 			return true
 		}
-		for d := range rel.digests {
+		for d := range rel.names {
 			if strings.Contains(text, d) {
 				return true
 			}
@@ -465,8 +481,8 @@ func relocation(t *testing.T, r writerRoots) *relocated {
 		}
 		return d
 	}
-	var visit func(v jsjson.Value)
-	visit = func(v jsjson.Value) {
+	var visit func(v jsjson.Value, path, pointer string)
+	visit = func(v jsjson.Value, path, pointer string) {
 		if v.Kind() != jsjson.Object && v.Kind() != jsjson.Array {
 			return
 		}
@@ -477,65 +493,100 @@ func relocation(t *testing.T, r writerRoots) *relocated {
 		if !tainted(text) {
 			return
 		}
-		rel.digests[digestOf(v)[7:]] = true
-		if v.Kind() == jsjson.Object {
-			o := v.Obj()
-			for _, key := range o.Keys() {
-				member := o.Field(key)
-				if member.Kind() != jsjson.String || !selfDigest.MatchString(member.Str()) {
-					continue
-				}
-				rest := jsjson.NewObj()
-				for _, k := range o.Keys() {
-					if k != key {
-						rest.Set(k, o.Field(k))
-					}
-				}
-				if digestOf(jsjson.MakeObject(rest)) == member.Str() {
-					rel.digests[member.Str()[7:]] = true
-				}
-			}
-			for _, key := range o.Keys() {
-				visit(o.Field(key))
+		add(digestOf(v)[7:], "json:"+path+"#"+pointer)
+		if v.Kind() == jsjson.Array {
+			for i, item := range v.Items() {
+				visit(item, path, pointer+"/"+strconv.Itoa(i))
 			}
 			return
 		}
-		for _, item := range v.Items() {
-			visit(item)
-		}
-	}
-	for size := -1; size != len(rel.digests); {
-		size = len(rel.digests)
-		for _, b := range files {
-			text := jsstr.DecodeUTF8(b)
-			if !tainted(text) {
+		o := v.Obj()
+		for _, key := range o.Keys() {
+			member := o.Field(key)
+			if member.Kind() != jsjson.String || !selfDigest.MatchString(member.Str()) {
 				continue
 			}
-			rel.digests[canonical.SHA256HexBytes(b)] = true
-			if v, err := jsjson.Parse(text); err == nil {
-				visit(v)
+			rest := jsjson.NewObj()
+			for _, k := range o.Keys() {
+				if k != key {
+					rest.Set(k, o.Field(k))
+				}
+			}
+			if digestOf(jsjson.MakeObject(rest)) == member.Str() {
+				add(member.Str()[7:], "self:"+path+"#"+pointer+"/"+pointerToken(key))
 			}
 		}
+		for _, key := range o.Keys() {
+			visit(o.Field(key), path, pointer+"/"+pointerToken(key))
+		}
 	}
-	rel.sorted = slices.Sorted(maps.Keys(rel.digests))
+	for frontier := []string{r.root}; len(frontier) > 0; {
+		found = nil
+		for _, f := range files {
+			if !slices.ContainsFunc(frontier, func(needle string) bool { return strings.Contains(f.text, needle) }) {
+				continue
+			}
+			add(canonical.SHA256HexBytes(f.bytes), "file:"+f.rel)
+			if v, err := jsjson.Parse(f.text); err == nil {
+				visit(v, f.rel, "")
+			}
+		}
+		frontier = found
+	}
+	rel.sorted = slices.Sorted(maps.Keys(rel.names))
 	return rel
 }
 
-// text masks the case paths, then every path-dependent digest.
+// text masks the case paths, then every path-dependent digest by its name.
 func (rel *relocated) text(s string) string {
 	out := normalizeWriter(s, rel.roots)
 	for _, d := range rel.sorted {
-		out = strings.ReplaceAll(out, d, "<PATHDIGEST>")
+		out = strings.ReplaceAll(out, d, "<PATHDIGEST:"+rel.names[d]+">")
 	}
 	return out
 }
 
 // fileDigest hashes a path-dependent file's masked text, any other file's bytes.
 func (rel *relocated) fileDigest(_ string, b []byte) string {
-	if d := canonical.SHA256HexBytes(b); !rel.digests[d] {
+	d := canonical.SHA256HexBytes(b)
+	if _, ok := rel.names[d]; !ok {
 		return d
 	}
 	return canonical.SHA256Hex(rel.text(jsstr.DecodeUTF8(b)))
+}
+
+// crossVerify is the spec 2.4 cross-check of a bundle Go wrote: Go `fl
+// verify --expect-root <printed root>` must report it valid, and so must
+// frozen TS when FAULTLINE_NODE_ORACLE=1.
+func crossVerify(t *testing.T, repo string, inv int, id, bundle, root string) {
+	t.Helper()
+	ok := func(out string, code int) bool {
+		return code == 0 && strings.HasPrefix(out, "Integrity: VALID\n") && strings.Contains(out, "\nExternal root: MATCH\n")
+	}
+	stdout, stderr, code := runFlOnce(t, repo, nil, "verify", bundle, "--expect-root", root)
+	if !ok(stdout, code) {
+		t.Fatalf("%s|%d: Go verify of the bundle Go wrote failed (exit %d)\n%s%s", id, inv, code, stdout, stderr)
+	}
+	if os.Getenv("FAULTLINE_NODE_ORACLE") == "1" {
+		if out, code := runTSVerify(t, repo, bundle, root); !ok(out, code) {
+			t.Fatalf("%s|%d: TS verify of the bundle Go wrote failed (exit %d)\n%s", id, inv, code, out)
+		}
+	}
+}
+
+// runTSVerify runs frozen TS `verify <dir> --expect-root <root>`, giving
+// its stdout then stderr and its exit code.
+func runTSVerify(t *testing.T, repo, dir, root string) (string, int) {
+	t.Helper()
+	cmd := exec.Command("node", filepath.Join(repo, "dist", "cli.js"), "verify", dir, "--expect-root", root)
+	cmd.Dir = filepath.Dir(dir)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	var exitErr *exec.ExitError
+	if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
+		t.Fatalf("running node: %v", err)
+	}
+	return stdout.String() + stderr.String(), cmd.ProcessState.ExitCode()
 }
 
 // jsonField is the string at path in a JSON text, "" when absent.
@@ -578,21 +629,7 @@ func normalizeRecord(record string, r writerRoots, reloc *relocated) string {
 // order, like difftest/gen/gen-writers.ts runCase.
 func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult {
 	r := makeWriterRoots(t)
-	copyScenario(t, repo, tpl.Scenario, r.ws)
-	for _, raw := range tpl.Mutations {
-		m := template{substituteDeep(jsjson.MakeObject(raw.fields), r).Obj()}
-		file := m.str("file")
-		if pathOps[m.str("op")] {
-			file = "."
-			if p, ok := m.fields.Get("path"); ok {
-				file = p.Str()
-			}
-		}
-		if !applyMutation(r.ws, testCase{id: tpl.ID, base: "writer", file: file, tpl: &m}) {
-			t.Fatalf("could not apply mutation %s", m.str("op"))
-		}
-	}
-	resetModes(t, r.ws)
+	prepareWriterCase(t, repo, tpl, r)
 	var out []writerResult
 	for inv, argv := range tpl.Argv {
 		before := treeEntries(t, r.ws, relocation(t, r).fileDigest)
@@ -618,9 +655,9 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 		for _, record := range readArgvLog(r.argvLog) {
 			res.Argv = append(res.Argv, normalizeRecord(record, r, reloc))
 		}
-		res.bundle, _ = writtenBundle(stdout.String())
-		if res.bundle != "" {
-			res.rootDigest = jsonField(stdout.String(), "proofBundle", "rootDigest")
+		// After the tree and the argv log are read (gen-writers.ts runCase).
+		if bundle, ok := writtenBundle(stdout.String()); ok {
+			crossVerify(t, repo, inv, tpl.ID, bundle, jsonField(stdout.String(), "proofBundle", "rootDigest"))
 		}
 		for rel, entry := range res.Files {
 			if fileEntry.MatchString(entry) {
@@ -630,6 +667,28 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 		out = append(out, res)
 	}
 	return out
+}
+
+// prepareWriterCase fills the case's workspace: the scenario, then the
+// template's mutations (with <WS>, <TMP>, <HOME> substituted), then
+// resetModes.
+func prepareWriterCase(t *testing.T, repo string, tpl writerTemplate, r writerRoots) {
+	t.Helper()
+	copyScenario(t, repo, tpl.Scenario, r.ws)
+	for _, raw := range tpl.Mutations {
+		m := template{substituteDeep(jsjson.MakeObject(raw.fields), r).Obj()}
+		file := m.str("file")
+		if pathOps[m.str("op")] {
+			file = "."
+			if p, ok := m.fields.Get("path"); ok {
+				file = p.Str()
+			}
+		}
+		if !applyMutation(r.ws, testCase{id: tpl.ID, base: "writer", file: file, tpl: &m}) {
+			t.Fatalf("could not apply mutation %s", m.str("op"))
+		}
+	}
+	resetModes(t, r.ws)
 }
 
 // compareWriter fails on the first difference from the golden line; a tree
@@ -725,14 +784,6 @@ func TestWriterReplay(t *testing.T) {
 					t.Fatalf("no golden for %s", key)
 				}
 				compareWriter(t, key, got, want) // stdout, stderr, exit, argv, tree and modes (naming changed files)
-				if got.bundle != "" {
-					// Spec 2.4 cross-check: Go verifies what Go wrote against the root it printed.
-					out, stderr, code := runFlOnce(t, repo, nil, "verify", got.bundle, "--expect-root", got.rootDigest)
-					out += stderr
-					if code != 0 || !strings.HasPrefix(out, "Integrity: VALID\n") || !strings.Contains(out, "\nExternal root: MATCH\n") {
-						t.Fatalf("%s: Go verify of the bundle Go wrote failed (exit %d)\n%s", key, code, out)
-					}
-				}
 			}
 		})
 	}
@@ -922,17 +973,7 @@ func tsVerify(t *testing.T) func(string) (string, int) {
 	t.Helper()
 	oracle.Skip(t)
 	repo := repoRoot(t)
-	return func(dir string) (string, int) {
-		cmd := exec.Command("node", filepath.Join(repo, "dist", "cli.js"), "verify", dir, "--expect-root", expectedRoot(t, dir))
-		cmd.Dir = filepath.Dir(dir)
-		var out bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &out
-		var exitErr *exec.ExitError
-		if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
-			t.Fatalf("running node: %v", err)
-		}
-		return out.String(), cmd.ProcessState.ExitCode()
-	}
+	return func(dir string) (string, int) { return runTSVerify(t, repo, dir, expectedRoot(t, dir)) }
 }
 
 // tamperManifestField sets the dotted field of the bundle's manifest.json to
