@@ -345,7 +345,7 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 
 	runIDs, executionIDs, nonces := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	attemptsByState := map[float64]map[float64]bool{}
-	commandDigestValue := commandDigest(frozen.Get("proposal", "witness", "command").Str())
+	commandDigestValue := CommandDigest(frozen.Get("proposal", "witness", "command").Str())
 	for _, run := range runs {
 		runID := run.Get("runId").Str()
 		if runID != expectedRunID(run) {

@@ -9,6 +9,7 @@
 package redaction
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -85,6 +86,8 @@ type candidate struct {
 	kind, confidence string
 	priority         int
 }
+
+const unsupportedValueWarning = "UNSUPPORTED_VALUE: non-JSON values are replaced before event capture."
 
 // Port of src/redaction.ts:104 RedactionContext.
 type context struct {
@@ -314,6 +317,13 @@ func (ctx *context) redactValue(value jsjson.Value, location string) jsjson.Valu
 	switch value.Kind() {
 	case jsjson.String:
 		return jsjson.MakeString(ctx.redactString(value.Str(), location))
+	case jsjson.Undefined:
+		// src/redaction.ts:328: undefined (an absent member a caller passes,
+		// such as a missing incidentPacket) becomes a placeholder string.
+		if !slices.Contains(ctx.warnings, unsupportedValueWarning) {
+			ctx.warnings = append(ctx.warnings, unsupportedValueWarning)
+		}
+		return jsjson.MakeString("<FAULTLINE_UNSUPPORTED_VALUE:undefined>")
 	case jsjson.Array:
 		items := value.Items()
 		out := make([]jsjson.Value, len(items))

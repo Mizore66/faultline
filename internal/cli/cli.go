@@ -56,6 +56,8 @@ func dispatch(e *env, args []string) error {
 	switch {
 	case command == "verify":
 		return verifyCommand(e, rest)
+	case command == "witness":
+		return witnessCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:
