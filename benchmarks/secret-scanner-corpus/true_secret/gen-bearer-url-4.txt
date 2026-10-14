@@ -1,0 +1,1 @@
+GET https://api.example.test/v1/items?id=4&h=Bearer NUmvEZQTmbkRhB6EVWdJzDvZ+9f6IVONPijuEHzPJuM&page=2

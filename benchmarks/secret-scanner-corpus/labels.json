@@ -7,7 +7,7 @@
     "SEC-09 expanded corpus remains LIMITED until FP/FN confidence intervals are published from this labeled set."
   ],
   "generatedBy": "scripts/expand-secret-scanner-corpus.mjs",
-  "caseCount": 151,
+  "caseCount": 241,
   "cases": [
     {
       "id": "openai-api-key",
@@ -1056,6 +1056,636 @@
       "label": "should_miss",
       "family": "base64-wrapped",
       "note": "Encoded credential without markers."
+    },
+    {
+      "id": "openai-unicode-wrap-0",
+      "path": "true_secret/gen-openai-unicode-wrap-0.txt",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "openai-unicode-wrap"
+    },
+    {
+      "id": "openai-unicode-wrap-1",
+      "path": "true_secret/gen-openai-unicode-wrap-1.txt",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "openai-unicode-wrap"
+    },
+    {
+      "id": "openai-unicode-wrap-2",
+      "path": "true_secret/gen-openai-unicode-wrap-2.txt",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "openai-unicode-wrap"
+    },
+    {
+      "id": "openai-unicode-wrap-3",
+      "path": "true_secret/gen-openai-unicode-wrap-3.txt",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "openai-unicode-wrap"
+    },
+    {
+      "id": "openai-unicode-wrap-4",
+      "path": "true_secret/gen-openai-unicode-wrap-4.txt",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "openai-unicode-wrap"
+    },
+    {
+      "id": "openai-unicode-wrap-5",
+      "path": "true_secret/gen-openai-unicode-wrap-5.txt",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "openai-unicode-wrap"
+    },
+    {
+      "id": "aws-secret-crlf-0",
+      "path": "true_secret/gen-aws-secret-crlf-0.txt",
+      "label": "true_secret",
+      "expectedKind": "AWS_SECRET_ACCESS_KEY",
+      "family": "aws-secret-crlf"
+    },
+    {
+      "id": "aws-secret-crlf-1",
+      "path": "true_secret/gen-aws-secret-crlf-1.txt",
+      "label": "true_secret",
+      "expectedKind": "AWS_SECRET_ACCESS_KEY",
+      "family": "aws-secret-crlf"
+    },
+    {
+      "id": "aws-secret-crlf-2",
+      "path": "true_secret/gen-aws-secret-crlf-2.txt",
+      "label": "true_secret",
+      "expectedKind": "AWS_SECRET_ACCESS_KEY",
+      "family": "aws-secret-crlf"
+    },
+    {
+      "id": "aws-secret-crlf-3",
+      "path": "true_secret/gen-aws-secret-crlf-3.txt",
+      "label": "true_secret",
+      "expectedKind": "AWS_SECRET_ACCESS_KEY",
+      "family": "aws-secret-crlf"
+    },
+    {
+      "id": "aws-secret-crlf-4",
+      "path": "true_secret/gen-aws-secret-crlf-4.txt",
+      "label": "true_secret",
+      "expectedKind": "AWS_SECRET_ACCESS_KEY",
+      "family": "aws-secret-crlf"
+    },
+    {
+      "id": "aws-secret-crlf-5",
+      "path": "true_secret/gen-aws-secret-crlf-5.txt",
+      "label": "true_secret",
+      "expectedKind": "AWS_SECRET_ACCESS_KEY",
+      "family": "aws-secret-crlf"
+    },
+    {
+      "id": "pem-crlf-0",
+      "path": "true_secret/gen-pem-crlf-0.txt",
+      "label": "true_secret",
+      "expectedKind": "PRIVATE_KEY_BLOCK",
+      "family": "pem-crlf"
+    },
+    {
+      "id": "pem-crlf-1",
+      "path": "true_secret/gen-pem-crlf-1.txt",
+      "label": "true_secret",
+      "expectedKind": "PRIVATE_KEY_BLOCK",
+      "family": "pem-crlf"
+    },
+    {
+      "id": "pem-crlf-2",
+      "path": "true_secret/gen-pem-crlf-2.txt",
+      "label": "true_secret",
+      "expectedKind": "PRIVATE_KEY_BLOCK",
+      "family": "pem-crlf"
+    },
+    {
+      "id": "pem-crlf-3",
+      "path": "true_secret/gen-pem-crlf-3.txt",
+      "label": "true_secret",
+      "expectedKind": "PRIVATE_KEY_BLOCK",
+      "family": "pem-crlf"
+    },
+    {
+      "id": "pem-crlf-4",
+      "path": "true_secret/gen-pem-crlf-4.txt",
+      "label": "true_secret",
+      "expectedKind": "PRIVATE_KEY_BLOCK",
+      "family": "pem-crlf"
+    },
+    {
+      "id": "pem-crlf-5",
+      "path": "true_secret/gen-pem-crlf-5.txt",
+      "label": "true_secret",
+      "expectedKind": "PRIVATE_KEY_BLOCK",
+      "family": "pem-crlf"
+    },
+    {
+      "id": "bearer-url-0",
+      "path": "true_secret/gen-bearer-url-0.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BEARER",
+      "family": "bearer-url"
+    },
+    {
+      "id": "bearer-url-1",
+      "path": "true_secret/gen-bearer-url-1.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BEARER",
+      "family": "bearer-url"
+    },
+    {
+      "id": "bearer-url-2",
+      "path": "true_secret/gen-bearer-url-2.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BEARER",
+      "family": "bearer-url"
+    },
+    {
+      "id": "bearer-url-3",
+      "path": "true_secret/gen-bearer-url-3.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BEARER",
+      "family": "bearer-url"
+    },
+    {
+      "id": "bearer-url-4",
+      "path": "true_secret/gen-bearer-url-4.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BEARER",
+      "family": "bearer-url"
+    },
+    {
+      "id": "bearer-url-5",
+      "path": "true_secret/gen-bearer-url-5.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BEARER",
+      "family": "bearer-url"
+    },
+    {
+      "id": "generic-yaml-0",
+      "path": "true_secret/gen-generic-yaml-0.txt",
+      "label": "true_secret",
+      "expectedKind": "GENERIC_SECRET_ASSIGNMENT",
+      "family": "generic-yaml"
+    },
+    {
+      "id": "generic-yaml-1",
+      "path": "true_secret/gen-generic-yaml-1.txt",
+      "label": "true_secret",
+      "expectedKind": "GENERIC_SECRET_ASSIGNMENT",
+      "family": "generic-yaml"
+    },
+    {
+      "id": "generic-yaml-2",
+      "path": "true_secret/gen-generic-yaml-2.txt",
+      "label": "true_secret",
+      "expectedKind": "GENERIC_SECRET_ASSIGNMENT",
+      "family": "generic-yaml"
+    },
+    {
+      "id": "generic-yaml-3",
+      "path": "true_secret/gen-generic-yaml-3.txt",
+      "label": "true_secret",
+      "expectedKind": "GENERIC_SECRET_ASSIGNMENT",
+      "family": "generic-yaml"
+    },
+    {
+      "id": "generic-yaml-4",
+      "path": "true_secret/gen-generic-yaml-4.txt",
+      "label": "true_secret",
+      "expectedKind": "GENERIC_SECRET_ASSIGNMENT",
+      "family": "generic-yaml"
+    },
+    {
+      "id": "generic-yaml-5",
+      "path": "true_secret/gen-generic-yaml-5.txt",
+      "label": "true_secret",
+      "expectedKind": "GENERIC_SECRET_ASSIGNMENT",
+      "family": "generic-yaml"
+    },
+    {
+      "id": "basic-header-folded-0",
+      "path": "true_secret/gen-basic-header-folded-0.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BASIC",
+      "family": "basic-header-folded"
+    },
+    {
+      "id": "basic-header-folded-1",
+      "path": "true_secret/gen-basic-header-folded-1.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BASIC",
+      "family": "basic-header-folded"
+    },
+    {
+      "id": "basic-header-folded-2",
+      "path": "true_secret/gen-basic-header-folded-2.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BASIC",
+      "family": "basic-header-folded"
+    },
+    {
+      "id": "basic-header-folded-3",
+      "path": "true_secret/gen-basic-header-folded-3.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BASIC",
+      "family": "basic-header-folded"
+    },
+    {
+      "id": "basic-header-folded-4",
+      "path": "true_secret/gen-basic-header-folded-4.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BASIC",
+      "family": "basic-header-folded"
+    },
+    {
+      "id": "basic-header-folded-5",
+      "path": "true_secret/gen-basic-header-folded-5.txt",
+      "label": "true_secret",
+      "expectedKind": "AUTHORIZATION_BASIC",
+      "family": "basic-header-folded"
+    },
+    {
+      "id": "fp-placeholder-like-0",
+      "path": "false_positive/gen-placeholder-like-0.txt",
+      "label": "false_positive",
+      "family": "placeholder-like",
+      "note": "Placeholder-shaped text; FP if redacted."
+    },
+    {
+      "id": "fp-placeholder-like-1",
+      "path": "false_positive/gen-placeholder-like-1.txt",
+      "label": "false_positive",
+      "family": "placeholder-like",
+      "note": "Placeholder-shaped text; FP if redacted."
+    },
+    {
+      "id": "fp-placeholder-like-2",
+      "path": "false_positive/gen-placeholder-like-2.txt",
+      "label": "false_positive",
+      "family": "placeholder-like",
+      "note": "Placeholder-shaped text; FP if redacted."
+    },
+    {
+      "id": "fp-placeholder-like-3",
+      "path": "false_positive/gen-placeholder-like-3.txt",
+      "label": "false_positive",
+      "family": "placeholder-like",
+      "note": "Placeholder-shaped text; FP if redacted."
+    },
+    {
+      "id": "fp-placeholder-like-4",
+      "path": "false_positive/gen-placeholder-like-4.txt",
+      "label": "false_positive",
+      "family": "placeholder-like",
+      "note": "Placeholder-shaped text; FP if redacted."
+    },
+    {
+      "id": "fp-placeholder-like-5",
+      "path": "false_positive/gen-placeholder-like-5.txt",
+      "label": "false_positive",
+      "family": "placeholder-like",
+      "note": "Placeholder-shaped text; FP if redacted."
+    },
+    {
+      "id": "fp-long-s-key-0",
+      "path": "false_positive/gen-long-s-key-0.txt",
+      "label": "false_positive",
+      "family": "long-s-key",
+      "note": "Long-s and Kelvin sign look like key letters; not secret names."
+    },
+    {
+      "id": "fp-long-s-key-1",
+      "path": "false_positive/gen-long-s-key-1.txt",
+      "label": "false_positive",
+      "family": "long-s-key",
+      "note": "Long-s and Kelvin sign look like key letters; not secret names."
+    },
+    {
+      "id": "fp-long-s-key-2",
+      "path": "false_positive/gen-long-s-key-2.txt",
+      "label": "false_positive",
+      "family": "long-s-key",
+      "note": "Long-s and Kelvin sign look like key letters; not secret names."
+    },
+    {
+      "id": "fp-long-s-key-3",
+      "path": "false_positive/gen-long-s-key-3.txt",
+      "label": "false_positive",
+      "family": "long-s-key",
+      "note": "Long-s and Kelvin sign look like key letters; not secret names."
+    },
+    {
+      "id": "fp-long-s-key-4",
+      "path": "false_positive/gen-long-s-key-4.txt",
+      "label": "false_positive",
+      "family": "long-s-key",
+      "note": "Long-s and Kelvin sign look like key letters; not secret names."
+    },
+    {
+      "id": "fp-long-s-key-5",
+      "path": "false_positive/gen-long-s-key-5.txt",
+      "label": "false_positive",
+      "family": "long-s-key",
+      "note": "Long-s and Kelvin sign look like key letters; not secret names."
+    },
+    {
+      "id": "fp-docs-token-word-0",
+      "path": "false_positive/gen-docs-token-word-0.txt",
+      "label": "false_positive",
+      "family": "docs-token-word",
+      "note": "The word token in prose, without = or :."
+    },
+    {
+      "id": "fp-docs-token-word-1",
+      "path": "false_positive/gen-docs-token-word-1.txt",
+      "label": "false_positive",
+      "family": "docs-token-word",
+      "note": "The word token in prose, without = or :."
+    },
+    {
+      "id": "fp-docs-token-word-2",
+      "path": "false_positive/gen-docs-token-word-2.txt",
+      "label": "false_positive",
+      "family": "docs-token-word",
+      "note": "The word token in prose, without = or :."
+    },
+    {
+      "id": "fp-docs-token-word-3",
+      "path": "false_positive/gen-docs-token-word-3.txt",
+      "label": "false_positive",
+      "family": "docs-token-word",
+      "note": "The word token in prose, without = or :."
+    },
+    {
+      "id": "fp-docs-token-word-4",
+      "path": "false_positive/gen-docs-token-word-4.txt",
+      "label": "false_positive",
+      "family": "docs-token-word",
+      "note": "The word token in prose, without = or :."
+    },
+    {
+      "id": "fp-docs-token-word-5",
+      "path": "false_positive/gen-docs-token-word-5.txt",
+      "label": "false_positive",
+      "family": "docs-token-word",
+      "note": "The word token in prose, without = or :."
+    },
+    {
+      "id": "miss-split-across-lines-0",
+      "path": "should_miss/gen-split-across-lines-0.txt",
+      "label": "should_miss",
+      "family": "split-across-lines",
+      "note": "Key split by a newline."
+    },
+    {
+      "id": "miss-split-across-lines-1",
+      "path": "should_miss/gen-split-across-lines-1.txt",
+      "label": "should_miss",
+      "family": "split-across-lines",
+      "note": "Key split by a newline."
+    },
+    {
+      "id": "miss-split-across-lines-2",
+      "path": "should_miss/gen-split-across-lines-2.txt",
+      "label": "should_miss",
+      "family": "split-across-lines",
+      "note": "Key split by a newline."
+    },
+    {
+      "id": "miss-split-across-lines-3",
+      "path": "should_miss/gen-split-across-lines-3.txt",
+      "label": "should_miss",
+      "family": "split-across-lines",
+      "note": "Key split by a newline."
+    },
+    {
+      "id": "miss-split-across-lines-4",
+      "path": "should_miss/gen-split-across-lines-4.txt",
+      "label": "should_miss",
+      "family": "split-across-lines",
+      "note": "Key split by a newline."
+    },
+    {
+      "id": "miss-split-across-lines-5",
+      "path": "should_miss/gen-split-across-lines-5.txt",
+      "label": "should_miss",
+      "family": "split-across-lines",
+      "note": "Key split by a newline."
+    },
+    {
+      "id": "miss-split-concat-0",
+      "path": "should_miss/gen-split-concat-0.txt",
+      "label": "should_miss",
+      "family": "split-concat",
+      "note": "Key assembled by concatenation."
+    },
+    {
+      "id": "miss-split-concat-1",
+      "path": "should_miss/gen-split-concat-1.txt",
+      "label": "should_miss",
+      "family": "split-concat",
+      "note": "Key assembled by concatenation."
+    },
+    {
+      "id": "miss-split-concat-2",
+      "path": "should_miss/gen-split-concat-2.txt",
+      "label": "should_miss",
+      "family": "split-concat",
+      "note": "Key assembled by concatenation."
+    },
+    {
+      "id": "miss-split-concat-3",
+      "path": "should_miss/gen-split-concat-3.txt",
+      "label": "should_miss",
+      "family": "split-concat",
+      "note": "Key assembled by concatenation."
+    },
+    {
+      "id": "miss-split-concat-4",
+      "path": "should_miss/gen-split-concat-4.txt",
+      "label": "should_miss",
+      "family": "split-concat",
+      "note": "Key assembled by concatenation."
+    },
+    {
+      "id": "miss-split-concat-5",
+      "path": "should_miss/gen-split-concat-5.txt",
+      "label": "should_miss",
+      "family": "split-concat",
+      "note": "Key assembled by concatenation."
+    },
+    {
+      "id": "miss-url-encoded-0",
+      "path": "should_miss/gen-url-encoded-0.txt",
+      "label": "should_miss",
+      "family": "url-encoded",
+      "note": "First key character percent-encoded."
+    },
+    {
+      "id": "miss-url-encoded-1",
+      "path": "should_miss/gen-url-encoded-1.txt",
+      "label": "should_miss",
+      "family": "url-encoded",
+      "note": "First key character percent-encoded."
+    },
+    {
+      "id": "miss-url-encoded-2",
+      "path": "should_miss/gen-url-encoded-2.txt",
+      "label": "should_miss",
+      "family": "url-encoded",
+      "note": "First key character percent-encoded."
+    },
+    {
+      "id": "miss-url-encoded-3",
+      "path": "should_miss/gen-url-encoded-3.txt",
+      "label": "should_miss",
+      "family": "url-encoded",
+      "note": "First key character percent-encoded."
+    },
+    {
+      "id": "miss-url-encoded-4",
+      "path": "should_miss/gen-url-encoded-4.txt",
+      "label": "should_miss",
+      "family": "url-encoded",
+      "note": "First key character percent-encoded."
+    },
+    {
+      "id": "miss-url-encoded-5",
+      "path": "should_miss/gen-url-encoded-5.txt",
+      "label": "should_miss",
+      "family": "url-encoded",
+      "note": "First key character percent-encoded."
+    },
+    {
+      "id": "miss-lone-surrogate-break-0",
+      "path": "should_miss/gen-lone-surrogate-break-0.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "miss-lone-surrogate-break-1",
+      "path": "should_miss/gen-lone-surrogate-break-1.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "miss-lone-surrogate-break-2",
+      "path": "should_miss/gen-lone-surrogate-break-2.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "miss-lone-surrogate-break-3",
+      "path": "should_miss/gen-lone-surrogate-break-3.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "miss-lone-surrogate-break-4",
+      "path": "should_miss/gen-lone-surrogate-break-4.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "miss-lone-surrogate-break-5",
+      "path": "should_miss/gen-lone-surrogate-break-5.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "tiny-binary-0",
+      "path": "true_secret/gen-tiny-binary-0.bin",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "tiny-binary"
+    },
+    {
+      "id": "tiny-binary-1",
+      "path": "should_miss/gen-tiny-binary-1.bin",
+      "label": "should_miss",
+      "family": "tiny-binary",
+      "note": "Binary noise around a key; labelled from TS behaviour."
+    },
+    {
+      "id": "tiny-binary-2",
+      "path": "true_secret/gen-tiny-binary-2.bin",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "tiny-binary"
+    },
+    {
+      "id": "tiny-binary-3",
+      "path": "true_secret/gen-tiny-binary-3.bin",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "tiny-binary"
+    },
+    {
+      "id": "tiny-binary-4",
+      "path": "true_secret/gen-tiny-binary-4.bin",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "tiny-binary"
+    },
+    {
+      "id": "tiny-binary-5",
+      "path": "true_secret/gen-tiny-binary-5.bin",
+      "label": "true_secret",
+      "expectedKind": "OPENAI_API_KEY",
+      "family": "tiny-binary"
+    },
+    {
+      "id": "github-json-escaped-0",
+      "path": "true_secret/gen-github-json-escaped-0.txt",
+      "label": "true_secret",
+      "expectedKind": "GITHUB_TOKEN",
+      "family": "github-json-escaped"
+    },
+    {
+      "id": "github-json-escaped-1",
+      "path": "true_secret/gen-github-json-escaped-1.txt",
+      "label": "true_secret",
+      "expectedKind": "GITHUB_TOKEN",
+      "family": "github-json-escaped"
+    },
+    {
+      "id": "github-json-escaped-2",
+      "path": "true_secret/gen-github-json-escaped-2.txt",
+      "label": "true_secret",
+      "expectedKind": "GITHUB_TOKEN",
+      "family": "github-json-escaped"
+    },
+    {
+      "id": "github-json-escaped-3",
+      "path": "true_secret/gen-github-json-escaped-3.txt",
+      "label": "true_secret",
+      "expectedKind": "GITHUB_TOKEN",
+      "family": "github-json-escaped"
+    },
+    {
+      "id": "github-json-escaped-4",
+      "path": "true_secret/gen-github-json-escaped-4.txt",
+      "label": "true_secret",
+      "expectedKind": "GITHUB_TOKEN",
+      "family": "github-json-escaped"
+    },
+    {
+      "id": "github-json-escaped-5",
+      "path": "true_secret/gen-github-json-escaped-5.txt",
+      "label": "true_secret",
+      "expectedKind": "GITHUB_TOKEN",
+      "family": "github-json-escaped"
     }
   ]
 }

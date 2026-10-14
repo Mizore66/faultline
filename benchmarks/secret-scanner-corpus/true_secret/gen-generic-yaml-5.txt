@@ -1,0 +1,2 @@
+service:
+  password: '98f1f580fce82f150cbd7664'
