@@ -76,11 +76,11 @@ func TestHardenedGitTimeoutMessage(t *testing.T) {
 
 func TestHardenedGitArgvAndText(t *testing.T) {
 	repo, head := gitRepo(t)
-	got, err := HardenedGitText([]string{"rev-parse", "HEAD"}, HardenedOptions{Repository: repo})
+	got, err := HardenedGitText(repo, []string{"rev-parse", "HEAD"})
 	if err != nil || got != head {
 		t.Fatal(got, err)
 	}
-	_, err = HardenedGitText([]string{"rev-parse", "--verify", "nope"}, HardenedOptions{Repository: repo})
+	_, err = HardenedGitText(repo, []string{"rev-parse", "--verify", "nope"})
 	if err == nil || !strings.HasPrefix(err.Error(), "Git rev-parse --verify nope failed: fatal: ") {
 		t.Fatal(err)
 	}
@@ -127,6 +127,24 @@ func overlayWitness(path string, bytes []byte, b64 string) jsjson.Value {
 	f := jsjson.NewObj()
 	f.Set("proposal", jsjson.MakeObject(p))
 	return jsjson.MakeObject(f)
+}
+
+func TestRemoveStagedForce(t *testing.T) {
+	dir := t.TempDir()
+	if err := removeForce(filepath.Join(dir, "missing")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "f")
+	os.WriteFile(file, nil, 0o644)
+	if err := removeForce(file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(file); !os.IsNotExist(err) {
+		t.Fatal("file survived")
+	}
+	if err := removeForce(dir); err == nil || err.Error() != "Path is a directory: rm returned EISDIR (is a directory) "+dir {
+		t.Fatal(err)
+	}
 }
 
 func TestMaterializeFrozenOverlays(t *testing.T) {

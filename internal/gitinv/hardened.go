@@ -29,9 +29,10 @@ var gitMaterializationTimeoutMs = 30_000
 // toGitPath ports src/git-materialization.ts:15 toGitPath.
 func toGitPath(path string) string { return strings.ReplaceAll(nodefs.Resolve(path), `\`, "/") }
 
-// MaterializationSafeGitConfig ports src/git-materialization.ts:19
-// MATERIALIZATION_SAFE_GIT_CONFIG, in source order.
-var MaterializationSafeGitConfig = []string{
+// materializationSafeGitConfig ports src/git-materialization.ts:19
+// MATERIALIZATION_SAFE_GIT_CONFIG, in source order. TS freezes it; it stays
+// unexported here, and callers copy it before appending.
+var materializationSafeGitConfig = []string{
 	"-c", "core.hooksPath=/nonexistent/faultline-hooks",
 	"-c", "core.fsmonitor=false",
 	"-c", "core.useBuiltinFSMonitor=false",
@@ -75,10 +76,12 @@ type HardenedOptions struct {
 	HasStdin                                bool
 }
 
-// failed reports `exitCode !== 0 || error !== undefined`.
+// failed is `exitCode !== 0 || error !== undefined`, as at
+// src/git-materialization.ts:199, 222, 264 and 305-319.
 func (r GitRun) failed() bool { return r.ExitCode == nil || *r.ExitCode != 0 || r.Error != "" }
 
-// detail is `stderr.toString("utf8").trim() || error || fallback`.
+// detail is `stderr.toString("utf8").trim() || error || fallback`, as at
+// src/git-materialization.ts:224, 246, 265 and 306-320.
 func (r GitRun) detail(fallback string) string {
 	if s := jsstr.Trim(jsstr.DecodeUTF8(r.Stderr)); s != "" {
 		return s
@@ -142,7 +145,7 @@ func boundedAppend(current, next []byte) []byte {
 // unref()s the timer, which changes nothing here: the child's handle keeps
 // the event loop alive until 'close', and settling clears the timer.
 func RunHardenedGit(args []string, o HardenedOptions) GitRun {
-	argv := append([]string{}, MaterializationSafeGitConfig...)
+	argv := append([]string{}, materializationSafeGitConfig...)
 	if o.GitDir != "" {
 		argv = append(argv, "--git-dir="+toGitPath(o.GitDir))
 	}
@@ -226,10 +229,9 @@ func RunHardenedGit(args []string, o HardenedOptions) GitRun {
 	return GitRun{ExitCode: exit.Code, Stdout: stdout, Stderr: stderr, Error: reason}
 }
 
-// HardenedGitText ports src/git-materialization.ts:197 hardenedGitText
-// (which passes no options beyond the repository).
-func HardenedGitText(args []string, o HardenedOptions) (string, error) {
-	result := RunHardenedGit(args, HardenedOptions{Repository: o.Repository})
+// HardenedGitText ports src/git-materialization.ts:197 hardenedGitText.
+func HardenedGitText(repository string, args []string) (string, error) {
+	result := RunHardenedGit(args, HardenedOptions{Repository: repository})
 	if result.failed() {
 		var parts []string
 		if s := jsstr.Trim(jsstr.DecodeUTF8(result.Stderr)); s != "" {
@@ -287,8 +289,8 @@ func AssertOverlayTargetsNotGitSymlinks(tree OverlayIndexInspector, overlayPaths
 	return nil
 }
 
-// firstWhitespaceField is line.split(/\s+/, 1)[0]: the text before the
-// first JS whitespace character.
+// firstWhitespaceField ports src/git-materialization.ts:229
+// line.split(/\s+/, 1)[0]: the text before the first JS whitespace character.
 func firstWhitespaceField(line string) string {
 	units := jsstr.ToUTF16(line)
 	for i, u := range units {
@@ -343,10 +345,10 @@ type MaterializedTree struct {
 	session             HardenedOptions
 }
 
-// RunGit is runGit(args) without stdin.
+// RunGit ports src/git-materialization.ts:325 runGit, without stdin.
 func (t MaterializedTree) RunGit(args []string) GitRun { return RunHardenedGit(args, t.session) }
 
-// RunGitStdin is runGit(args, stdin).
+// RunGitStdin ports src/git-materialization.ts:325 runGit, with stdin.
 func (t MaterializedTree) RunGitStdin(args []string, stdin []byte) GitRun {
 	o := t.session
 	o.Stdin, o.HasStdin = stdin, true
@@ -360,7 +362,7 @@ func MaterializeGitTree(repository, commit, tempRoot, name string) (Materialized
 	}
 	worktrees := nodefs.Join(tempRoot, "worktrees")
 	indexes := nodefs.Join(tempRoot, "indexes")
-	gitDir, err := HardenedGitText([]string{"rev-parse", "--absolute-git-dir"}, HardenedOptions{Repository: repository})
+	gitDir, err := HardenedGitText(repository, []string{"rev-parse", "--absolute-git-dir"})
 	if err != nil {
 		return MaterializedTree{}, err
 	}
@@ -383,7 +385,7 @@ func MaterializeGitTree(repository, commit, tempRoot, name string) (Materialized
 	cleanup := func() error {
 		err := nodefs.RemoveAll(worktree)
 		if err == nil {
-			err = nodefs.RemoveAll(indexFile)
+			err = removeForce(indexFile) // rm(indexFile, { force: true }) is not recursive
 		}
 		if err != nil {
 			return errors.New(jsexc.Concat("Could not remove temporary materialized tree: ", jsexc.Message(err)))

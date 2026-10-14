@@ -410,8 +410,7 @@ func TestLiveMaterialize(t *testing.T) {
 				}
 				result := "null"
 				if err := tree.Cleanup(); err != nil {
-					b, _ := json.Marshal(err.Error())
-					result = string(b)
+					result = jsjson.Stringify(jsjson.MakeString(err.Error()))
 				}
 				_, statErr := os.Lstat(tree.Worktree)
 				got = append(got, `{"result":`+result+`}`, fmt.Sprint(os.IsNotExist(statErr)), indexesLeft(t, root))

@@ -156,8 +156,27 @@ func writeStagedOverlay(staged, target string, data []byte) error {
 	if err == nil {
 		err = nodefs.Rename(staged, target)
 	}
-	if rmErr := nodefs.RemoveAll(staged); rmErr != nil {
+	if rmErr := removeForce(staged); rmErr != nil {
 		return rmErr
 	}
 	return err
+}
+
+// removeForce is fs.promises.rm(path, { force: true }) in Node 22:
+// validateRmOptions lstat()s the path (ENOENT resolves, any other failure
+// rejects with the lstat error, a directory rejects with ERR_FS_EISDIR),
+// then rimraf removes what is there, which for a non-directory is unlink.
+func removeForce(path string) error {
+	info, err := nodefs.Lstat(path)
+	if err != nil {
+		var e *nodefs.Error
+		if errors.As(err, &e) && e.Code == "ENOENT" {
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() {
+		return errors.New(jsexc.Concat("Path is a directory: rm returned EISDIR (is a directory) ", path))
+	}
+	return nodefs.RemoveAll(path)
 }
