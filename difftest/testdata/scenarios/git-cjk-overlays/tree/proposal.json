@@ -1,0 +1,44 @@
+{
+  "proposalId": "demo-1",
+  "incidentPacket": {
+    "symptom": "The repository state must not be bad.",
+    "ciLog": "state.txt became bad",
+    "repositoryLanguage": "Text",
+    "repositorySummary": "Temporary repository for the writer replay."
+  },
+  "witness": {
+    "behavior": "state.txt must not be bad",
+    "command": "node witness.mjs",
+    "overlays": [
+      {
+        "path": "witness.mjs",
+        "bytesBase64": "ZXhwb3J0IGNvbnN0IGZhdWx0TGluZVdpdG5lc3MgPSAnYXBwcm92ZWQtZXhhY3QtYnl0ZXMnOwo="
+      },
+      {
+        "path": "说明/视图.md",
+        "bytesBase64": "dmlldwo="
+      },
+      {
+        "path": "说明/神经.md",
+        "bytesBase64": "bmVydmUK"
+      },
+      {
+        "path": "🤔.md",
+        "bytesBase64": "dGhpbmtpbmcK"
+      },
+      {
+        "path": "𠀀.txt",
+        "bytesBase64": "ZXh0LWIK"
+      },
+      {
+        "path": "中.txt",
+        "bytesBase64": "bWlkZGxlCg=="
+      }
+    ],
+    "policy": {
+      "network": "disabled",
+      "credentials": "redacted",
+      "timeoutSeconds": 30
+    }
+  }
+}

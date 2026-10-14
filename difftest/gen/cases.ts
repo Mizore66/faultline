@@ -438,7 +438,7 @@ export function caseEnv(c: Case, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...env, PATH: `${dir}:${env.PATH ?? ""}` };
 }
 
-export function treeDigest(root: string): string {
+export function treeDigest(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes)): string {
   const lines: string[] = [];
   if (!existsSync(root)) return sha256(""); // remove-root; Go lists nothing either
   const walk = (rel: string) => {
@@ -449,7 +449,7 @@ export function treeDigest(root: string): string {
       if (stat.isSymbolicLink()) lines.push(`L ${r} ${readlinkSync(path)}`);
       else if (stat.isDirectory()) { lines.push(`D ${r}`); walk(r); }
       else if (!stat.isFile()) lines.push(`S ${r}`); // a FIFO: reading it would block
-      else lines.push(`F ${r} ${sha256(readFileSync(path))}`);
+      else lines.push(`F ${r} ${fileDigest(r, readFileSync(path))}`);
     }
   };
   walk("");

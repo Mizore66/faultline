@@ -24,7 +24,25 @@ var writerScenarios = map[string]bool{
 	"witness-nooverlay-policies": true,
 	"git-two-states-bundle":      true,
 	"ledger-bound":               true,
+	"git-two-states":             true,
+	"git-many-states":            true,
+	"git-max-states-overflow":    true,
+	"git-heterogeneous":          true,
+	"git-ledger-partial":         true,
+	"git-ledger-full":            true,
+	"git-unbound":                true,
+	"git-sha256":                 true,
+	"git-cjk-overlays":           true,
+	"git-non-monotonic":          true,
+	"git-all-pass":               true,
+	"git-all-fail":               true,
+	"git-short-timeout":          true,
 }
+
+// committedGitDir is what a scenario repository's .git directory is
+// committed as: git refuses a path with a .git component (scenarios.ts
+// COMMITTED_GIT_DIR). dirs.txt keeps the real names.
+const committedGitDir = "dot-git"
 
 // copyScenario fills the workspace ws from a committed scenario:
 // <name>/dirs.txt lists every directory, one per line (git keeps no empty
@@ -48,7 +66,37 @@ func copyScenario(t *testing.T, repo, name, ws string) {
 		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, "tree")); err == nil {
-		copyTree(t, filepath.Join(dir, "tree"), ws)
+		copyScenarioTree(t, filepath.Join(dir, "tree"), ws)
+	}
+}
+
+// copyScenarioTree copies a committed tree/ into ws, turning each
+// committedGitDir component back into .git.
+func copyScenarioTree(t *testing.T, from, to string) {
+	t.Helper()
+	err := filepath.WalkDir(from, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(from, path)
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		for i, p := range parts {
+			if p == committedGitDir {
+				parts[i] = ".git"
+			}
+		}
+		dest := filepath.Join(to, filepath.FromSlash(strings.Join(parts, "/")))
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0o755)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dest, b, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

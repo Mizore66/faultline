@@ -5,7 +5,7 @@
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts && pnpm exec tsx difftest/gen/gen-writers.ts
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { sha256 } from "../../src/canonical.js";
+import { canonicalJson, digestJson, sha256 } from "../../src/canonical.js";
 import { PATH_OPS, applyMutation, normalizeWriter, treeDigest, type Template } from "./cases.js";
 import { copyScenario, makeCaseRoots, resetModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
 
@@ -34,13 +34,23 @@ export function substitute(value: string, roots: CaseRoots): string {
   return value.split("<WS>").join(roots.ws).split("<TMP>").join(roots.tmp).split("<HOME>").join(roots.home);
 }
 
+// substituteDeep applies substitute to every string inside a mutation.
+function substituteDeep(value: unknown, roots: CaseRoots): unknown {
+  if (typeof value === "string") return substitute(value, roots);
+  if (Array.isArray(value)) return value.map((item) => substituteDeep(item, roots));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, substituteDeep(v, roots)]));
+  }
+  return value;
+}
+
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 // treeEntries describes every path under root the way treeDigest walks it:
 // a file by its SHA-256, a symlink by its target, a directory, or anything
 // else (a FIFO); all but symlinks also carry their permission bits in octal
 // ("<sha256> 600", "dir 700"), since the stores are written 0600/0700.
-export function treeEntries(root: string): Map<string, string> {
+export function treeEntries(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes)): Map<string, string> {
   const out = new Map<string, string>();
   if (!existsSync(root)) return out;
   const walk = (rel: string) => {
@@ -52,7 +62,7 @@ export function treeEntries(root: string): Map<string, string> {
       if (stat.isSymbolicLink()) out.set(r, `symlink:${readlinkSync(path)}`);
       else if (stat.isDirectory()) { out.set(r, `dir${mode}`); walk(r); }
       else if (!stat.isFile()) out.set(r, `special${mode}`);
-      else out.set(r, `${sha256(readFileSync(path))}${mode}`);
+      else out.set(r, `${fileDigest(r, readFileSync(path))}${mode}`);
     }
   };
   walk("");
@@ -81,6 +91,75 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
   return out;
 }
 
+
+// Relocation (Task 15). A writer that records the workspace path inside a
+// file (a Git investigation's repository, a session binding's ledgerPath)
+// makes that file's digest, and every digest computed over it (the bundle
+// catalog, its root, a ledger-bound record's bindingDigest), depend on where
+// the case ran. relocation finds those path-dependent digests in the tree
+// after an invocation: the SHA-256 of every file that holds a case path or
+// an already path-dependent digest, and, inside such a JSON file, the
+// digestJson of every object or array that does, and every "sha256:<hex>"
+// member that is the digestJson of the rest of its object (a self-digest:
+// checkpoint digest, event hash, bindingDigest). It repeats until nothing
+// new is found. text() masks the case paths (normalizeWriter) and then
+// each path-dependent digest as <PATHDIGEST>; fileDigest() hashes a
+// path-dependent file's masked text and any other file's bytes. The
+// derived digests are checked anyway: the generator verifies every bundle
+// TS wrote against the root it printed, and the Go replay does the same.
+// The Go twin is relocation in difftest/writer_test.go.
+export type Relocation = { text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string };
+const SELF_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+export function relocation(roots: CaseRoots): Relocation {
+  const files = new Map<string, Buffer>();
+  const walk = (rel: string) => {
+    for (const name of readdirSync(join(roots.ws, rel)).sort(byCodeUnit)) {
+      const r = rel ? `${rel}/${name}` : name;
+      const stat = lstatSync(join(roots.ws, r));
+      if (stat.isDirectory()) walk(r);
+      else if (stat.isFile()) files.set(r, readFileSync(join(roots.ws, r)));
+    }
+  };
+  if (existsSync(roots.ws)) walk("");
+  const digests = new Set<string>();
+  const tainted = (text: string) => text.includes(roots.root) || [...digests].some((d) => text.includes(d));
+  const visit = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return;
+    const text = canonicalJson(value);
+    if (!tainted(text)) return;
+    digests.add(digestJson(value).slice(7));
+    if (!Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      for (const [key, member] of Object.entries(record)) {
+        if (typeof member !== "string" || !SELF_DIGEST.test(member)) continue;
+        const { [key]: _self, ...rest } = record;
+        if (digestJson(rest) === member) digests.add(member.slice(7));
+      }
+    }
+    for (const member of Object.values(value)) visit(member);
+  };
+  for (let size = -1; size !== digests.size;) {
+    size = digests.size;
+    for (const bytes of files.values()) {
+      const text = bytes.toString("utf8");
+      if (!tainted(text)) continue;
+      digests.add(sha256(bytes));
+      try { visit(JSON.parse(text)); } catch { /* not JSON */ }
+    }
+  }
+  const sorted = [...digests].sort(byCodeUnit);
+  const text = (s: string): string => {
+    let out = normalizeWriter(s, roots);
+    for (const d of sorted) out = out.split(d).join("<PATHDIGEST>");
+    return out;
+  };
+  return {
+    text,
+    fileDigest: (_rel, bytes) => (digests.has(sha256(bytes)) ? sha256(text(bytes.toString("utf8"))) : sha256(bytes))
+  };
+}
+
 // readArgvLog splits the recorders' log into records ("git a\x1fb").
 export function readArgvLog(path: string): string[] {
   if (!existsSync(path)) return [];
@@ -91,32 +170,58 @@ export function readArgvLog(path: string): string[] {
 
 // normalizeRecord normalizes each argument of a record on its own, so a mask
 // that widens to the previous boundary (<GITTMP>) stays inside its argument.
-export function normalizeRecord(record: string, roots: CaseRoots): string {
-  return record.split("\x1f").map((arg) => normalizeWriter(arg, roots)).join("\x1f");
+export function normalizeRecord(record: string, roots: CaseRoots, reloc?: Relocation): string {
+  return record.split("\x1f").map((arg) => (reloc ? reloc.text(arg) : normalizeWriter(arg, roots))).join("\x1f");
+}
+
+// writtenBundle is the proof bundle directory an `fl investigate git`
+// invocation reports on stdout, or undefined when it wrote none.
+export function writtenBundle(stdout: string): string | undefined {
+  try {
+    const directory = (JSON.parse(stdout) as { proofBundle?: { directory?: unknown } | null }).proofBundle?.directory;
+    return typeof directory === "string" ? directory : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// crossVerify runs TS `fl verify` on every bundle TS wrote (slice 2 spec
+// 2.4); TestWriterReplay does the same with Go on the bundles Go wrote. It
+// runs after the invocation's argv log is read, so its git calls are not
+// recorded.
+async function crossVerify(id: string, inv: number, roots: CaseRoots, stdout: string): Promise<void> {
+  const directory = writtenBundle(stdout);
+  if (directory === undefined) return;
+  const root = (JSON.parse(stdout) as { proofBundle: { rootDigest: string } }).proofBundle.rootDigest;
+  const r = await runCli(roots, ["verify", directory, "--expect-root", root], writerEnv(roots, `${id}:verify`, undefined, {}));
+  if (r.exit !== 0 || !r.stdout.startsWith("Integrity: VALID\n") || !r.stdout.includes("\nExternal root: MATCH\n")) throw new Error(`${id}|${inv}: TS verify of the bundle TS wrote failed (exit ${r.exit})\n${r.stdout}${r.stderr}`);
 }
 
 async function runCase(t: WriterTemplate): Promise<string[]> {
   const roots = makeCaseRoots();
   try {
     copyScenario(t.scenario, roots.ws);
-    for (const m of t.mutations ?? []) {
+    for (const template of t.mutations ?? []) {
+      const m = substituteDeep(template, roots) as Template;
       applyMutation(roots.ws, { id: t.id, base: "writer", template: m, file: PATH_OPS.has(m.op) ? m.path ?? "." : m.file! });
     }
     resetModes(roots.ws);
     const env = Object.fromEntries(Object.entries(t.env ?? {}).map(([k, v]) => [k, substitute(v, roots)]));
     const lines: string[] = [];
     for (const [inv, argv] of t.argv.entries()) {
-      const before = treeEntries(roots.ws);
+      const before = treeEntries(roots.ws, relocation(roots).fileDigest);
       rmSync(roots.argvLog, { force: true });
       const r = await runCli(roots, argv.map((a) => substitute(a, roots)), writerEnv(roots, t.id, t.fakeDocker, env));
-      const after = treeEntries(roots.ws);
+      const reloc = relocation(roots);
+      const after = treeEntries(roots.ws, reloc.fileDigest);
       const records = readArgvLog(roots.argvLog);
+      await crossVerify(t.id, inv, roots, r.stdout);
       // Windows runs no sh recorder: a case that records argv is POSIX-only.
       if (records.length > 0 && !t.posixOnly) throw new Error(`${t.id}: records git/docker argv but is not posixOnly`);
       lines.push(JSON.stringify({
-        case: t.id, inv, stdout: normalizeWriter(r.stdout, roots), stderr: normalizeWriter(r.stderr, roots), exit: r.exit,
-        tree: treeDigest(roots.ws), modes: modesDigest(after), files: changedFiles(before, after),
-        argv: records.map((record) => normalizeRecord(record, roots))
+        case: t.id, inv, stdout: reloc.text(r.stdout), stderr: reloc.text(r.stderr), exit: r.exit,
+        tree: treeDigest(roots.ws, reloc.fileDigest), modes: modesDigest(after), files: changedFiles(before, after),
+        argv: records.map((record) => normalizeRecord(record, roots, reloc))
       }));
     }
     return lines;

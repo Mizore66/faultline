@@ -669,6 +669,13 @@ func firstKey(o *jsjson.Obj) string {
 }
 
 func treeDigest(root string) string {
+	return treeDigestWith(root, func(_ string, b []byte) string { return canonical.SHA256HexBytes(b) })
+}
+
+// treeDigestWith is treeDigest with each regular file described by
+// fileDigest (the writer replay's relocated digest; cases.ts treeDigest's
+// second argument).
+func treeDigestWith(root string, fileDigest func(rel string, b []byte) string) string {
 	var lines []string
 	var walk func(rel string)
 	walk = func(rel string) {
@@ -693,7 +700,7 @@ func treeDigest(root string) string {
 				lines = append(lines, "S "+r)
 			default:
 				b, _ := os.ReadFile(path)
-				lines = append(lines, "F "+r+" "+canonical.SHA256HexBytes(b))
+				lines = append(lines, "F "+r+" "+fileDigest(r, b))
 			}
 		}
 	}
@@ -803,7 +810,7 @@ func maskedForms(path string, jsonEscaped bool) []string {
 
 // writerRoots are the directories a writer case owns (makeWriterRoots in
 // writer_test.go); normalizeWriter masks them.
-type writerRoots struct{ root, ws, home, tmp, argvLog string }
+type writerRoots struct{ root, ws, home, tmp, argvLog, recorder string }
 
 // normalizeWriter masks a writer case's own directories (slice 2 spec 2.3):
 // the workspace, its TMPDIR and HOME, a judge-proof server port, then the

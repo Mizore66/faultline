@@ -4,13 +4,16 @@
 // difftest/testdata/scenarios/<name>/, so the Go replay copies the exact
 // files fl would have written instead of rebuilding them.
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { deflateSync } from "node:zlib";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
+import { computeEnvironmentFingerprint } from "../../src/environment-fingerprint.js";
+import { appendLifecycleEvent, createCodexLifecycleLedger, GIT_CHECKPOINT_VERSION, signGitCheckpoint, type CodexLifecycleLedger } from "../../src/ledger.js";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const cli = join(repo, "dist", "cli.js");
@@ -46,14 +49,30 @@ export function requireFreshBuild(): void {
 // CaseRoots are the directories one case owns: the workspace (the command's
 // cwd), HOME and TMPDIR, all under one physical mkdtemp directory so the
 // paths fl prints are the ones the harness masks.
-export type CaseRoots = { root: string; ws: string; home: string; tmp: string; argvLog: string };
+export type CaseRoots = { root: string; ws: string; home: string; tmp: string; argvLog: string; recorder: string };
 
 export function makeCaseRoots(): CaseRoots {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "faultline-writer-")));
-  const roots = { root, ws: join(root, "ws"), home: join(root, "home"), tmp: join(root, "tmp"), argvLog: join(root, "argv.log") };
-  for (const dir of [roots.ws, roots.home, roots.tmp]) mkdirSync(dir, { mode: 0o755 });
+  const roots = { root, ws: join(root, "ws"), home: join(root, "home"), tmp: join(root, "tmp"), argvLog: join(root, "argv.log"), recorder: join(root, "recorder") };
+  for (const dir of [roots.ws, roots.home, roots.tmp, roots.recorder]) mkdirSync(dir, { mode: 0o755 });
   writeFileSync(join(roots.home, "empty.gitconfig"), "");
+  writeRecorders(roots);
   return roots;
+}
+
+// writeRecorders copies the recorder templates into the case's own recorder
+// directory with the argv log path written into the script: hardened git
+// runs with PATH as its only environment variable, so a recorder that read
+// FAULTLINE_ARGV_LOG would miss every git call fl hardens (the Go twin is
+// writeRecorders in difftest/writer_test.go).
+export function writeRecorders(roots: CaseRoots): void {
+  for (const name of ["git", "docker"]) {
+    const template = readFileSync(join(recorderDir, name), "utf8");
+    const line = "log=$FAULTLINE_ARGV_LOG\n";
+    if (!template.includes(line) || roots.argvLog.includes("'")) throw new Error(`recorder template ${name} cannot take ${roots.argvLog}`);
+    writeFileSync(join(roots.recorder, name), template.replace(line, `log='${roots.argvLog}'\n`), { mode: 0o755 });
+    chmodSync(join(roots.recorder, name), 0o755);
+  }
 }
 
 // inheritedOut names the variables a writer case never inherits: git's own,
@@ -65,7 +84,7 @@ export function inheritedOut(name: string): boolean {
 // The environment every writer invocation runs with; extra is the
 // template's env (after placeholder substitution).
 export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | undefined, extra: Record<string, string>): NodeJS.ProcessEnv {
-  const path = [recorderDir, ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), process.env.PATH ?? ""].join(":");
+  const path = [roots.recorder, ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), process.env.PATH ?? ""].join(":");
   return {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !inheritedOut(name))),
     HOME: roots.home, USERPROFILE: roots.home, TMPDIR: roots.tmp, TEMP: roots.tmp, TMP: roots.tmp,
@@ -241,10 +260,155 @@ function tamperBound(ws: string): void {
   write("bound-binding-tampered.json", (v) => { v.stateBindings[0].checkpointEventSequence += 1; });
 }
 
+// Git investigation scenarios (Task 15). A scenario repository is built with
+// git in a scratch directory, then written into the workspace as loose
+// objects deflated at level 0 (stored blocks: the same bytes from any zlib)
+// with a minimal HEAD/config/ref and the descendant's files, and no index,
+// logs or hooks, so its bytes depend on nothing but the commits. Each
+// scenario also holds a frozen witness (proposal.json, propose, approve,
+// freeze --repo repo: the session binding lands in repo/.faultline/incidents).
+export const PINNED_IMAGE = `registry.example/faultline-node@sha256:${"b".repeat(64)}`;
+const OTHER_IMAGE = `registry.example/faultline-node@sha256:${"c".repeat(64)}`;
+type RepoState = Record<string, string>;
+const state = (value: string, extra: RepoState = {}): RepoState => ({ "state.txt": `${value}\n`, ...extra });
+type BuiltRepo = { commits: string[]; trees: string[]; files: RepoState[] };
+
+function scratchGit(dir: string, args: string[], objectFormat: string): Buffer {
+  return execFileSync("git", ["-C", dir, ...args], {
+    env: {
+      PATH: process.env.PATH ?? "", HOME: dir, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_DEFAULT_HASH: objectFormat,
+      GIT_AUTHOR_NAME: "FaultLine Test", GIT_AUTHOR_EMAIL: "faultline@example.test", GIT_AUTHOR_DATE: "2026-07-16T10:00:00Z",
+      GIT_COMMITTER_NAME: "FaultLine Test", GIT_COMMITTER_EMAIL: "faultline@example.test", GIT_COMMITTER_DATE: "2026-07-16T10:00:00Z",
+      LC_ALL: "C"
+    },
+    maxBuffer: 1 << 26
+  });
+}
+
+// buildRepo writes repo `rel` of the workspace: one commit per state (each
+// state is the whole tree), the last one checked out.
+function buildRepo(ws: string, rel: string, states: RepoState[], objectFormat: "sha1" | "sha256" = "sha1"): BuiltRepo {
+  const scratch = mkdtempSync(join(tmpdir(), "faultline-scenario-repo-"));
+  try {
+    scratchGit(scratch, ["init", "-q", `--object-format=${objectFormat}`, "--initial-branch=main"], objectFormat);
+    const built: BuiltRepo = { commits: [], trees: [], files: states };
+    let previous: RepoState = {};
+    for (const [index, files] of states.entries()) {
+      for (const name of Object.keys(previous)) rmSync(join(scratch, name), { force: true });
+      for (const [name, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(scratch, name)), { recursive: true });
+        writeFileSync(join(scratch, name), text);
+      }
+      scratchGit(scratch, ["add", "-A"], objectFormat);
+      scratchGit(scratch, ["commit", "-q", "--allow-empty", "-m", `state ${index}`], objectFormat);
+      built.commits.push(scratchGit(scratch, ["rev-parse", "HEAD"], objectFormat).toString("utf8").trim());
+      built.trees.push(scratchGit(scratch, ["rev-parse", "HEAD^{tree}"], objectFormat).toString("utf8").trim());
+      previous = files;
+    }
+    const gitDir = join(ws, rel, ".git");
+    for (const dir of ["objects", "refs/heads", "refs/tags"]) mkdirSync(join(gitDir, dir), { recursive: true });
+    writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(gitDir, "config"), objectFormat === "sha1"
+      ? "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n"
+      : "[core]\n\trepositoryformatversion = 1\n\tfilemode = true\n\tbare = false\n[extensions]\n\tobjectformat = sha256\n");
+    writeFileSync(join(gitDir, "refs", "heads", "main"), `${built.commits.at(-1)}\n`);
+    const objects = scratchGit(scratch, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)"], objectFormat)
+      .toString("utf8").split("\n").filter(Boolean);
+    for (const line of objects) {
+      const [oid, type] = line.split(" ") as [string, string];
+      const body = scratchGit(scratch, ["cat-file", type, oid], objectFormat);
+      mkdirSync(join(gitDir, "objects", oid.slice(0, 2)), { recursive: true });
+      writeFileSync(join(gitDir, "objects", oid.slice(0, 2), oid.slice(2)),
+        deflateSync(Buffer.concat([Buffer.from(`${type} ${body.length}\0`), body]), { level: 0 }));
+    }
+    for (const [name, text] of Object.entries(states.at(-1)!)) {
+      mkdirSync(dirname(join(ws, rel, name)), { recursive: true });
+      writeFileSync(join(ws, rel, name), text);
+    }
+    return built;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+// lifecycleLedger is a deterministic SIDE_CAR ledger with one clean
+// checkpoint per listed state (fixtures.ts lifecycleBoundToDescendant and
+// lifecycleBoundToEveryInvestigatedState, with fixed times and ids).
+function lifecycleLedger(repo: BuiltRepo, indices: number[]): string {
+  const at = (second: number) => new Date(Date.UTC(2026, 6, 16, 10, 0, second)).toISOString();
+  let second = 0;
+  let ledger: CodexLifecycleLedger = createCodexLifecycleLedger({ ledgerId: "ledger-scenario", sessionId: "scenario-session", createdAt: at(0) });
+  const add = (input: Parameters<typeof appendLifecycleEvent>[1]) => {
+    second += 1;
+    ledger = appendLifecycleEvent(ledger, input, { occurredAt: at(second), eventId: `event-${second}` });
+  };
+  add({ type: "SESSION_STARTED", payload: { transport: "SIDE_CAR", workingDirectory: "/work/repository", model: "gpt-5.6" } });
+  for (const [offset, index] of indices.entries()) {
+    const turnOrdinal = offset + 1;
+    add({ type: "TURN_STARTED", payload: { turnId: `turn-${turnOrdinal}`, turnOrdinal, promptDigest: `sha256:${"c".repeat(64)}` } });
+    add({ type: "TURN_COMPLETED", payload: { turnId: `turn-${turnOrdinal}`, turnOrdinal, outcome: "COMPLETED", outputDigest: `sha256:${"d".repeat(64)}` } });
+    const checkpoint = signGitCheckpoint({
+      schemaVersion: GIT_CHECKPOINT_VERSION, repositoryRoot: "/work/repository", headCommit: repo.commits[index]!, treeDigest: repo.trees[index]!,
+      capturedAt: at(second), clean: true
+    });
+    add({ type: "WORKTREE_CHECKPOINT", payload: { checkpoint, afterTurnOrdinal: turnOrdinal } });
+  }
+  add({ type: "SESSION_ENDED", payload: { reason: "COMPLETED", completedTurns: indices.length } });
+  return jsonText(ledger);
+}
+
+// runtimeMapping maps the environment fingerprint of every state to an image.
+function runtimeMapping(repo: BuiltRepo, images: string[]): string {
+  const mapping: Record<string, string> = {};
+  for (const [index, files] of repo.files.entries()) {
+    const dir = mkdtempSync(join(tmpdir(), "faultline-scenario-fingerprint-"));
+    try {
+      for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+      mapping[computeEnvironmentFingerprint(dir).digest] = images[index % images.length]!;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  return jsonText({ schemaVersion: "faultline.runtime-mapping.v1", mapping });
+}
+
+const CJK_OVERLAYS = [
+  { path: "说明/视图.md", text: "view\n" },
+  { path: "说明/神经.md", text: "nerve\n" },
+  { path: "🤔.md", text: "thinking\n" },
+  { path: "𠀀.txt", text: "ext-b\n" },
+  { path: "中.txt", text: "middle\n" }
+];
+const witnessInput = (options: { overlays?: { path: string; text: string }[]; timeoutSeconds?: number } = {}): string => jsonText({
+  ...PROPOSAL_INPUT,
+  witness: {
+    ...PROPOSAL_INPUT.witness,
+    overlays: [...PROPOSAL_INPUT.witness.overlays, ...(options.overlays ?? []).map((o) => ({ path: o.path, bytesBase64: Buffer.from(o.text, "utf8").toString("base64") }))],
+    policy: { ...PROPOSAL_INPUT.witness.policy, timeoutSeconds: options.timeoutSeconds ?? 30 }
+  }
+});
+const FREEZE_IN_REPO = ["witness", "freeze", PROPOSAL_ID, "--repo", "repo"];
+const repeat = (value: string, n: number): RepoState[] => Array.from({ length: n }, () => state(value));
+function gitScenario(states: RepoState[], options: {
+  objectFormat?: "sha1" | "sha256"; proposal?: string; extra?: (repo: BuiltRepo) => Record<string, string>
+} = {}): Scenario {
+  return {
+    files: { "proposal.json": options.proposal ?? witnessInput() },
+    setup: (ws) => {
+      const repo = buildRepo(ws, "repo", states, options.objectFormat);
+      for (const [path, text] of Object.entries(options.extra?.(repo) ?? {})) writeFileSync(join(ws, path), text);
+    },
+    argv: [PROPOSE, APPROVE, FREEZE_IN_REPO]
+  };
+}
+const GOOD_BAD_REPAIRED = [state("good"), state("bad"), state("repaired")];
+
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
-type Scenario = { bases?: Record<string, string>; files: Record<string, string>; argv: string[][]; after?: (ws: string) => void };
+type Scenario = {
+  bases?: Record<string, string>; files: Record<string, string>; setup?: (ws: string) => void; argv: string[][]; after?: (ws: string) => void;
+};
 export const SCENARIOS: Record<string, Scenario> = {
   "empty": { files: {}, argv: [] },
   "witness-proposed": { files: { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` }, argv: [PROPOSE] },
@@ -259,7 +423,24 @@ export const SCENARIOS: Record<string, Scenario> = {
   // A Git proof bundle: `fl verify bundle` runs git, so it checks the
   // recorders and the argv normalization.
   "git-two-states-bundle": { bases: { bundle: "git-two-states" }, files: {}, argv: [] },
-  "ledger-bound": { files: LEDGER_BOUND_FILES, argv: [LEDGER_BIND], after: tamperBound }
+  "ledger-bound": { files: LEDGER_BOUND_FILES, argv: [LEDGER_BIND], after: tamperBound },
+  "git-two-states": gitScenario([state("good"), state("bad")]),
+  "git-many-states": gitScenario([...repeat("good", 6), ...repeat("bad", 6)]),
+  "git-max-states-overflow": gitScenario([...repeat("good", 4), ...repeat("bad", 4)]),
+  "git-heterogeneous": gitScenario([state("good", { "package.json": "{\"name\":\"demo\",\"version\":\"1.0.0\"}\n" }),
+    state("bad", { "package.json": "{\"name\":\"demo\",\"version\":\"2.0.0\"}\n" })], {
+    extra: (repo) => ({ "runtime-mapping.json": runtimeMapping(repo, [PINNED_IMAGE, OTHER_IMAGE]) })
+  }),
+  "git-ledger-partial": gitScenario(GOOD_BAD_REPAIRED, { extra: (repo) => ({ "ledger.json": lifecycleLedger(repo, [2]) }) }),
+  "git-ledger-full": gitScenario(GOOD_BAD_REPAIRED, { extra: (repo) => ({ "ledger.json": lifecycleLedger(repo, [0, 1, 2]) }) }),
+  "git-unbound": gitScenario(GOOD_BAD_REPAIRED),
+  "git-sha256": gitScenario(GOOD_BAD_REPAIRED, { objectFormat: "sha256" }),
+  "git-cjk-overlays": gitScenario([state("good"), state("bad")], { proposal: witnessInput({ overlays: CJK_OVERLAYS }) }),
+  "git-non-monotonic": gitScenario([state("good"), state("bad"), state("good"), state("bad")]),
+  "git-all-pass": gitScenario(repeat("good", 3)),
+  "git-all-fail": gitScenario(repeat("bad", 3)),
+  // A one-second witness: the timeout fake Docker is killed after 1 s, not 30.
+  "git-short-timeout": gitScenario([state("good"), state("bad")], { proposal: witnessInput({ timeoutSeconds: 1 }) })
 };
 
 // A scenario is committed as <name>/dirs.txt, every directory of the
@@ -270,7 +451,27 @@ export function copyScenario(name: string, ws: string): void {
   if (!Object.hasOwn(SCENARIOS, name)) throw new Error(`unknown scenario ${name}`);
   const dir = join(scenariosDir, name);
   for (const rel of readFileSync(join(dir, "dirs.txt"), "utf8").split("\n").filter(Boolean)) mkdirSync(join(ws, rel), { recursive: true });
-  if (existsSync(join(dir, "tree"))) cpSync(join(dir, "tree"), ws, { recursive: true });
+  if (existsSync(join(dir, "tree"))) copyMapped(join(dir, "tree"), ws, (entry) => (entry === COMMITTED_GIT_DIR ? ".git" : entry));
+}
+
+// Git refuses to commit a path with a .git component, so a scenario
+// repository's .git directory is committed as COMMITTED_GIT_DIR (dirs.txt
+// keeps the real names); the Go twin is copyScenario in scenarios_test.go.
+export const COMMITTED_GIT_DIR = "dot-git";
+
+// copyMapped copies the files under from into to, renaming each path
+// component with rename; directories are created as needed.
+function copyMapped(from: string, to: string, rename: (entry: string) => string): void {
+  for (const entry of readdirSync(from)) {
+    const source = join(from, entry);
+    const target = join(to, rename(entry));
+    if (lstatSync(source).isDirectory()) {
+      mkdirSync(target, { recursive: true });
+      copyMapped(source, target, rename);
+    } else {
+      cpSync(source, target);
+    }
+  }
 }
 
 // resetModes sets directories to 0755 and files to 0644 under root. A case
@@ -313,6 +514,7 @@ async function buildScenario(name: string): Promise<void> {
       mkdirSync(dirname(join(roots.ws, path)), { recursive: true });
       writeFileSync(join(roots.ws, path), text);
     }
+    scenario.setup?.(roots.ws);
     for (const argv of scenario.argv) {
       const r = await runCli(roots, argv, writerEnv(roots, `scenario:${name}`, "pass-fail", {}));
       if (r.exit !== 0) throw new Error(`scenario ${name}: fl ${argv.join(" ")} exited ${r.exit}\n${r.stdout}${r.stderr}`);
@@ -323,7 +525,13 @@ async function buildScenario(name: string): Promise<void> {
     rmSync(out, { recursive: true, force: true });
     mkdirSync(out, { recursive: true });
     writeFileSync(join(out, "dirs.txt"), dirs.map((d) => `${d}\n`).join(""));
-    if (readdirSync(roots.ws).length > 0) cpSync(roots.ws, join(out, "tree"), { recursive: true });
+    if (readdirSync(roots.ws).length > 0) {
+      mkdirSync(join(out, "tree"));
+      copyMapped(roots.ws, join(out, "tree"), (entry) => {
+        if (entry === COMMITTED_GIT_DIR) throw new Error(`scenario ${name} has a ${COMMITTED_GIT_DIR} entry`);
+        return entry === ".git" ? COMMITTED_GIT_DIR : entry;
+      });
+    }
   } finally {
     rmSync(roots.root, { recursive: true, force: true });
   }

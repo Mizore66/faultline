@@ -13,11 +13,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
@@ -49,6 +51,9 @@ type writerResult struct {
 	Argv           []string
 	// contents are the bytes of the regular files in Files, for the report.
 	contents map[string][]byte
+	// bundle and rootDigest are the proof bundle the invocation wrote and
+	// the root it printed ("" when none), for the cross-verification.
+	bundle, rootDigest string
 }
 
 var (
@@ -181,8 +186,8 @@ func makeWriterRoots(t *testing.T) writerRoots {
 		t.Fatal(err)
 	}
 	r := writerRoots{root: root, ws: filepath.Join(root, "ws"), home: filepath.Join(root, "home"), tmp: filepath.Join(root, "tmp"),
-		argvLog: filepath.Join(root, "argv.log")}
-	for _, dir := range []string{r.ws, r.home, r.tmp} {
+		argvLog: filepath.Join(root, "argv.log"), recorder: filepath.Join(root, "recorder")}
+	for _, dir := range []string{r.ws, r.home, r.tmp, r.recorder} {
 		if err := os.Mkdir(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +195,35 @@ func makeWriterRoots(t *testing.T) writerRoots {
 	if err := os.WriteFile(filepath.Join(r.home, "empty.gitconfig"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeRecorders(t, oracle.RepoRoot(t), r)
 	return r
+}
+
+// writeRecorders copies the recorder templates (difftest/testdata/recorder)
+// into the case's own recorder directory with the argv log path written into
+// the script: hardened git runs with PATH as its only environment variable,
+// so a recorder that read FAULTLINE_ARGV_LOG would miss every git call fl
+// hardens (scenarios.ts writeRecorders).
+func writeRecorders(t *testing.T, repo string, r writerRoots) {
+	t.Helper()
+	const line = "log=$FAULTLINE_ARGV_LOG\n"
+	for _, name := range []string{"git", "docker"} {
+		template, err := os.ReadFile(filepath.Join(repo, "difftest", "testdata", "recorder", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(template), line) || strings.Contains(r.argvLog, "'") {
+			t.Fatalf("recorder template %s cannot take %s", name, r.argvLog)
+		}
+		script := strings.Replace(string(template), line, "log='"+r.argvLog+"'\n", 1)
+		path := filepath.Join(r.recorder, name)
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 // inheritedOut names the variables a writer case never inherits: git's own,
@@ -225,7 +258,7 @@ func writerEnv(repo string, r writerRoots, seed string, tpl writerTemplate) []st
 			set(k, v)
 		}
 	}
-	path := []string{filepath.Join(repo, "difftest", "testdata", "recorder")}
+	path := []string{r.recorder}
 	if tpl.FakeDocker != "" {
 		path = append(path, filepath.Join(repo, "difftest", "testdata", "fakedocker", tpl.FakeDocker))
 	}
@@ -248,6 +281,28 @@ func writerEnv(repo string, r writerRoots, seed string, tpl writerTemplate) []st
 	return out
 }
 
+// substituteDeep applies substituteRoots to every string inside a mutation
+// (gen-writers.ts substituteDeep).
+func substituteDeep(v jsjson.Value, r writerRoots) jsjson.Value {
+	switch v.Kind() {
+	case jsjson.String:
+		return jsjson.MakeString(substituteRoots(v.Str(), r))
+	case jsjson.Array:
+		items := make([]jsjson.Value, len(v.Items()))
+		for i, item := range v.Items() {
+			items[i] = substituteDeep(item, r)
+		}
+		return jsjson.MakeArray(items)
+	case jsjson.Object:
+		o := jsjson.NewObj()
+		for _, k := range v.Obj().Keys() {
+			o.Set(k, substituteDeep(v.Obj().Field(k), r))
+		}
+		return jsjson.MakeObject(o)
+	}
+	return v
+}
+
 // substituteRoots replaces <WS>, <TMP> and <HOME> in argv and env values.
 func substituteRoots(s string, r writerRoots) string {
 	return strings.NewReplacer("<WS>", r.ws, "<TMP>", r.tmp, "<HOME>", r.home).Replace(s)
@@ -256,7 +311,7 @@ func substituteRoots(s string, r writerRoots) string {
 // treeEntries describes every path under root the way treeDigest walks it
 // (difftest/gen/gen-writers.ts treeEntries): entries but symlinks end in
 // their octal permission bits, except on Windows, which has none to compare.
-func treeEntries(t *testing.T, root string) map[string]string {
+func treeEntries(t *testing.T, root string, fileDigest func(rel string, b []byte) string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
 	var walk func(rel string)
@@ -296,7 +351,7 @@ func treeEntries(t *testing.T, root string) map[string]string {
 				if err != nil {
 					t.Fatal(err)
 				}
-				out[r] = canonical.SHA256HexBytes(b) + mode
+				out[r] = fileDigest(r, b) + mode
 			}
 		}
 	}
@@ -346,6 +401,155 @@ func changedFiles(before, after map[string]string) map[string]string {
 	return out
 }
 
+// relocated is gen-writers.ts relocation: see there.
+type relocated struct {
+	roots   writerRoots
+	digests map[string]bool
+	sorted  []string
+}
+
+var selfDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// relocation ports gen-writers.ts relocation: the digests in the tree that
+// depend on the case paths, to mask as <PATHDIGEST>.
+func relocation(t *testing.T, r writerRoots) *relocated {
+	t.Helper()
+	var files [][]byte
+	var walk func(rel string)
+	walk = func(rel string) {
+		names, err := nodefs.ReadDirNames(filepath.Join(r.ws, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("listing %s: %v", rel, err)
+		}
+		for _, name := range names {
+			rr := name
+			if rel != "" {
+				rr = rel + "/" + name
+			}
+			path := filepath.Join(r.ws, filepath.FromSlash(rr))
+			info, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case info.IsDir():
+				walk(rr)
+			case info.Mode().IsRegular():
+				b, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				files = append(files, b)
+			}
+		}
+	}
+	if _, err := os.Stat(r.ws); err == nil {
+		walk("")
+	}
+	rel := &relocated{roots: r, digests: map[string]bool{}}
+	tainted := func(text string) bool {
+		if strings.Contains(text, r.root) {
+			return true
+		}
+		for d := range rel.digests {
+			if strings.Contains(text, d) {
+				return true
+			}
+		}
+		return false
+	}
+	digestOf := func(v jsjson.Value) string {
+		d, err := canonical.DigestJSON(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	var visit func(v jsjson.Value)
+	visit = func(v jsjson.Value) {
+		if v.Kind() != jsjson.Object && v.Kind() != jsjson.Array {
+			return
+		}
+		text, err := canonical.CanonicalJSON(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !tainted(text) {
+			return
+		}
+		rel.digests[digestOf(v)[7:]] = true
+		if v.Kind() == jsjson.Object {
+			o := v.Obj()
+			for _, key := range o.Keys() {
+				member := o.Field(key)
+				if member.Kind() != jsjson.String || !selfDigest.MatchString(member.Str()) {
+					continue
+				}
+				rest := jsjson.NewObj()
+				for _, k := range o.Keys() {
+					if k != key {
+						rest.Set(k, o.Field(k))
+					}
+				}
+				if digestOf(jsjson.MakeObject(rest)) == member.Str() {
+					rel.digests[member.Str()[7:]] = true
+				}
+			}
+			for _, key := range o.Keys() {
+				visit(o.Field(key))
+			}
+			return
+		}
+		for _, item := range v.Items() {
+			visit(item)
+		}
+	}
+	for size := -1; size != len(rel.digests); {
+		size = len(rel.digests)
+		for _, b := range files {
+			text := jsstr.DecodeUTF8(b)
+			if !tainted(text) {
+				continue
+			}
+			rel.digests[canonical.SHA256HexBytes(b)] = true
+			if v, err := jsjson.Parse(text); err == nil {
+				visit(v)
+			}
+		}
+	}
+	rel.sorted = slices.Sorted(maps.Keys(rel.digests))
+	return rel
+}
+
+// text masks the case paths, then every path-dependent digest.
+func (rel *relocated) text(s string) string {
+	out := normalizeWriter(s, rel.roots)
+	for _, d := range rel.sorted {
+		out = strings.ReplaceAll(out, d, "<PATHDIGEST>")
+	}
+	return out
+}
+
+// fileDigest hashes a path-dependent file's masked text, any other file's bytes.
+func (rel *relocated) fileDigest(_ string, b []byte) string {
+	if d := canonical.SHA256HexBytes(b); !rel.digests[d] {
+		return d
+	}
+	return canonical.SHA256Hex(rel.text(jsstr.DecodeUTF8(b)))
+}
+
+// jsonField is the string at path in a JSON text, "" when absent.
+func jsonField(text string, path ...string) string {
+	v, err := jsjson.Parse(text)
+	if err != nil {
+		return ""
+	}
+	if f := v.Get(path...); f.Kind() == jsjson.String {
+		return f.Str()
+	}
+	return ""
+}
+
 // readArgvLog splits the recorders' log into records ("git a\x1fb").
 func readArgvLog(path string) []string {
 	b, err := os.ReadFile(path)
@@ -358,10 +562,14 @@ func readArgvLog(path string) []string {
 
 // normalizeRecord normalizes each argument of a record on its own, so a mask
 // that widens to the previous boundary (<GITTMP>) stays inside its argument.
-func normalizeRecord(record string, r writerRoots) string {
+func normalizeRecord(record string, r writerRoots, reloc *relocated) string {
 	args := strings.Split(record, "\x1f")
 	for i, a := range args {
-		args[i] = normalizeWriter(a, r)
+		if reloc != nil {
+			args[i] = reloc.text(a)
+		} else {
+			args[i] = normalizeWriter(a, r)
+		}
 	}
 	return strings.Join(args, "\x1f")
 }
@@ -371,7 +579,8 @@ func normalizeRecord(record string, r writerRoots) string {
 func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult {
 	r := makeWriterRoots(t)
 	copyScenario(t, repo, tpl.Scenario, r.ws)
-	for _, m := range tpl.Mutations {
+	for _, raw := range tpl.Mutations {
+		m := template{substituteDeep(jsjson.MakeObject(raw.fields), r).Obj()}
 		file := m.str("file")
 		if pathOps[m.str("op")] {
 			file = "."
@@ -386,7 +595,7 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 	resetModes(t, r.ws)
 	var out []writerResult
 	for inv, argv := range tpl.Argv {
-		before := treeEntries(t, r.ws)
+		before := treeEntries(t, r.ws, relocation(t, r).fileDigest)
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
@@ -401,12 +610,17 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 		if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
 			t.Fatalf("running fl: %v", err)
 		}
-		after := treeEntries(t, r.ws)
-		res := writerResult{Inv: inv, Stdout: normalizeWriter(stdout.String(), r), Stderr: normalizeWriter(stderr.String(), r),
-			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigest(r.ws), Modes: modesDigest(after), Files: changedFiles(before, after),
+		reloc := relocation(t, r)
+		after := treeEntries(t, r.ws, reloc.fileDigest)
+		res := writerResult{Inv: inv, Stdout: reloc.text(stdout.String()), Stderr: reloc.text(stderr.String()),
+			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestWith(r.ws, reloc.fileDigest), Modes: modesDigest(after), Files: changedFiles(before, after),
 			contents: map[string][]byte{}}
 		for _, record := range readArgvLog(r.argvLog) {
-			res.Argv = append(res.Argv, normalizeRecord(record, r))
+			res.Argv = append(res.Argv, normalizeRecord(record, r, reloc))
+		}
+		res.bundle, _ = writtenBundle(stdout.String())
+		if res.bundle != "" {
+			res.rootDigest = jsonField(stdout.String(), "proofBundle", "rootDigest")
 		}
 		for rel, entry := range res.Files {
 			if fileEntry.MatchString(entry) {
@@ -511,6 +725,14 @@ func TestWriterReplay(t *testing.T) {
 					t.Fatalf("no golden for %s", key)
 				}
 				compareWriter(t, key, got, want) // stdout, stderr, exit, argv, tree and modes (naming changed files)
+				if got.bundle != "" {
+					// Spec 2.4 cross-check: Go verifies what Go wrote against the root it printed.
+					out, stderr, code := runFlOnce(t, repo, nil, "verify", got.bundle, "--expect-root", got.rootDigest)
+					out += stderr
+					if code != 0 || !strings.HasPrefix(out, "Integrity: VALID\n") || !strings.Contains(out, "\nExternal root: MATCH\n") {
+						t.Fatalf("%s: Go verify of the bundle Go wrote failed (exit %d)\n%s", key, code, out)
+					}
+				}
 			}
 		})
 	}
@@ -584,7 +806,7 @@ func testRecorderFakeDocker(t *testing.T, repo string) {
 		if b, _ := os.ReadFile(r.argvLog); string(b) != wantLog {
 			t.Errorf("state %s: recorder log %q, want %q", tc.state, b, wantLog)
 		}
-		if got := readArgvLog(r.argvLog); len(got) != 1 || normalizeRecord(got[0], r) != "docker run\x1f--rm\x1f--mount\x1ftype=bind,src=<WS>,dst=/workspace/source,readonly\x1fimg\x1f-lc\x1fa b\nc" {
+		if got := readArgvLog(r.argvLog); len(got) != 1 || normalizeRecord(got[0], r, nil) != "docker run\x1f--rm\x1f--mount\x1ftype=bind,src=<WS>,dst=/workspace/source,readonly\x1fimg\x1f-lc\x1fa b\nc" {
 			t.Errorf("state %s: normalized record %q", tc.state, got)
 		}
 	}
@@ -599,4 +821,146 @@ func lookPathIn(name, list string) (string, error) {
 		}
 	}
 	return "", errors.New(name + " not found on PATH")
+}
+
+// pinnedImage is the digest-pinned image the investigate cases name
+// (difftest/gen/scenarios.ts PINNED_IMAGE).
+const pinnedImage = "registry.example/faultline-node@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+// scenarioWorkspace builds a writer case workspace from a committed
+// scenario, as runWriterCase does, and returns it; runFlIn runs fl there.
+func scenarioWorkspace(t *testing.T, name string) string {
+	t.Helper()
+	setWriterUmask(t)
+	r := makeWriterRoots(t)
+	copyScenario(t, repoRoot(t), name, r.ws)
+	resetModes(t, r.ws)
+	return r.ws
+}
+
+// rootsOf recovers the case directories of a workspace scenarioWorkspace made.
+func rootsOf(ws string) writerRoots {
+	root := filepath.Dir(ws)
+	return writerRoots{root: root, ws: ws, home: filepath.Join(root, "home"), tmp: filepath.Join(root, "tmp"),
+		argvLog: filepath.Join(root, "argv.log"), recorder: filepath.Join(root, "recorder")}
+}
+
+// runFlIn runs fl in a scenarioWorkspace with the writer environment (the
+// pass-fail fake Docker) plus env.
+func runFlIn(t *testing.T, ws string, env map[string]string, args ...string) (string, string, int) {
+	t.Helper()
+	tpl := writerTemplate{ID: t.Name(), FakeDocker: "pass-fail"}
+	for k, v := range env {
+		tpl.Env = append(tpl.Env, [2]string{k, v})
+	}
+	cmd := exec.Command(flBinary, args...)
+	cmd.Dir = ws
+	cmd.Env = writerEnv(repoRoot(t), rootsOf(ws), t.Name(), tpl)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	var exitErr *exec.ExitError
+	if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
+		t.Fatalf("running fl: %v", err)
+	}
+	return stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()
+}
+
+// writtenBundle is the proofBundle.directory an `fl investigate git` run
+// printed (gen-writers.ts writtenBundle); ok is false when it wrote none.
+func writtenBundle(stdout string) (string, bool) {
+	v, err := jsjson.Parse(stdout)
+	if err != nil || v.Kind() != jsjson.Object {
+		return "", false
+	}
+	if d := v.Get("proofBundle", "directory"); d.Kind() == jsjson.String {
+		return d.Str(), true
+	}
+	return "", false
+}
+
+// proofDirectory is the bundle directory a successful investigate printed.
+func proofDirectory(t *testing.T, stdout string) string {
+	t.Helper()
+	dir, ok := writtenBundle(stdout)
+	if !ok {
+		t.Fatalf("no proof bundle in %s", stdout)
+	}
+	return dir
+}
+
+// retainedRoots are the ROOT.sha256 values of bundles first verified in
+// this test binary: a later edit that rewrites the catalog and ROOT.sha256
+// is still caught, since verification runs against this external root.
+var retainedRoots sync.Map
+
+func expectedRoot(t *testing.T, dir string) string {
+	t.Helper()
+	if root, ok := retainedRoots.Load(dir); ok {
+		return root.(string)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "ROOT.sha256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _ := retainedRoots.LoadOrStore(dir, strings.TrimSpace(string(b)))
+	return root.(string)
+}
+
+// goVerify returns a verifier running Go `fl verify <dir> --expect-root
+// <retained root>`, giving its output and exit code.
+func goVerify(t *testing.T) func(string) (string, int) {
+	t.Helper()
+	return func(dir string) (string, int) {
+		stdout, stderr, code := runFlOnce(t, filepath.Dir(dir), nil, "verify", dir, "--expect-root", expectedRoot(t, dir))
+		return stdout + stderr, code
+	}
+}
+
+// tsVerify is goVerify with frozen TS (node dist/cli.js); it skips unless
+// FAULTLINE_NODE_ORACLE=1.
+func tsVerify(t *testing.T) func(string) (string, int) {
+	t.Helper()
+	oracle.Skip(t)
+	repo := repoRoot(t)
+	return func(dir string) (string, int) {
+		cmd := exec.Command("node", filepath.Join(repo, "dist", "cli.js"), "verify", dir, "--expect-root", expectedRoot(t, dir))
+		cmd.Dir = filepath.Dir(dir)
+		var out bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &out, &out
+		var exitErr *exec.ExitError
+		if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
+			t.Fatalf("running node: %v", err)
+		}
+		return out.String(), cmd.ProcessState.ExitCode()
+	}
+}
+
+// tamperManifestField sets the dotted field of the bundle's manifest.json to
+// value and rewrites hashes.txt and ROOT.sha256 to match, so only the
+// external root can catch the edit.
+func tamperManifestField(t *testing.T, dir, field, value string) {
+	t.Helper()
+	path := filepath.Join(dir, "manifest.json")
+	manifest, ok := parseObjectFile(path)
+	if !ok {
+		t.Fatalf("unreadable %s", path)
+	}
+	keys := strings.Split(field, ".")
+	o := manifest
+	for _, k := range keys[:len(keys)-1] {
+		next := o.Field(k)
+		if next.Kind() != jsjson.Object {
+			t.Fatalf("manifest has no object %s", k)
+		}
+		o = next.Obj()
+	}
+	o.Set(keys[len(keys)-1], jsjson.MakeString(value))
+	text, err := canonical.CanonicalJSON(jsjson.MakeObject(manifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(text+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rehash(dir, "writer")
 }
