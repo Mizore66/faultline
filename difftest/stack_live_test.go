@@ -25,12 +25,17 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A base under testdata/bases is verified; the cli site is a writer,
+	// `witness propose --input` on the git-two-states scenario's proposal,
+	// whose zod message formatCliFailure prints (past the limit TS dies of
+	// the uncaught RangeError and Go prints it as a FaultLine error).
 	sites := []struct{ name, base, file, old string }{
 		{"demo", "demo-replay", "analysis.json", `"schemaVersion": "faultline.demo.v1"`},
 		{"witness", "demo-replay", "witness/witness.json", `"network": "disabled"`},
 		{"prevention", "prevention-verified", "prevention.json", `"schemaVersion":"faultline.prevention-proof.v1"`},
 		{"git", "git-fully-bound", "manifest.json", `"integrityScope":"complete-declared-file-set"`},
 		{"ledger", "git-fully-bound", "lifecycle/ledger.json", `"schemaVersion":"faultline.codex-lifecycle-ledger.v1"`},
+		{"cli", "scenarios/git-two-states/tree", "proposal.json", `"network": "disabled"`},
 	}
 	shapes := map[string]func(n int) string{
 		"arr": func(n int) string { return strings.Repeat("[", n) + strings.Repeat("]", n) },
@@ -60,7 +65,18 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 		for _, shape := range []string{"arr", "obj", "idx", "alt"} {
 			prints := func(argv []string, n int) bool {
 				dir := filepath.Join(t.TempDir(), "b")
-				copyTree(t, filepath.Join("testdata", "bases", site.base), dir)
+				if site.name == "cli" {
+					if err := os.MkdirAll(dir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					b, err := os.ReadFile(filepath.Join("testdata", site.base, site.file))
+					if err != nil {
+						t.Fatal(err)
+					}
+					os.WriteFile(filepath.Join(dir, site.file), b, 0o644)
+				} else {
+					copyTree(t, filepath.Join("testdata", "bases", site.base), dir)
+				}
 				path := filepath.Join(dir, filepath.FromSlash(site.file))
 				b, err := os.ReadFile(path)
 				if err != nil || !strings.Contains(string(b), site.old) {
@@ -68,8 +84,20 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 				}
 				key, _, _ := strings.Cut(site.old, ":")
 				os.WriteFile(path, []byte(strings.Replace(string(b), site.old, key+":"+shapes[shape](n), 1)), 0o644)
-				out, _ := exec.Command(argv[0], append(argv[1:], "verify", dir)...).Output()
-				if !strings.Contains(string(out), "self-consistency") {
+				var out []byte
+				var expected bool
+				if site.name == "cli" {
+					// stderr: the zod message, or the overflow (TS's uncaught
+					// RangeError report, Go's FaultLine error line).
+					cmd := exec.Command(argv[0], append(argv[1:], "witness", "propose", "--input", "proposal.json")...)
+					cmd.Dir = dir
+					out, _ = cmd.CombinedOutput()
+					expected = strings.Contains(string(out), `"received"`) || strings.Contains(string(out), "Maximum call stack size exceeded")
+				} else {
+					out, _ = exec.Command(argv[0], append(argv[1:], "verify", dir)...).Output()
+					expected = strings.Contains(string(out), "self-consistency")
+				}
+				if !expected {
 					t.Fatalf("%s %s depth %d: unexpected output %.300q", site.name, shape, n, out)
 				}
 				return !strings.Contains(string(out), "Maximum call stack size exceeded")

@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/Mizore66/faultline/internal/jsexc"
+	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
@@ -42,7 +43,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		err = thrown // a JS exception escaping the command reaches the CLI's catch
 	}
 	if err != nil {
-		io.WriteString(stderr, jsstr.ToUTF8(formatFailure(err.Error())+"\n"))
+		// A ZodError's message is read here, by formatCliFailure
+		// (src/cli.ts:8), with the stack the CLI's catch has left.
+		message := jsjson.AtCallSite(jsjson.SiteCLI, err.Error)
+		io.WriteString(stderr, jsstr.ToUTF8(formatFailure(message)+"\n"))
 		return 1
 	}
 	return e.exitCode

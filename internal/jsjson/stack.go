@@ -17,21 +17,31 @@ import "runtime"
 //	                            git         2232      4165     2231     2906
 //	                            ledger      2232      4165     2231     2905
 //	                            witness     2232      4164     2231     2905
+//	                            cli         2235      4170     2234     2909
 //	linux/arm64 (22.22.2 glibc) demo        1827      3653     1956     2434
 //	                            prevention  1827      3653     1957     2435
 //	                            git         1827      3652     1956     2434
 //	                            ledger      1826      3651     1956     2434
 //	                            witness     1826      3651     1955     2434
+//	                            cli         1829      3657     1959     2438
 //	darwin/arm64 (22.22.2)      demo        2610      6089     2491     3653
 //	                            prevention  2611      6091     2491     3654
 //	                            git         2610      6088     2490     3652
 //	                            ledger      2609      6087     2490     3652
 //	                            witness     2609      6086     2490     3652
+//	                            cli         2614*     6097*    2494*    3657*
 //
 // Every row is Node 22.22.2, the release CI pins; TestLiveStackThresholds-
-// MatchNode bisects all five sites and four shapes against it on linux/amd64,
+// MatchNode bisects all six sites and four shapes against it on linux/amd64,
 // linux/arm64 and darwin/arm64 in CI. linux/amd64 was measured here, the
 // arm64 rows by the stack-live CI job.
+// The cli rows are `fl witness propose --input` (a zod message the CLI
+// prints from formatCliFailure; past the limit TS dies of the uncaught
+// RangeError). linux/amd64 (under qemu) and linux/arm64 were measured on
+// 22.22.2; the darwin/arm64 cli row (*) is the 22.22.2 demo row plus the cli
+// minus demo difference measured on 22.23.3 (+4, +8, +3, +4); no offset
+// gives all four, and the one chosen gives 3658 for the alternating shape.
+// The stack-live CI job measures the real 22.22.2 row.
 // [0]- and {}-terminated values cost one level more and less (2232 and 4167
 // at the linux/amd64 demo site).
 //
@@ -57,13 +67,13 @@ func stackModelFor(goos, goarch string) stackModel {
 	switch {
 	case goos == "darwin" && goarch == "arm64":
 		return stackModel{budget: 60_894_500 + 23_333 + 10_000, array: 23_333, object: 10_000, slowObject: 24_444,
-			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 17_700, SiteGitProof: -9_800, SiteGitLedger: -21_600, SiteDemoWitness: -26_500}}
+			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 17_700, SiteGitProof: -9_800, SiteGitLedger: -21_600, SiteDemoWitness: -26_500, SiteCLI: 80_000}}
 	case goarch == "arm64":
 		return stackModel{budget: 36_531_800 + 20_003 + 10_000, array: 20_003, object: 10_000, slowObject: 18_669,
-			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 5_800, SiteGitProof: -4_100, SiteGitLedger: -13_500, SiteDemoWitness: -16_700}}
+			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 5_800, SiteGitProof: -4_100, SiteGitLedger: -13_500, SiteDemoWitness: -16_700, SiteCLI: 45_000}}
 	}
 	return stackModel{budget: 41_667_000 + 18_667 + 10_000, array: 18_667, object: 10_000, slowObject: 18_664,
-		sites: [siteCount]int{SiteDemo: 0, SitePrevention: 7_000, SiteGitProof: -11_500, SiteGitLedger: -15_500, SiteDemoWitness: -19_000}}
+		sites: [siteCount]int{SiteDemo: 0, SitePrevention: 7_000, SiteGitProof: -11_500, SiteGitLedger: -15_500, SiteDemoWitness: -19_000, SiteCLI: 39_000}}
 }
 
 // Site is a JS call site that reads a zod message; see stackModel.
@@ -75,6 +85,9 @@ const (
 	SiteGitProof
 	SiteGitLedger
 	SiteDemoWitness
+	// SiteCLI is a ZodError that reaches the CLI uncaught: formatCliFailure
+	// (src/cli.ts:8) reads its message near the bottom of the JS stack.
+	SiteCLI
 	siteCount
 )
 
