@@ -16,6 +16,9 @@ var writerScenarios = map[string]bool{
 	"witness-proposed":      true,
 	"witness-approved":      true,
 	"witness-frozen":        true,
+	"witness-approved-keys": true,
+	"witness-frozen-keys":   true,
+	"witness-signed":        true,
 	"git-two-states-bundle": true,
 }
 

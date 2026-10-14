@@ -26,7 +26,7 @@ func TestWitnessProposeSampleAndUnported(t *testing.T) {
 	if code := Run([]string{"witness", "propose"}, &out, &errb); code != 0 || !strings.HasPrefix(out.String(), "{\n  \"source\": \"sample\",\n  \"proposal\": {\n    \"behavior\": ") {
 		t.Fatalf("%d %q %q", code, out.String(), errb.String())
 	}
-	for _, args := range []string{"witness sign x", "witness propose --live", "witness verify x --keyring k.json"} {
+	for _, args := range []string{"witness propose --live"} {
 		var out, errb bytes.Buffer
 		if code := Run(strings.Fields(args), &out, &errb); code != 1 || !strings.HasPrefix(errb.String(), "FaultLine error: not yet ported: witness ") {
 			t.Fatalf("%s: %q", args, errb.String())

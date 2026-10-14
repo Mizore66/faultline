@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"errors"
+
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
@@ -70,7 +72,7 @@ func witnessCommand(e *env, args []string) error {
 	}
 	store := witnessStore(args)
 	switch action {
-	case "implement", "review", "policy", "resolve-autonomous", "ratify", "sign":
+	case "implement", "review", "policy", "resolve-autonomous", "ratify":
 		return fail("not yet ported: witness %s", action)
 	case "propose":
 		return e.witnessPropose(store, args)
@@ -121,6 +123,36 @@ func witnessCommand(e *env, args []string) error {
 		e.printJSON(obj("status", "FROZEN", "proposalId", proposalID, "witnessDigest", frozen.Get("witnessDigest"),
 			"frozenDigest", frozen.Get("frozenDigest"), "frozenAt", frozen.Get("frozenAt")))
 		return nil
+	case "sign":
+		if proposalID == "" {
+			return fail("Usage: fl witness sign <proposal-id> --private-key <ed25519-private.pem> --keyring <trusted-reviewers.json>")
+		}
+		keyOption, err := requiredOption(args, "--private-key")
+		if err != nil {
+			return err
+		}
+		privateKeyFile := nodefs.Resolve(keyOption)
+		privateKeyPEM, err := nodefs.ReadText(privateKeyFile)
+		if err != nil {
+			return errors.New(jsexc.Concat("Unable to read reviewer private key ", privateKeyFile, ": ", jsexc.Message(err)))
+		}
+		keyringOption, err := requiredOption(args, "--keyring")
+		if err != nil {
+			return err
+		}
+		keyring, err := readJSONInput(keyringOption)
+		if err != nil {
+			return err
+		}
+		receipt, err := witness.SignAuthenticatedApproval(store, proposalID, witness.SignOptions{PrivateKeyPEM: privateKeyPEM, Keyring: keyring})
+		if err != nil {
+			return err
+		}
+		e.printJSON(obj("status", "AUTHENTICATED_APPROVAL_RECORDED", "proposalId", proposalID,
+			"frozenDigest", receipt.Get("frozenDigest"), "keyId", receipt.Get("keyId"), "signedAt", receipt.Get("signedAt"),
+			"receiptDigest", receipt.Get("receiptDigest"),
+			"limitation", "The private key is never stored or printed. Trust comes only from the supplied reviewer keyring."))
+		return nil
 	case "verify":
 		if proposalID == "" {
 			return fail("Usage: fl witness verify <proposal-id> [--expect-digest <sha256:...>]")
@@ -130,10 +162,26 @@ func witnessCommand(e *env, args []string) error {
 		if hasFlag(args, "--require-signature") && !hasKeyring {
 			return fail("--require-signature needs --keyring <trusted-reviewers.json>.")
 		}
-		if hasKeyring {
-			return fail("not yet ported: witness verify --keyring")
-		}
 		expected, provided := option(args, "--expect-digest")
+		if hasKeyring {
+			opts := witness.VerifyAuthOptions{RequireSignature: hasFlag(args, "--require-signature")}
+			if provided {
+				opts.ExpectedFrozenDigest = &expected
+			}
+			keyringValue, err := readJSONInput(keyring)
+			if err != nil {
+				return err
+			}
+			opts.Keyring = &keyringValue
+			result := witness.VerifyAuthenticatedApproval(store, proposalID, opts)
+			e.printJSON(result)
+			if result.Get("valid").Bool() {
+				e.exitCode = 0
+			} else {
+				e.exitCode = 1
+			}
+			return nil
+		}
 		result := witness.VerifyFrozen(store, proposalID, expected, provided)
 		e.printJSON(result.JSON())
 		if result.Valid {

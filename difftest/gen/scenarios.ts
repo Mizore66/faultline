@@ -5,6 +5,7 @@
 // files fl would have written instead of rebuilding them.
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts
 import { spawn } from "node:child_process";
+import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -111,6 +112,44 @@ const PROPOSE = ["witness", "propose", "--input", "proposal.json"];
 const APPROVE = ["witness", "approve", PROPOSAL_ID, "--approved-by", "reviewer@example.test"];
 const FREEZE = ["witness", "freeze", PROPOSAL_ID];
 
+// Reviewer key material for the authenticated approval cases. The Ed25519
+// keys come from fixed 32-byte seeds (PKCS#8 = this prefix + the seed), so
+// the committed PEM files, keyrings and (Ed25519 being deterministic) the
+// signatures never change. EC_PUBLIC_PEM is a P-256 public key generated
+// once: a well-formed key that is not Ed25519.
+const PKCS8_ED25519_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
+const EC_PUBLIC_PEM = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEU2XZiU7j36AfpHTmuOZEZ2mFYM+I\nZTCOIJ2bfqCoMGaDZCGDX78GItE2wsgVj+xSpCzpOJ/9EwO81d3+N1OiDA==\n-----END PUBLIC KEY-----\n";
+function reviewerKey(seedByte: number) {
+  const privateKey = createPrivateKey({ key: Buffer.concat([PKCS8_ED25519_PREFIX, Buffer.alloc(32, seedByte)]), format: "der", type: "pkcs8" });
+  const publicKey = createPublicKey(privateKey);
+  const der = publicKey.export({ type: "spki", format: "der" });
+  return {
+    privatePem: privateKey.export({ type: "pkcs8", format: "pem" }) as string,
+    publicPem: publicKey.export({ type: "spki", format: "pem" }) as string,
+    keyId: `sha256:${createHash("sha256").update(der).digest("hex")}`
+  };
+}
+const KEY1 = reviewerKey(1);
+const KEY2 = reviewerKey(2);
+const reviewerEntry = (approvedBy: string, k: { publicPem: string; keyId: string }) => ({ approvedBy, keyId: k.keyId, algorithm: "ED25519", publicKeyPem: k.publicPem });
+const keyring = (...reviewers: object[]) => `${JSON.stringify({ schemaVersion: "faultline.reviewer-keyring.v1", reviewers }, null, 2)}\n`;
+const REVIEWER = "reviewer@example.test";
+const KEY_FILES: Record<string, string> = {
+  "keys/reviewer.pem": KEY1.privatePem,
+  "keys/other.pem": KEY2.privatePem,
+  "keys/garbage.pem": "this is not a key\n",
+  "keys/keyring.json": keyring(reviewerEntry(REVIEWER, KEY1)),
+  "keys/keyring-other-key.json": keyring(reviewerEntry(REVIEWER, KEY2)),
+  "keys/keyring-other-identity.json": keyring(reviewerEntry("someone-else@example.test", KEY1)),
+  "keys/keyring-duplicate.json": keyring(reviewerEntry(REVIEWER, KEY1), reviewerEntry(REVIEWER, KEY1)),
+  "keys/keyring-ec.json": keyring({ approvedBy: REVIEWER, keyId: KEY1.keyId, algorithm: "ED25519", publicKeyPem: EC_PUBLIC_PEM }),
+  "keys/keyring-bad-pem.json": keyring({ approvedBy: REVIEWER, keyId: KEY1.keyId, algorithm: "ED25519", publicKeyPem: "not a pem" }),
+  "keys/keyring-wrong-keyid.json": keyring({ approvedBy: REVIEWER, keyId: KEY2.keyId, algorithm: "ED25519", publicKeyPem: KEY1.publicPem }),
+  "keys/keyring-empty.json": keyring()
+};
+const SIGN = ["witness", "sign", PROPOSAL_ID, "--private-key", "keys/reviewer.pem", "--keyring", "keys/keyring.json"];
+const PROPOSAL_FILES = { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` };
+
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
@@ -120,6 +159,9 @@ export const SCENARIOS: Record<string, Scenario> = {
   "witness-proposed": { files: { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` }, argv: [PROPOSE] },
   "witness-approved": { files: { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` }, argv: [PROPOSE, APPROVE] },
   "witness-frozen": { files: { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` }, argv: [PROPOSE, APPROVE, FREEZE] },
+  "witness-approved-keys": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE] },
+  "witness-frozen-keys": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE] },
+  "witness-signed": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE, SIGN] },
   // A Git proof bundle: `fl verify bundle` runs git, so it checks the
   // recorders and the argv normalization.
   "git-two-states-bundle": { bases: { bundle: "git-two-states" }, files: {}, argv: [] }

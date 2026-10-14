@@ -517,3 +517,7 @@ func VerifyCodexLifecycleLedger(value jsjson.Value) LedgerVerification {
 	}
 	return LedgerVerification{Valid: len(errs) == 0, Errors: errs, EventCount: len(events), HeadHash: &head}
 }
+
+// CanonicalTimestamp is `new Date(value).toISOString() === value` for a
+// finite date (the refinement of src/authenticated-witness-approval.ts:27).
+func CanonicalTimestamp(value string) bool { return canonicalTimestamp(value) }
