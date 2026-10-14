@@ -19,7 +19,8 @@ import { MaterializedOverlaySchema, materializeFrozenOverlays } from "../../src/
 import { materializeGitTree, runHardenedGit } from "../../src/git-materialization.js";
 import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../src/ledger.js";
 import { ledgerBoundInvestigationDigest, verifyLedgerBoundInvestigation } from "../../src/ledger-binding.js";
-import { validateSandboxPlanAudit } from "../../src/sandbox.js";
+import { classifySandboxResult, createSandboxPlan, executeSandboxPlan, validateSandboxPlanAudit } from "../../src/sandbox.js";
+import type { SandboxCommandResult, SandboxPlan, SandboxPlanRequest } from "../../src/sandbox.js";
 import { resignLedger, richLedger } from "./ledger-seed.js";
 import { resignSandbox, sandboxVariant } from "./sandbox-seed.js";
 import { makeWitness, resignWitness } from "./witness-seed.js";
@@ -274,6 +275,46 @@ export const handlers: Record<string, Handler> = {
     const tree = materializedTrees.get(id)!;
     materializedTrees.delete(id);
     return { result: await tree.cleanup() };
+  },
+  // JSON.stringify of the plan (key order kept), or "THREW:<message>".
+  // Start the oracle seeded (oracle.StartSeeded) to compare container names.
+  createSandboxPlan: ({ request }: { request: SandboxPlanRequest }) => {
+    try {
+      return JSON.stringify(createSandboxPlan(request));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  // classifySandboxResult needs only these plan fields.
+  classifySandboxResult: ({ plan, result }: { plan: SandboxPlan; result: SandboxCommandResult }) =>
+    JSON.stringify(classifySandboxResult(plan, result)),
+  // truncateOutput is not exported: classifySandboxResult applies it to
+  // both strings when outputLimitExceeded is true.
+  truncateOutput: ({ stdout, stderr, max }: { stdout: string; stderr: string; max: number }) => {
+    const plan = { kind: "DOCKER_ISOLATED", limits: { maxOutputBytes: max } } as unknown as SandboxPlan;
+    const result = classifySandboxResult(plan, { exitCode: 0, stdout, stderr, outputLimitExceeded: true });
+    return { stdout: result.stdout, stderr: result.stderr };
+  },
+  // createSandboxPlan then executeSandboxPlan with the native runner, with
+  // PATH and FAULTLINE_ARGV_LOG (the docker recorder's log) replaced:
+  // JSON.stringify({ arguments, result }), or "THREW:<message>".
+  executeSandboxPlan: async ({ request, path, argvLog }: { request: SandboxPlanRequest; path: string; argvLog: string }) => {
+    const saved = process.env.FAULTLINE_ARGV_LOG;
+    process.env.FAULTLINE_ARGV_LOG = argvLog;
+    try {
+      return await withPath(path, async () => {
+        let plan;
+        try {
+          plan = createSandboxPlan(request);
+        } catch (error) {
+          return `THREW:${(error as Error).message}`;
+        }
+        return JSON.stringify({ arguments: plan.arguments, result: await executeSandboxPlan(plan) });
+      });
+    } finally {
+      if (saved === undefined) delete process.env.FAULTLINE_ARGV_LOG;
+      else process.env.FAULTLINE_ARGV_LOG = saved;
+    }
   },
   resolveWitnessResultFromStdout: ({ stdout }: { stdout: string }) => canonicalJson(resolveWitnessResultFromStdout(stdout)),
   classifyFromWitnessResult: ({ outcome }: { outcome: any }) => canonicalJson(classifyFromWitnessResult(outcome)),

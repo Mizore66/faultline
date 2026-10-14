@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fake Docker "daemon-down" (README.md): every `run` fails as a client whose
+# daemon is unreachable, with exit 1 (so only the stderr signature marks it
+# as infrastructure). `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  printf 'docker: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n' >&2
+  exit 1
+  ;;
+esac
+printf 'fake docker (daemon-down): unsupported command: %s\n' "$1" >&2
+exit 125

@@ -253,7 +253,7 @@ func processCwd() string {
 // without its prefix on Windows.
 func errorPath(path string) string {
 	if !isWindows {
-		return path
+		return jsstr.ToUTF8(path)
 	}
 	return DecodeUTF8([]byte(stringFromPath(sysPath(path))))
 }

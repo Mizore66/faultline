@@ -249,12 +249,18 @@ func validateSpawnArguments(file string, args []string, o SpawnOptions) {
 // throwInvalidArgValue throws ERR_INVALID_ARG_VALUE (a TypeError), whose
 // message cuts the inspected value at 128 UTF-16 units.
 func throwInvalidArgValue(name, value, reason string) {
+	jsexc.Throw(InvalidArgValue(name, value, reason))
+}
+
+// InvalidArgValue is the ERR_INVALID_ARG_VALUE error Node builds for a
+// string value, as throwInvalidArgValue throws it.
+func InvalidArgValue(name, value, reason string) error {
 	inspected := jsstr.ToUTF16(inspectString(value))
 	shown := jsstr.FromUTF16(inspected)
 	if len(inspected) > 128 {
 		shown = jsstr.FromUTF16(inspected[:128]) + "..."
 	}
-	jsexc.Throw(errors.New(name + " " + reason + ". Received " + shown))
+	return errors.New(name + " " + reason + ". Received " + shown)
 }
 
 // inspectString is util.inspect for a string at the top level: quoted
