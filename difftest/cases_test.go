@@ -24,3 +24,29 @@ func TestMaskGitDetail(t *testing.T) {
 		}
 	}
 }
+
+// The writer masks: the case's directories, a loopback port, git's
+// temporary verifier directory. A digest that happens to follow a mask is
+// left alone.
+func TestNormalizeWriter(t *testing.T) {
+	r := writerRoots{ws: "/c/ws", tmp: "/c/tmp", home: "/c/home"}
+	in := `{"store": "/c/ws/.faultline/witnesses"} /c/tmp/faultline-git-proof-verify-Ab12Cd/x HOME=/c/home ` +
+		"http://127.0.0.1:41234/proof 127.0.0.1:x sha256:0123"
+	want := `{"store": "<WS>/.faultline/witnesses"} <GITTMP>/x HOME=<HOME> ` +
+		"http://127.0.0.1:<PORT>/proof 127.0.0.1:x sha256:0123"
+	if got := normalizeWriter(in, r); got != want {
+		t.Errorf("normalizeWriter:\n got %q\nwant %q", got, want)
+	}
+}
+
+// On Windows the path after a mask keeps Node's "\" separators, escaped in
+// JSON; both become "/" to compare with Linux goldens.
+func TestSlashesAfter(t *testing.T) {
+	got, slash := slashesAfter(`"<WS>\\a\\b.json" open '<WS>\c\d'`, "<WS>", true)
+	if want := `"<WS>/a/b.json" open '<WS>/c/d'`; got != want || slash {
+		t.Errorf("slashesAfter = %q, %v; want %q, false", got, slash, want)
+	}
+	if _, slash := slashesAfter("<WS>/a", "<WS>", true); !slash {
+		t.Error("slashesAfter did not report a '/' after the mask")
+	}
+}

@@ -1,0 +1,28 @@
+#!/bin/sh
+# Writer replay recorder: appends one record to $FAULTLINE_ARGV_LOG (when
+# set) and execs the next docker on PATH after this directory. A record is
+# "docker " + the arguments joined by \037 (unit separator), terminated by
+# \036 (record separator), so arguments may hold newlines.
+self=$(cd "$(dirname "$0")" && pwd -P)
+if [ -n "$FAULTLINE_ARGV_LOG" ]; then
+  {
+    printf '%s ' docker
+    sep=
+    for arg in "$@"; do printf '%s%s' "$sep" "$arg"; sep=$(printf '\037'); done
+    printf '\036'
+  } >> "$FAULTLINE_ARGV_LOG"
+fi
+found=
+rest=$PATH
+while [ -n "$rest" ]; do
+  dir=${rest%%:*}
+  case "$rest" in *:*) rest=${rest#*:} ;; *) rest= ;; esac
+  [ -n "$dir" ] || continue
+  if [ -z "$found" ]; then
+    [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$self" ] && found=1
+    continue
+  fi
+  if [ -f "$dir/docker" ] && [ -x "$dir/docker" ]; then exec "$dir/docker" "$@"; fi
+done
+echo "recorder: no docker after $self on PATH" >&2
+exit 127

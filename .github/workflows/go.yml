@@ -29,7 +29,8 @@ jobs:
       # PASS could hide a change to main.
       # On ubuntu-24.04 the replay also builds fl with coverage and fails
       # if a verifier error site is never reached (difftest/covergate_test.go).
-      # Only oracle tests (no Node here) and per-platform cases may skip.
+      # Only oracle tests (no Node here) and per-platform cases may skip; on
+      # Windows, the writer cases marked posixOnly (sh recorders, fake Docker).
       - name: go test
         shell: bash
         run: |
@@ -42,7 +43,7 @@ jobs:
           allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestEchoRoundTripsLoneSurrogate'
           case "$RUNNER_OS" in
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
-            Windows) allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestGoldenReplay/.+" ;;
+            Windows) allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestGoldenReplay/.+|TestWriterReplay/.+" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status
@@ -69,9 +70,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Regenerate goldens and require no drift
-        # porcelain also catches untracked files (a new base's golden).
+        # porcelain also catches untracked files (a new base's golden). The
+        # writer scenarios and goldens come from this pinned Node under the
+        # seed preload (difftest/gen/seed.mjs).
         run: |
           pnpm exec tsx difftest/gen/gen-goldens.ts
+          pnpm exec tsx difftest/gen/scenarios.ts
+          pnpm exec tsx difftest/gen/gen-writers.ts
           git status --porcelain difftest/testdata
           test -z "$(git status --porcelain difftest/testdata)"
       - name: Install strace

@@ -132,7 +132,7 @@ function matches(pattern: string, file: string): boolean {
 }
 
 // Ops whose target is a path in the bundle (or the bundle itself), not an existing file.
-const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "fifo", "sparse-file", "many-files", "fake-git", "pad-total"]);
+export const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "fifo", "sparse-file", "many-files", "fake-git", "pad-total"]);
 
 export function expandCases(base: string, root: string, templates: Template[]): Case[] {
   const files = listFiles(root);
@@ -491,9 +491,26 @@ export function maskGitDetail(detail: string): string {
 }
 
 export function normalize(text: string, bundle: string, maskGit = true): string {
-  let out = text;
   // Only the path passed to fl is masked (goldens are generated on Linux).
-  out = out.split(bundle).join("<BUNDLE>");
+  return maskGitOutput(text.split(bundle).join("<BUNDLE>"), maskGit);
+}
+
+// normalizeWriter masks a writer case's own directories (slice 2 spec 2.3):
+// the workspace, its TMPDIR and HOME, a judge-proof server port, then the
+// git masks verify uses. Digests are never masked.
+export function normalizeWriter(text: string, roots: { ws: string; tmp: string; home: string }): string {
+  let out = text;
+  for (const [path, mask] of [[roots.ws, "<WS>"], [roots.tmp, "<TMP>"], [roots.home, "<HOME>"]] as const) {
+    out = out.split(path).join(mask);
+  }
+  out = out.replace(/127\.0\.0\.1:[0-9]+/g, "127.0.0.1:<PORT>");
+  return maskGitOutput(out, true);
+}
+
+// maskGitOutput replaces git's temporary verifier directories with <GITTMP>
+// and, with maskGit, git's own diagnostics after each GIT_LABELS failure.
+export function maskGitOutput(text: string, maskGit: boolean): string {
+  let out = text;
   const marker = "faultline-git-proof-verify-";
   for (let i = out.indexOf(marker); i >= 0; i = out.indexOf(marker, i)) {
     let start = i;

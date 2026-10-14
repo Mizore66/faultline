@@ -4,3 +4,5 @@ dist/
 .faultline/
 .action-smoke/
 coverage/
+# Writer replay scenarios commit the witness store fl writes there.
+!/difftest/testdata/scenarios/**/.faultline/
