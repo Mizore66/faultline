@@ -1,0 +1,33 @@
+#!/bin/sh
+# Fake Docker "odd-bad" (difftest/testdata/fakedocker/README.md): `run`
+# fails the predicate when an odd number of the bind-mounted source's
+# state*.txt files hold a line `bad`, so a witness can depend on several
+# files (a non-monotonic interaction) or on one hunk of one file. `rm`
+# succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  src=
+  prev=
+  for arg in "$@"; do
+    if [ "$prev" = "--mount" ]; then
+      case "$arg" in type=bind,src=*) src=${arg#type=bind,src=}; src=${src%%,*} ;; esac
+    fi
+    prev=$arg
+  done
+  count=0
+  for f in "$src"/state*.txt; do
+    [ -f "$f" ] || continue
+    if grep -q '^bad$' "$f"; then count=$((count + 1)); fi
+  done
+  if [ $((count % 2)) -eq 1 ]; then
+    printf 'FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_FAIL"}\n'
+    printf 'witness failed' >&2
+    exit 1
+  fi
+  printf 'FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n'
+  exit 0
+  ;;
+esac
+printf 'fake docker (odd-bad): unsupported command: %s\n' "$1" >&2
+exit 125

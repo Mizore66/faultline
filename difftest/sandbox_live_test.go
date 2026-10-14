@@ -353,6 +353,7 @@ func TestLiveNativeRunner(t *testing.T) {
 	}{
 		{"pass", "pass-fail", "good", 60_000, 1_048_576, "PREDICATE_PASS"},
 		{"fail", "pass-fail", "bad", 60_000, 1_048_576, "PREDICATE_FAIL"},
+		{"odd-bad", "odd-bad", "bad", 60_000, 1_048_576, "PREDICATE_FAIL"},
 		{"timeout", "timeout", "", 1_500, 1_048_576, "TIMEOUT"},
 		{"flood", "flood", "", 60_000, 1_006, "OUTPUT_LIMIT_EXCEEDED"},
 		{"daemon-down", "daemon-down", "", 60_000, 1_048_576, "SANDBOX_UNAVAILABLE"},

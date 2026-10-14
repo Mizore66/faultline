@@ -117,7 +117,28 @@ export type Relocation = { text: (s: string) => string; fileDigest: (rel: string
 const SELF_DIGEST = /^sha256:[0-9a-f]{64}$/;
 const pointerToken = (key: string | number): string => String(key).split("~").join("~0").split("/").join("~1");
 
-export function relocation(roots: CaseRoots): Relocation {
+// loggedCasePaths are the paths under the case root the recorders logged
+// (every `git -C <worktree>` and `--mount src=<worktree>` argument), in log
+// order. The Go twin is loggedCasePaths in difftest/writer_test.go.
+export function loggedCasePaths(records: string[], roots: CaseRoots): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const consider = (s: string): void => {
+    if (s.startsWith(roots.root) && !seen.has(s)) { seen.add(s); out.push(s); }
+  };
+  for (const record of records) {
+    for (const arg of record.split("\x1f")) {
+      consider(arg);
+      for (const part of arg.split(",")) {
+        const index = part.indexOf("=");
+        if (index >= 0) consider(part.slice(index + 1));
+      }
+    }
+  }
+  return out;
+}
+
+export function relocation(roots: CaseRoots, records: string[] = []): Relocation {
   const files: [string, Buffer, string][] = [];
   const walk = (rel: string) => {
     for (const name of readdirSync(join(roots.ws, rel)).sort(byCodeUnit)) {
@@ -146,7 +167,15 @@ export function relocation(roots: CaseRoots): Relocation {
     }
     for (const [key, member] of Object.entries(value)) visit(member, rel, `${pointer}/${pointerToken(key)}`);
   };
-  let frontier = [roots.root];
+  // A minimization run fact hashes its materialized worktree path, which
+  // appears in no file: name those digests after the masked path.
+  const seeds = [roots.root];
+  for (const path of loggedCasePaths(records, roots)) {
+    const digest = sha256(Buffer.from(path, "utf8"));
+    add(digest, `path:${normalizeWriter(path, roots)}`);
+    seeds.push(digest);
+  }
+  let frontier = seeds;
   while (frontier.length > 0) {
     found = [];
     for (const [rel, bytes, text] of files) {
@@ -216,22 +245,27 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     resetModes(roots.ws);
     const env = Object.fromEntries(Object.entries(t.env ?? {}).map(([k, v]) => [k, substitute(v, roots)]));
     const lines: string[] = [];
+    // The recorded paths accumulate over the case's invocations: a later
+    // invocation must keep masking the worktree digests an earlier one
+    // wrote into a file (the Go twin is runWriterCase).
+    const records: string[] = [];
     for (const [inv, argv] of t.argv.entries()) {
-      const before = treeEntries(roots.ws, relocation(roots).fileDigest);
+      const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
       rmSync(roots.argvLog, { force: true });
       const r = await runCli(roots, argv.map((a) => substitute(a, roots)), writerEnv(roots, t.id, t.fakeDocker, env));
-      const reloc = relocation(roots);
+      const invocationRecords = readArgvLog(roots.argvLog);
+      records.push(...invocationRecords);
+      const reloc = relocation(roots, records);
       const after = treeEntries(roots.ws, reloc.fileDigest);
       const tree = treeDigest(roots.ws, reloc.fileDigest);
-      const records = readArgvLog(roots.argvLog);
       // After the tree and the argv log are read, like the Go replay.
       await crossVerify(t.id, inv, roots, r.stdout);
       // Windows runs no sh recorder: a case that records argv is POSIX-only.
-      if (records.length > 0 && !t.posixOnly) throw new Error(`${t.id}: records git/docker argv but is not posixOnly`);
+      if (invocationRecords.length > 0 && !t.posixOnly) throw new Error(`${t.id}: records git/docker argv but is not posixOnly`);
       lines.push(JSON.stringify({
         case: t.id, inv, stdout: reloc.text(r.stdout), stderr: reloc.text(r.stderr), exit: r.exit,
         tree, modes: modesDigest(after), files: changedFiles(before, after),
-        argv: records.map((record) => normalizeRecord(record, roots, reloc))
+        argv: invocationRecords.map((record) => normalizeRecord(record, roots, reloc))
       }));
     }
     return lines;

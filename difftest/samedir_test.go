@@ -21,7 +21,7 @@ import (
 // workspace path; TestWriterSameDirectory compares them without relocation.
 var sameDirectoryCases = []string{
 	"investigate-two-states", "investigate-heterogeneous-mapped", "investigate-ledger-full",
-	"investigate-cjk-overlays", "investigate-many-states",
+	"investigate-cjk-overlays", "investigate-many-states", "minimize-git",
 }
 
 // TestWriterSameDirectory runs frozen TS and then Go in the same case
@@ -102,8 +102,8 @@ func TestWriterSameDirectory(t *testing.T) {
 						t.Errorf("inv %d: Go wrote %s, TS did not", i, path)
 					}
 				}
-				if _, ok := writtenBundle(want.stdout); !ok {
-					t.Errorf("inv %d: no bundle written; the comparison needs one", i)
+				if _, ok := writtenBundle(want.stdout); !ok && jsonField(want.stdout, "resultFile") == "" {
+					t.Errorf("inv %d: no proof bundle or minimization result written; the comparison needs one", i)
 				}
 			}
 		})

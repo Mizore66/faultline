@@ -18,6 +18,7 @@ Protocol:
 | name | `run` behaviour |
 | --- | --- |
 | `pass-fail` | `state.txt` = `bad`: stdout `state=bad` and a `PREDICATE_FAIL` result line, stderr `witness failed`, exit 1. Otherwise stdout `state=<state>` and a `PREDICATE_PASS` result line, exit 0 (`difftest/gen/fixtures.ts` `deterministicDockerRunner`). |
+| `odd-bad` | fails the predicate when an odd number of the source's `state*.txt` files hold a line `bad` (a witness over several files, or over one hunk), otherwise passes; no `state=` line. |
 | `timeout` | stdout `started`, then `exec sleep 30` (the runner's timeout kills it). |
 | `flood` | `exec yes 'flood é'`: stdout without end (the output limit kills it). |
 | `daemon-down` | stderr `docker: Cannot connect to the Docker daemon ...`, exit 1. |
@@ -27,7 +28,7 @@ Protocol:
 | `forged-pass` | stdout a `PREDICATE_PASS` result line, exit 1. |
 | `compile-error` | stderr `witness.mjs:3` and `SyntaxError: Unexpected token '}'`, exit 1. |
 
-None of them reads `state.txt` except `pass-fail`. Long-running children are
+None of them reads `state.txt` except `pass-fail` and `odd-bad`. Long-running children are
 started with `exec`, so a SIGKILL to the pid the runner spawned (the
 recorder, which also execs) reaches the process holding the pipes. Keep the
 outputs fixed text: goldens compare them byte for byte.

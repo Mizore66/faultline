@@ -10,6 +10,7 @@ import (
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
+	"github.com/Mizore66/faultline/internal/safedir"
 )
 
 // hasFlag ports src/cli-app.ts:140.
@@ -70,4 +71,48 @@ func requireImageOrConfig(repository string, args []string) (string, error) {
 		return "", fail("Missing required image: pass --image <digest-pinned-image> or run fl init / fl runtime prepare so `.faultline/config.json` stores one.")
 	}
 	return image, nil
+}
+
+// realDirectorySegment is resolveSafeDirectorySegment !== null, with its
+// lstat error thrown as in TS.
+func realDirectorySegment(path string) bool {
+	_, ok, err := safedir.ResolveSafeDirectorySegment(path)
+	if err != nil {
+		jsexc.Throw(err)
+	}
+	return ok
+}
+
+// safeManagedFileOutput ports src/cli-app.ts:265: keep write-once CLI
+// artifacts inside a managed, non-symlink FaultLine root.
+func safeManagedFileOutput(outputFile, managedRoot, label string) (string, error) {
+	root := nodefs.Resolve(managedRoot)
+	output := nodefs.Resolve(outputFile)
+	nested := jsexc.Must(safedir.RelativeTrustedSystemPath(root, output))
+	if nested == "" || strings.HasPrefix(nested, "..") || nodefs.IsAbsolute(nested) {
+		return "", fail("%s output must be a file beneath %s", label, root)
+	}
+	parts := strings.FieldsFunc(nested, func(r rune) bool { return r == '/' || r == '\\' })
+	if len(parts) < 1 {
+		return "", fail("%s output must have a file name.", label)
+	}
+	current := root
+	if nodefs.Exists(current) {
+		if !realDirectorySegment(current) {
+			return "", fail("%s root must be a real directory: %s", label, root)
+		}
+	}
+	for _, part := range parts[:len(parts)-1] {
+		current = nodefs.Join(current, part)
+		if !nodefs.Exists(current) {
+			continue
+		}
+		if !realDirectorySegment(current) {
+			return "", fail("%s output cannot traverse a symbolic link or non-directory: %s", label, current)
+		}
+	}
+	if nodefs.Exists(output) {
+		return "", fail("%s output already exists and will not be replaced: %s", label, output)
+	}
+	return output, nil
 }

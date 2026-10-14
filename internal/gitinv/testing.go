@@ -56,6 +56,7 @@ func FakeDockerDirForTest(t testing.TB, name string) string {
 type RepoCommitForTest struct {
 	Files    map[string]string
 	Symlinks map[string]string // path to link target
+	Modes    map[string]int    // path to permission bits (after the files are written)
 	Remove   []string
 }
 
@@ -101,6 +102,11 @@ func BuildRepoForTest(t testing.TB, objectFormat, name string, commits []RepoCom
 		}
 		for path, target := range c.Symlinks {
 			if err := os.Symlink(target, filepath.Join(dir, filepath.FromSlash(path))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for path, mode := range c.Modes {
+			if err := os.Chmod(filepath.Join(dir, filepath.FromSlash(path)), os.FileMode(mode)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -200,4 +206,28 @@ func TwoStateRequestForTest(t *testing.T, fake string) (request, frozen jsjson.V
 		"sandbox", jsjson.MustObject("mode", jsjson.MakeString("DOCKER_ISOLATED"), "image", jsjson.MakeString(PinnedImageForTest)),
 	)
 	return request, frozen
+}
+
+// TwoFileMinimizationRequestForTest is the minimization request over a
+// repository whose `before` commit has state.txt=good and other.txt=a and
+// whose `after` commit has state.txt=bad and other.txt=b: only state.txt
+// makes the witness fail. The fake Docker named by fake is put first on
+// PATH (t.Setenv). It reads the clock (the witness), like
+// FrozenWitnessForTest.
+func TwoFileMinimizationRequestForTest(t *testing.T, fake string) jsjson.Value {
+	t.Helper()
+	t.Setenv("PATH", FakeDockerDirForTest(t, fake)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	repo, ids := BuildRepoForTest(t, "sha1", "", []RepoCommitForTest{
+		{Files: map[string]string{"state.txt": "good\n", "other.txt": "a\n", "package.json": "{}\n"}},
+		{Files: map[string]string{"state.txt": "bad\n", "other.txt": "b\n"}},
+	})
+	frozen := FrozenWitnessForTest(t)
+	return jsjson.MustObject(
+		"repository", jsjson.MakeString(repo),
+		"before", jsjson.MakeString(ids[0]),
+		"after", jsjson.MakeString(ids[1]),
+		"frozenWitness", frozen,
+		"expectedFrozenDigest", frozen.Get("frozenDigest"),
+		"sandbox", jsjson.MustObject("mode", jsjson.MakeString("DOCKER_ISOLATED"), "image", jsjson.MakeString(PinnedImageForTest)),
+	)
 }

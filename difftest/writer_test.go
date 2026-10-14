@@ -412,9 +412,34 @@ func pointerToken(key string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(key, "~", "~0"), "/", "~1")
 }
 
+// loggedCasePaths are the paths under the case root the recorders logged
+// (every `git -C <worktree>` and `--mount src=<worktree>` argument), in log
+// order. gen-writers.ts has the twin.
+func loggedCasePaths(records []string, r writerRoots) []string {
+	var out []string
+	seen := map[string]bool{}
+	consider := func(s string) {
+		if strings.HasPrefix(s, r.root) && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, record := range records {
+		for _, arg := range strings.Split(record, "\x1f") {
+			consider(arg)
+			for _, part := range strings.Split(arg, ",") {
+				if i := strings.Index(part, "="); i >= 0 {
+					consider(part[i+1:])
+				}
+			}
+		}
+	}
+	return out
+}
+
 // relocation ports gen-writers.ts relocation: the digests in the tree that
 // depend on the case paths, each named by where it was first derived.
-func relocation(t *testing.T, r writerRoots) *relocated {
+func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 	t.Helper()
 	type file struct {
 		rel   string
@@ -520,7 +545,15 @@ func relocation(t *testing.T, r writerRoots) *relocated {
 			visit(o.Field(key), path, pointer+"/"+pointerToken(key))
 		}
 	}
-	for frontier := []string{r.root}; len(frontier) > 0; {
+	// A minimization run fact hashes its materialized worktree path, which
+	// appears in no file: name those digests after the masked path.
+	seeds := []string{r.root}
+	for _, path := range loggedCasePaths(records, r) {
+		digest := canonical.SHA256Hex(path)
+		add(digest, "path:"+normalizeWriter(path, r))
+		seeds = append(seeds, digest)
+	}
+	for frontier := seeds; len(frontier) > 0; {
 		found = nil
 		for _, f := range files {
 			if !slices.ContainsFunc(frontier, func(needle string) bool { return strings.Contains(f.text, needle) }) {
@@ -631,8 +664,12 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 	r := makeWriterRoots(t)
 	prepareWriterCase(t, repo, tpl, r)
 	var out []writerResult
+	// The recorded paths accumulate over the case's invocations: a later
+	// invocation must keep masking the worktree digests an earlier one
+	// wrote into a file (gen-writers.ts runCase).
+	var records []string
 	for inv, argv := range tpl.Argv {
-		before := treeEntries(t, r.ws, relocation(t, r).fileDigest)
+		before := treeEntries(t, r.ws, relocation(t, r, records).fileDigest)
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
@@ -647,12 +684,14 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 		if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
 			t.Fatalf("running fl: %v", err)
 		}
-		reloc := relocation(t, r)
+		invocationRecords := readArgvLog(r.argvLog)
+		records = append(records, invocationRecords...)
+		reloc := relocation(t, r, records)
 		after := treeEntries(t, r.ws, reloc.fileDigest)
 		res := writerResult{Inv: inv, Stdout: reloc.text(stdout.String()), Stderr: reloc.text(stderr.String()),
 			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestWith(r.ws, reloc.fileDigest), Modes: modesDigest(after), Files: changedFiles(before, after),
 			contents: map[string][]byte{}}
-		for _, record := range readArgvLog(r.argvLog) {
+		for _, record := range invocationRecords {
 			res.Argv = append(res.Argv, normalizeRecord(record, r, reloc))
 		}
 		// After the tree and the argv log are read (gen-writers.ts runCase).

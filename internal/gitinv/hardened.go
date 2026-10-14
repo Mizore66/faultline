@@ -416,3 +416,7 @@ func MaterializeGitTree(repository, commit, tempRoot, name string) (Materialized
 	}
 	return MaterializedTree{Worktree: worktree, IndexFile: indexFile, Cleanup: cleanup, session: session}, nil
 }
+
+// Detail is the `stderr.trim() || error || fallback` detail of a failed
+// run, for ported callers outside this package.
+func (r GitRun) Detail(fallback string) string { return r.detail(fallback) }

@@ -12,6 +12,8 @@ import {
   investigateGitRange
 } from "../../src/git-investigation.js";
 import type { GitInvestigationRequest } from "../../src/git-investigation.js";
+import { minimizeGitDiff, verifyGitMinimizationResult } from "../../src/git-minimization.js";
+import type { GitMinimizationRequest } from "../../src/git-minimization.js";
 import { GitProofBundleManifestSchema, GitProofSourceMetadataSchema, writeGitInvestigationProofBundle } from "../../src/git-proof-bundle.js";
 import type { GitProofBundleWriteOptions } from "../../src/git-proof-bundle.js";
 import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witness-lock.js";
@@ -334,6 +336,28 @@ export const handlers: Record<string, Handler> = {
       return await withPath(path, async () => {
         try {
           return JSON.stringify(await investigateGitRange(request));
+        } catch (error) {
+          return `THREW:${(error as Error).message}`;
+        }
+      });
+    } finally {
+      if (saved === undefined) delete process.env.FAULTLINE_ARGV_LOG;
+      else process.env.FAULTLINE_ARGV_LOG = saved;
+    }
+  },
+  verifyGitMinimizationResult: ({ text, expected }: { text: string; expected?: string }) =>
+    canonicalJson(verifyGitMinimizationResult(JSON.parse(text), expected)),
+  // minimizeGitDiff with the native runner, with PATH and
+  // FAULTLINE_ARGV_LOG (the git and docker recorders' log) replaced:
+  // JSON.stringify of the result (key order kept), or "THREW:<message>".
+  // Start the oracle seeded (oracle.StartSeeded) to compare nonces and times.
+  minimizeGitDiff: async ({ request, path, argvLog }: { request: GitMinimizationRequest; path: string; argvLog: string }) => {
+    const saved = process.env.FAULTLINE_ARGV_LOG;
+    process.env.FAULTLINE_ARGV_LOG = argvLog;
+    try {
+      return await withPath(path, async () => {
+        try {
+          return JSON.stringify(await minimizeGitDiff(request));
         } catch (error) {
           return `THREW:${(error as Error).message}`;
         }

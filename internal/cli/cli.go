@@ -62,6 +62,8 @@ func dispatch(e *env, args []string) error {
 		return ledgerCommand(e, rest)
 	case command == "investigate":
 		return investigateCommand(e, rest)
+	case command == "minimize":
+		return minimizeCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:

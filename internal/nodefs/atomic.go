@@ -68,3 +68,11 @@ func SyncDir(dir string) {
 	f.Sync()
 	closeFile(f)
 }
+
+// Link is linkSync(from, to); a failure prints both paths.
+func Link(from, to string) error {
+	if err := retryEINTR(func() error { return os.Link(sysPath(from), sysPath(to)) }); err != nil {
+		return &Error{Code: codeOf(err), Syscall: "link", Path: errorPath(from), Dest: errorPath(to)}
+	}
+	return nil
+}
