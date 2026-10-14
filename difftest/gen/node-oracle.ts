@@ -11,7 +11,9 @@ import {
 } from "../../src/git-investigation.js";
 import { GitProofBundleManifestSchema, GitProofSourceMetadataSchema } from "../../src/git-proof-bundle.js";
 import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witness-lock.js";
-import { EnvironmentFingerprintSchema } from "../../src/environment-fingerprint.js";
+import { EnvironmentFingerprintSchema, computeEnvironmentFingerprint, resolveRuntimeImageForFingerprint } from "../../src/environment-fingerprint.js";
+import { loadRuntimeMappingDocument } from "../../src/runtime-mapping-file.js";
+import { readFaultLineConfig } from "../../src/config.js";
 import { MaterializedOverlaySchema } from "../../src/safe-overlay.js";
 import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../src/ledger.js";
 import { ledgerBoundInvestigationDigest, verifyLedgerBoundInvestigation } from "../../src/ledger-binding.js";
@@ -109,6 +111,41 @@ export const handlers: Record<string, Handler> = {
     if (!parsed.success) return `SCHEMA:${parsed.error.message}`;
     try {
       return canonicalJson(validateSandboxPlanAudit(parsed.data));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  // The image-configuration and fingerprint helpers: canonical JSON, or
+  // "THREW:<message>" when TS threw.
+  loadRuntimeMappingDocument: ({ text }: { text: string }) => {
+    try {
+      return canonicalJson(Object.entries(loadRuntimeMappingDocument(JSON.parse(text))));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  computeEnvironmentFingerprint: ({ dir }: { dir: string }) => {
+    try {
+      return canonicalJson(computeEnvironmentFingerprint(dir));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  resolveRuntimeImageForFingerprint: ({ fingerprintDigest, homogeneity, mapping, defaultImage }: {
+    fingerprintDigest: string; homogeneity: "HOMOGENEOUS" | "HETEROGENEOUS" | "EMPTY"; mapping: Record<string, string>; defaultImage?: string;
+  }) => {
+    try {
+      return resolveRuntimeImageForFingerprint({
+        fingerprintDigest, homogeneity, runtimeMapping: mapping, ...(defaultImage === undefined ? {} : { defaultImage })
+      });
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  readFaultLineConfig: ({ dir }: { dir: string }) => {
+    try {
+      const config = readFaultLineConfig(dir);
+      return config === null ? "NULL" : canonicalJson(config);
     } catch (error) {
       return `THREW:${(error as Error).message}`;
     }

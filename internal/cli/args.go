@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Mizore66/faultline/internal/bundle"
+	"github.com/Mizore66/faultline/internal/gitinv"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
@@ -52,4 +53,21 @@ func readJSONInput(file string) (jsjson.Value, error) {
 		return jsjson.Value{}, errors.New(jsexc.Concat("Unable to read JSON input ", file, ": ", jsexc.Message(err)))
 	}
 	return v, nil
+}
+
+// requireImageOrConfig ports src/cli-app.ts:161: `--image` overrides the
+// image persisted in .faultline/config.json (resolveConfiguredImage,
+// src/config.ts:122).
+func requireImageOrConfig(repository string, args []string) (string, error) {
+	image, ok := option(args, "--image")
+	if !ok {
+		var err error
+		if image, ok, err = gitinv.ResolveConfiguredImage(repository); err != nil {
+			return "", err
+		}
+	}
+	if !ok {
+		return "", fail("Missing required image: pass --image <digest-pinned-image> or run fl init / fl runtime prepare so `.faultline/config.json` stores one.")
+	}
+	return image, nil
 }
