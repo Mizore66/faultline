@@ -817,3 +817,7 @@ func Relative(from, to string) string {
 	}
 	return PosixRelative(mustCwd, from, to)
 }
+
+// ParseRoot is path.parse(p).root for a path.resolve result: "/" on POSIX;
+// on Windows the drive root ("C:\") or the UNC share root ("\\h\s\").
+func ParseRoot(resolved string) string { return realpathSplitRoot(resolved) }

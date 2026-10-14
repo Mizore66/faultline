@@ -121,8 +121,16 @@ func reconstructTransitions(states []jsjson.Value) []jsjson.Value {
 // hasLifecycleLedger ports git-proof-bundle.ts:565.
 func hasLifecycleLedger(binding jsjson.Value) bool { return binding.Get("status").Str() != "UNBOUND" }
 
-// bindLifecycleLedger ports git-proof-bundle.ts:581 for a supplied ledger.
+// bindLifecycleLedger ports git-proof-bundle.ts:581 for a supplied ledger;
+// it returns the binding.
 func bindLifecycleLedger(ledgerInput, result jsjson.Value) jsjson.Value {
+	binding, _ := bindParsedLifecycleLedger(ledgerInput, result)
+	return binding
+}
+
+// bindParsedLifecycleLedger ports git-proof-bundle.ts:581 for a supplied
+// ledger: it returns { binding, ledger }, the ledger as parsed.
+func bindParsedLifecycleLedger(ledgerInput, result jsjson.Value) (jsjson.Value, jsjson.Value) {
 	ledger := bundle.Must(bundle.ParseValue(ledgerInput, CodexLifecycleLedgerSchema))
 	verification := VerifyCodexLifecycleLedger(ledger)
 	if !verification.Valid || verification.HeadHash == nil {
@@ -181,7 +189,7 @@ func bindLifecycleLedger(ledgerInput, result jsjson.Value) jsjson.Value {
 	binding.Set("headHash", jsjson.MakeString(*verification.HeadHash))
 	binding.Set("transport", sessionStarted.Get("event", "payload", "transport"))
 	binding.Set("checkpointBindings", jsjson.MakeArray(bindings))
-	return bundle.Must(bundle.ParseValue(jsjson.MakeObject(binding), target))
+	return bundle.Must(bundle.ParseValue(jsjson.MakeObject(binding), target)), ledger
 }
 
 // verifyLifecycleBinding ports git-proof-bundle.ts:984.

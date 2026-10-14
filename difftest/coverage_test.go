@@ -37,6 +37,24 @@ var unreachableLiterals = map[string]string{
 	"source metadata artifact paths do not match the manifest":                "both paths are zod literals, so they always agree after the schemas pass",
 	"Cannot bind an invalid Codex lifecycle ledger:":                          "binding runs only after the ledger verified",
 	"Cannot bind a lifecycle ledger that has no SESSION_STARTED observation.": "a verified ledger always starts with SESSION_STARTED",
+
+	// gitproof/write.go (TestLiveProofWriter's requireReached):
+	"Git proof root is not a real directory:":                                         "the filesystem root is always a real directory",
+	"Proof bundle root cannot traverse a symbolic link or non-directory:":             "race only: the Git proof walk over the same segments refused it first",
+	"Proof bundle output must be a child directory of":                                "prepareFreshOutput refuses the same relation first",
+	"Proof bundle root cannot be a symbolic link:":                                    "race only: the Git proof walk resolved the root just before",
+	"Proof bundle output cannot traverse a symbolic link:":                            "race only: the Git proof walk resolved every parent just before, and the output does not exist",
+	"Proof bundle output must be a directory:":                                        "race only: prepareFreshOutput refused an existing output just before",
+	"Only a completed Git investigation with a resolved source range can be bundled.": "semantic validation refuses a null repository or range first",
+	"Unsupported Git object format:":                                                  "Git reports only sha1 or sha256",
+	"Git bundle did not expose exactly the expected descendant reference.":            "git bundle create was given exactly that one ref",
+	"Git bundle is empty or exceeds FaultLine's portable artifact limit.":             "a created bundle is never empty, and readBoundedFile refuses one past the limit first",
+	"Cannot create a manifest without a resolved Git range.":                          "semantic validation refuses a null range first",
+	"Unsafe generated artifact path:":                                                 "generated paths are fixed names and hex run ids",
+	"Git proof bundle generated duplicate artifact:":                                  "semantic validation refuses duplicate run ids first",
+	"Git proof writer did not produce the complete expected artifact set.":            "the writer puts exactly requiredArtifactPaths",
+	"Git proof source artifact changed before package assembly:":                      "race only: the bundle git just wrote is read back unchanged",
+	"Git proof bundle output appeared during assembly and will not be replaced:":      "race only: the output was refused when it existed before staging",
 }
 
 // errorLiterals collects the string literals passed to errors.New,
@@ -221,6 +239,7 @@ var liveGatedFiles = map[string]string{
 	"gitproof/ledger.go":  "TestLiveLedger",
 	"gitproof/sandbox.go": "TestLiveSandbox",
 	"gitproof/witness.go": "TestLiveWitness",
+	"gitproof/write.go":   "TestLiveProofWriter",
 }
 
 func TestGoldensReachEveryErrorLiteral(t *testing.T) {

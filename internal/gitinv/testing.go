@@ -182,3 +182,22 @@ var (
 )
 
 const pinnedImage = PinnedImageForTest
+
+// TwoStateRequestForTest is the two-state investigation request over
+// GoodThenBadRepoForTest (DOCKER_ISOLATED, PinnedImageForTest) with the
+// fake Docker fake first on PATH (t.Setenv), and the frozen witness it
+// names. It reads the clock (the witness), like FrozenWitnessForTest.
+func TwoStateRequestForTest(t *testing.T, fake string) (request, frozen jsjson.Value) {
+	t.Helper()
+	t.Setenv("PATH", FakeDockerDirForTest(t, fake)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	repo, ancestor, descendant := GoodThenBadRepoForTest(t)
+	frozen = FrozenWitnessForTest(t)
+	request = jsjson.MustObject(
+		"repository", jsjson.MakeString(repo),
+		"range", jsjson.MustObject("ancestor", jsjson.MakeString(ancestor), "descendant", jsjson.MakeString(descendant)),
+		"frozenWitness", frozen,
+		"expectedFrozenDigest", frozen.Get("frozenDigest"),
+		"sandbox", jsjson.MustObject("mode", jsjson.MakeString("DOCKER_ISOLATED"), "image", jsjson.MakeString(PinnedImageForTest)),
+	)
+	return request, frozen
+}

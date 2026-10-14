@@ -12,7 +12,8 @@ import {
   investigateGitRange
 } from "../../src/git-investigation.js";
 import type { GitInvestigationRequest } from "../../src/git-investigation.js";
-import { GitProofBundleManifestSchema, GitProofSourceMetadataSchema } from "../../src/git-proof-bundle.js";
+import { GitProofBundleManifestSchema, GitProofSourceMetadataSchema, writeGitInvestigationProofBundle } from "../../src/git-proof-bundle.js";
+import type { GitProofBundleWriteOptions } from "../../src/git-proof-bundle.js";
 import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witness-lock.js";
 import { EnvironmentFingerprintSchema, computeEnvironmentFingerprint, resolveRuntimeImageForFingerprint } from "../../src/environment-fingerprint.js";
 import { loadRuntimeMappingDocument } from "../../src/runtime-mapping-file.js";
@@ -26,6 +27,7 @@ import type { SandboxCommandResult, SandboxPlan, SandboxPlanRequest } from "../.
 import { resignLedger, richLedger } from "./ledger-seed.js";
 import { resignSandbox, sandboxVariant } from "./sandbox-seed.js";
 import { makeWitness, resignWitness } from "./witness-seed.js";
+import { lifecycleBoundToDescendant, lifecycleBoundToEveryInvestigatedState } from "./fixtures.js";
 import { redactText, redactValue } from "../../src/redaction.js";
 import { classifyFromWitnessResult, resolveWitnessResultFromStdout, witnessResultConsistentWithExitCode } from "../../src/witness-result.js";
 
@@ -341,6 +343,32 @@ export const handlers: Record<string, Handler> = {
       else process.env.FAULTLINE_ARGV_LOG = saved;
     }
   },
+  // writeGitInvestigationProofBundle with PATH and FAULTLINE_ARGV_LOG (the
+  // git recorder's log) replaced: JSON.stringify of the written bundle (key
+  // order kept), or "THREW:<message>". Start the oracle seeded to compare
+  // the staging UUID, the temporary clone and the generatedAt default.
+  writeGitInvestigationProofBundle: ({ output, result, frozen, options, path, argvLog }: {
+    output: string; result: unknown; frozen: unknown; options: GitProofBundleWriteOptions; path: string; argvLog: string;
+  }) => {
+    const saved = process.env.FAULTLINE_ARGV_LOG;
+    const savedPath = process.env.PATH;
+    process.env.FAULTLINE_ARGV_LOG = argvLog;
+    process.env.PATH = path;
+    try {
+      return JSON.stringify(writeGitInvestigationProofBundle(output, result as never, frozen as never, options));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    } finally {
+      if (saved === undefined) delete process.env.FAULTLINE_ARGV_LOG;
+      else process.env.FAULTLINE_ARGV_LOG = saved;
+      process.env.PATH = savedPath;
+    }
+  },
+  // A lifecycle ledger over a fixture repository (it reads the clock, so use
+  // an unseeded oracle): with commits, one clean checkpoint per commit
+  // (checking each out); without, one checkpoint of the current HEAD.
+  gitLifecycleLedger: ({ repository, commits }: { repository: string; commits?: string[] }) =>
+    JSON.stringify(commits === undefined ? lifecycleBoundToDescendant(repository) : lifecycleBoundToEveryInvestigatedState(repository, commits)),
   resolveWitnessResultFromStdout: ({ stdout }: { stdout: string }) => canonicalJson(resolveWitnessResultFromStdout(stdout)),
   classifyFromWitnessResult: ({ outcome }: { outcome: any }) => canonicalJson(classifyFromWitnessResult(outcome)),
   witnessResultConsistentWithExitCode: ({ outcome, exitCode }: { outcome: any; exitCode: number }) => canonicalJson(witnessResultConsistentWithExitCode(outcome, exitCode)),
