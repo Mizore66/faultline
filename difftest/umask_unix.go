@@ -14,7 +14,7 @@ import (
 // subtests are not parallel, and parallel top-level tests only start after
 // every sequential one has finished. Setting it around each child instead
 // would need the same process-wide call (Go has no per-child umask).
-func setWriterUmask(t *testing.T) {
+func setWriterUmask(t testing.TB) {
 	old := syscall.Umask(0)
 	t.Cleanup(func() { syscall.Umask(old) })
 }

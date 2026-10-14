@@ -62,7 +62,7 @@ var (
 	fileEntry = regexp.MustCompile(`^[0-9a-f]{64}(?: [0-7]{1,4})?$`)
 )
 
-func loadWriterTemplates(t *testing.T, repo string) []writerTemplate {
+func loadWriterTemplates(t testing.TB, repo string) []writerTemplate {
 	text, err := os.ReadFile(filepath.Join(repo, "difftest", "testdata", "writers.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +178,7 @@ func checkWriterGolden(v jsjson.Value) string {
 // makeWriterRoots makes the workspace (the command's cwd), HOME and TMPDIR
 // under one physical temporary directory, so the paths fl prints are the
 // ones normalizeWriter masks.
-func makeWriterRoots(t *testing.T) writerRoots {
+func makeWriterRoots(t testing.TB) writerRoots {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func makeWriterRoots(t *testing.T) writerRoots {
 // the script: hardened git runs with PATH as its only environment variable,
 // so a recorder that read FAULTLINE_ARGV_LOG would miss every git call fl
 // hardens (scenarios.ts writeRecorders).
-func writeRecorders(t *testing.T, repo string, r writerRoots) {
+func writeRecorders(t testing.TB, repo string, r writerRoots) {
 	t.Helper()
 	const line = "log=$FAULTLINE_ARGV_LOG\n"
 	for _, name := range []string{"git", "docker"} {
@@ -662,6 +662,23 @@ func normalizeRecord(record string, r writerRoots, reloc *relocated) string {
 // runWriterCase builds the case's workspace and runs its invocations in
 // order, like difftest/gen/gen-writers.ts runCase.
 func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult {
+	return runWriterCaseWith(t, repo, tpl, writerRun{})
+}
+
+// writerRun changes how runWriterCaseWith runs an invocation; the zero
+// value runs the Go fl and cross-verifies every bundle it writes.
+type writerRun struct {
+	// command turns fl's arguments into the command line to run (nil: flBinary).
+	command func(r writerRoots, inv int, args []string) []string
+	// mask rewrites an invocation's stdout and stderr before normalization,
+	// and may rename what the invocation left in the workspace.
+	mask func(t *testing.T, r writerRoots, inv int, stdout, stderr string) (string, string)
+	// noVerify skips crossVerify.
+	noVerify bool
+}
+
+// runWriterCaseWith is runWriterCase with run's command, masks and checks.
+func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writerRun) []writerResult {
 	r := makeWriterRoots(t)
 	busyPort := holdBusyPort(t, tpl)
 	prepareWriterCase(t, repo, tpl, r)
@@ -677,7 +694,11 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 		for i, a := range argv {
 			args[i] = strings.ReplaceAll(substituteRoots(a, r), busyPortMarker, busyPort)
 		}
-		cmd := exec.Command(flBinary, args...)
+		command := append([]string{flBinary}, args...)
+		if run.command != nil {
+			command = run.command(r, inv, args)
+		}
+		cmd := exec.Command(command[0], command[1:]...)
 		cmd.Dir = r.ws
 		cmd.Env = writerEnv(repo, r, tpl.ID, tpl)
 		var stdout, stderr bytes.Buffer
@@ -686,19 +707,23 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 		if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
 			t.Fatalf("running fl: %v", err)
 		}
+		outText, errText := stdout.String(), stderr.String()
+		if run.mask != nil {
+			outText, errText = run.mask(t, r, inv, outText, errText)
+		}
 		invocationRecords := readArgvLog(r.argvLog)
 		records = append(records, invocationRecords...)
 		reloc := relocation(t, r, records)
 		after := treeEntries(t, r.ws, reloc.fileDigest)
-		res := writerResult{Inv: inv, Stdout: reloc.text(stdout.String()), Stderr: reloc.text(stderr.String()),
+		res := writerResult{Inv: inv, Stdout: reloc.text(outText), Stderr: reloc.text(errText),
 			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestWith(r.ws, reloc.fileDigest), Modes: modesDigest(after), Files: changedFiles(before, after),
 			contents: map[string][]byte{}}
 		for _, record := range invocationRecords {
 			res.Argv = append(res.Argv, normalizeRecord(record, r, reloc))
 		}
 		// After the tree and the argv log are read (gen-writers.ts runCase).
-		if bundle, ok := writtenBundle(stdout.String()); ok {
-			crossVerify(t, repo, inv, tpl.ID, bundle, jsonField(stdout.String(), "proofBundle", "rootDigest"))
+		if bundle, ok := writtenBundle(outText); ok && !run.noVerify {
+			crossVerify(t, repo, inv, tpl.ID, bundle, jsonField(outText, "proofBundle", "rootDigest"))
 		}
 		for rel, entry := range res.Files {
 			if fileEntry.MatchString(entry) {
@@ -736,7 +761,7 @@ func holdBusyPort(t *testing.T, tpl writerTemplate) string {
 // prepareWriterCase fills the case's workspace: the scenario, then the
 // template's mutations (with <WS>, <TMP>, <HOME> substituted), then
 // resetModes.
-func prepareWriterCase(t *testing.T, repo string, tpl writerTemplate, r writerRoots) {
+func prepareWriterCase(t testing.TB, repo string, tpl writerTemplate, r writerRoots) {
 	t.Helper()
 	copyScenario(t, repo, tpl.Scenario, r.ws)
 	for _, raw := range tpl.Mutations {

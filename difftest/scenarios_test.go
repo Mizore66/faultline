@@ -50,7 +50,7 @@ const committedGitDir = "dot-git"
 // <name>/dirs.txt lists every directory, one per line (git keeps no empty
 // directories, and the witness store makes some), <name>/tree/ holds the
 // files.
-func copyScenario(t *testing.T, repo, name, ws string) {
+func copyScenario(t testing.TB, repo, name, ws string) {
 	t.Helper()
 	if !writerScenarios[name] {
 		t.Fatalf("unknown scenario %q (add it to difftest/gen/scenarios.ts and writerScenarios)", name)
@@ -74,7 +74,7 @@ func copyScenario(t *testing.T, repo, name, ws string) {
 
 // copyScenarioTree copies a committed tree/ into ws, turning each
 // committedGitDir component back into .git.
-func copyScenarioTree(t *testing.T, from, to string) {
+func copyScenarioTree(t testing.TB, from, to string) {
 	t.Helper()
 	err := filepath.WalkDir(from, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -121,7 +121,7 @@ func checkScenarioDirs(t *testing.T, repo string) {
 // case's scenario and mutations are in place (scenarios.ts resetModes), so
 // the workspace fl starts from never depends on the checkout or on how the
 // harness wrote it.
-func resetModes(t *testing.T, root string) {
+func resetModes(t testing.TB, root string) {
 	t.Helper()
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		switch {
