@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fake git for difftest: never finishes in time, so FaultLine's 30 s bound
+# stops it (exec, so SIGTERM reaches the sleeping process itself).
+exec sleep 40

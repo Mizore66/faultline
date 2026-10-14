@@ -284,3 +284,22 @@ func isArrayIndex(key string) bool {
 	}
 	return n < 1<<32-1
 }
+
+// Getenv is process.env[name] for one name: on Windows GetEnvironmentVariableW
+// (case-insensitive) decoded as decodeEnvValue does, elsewhere getenv(3)
+// (the first entry) decoded from UTF-8 with replacement. ok is false when
+// the value is undefined.
+func Getenv(name string) (value string, ok bool) {
+	if runtime.GOOS == "windows" {
+		units, ok := getenvUTF16(name)
+		if !ok {
+			return "", false
+		}
+		return decodeEnvValue(units), true
+	}
+	raw, ok := syscall.Getenv(name)
+	if !ok {
+		return "", false
+	}
+	return nodefs.DecodeUTF8([]byte(raw)), true
+}

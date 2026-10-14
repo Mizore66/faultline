@@ -15,6 +15,12 @@ import (
 // already exists, open '<path>'"); write and close failures do not. The text
 // is encoded as Node encodes a JS string (lone surrogates become U+FFFD).
 func WriteFileUTF8(path, text string, mode fs.FileMode, exclusive bool) error {
+	return WriteFileBytes(path, []byte(jsstr.ToUTF8(text)), mode, exclusive)
+}
+
+// WriteFileBytes is writeFile(path, buffer, { mode, flag }) with flag "w"
+// or "wx", reporting failures as WriteFileUTF8 does.
+func WriteFileBytes(path string, data []byte, mode fs.FileMode, exclusive bool) error {
 	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	if exclusive {
 		flags |= os.O_EXCL
@@ -23,7 +29,6 @@ func WriteFileUTF8(path, text string, mode fs.FileMode, exclusive bool) error {
 	if err != nil {
 		return wrap(err, "open", path)
 	}
-	data := []byte(jsstr.ToUTF8(text))
 	var writeErr error
 	for len(data) > 0 {
 		n, err := f.Write(data)

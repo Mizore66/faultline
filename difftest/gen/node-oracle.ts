@@ -3,6 +3,7 @@
 import { createInterface } from "node:readline";
 import nodePath from "node:path";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { buildZod } from "./schema-dsl.js";
 import { PreventionProofBodySchema, PreventionProofManifestSchema, PreventionRepairedRunsArtifactSchema } from "../../src/prevention-proof.js";
@@ -14,7 +15,8 @@ import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witnes
 import { EnvironmentFingerprintSchema, computeEnvironmentFingerprint, resolveRuntimeImageForFingerprint } from "../../src/environment-fingerprint.js";
 import { loadRuntimeMappingDocument } from "../../src/runtime-mapping-file.js";
 import { readFaultLineConfig } from "../../src/config.js";
-import { MaterializedOverlaySchema } from "../../src/safe-overlay.js";
+import { MaterializedOverlaySchema, materializeFrozenOverlays } from "../../src/safe-overlay.js";
+import { materializeGitTree, runHardenedGit } from "../../src/git-materialization.js";
 import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../src/ledger.js";
 import { ledgerBoundInvestigationDigest, verifyLedgerBoundInvestigation } from "../../src/ledger-binding.js";
 import { validateSandboxPlanAudit } from "../../src/sandbox.js";
@@ -42,6 +44,32 @@ export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
 };
 
 type Handler = (args: any) => unknown; // may return a Promise
+
+// Git output as the hardened-git ops report it: its length and SHA-256, and
+// the bytes themselves (latin1) up to 64 KiB.
+const outputView = (bytes: Buffer) => ({
+  length: bytes.length,
+  sha256: createHash("sha256").update(bytes).digest("hex"),
+  text: bytes.length <= 65536 ? bytes.toString("latin1") : null
+});
+
+// Runs fn with process.env.PATH replaced (the hardened Git environment
+// copies the host PATH when it spawns).
+async function withPath<T>(path: string | undefined, fn: () => Promise<T>): Promise<T> {
+  if (path === undefined) return fn();
+  const saved = process.env.PATH;
+  process.env.PATH = path;
+  try {
+    return await fn();
+  } finally {
+    process.env.PATH = saved;
+  }
+}
+
+// Trees from materializeGitTree, kept for materializeFrozenOverlays and
+// cleanupGitTree.
+const materializedTrees = new Map<number, Awaited<ReturnType<typeof materializeGitTree>>>();
+let nextMaterializedTree = 0;
 export const handlers: Record<string, Handler> = {
   echo: (args) => args,
   makeWitness: ({ paths }: { paths: string[] }) => makeWitness(paths),
@@ -206,6 +234,47 @@ export const handlers: Record<string, Handler> = {
       child.stdin?.end(Buffer.from(stdin, "latin1"));
     }
   }),
+  // Buffer.from(s, "base64") for each string, as latin1.
+  base64Lenient: ({ texts }: { texts: string[] }) => texts.map((s) => Buffer.from(s, "base64").toString("latin1")),
+  runHardenedGit: async ({ repository, args, stdin, gitDir, worktree, indexFile, path }: {
+    repository: string; args: string[]; stdin?: string; gitDir?: string; worktree?: string; indexFile?: string; path?: string;
+  }) => {
+    const result = await withPath(path, () => runHardenedGit(repository, args, {
+      ...(stdin === undefined ? {} : { stdin: Buffer.from(stdin, "latin1") }),
+      ...(gitDir === undefined ? {} : { gitDir }),
+      ...(worktree === undefined ? {} : { worktree }),
+      ...(indexFile === undefined ? {} : { indexFile })
+    }));
+    return { exitCode: result.exitCode, stdout: outputView(result.stdout), stderr: outputView(result.stderr), error: result.error ?? null };
+  },
+  // { id, worktree }, or "THREW:<message>".
+  materializeGitTree: async ({ repository, commit, tempRoot, name, path }: {
+    repository: string; commit: string; tempRoot: string; name: string; path?: string;
+  }) => {
+    try {
+      const tree = await withPath(path, () => materializeGitTree({ repository, commit, tempRoot, name }));
+      const id = nextMaterializedTree++;
+      materializedTrees.set(id, tree);
+      return { id, worktree: tree.worktree };
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  // Canonical JSON of the overlay facts, or "THREW:<message>"; with id the
+  // tree's index refuses Git symlink targets.
+  materializeFrozenOverlays: async ({ worktree, witness, id }: { worktree: string; witness: string; id?: number }) => {
+    try {
+      const index = id === undefined ? undefined : materializedTrees.get(id);
+      return canonicalJson(await materializeFrozenOverlays(worktree, JSON.parse(witness), index));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  cleanupGitTree: async ({ id }: { id: number }) => {
+    const tree = materializedTrees.get(id)!;
+    materializedTrees.delete(id);
+    return { result: await tree.cleanup() };
+  },
   resolveWitnessResultFromStdout: ({ stdout }: { stdout: string }) => canonicalJson(resolveWitnessResultFromStdout(stdout)),
   classifyFromWitnessResult: ({ outcome }: { outcome: any }) => canonicalJson(classifyFromWitnessResult(outcome)),
   witnessResultConsistentWithExitCode: ({ outcome, exitCode }: { outcome: any; exitCode: number }) => canonicalJson(witnessResultConsistentWithExitCode(outcome, exitCode)),

@@ -1,0 +1,21 @@
+#!/bin/sh
+# Fake git for difftest: `git grep` finds a filter attribute; everything else runs the real git.
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+# The subcommand follows the hardened -c pairs, --git-dir=, --work-tree= and -C <dir>.
+sub=
+skip=
+for arg in "$@"; do
+  if [ -n "$skip" ]; then skip=; continue; fi
+  case $arg in
+    -c|-C) skip=1 ;;
+    --git-dir=*|--work-tree=*) ;;
+    *) sub=$arg; break ;;
+  esac
+done
+if [ "$sub" = grep ]; then
+  printf 'HEAD:.gitattributes:1:* filter=fake\n'
+  exit 0
+fi
+exec git "$@"
