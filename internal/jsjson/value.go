@@ -199,3 +199,21 @@ func arrayIndex(k string) (uint32, bool) {
 	}
 	return uint32(n), true
 }
+
+// MustObject builds an object from alternating key strings and Values, set
+// in argument order. It panics on a malformed argument list.
+func MustObject(kv ...any) Value {
+	if len(kv)%2 != 0 {
+		panic("jsjson.MustObject: odd argument count")
+	}
+	o := NewObj()
+	for i := 0; i < len(kv); i += 2 {
+		k, ok := kv[i].(string)
+		v, okv := kv[i+1].(Value)
+		if !ok || !okv {
+			panic("jsjson.MustObject: want string key and Value")
+		}
+		o.Set(k, v)
+	}
+	return MakeObject(o)
+}

@@ -15,8 +15,8 @@ import (
 	"github.com/Mizore66/faultline/internal/schema"
 )
 
-// expectedExecutionId ports git-proof-bundle.ts:502.
-func expectedExecutionID(run jsjson.Value) string {
+// ExpectedExecutionID ports git-proof-bundle.ts:502.
+func ExpectedExecutionID(run jsjson.Value) string {
 	o := jsjson.NewObj()
 	o.Set("schemaVersion", jsjson.MakeString(GitInvestigationSchemaVersion))
 	for _, k := range []string{"executionNonce", "stateIndex", "commit", "tree", "frozenDigest", "executionAttempt"} {
@@ -25,8 +25,8 @@ func expectedExecutionID(run jsjson.Value) string {
 	return bundle.Must(canonical.DigestJSON(jsjson.MakeObject(o)))
 }
 
-// expectedRunId ports git-proof-bundle.ts:514.
-func expectedRunID(run jsjson.Value) string {
+// ExpectedRunID ports git-proof-bundle.ts:514.
+func ExpectedRunID(run jsjson.Value) string {
 	return bundle.Must(canonical.DigestJSON(bundle.Without(run, "runId")))
 }
 
@@ -348,10 +348,10 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 	commandDigestValue := CommandDigest(frozen.Get("proposal", "witness", "command").Str())
 	for _, run := range runs {
 		runID := run.Get("runId").Str()
-		if runID != expectedRunID(run) {
+		if runID != ExpectedRunID(run) {
 			add(jsexc.Concat("runId does not match the canonical run fact: ", runID))
 		}
-		if run.Get("executionId").Str() != expectedExecutionID(run) {
+		if run.Get("executionId").Str() != ExpectedExecutionID(run) {
 			add(jsexc.Concat("executionId does not match its state and attempt: ", runID))
 		}
 		if runIDs[runID] {

@@ -54,6 +54,33 @@ var (
 		s.F("descendant", gitRevisionSchema),
 	).Strict()
 
+	// GitSandboxSchema ports src/git-investigation.ts:80
+	// GitInvestigationSandboxSchema.
+	GitSandboxSchema = s.Object(
+		s.F("mode", s.Default(s.LiteralString("DOCKER_ISOLATED"), jsjson.MakeString("DOCKER_ISOLATED"))),
+		s.F("image", s.Optional(s.String(s.MinLength(1), s.MaxLength(1_024)))),
+		s.F("environment", s.Optional(s.Record(s.String()))),
+		s.F("allowedEnvironment", s.Optional(s.Array(s.String(s.MinLength(1), s.MaxLength(128)), s.MaxItems(64)))),
+		s.F("limits", s.Optional(s.Object(
+			s.F("timeoutMs", s.Optional(positiveInt())),
+			s.F("maxOutputBytes", s.Optional(positiveInt())),
+			s.F("cpuCount", s.Optional(positiveInt())),
+			s.F("memoryBytes", s.Optional(positiveInt())),
+			s.F("pidsLimit", s.Optional(positiveInt())),
+			s.F("tmpfsBytes", s.Optional(positiveInt())),
+		).Strict())),
+	).Strict()
+
+	// GitInvestigationRequestSchema ports src/git-investigation.ts:97.
+	GitInvestigationRequestSchema = s.Object(
+		s.F("repository", s.String(s.MinLength(1), s.MaxLength(16_384))),
+		s.F("range", gitRangeSchema),
+		s.F("frozenWitness", FrozenWitnessSchema),
+		s.F("expectedFrozenDigest", digestSchema),
+		s.F("sandbox", GitSandboxSchema),
+		s.F("maxStates", s.Default(s.Number(s.Int(), s.Gte(2), s.Lte(512)), jsjson.MakeNumber(128))),
+	).Strict()
+
 	// GitCommitStateSchema ports src/git-investigation.ts:124.
 	GitCommitStateSchema = s.Object(
 		s.F("index", nonnegativeInt()),

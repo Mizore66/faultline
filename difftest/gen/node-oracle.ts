@@ -8,8 +8,10 @@ import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { buildZod } from "./schema-dsl.js";
 import { PreventionProofBodySchema, PreventionProofManifestSchema, PreventionRepairedRunsArtifactSchema } from "../../src/prevention-proof.js";
 import {
-  GitCommitStateSchema, GitInvestigationResultSchema, GitInvestigationRunFactSchema, StableGitStateSchema, StableGitTransitionSchema
+  GitCommitStateSchema, GitInvestigationResultSchema, GitInvestigationRunFactSchema, StableGitStateSchema, StableGitTransitionSchema,
+  investigateGitRange
 } from "../../src/git-investigation.js";
+import type { GitInvestigationRequest } from "../../src/git-investigation.js";
 import { GitProofBundleManifestSchema, GitProofSourceMetadataSchema } from "../../src/git-proof-bundle.js";
 import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witness-lock.js";
 import { EnvironmentFingerprintSchema, computeEnvironmentFingerprint, resolveRuntimeImageForFingerprint } from "../../src/environment-fingerprint.js";
@@ -310,6 +312,29 @@ export const handlers: Record<string, Handler> = {
           return `THREW:${(error as Error).message}`;
         }
         return JSON.stringify({ arguments: plan.arguments, result: await executeSandboxPlan(plan) });
+      });
+    } finally {
+      if (saved === undefined) delete process.env.FAULTLINE_ARGV_LOG;
+      else process.env.FAULTLINE_ARGV_LOG = saved;
+    }
+  },
+  // Date.now() minus the seeded epoch: under seed.mjs, how many clock ticks
+  // the oracle had used (tsx's startup takes some), plus this read.
+  seededTick: () => Date.now() - 1784203200000,
+  // investigateGitRange with the native runner, with PATH and
+  // FAULTLINE_ARGV_LOG (the git and docker recorders' log) replaced:
+  // JSON.stringify of the result (key order kept), or "THREW:<message>".
+  // Start the oracle seeded (oracle.StartSeeded) to compare nonces and times.
+  investigateGitRange: async ({ request, path, argvLog }: { request: GitInvestigationRequest; path: string; argvLog: string }) => {
+    const saved = process.env.FAULTLINE_ARGV_LOG;
+    process.env.FAULTLINE_ARGV_LOG = argvLog;
+    try {
+      return await withPath(path, async () => {
+        try {
+          return JSON.stringify(await investigateGitRange(request));
+        } catch (error) {
+          return `THREW:${(error as Error).message}`;
+        }
       });
     } finally {
       if (saved === undefined) delete process.env.FAULTLINE_ARGV_LOG;
