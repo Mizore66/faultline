@@ -1,0 +1,7 @@
+docs
+docs/samples
+docs/samples/self-incident-commit-proof
+docs/samples/self-incident-commit-proof/runs
+docs/samples/self-incident-commit-proof/source
+docs/samples/self-incident-commit-proof/transitions
+docs/samples/self-incident-commit-proof/witness

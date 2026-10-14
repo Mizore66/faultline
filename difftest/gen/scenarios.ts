@@ -440,7 +440,19 @@ export const SCENARIOS: Record<string, Scenario> = {
   "git-all-pass": gitScenario(repeat("good", 3)),
   "git-all-fail": gitScenario(repeat("bad", 3)),
   // A one-second witness: the timeout fake Docker is killed after 1 s, not 30.
-  "git-short-timeout": gitScenario([state("good"), state("bad")], { proposal: witnessInput({ timeoutSeconds: 1 }) })
+  "git-short-timeout": gitScenario([state("good"), state("bad")], { proposal: witnessInput({ timeoutSeconds: 1 }) }),
+  // judge-proof and commit-proof-preview read the committed COMMIT_PROOF
+  // sample from the workspace by default.
+  "commit-proof-sample": {
+    files: {}, argv: [],
+    setup: (ws) => cpSync(join(repo, "docs", "samples", "self-incident-commit-proof"), join(ws, "docs", "samples", "self-incident-commit-proof"), { recursive: true })
+  },
+  // Git proof bundles whose pages take the lifecycle-bound, recovery and
+  // unstable-state branches (and one the loader refuses).
+  "proof-bases": {
+    bases: Object.fromEntries(["git-fully-bound", "git-partially-bound", "git-shape-mixed-history", "git-sha256"].map((b) => [`bases/${b}`, b])),
+    files: {}, argv: []
+  }
 };
 
 // A scenario is committed as <name>/dirs.txt, every directory of the

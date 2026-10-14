@@ -13,6 +13,8 @@ import (
 // the seed preload.
 var writerScenarios = map[string]bool{
 	"empty":                      true,
+	"commit-proof-sample":        true,
+	"proof-bases":                true,
 	"witness-proposed":           true,
 	"witness-approved":           true,
 	"witness-frozen":             true,

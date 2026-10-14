@@ -9,3 +9,4 @@ difftest/testdata/fixtures/** binary
 difftest/testdata/fakegit/** text eol=lf
 difftest/testdata/recorder/** text eol=lf
 difftest/testdata/fakedocker/** text eol=lf
+difftest/testdata/fakebrowser/** text eol=lf

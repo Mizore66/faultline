@@ -4,6 +4,7 @@
 // (slice 2 spec 2.3). The Go twin is difftest/writer_test.go.
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts && pnpm exec tsx difftest/gen/gen-writers.ts
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { join, resolve } from "node:path";
 import { canonicalJson, digestJson, sha256 } from "../../src/canonical.js";
 import { PATH_OPS, applyMutation, normalizeWriter, treeDigest, type Template } from "./cases.js";
@@ -234,8 +235,24 @@ async function crossVerify(id: string, inv: number, roots: CaseRoots, stdout: st
   if (r.exit !== 0 || !r.stdout.startsWith("Integrity: VALID\n") || !r.stdout.includes("\nExternal root: MATCH\n")) throw new Error(`${id}|${inv}: TS verify of the bundle TS wrote failed (exit ${r.exit})\n${r.stdout}${r.stderr}`);
 }
 
+// BUSY_PORT in an argv string is the port of a listener the case holds on
+// 127.0.0.1 while it runs (judge-proof-port-in-use); the Go twin is
+// holdBusyPort in difftest/writer_test.go.
+export const BUSY_PORT = "<BUSYPORT>";
+
+async function holdBusyPort(t: WriterTemplate): Promise<{ port: string; server?: Server }> {
+  if (!t.argv.some((argv) => argv.some((a) => a.includes(BUSY_PORT)))) return { port: "" };
+  const server = createServer();
+  await new Promise<void>((resolveListen, rejectListen) => {
+    server.once("error", rejectListen);
+    server.listen(0, "127.0.0.1", () => resolveListen());
+  });
+  return { port: String((server.address() as { port: number }).port), server };
+}
+
 async function runCase(t: WriterTemplate): Promise<string[]> {
   const roots = makeCaseRoots();
+  const busy = await holdBusyPort(t);
   try {
     copyScenario(t.scenario, roots.ws);
     for (const template of t.mutations ?? []) {
@@ -252,7 +269,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     for (const [inv, argv] of t.argv.entries()) {
       const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
       rmSync(roots.argvLog, { force: true });
-      const r = await runCli(roots, argv.map((a) => substitute(a, roots)), writerEnv(roots, t.id, t.fakeDocker, env));
+      const r = await runCli(roots, argv.map((a) => substitute(a, roots).split(BUSY_PORT).join(busy.port)), writerEnv(roots, t.id, t.fakeDocker, env));
       const invocationRecords = readArgvLog(roots.argvLog);
       records.push(...invocationRecords);
       const reloc = relocation(roots, records);
@@ -270,6 +287,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     }
     return lines;
   } finally {
+    busy.server?.close();
     rmSync(roots.root, { recursive: true, force: true });
   }
 }

@@ -36,7 +36,13 @@ func init() {
 	signal.Notify(ch, terminating...)
 	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE, syscall.SIGXFSZ)
 	go func() {
-		sigexit.Die((<-ch).(syscall.Signal))
+		for {
+			// A signal a command intercepts (judge-proof's SIGINT and
+			// SIGTERM listeners) is the command's to handle.
+			if sig := (<-ch).(syscall.Signal); !sigexit.Intercepted(sig) {
+				sigexit.Die(sig)
+			}
+		}
 	}()
 	resetInherited()
 	disableStdioInheritance()

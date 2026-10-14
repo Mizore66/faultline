@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"maps"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -662,6 +663,7 @@ func normalizeRecord(record string, r writerRoots, reloc *relocated) string {
 // order, like difftest/gen/gen-writers.ts runCase.
 func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult {
 	r := makeWriterRoots(t)
+	busyPort := holdBusyPort(t, tpl)
 	prepareWriterCase(t, repo, tpl, r)
 	var out []writerResult
 	// The recorded paths accumulate over the case's invocations: a later
@@ -673,7 +675,7 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
-			args[i] = substituteRoots(a, r)
+			args[i] = strings.ReplaceAll(substituteRoots(a, r), busyPortMarker, busyPort)
 		}
 		cmd := exec.Command(flBinary, args...)
 		cmd.Dir = r.ws
@@ -706,6 +708,29 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 		out = append(out, res)
 	}
 	return out
+}
+
+// busyPortMarker in an argv string is the port of a listener the case holds
+// on 127.0.0.1 while it runs (gen-writers.ts BUSY_PORT).
+const busyPortMarker = "<BUSYPORT>"
+
+// holdBusyPort listens on 127.0.0.1:0 for the duration of the test when the
+// template uses busyPortMarker, and returns the port ("" otherwise); the
+// TS twin is holdBusyPort in gen-writers.ts.
+func holdBusyPort(t *testing.T, tpl writerTemplate) string {
+	for _, argv := range tpl.Argv {
+		for _, a := range argv {
+			if strings.Contains(a, busyPortMarker) {
+				l, err := net.Listen("tcp4", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { l.Close() })
+				return strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+			}
+		}
+	}
+	return ""
 }
 
 // prepareWriterCase fills the case's workspace: the scenario, then the
