@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -42,7 +44,7 @@ type writerResult struct {
 	Inv            int
 	Stdout, Stderr string
 	Exit           int
-	Tree           string
+	Tree, Modes    string
 	Files          map[string]string
 	Argv           []string
 	// contents are the bytes of the regular files in Files, for the report.
@@ -118,12 +120,56 @@ func loadWriterGoldens(t *testing.T, repo string) map[string]*jsjson.Obj {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out[v.Get("case").Str()+"|"+itoa(int64(v.Get("inv").Num()))] = v.Obj()
+		if err := checkWriterGolden(v); err != "" {
+			t.Fatalf("%s line %q: %s", writerGoldenFile, scanner.Text(), err)
+		}
+		key := v.Get("case").Str() + "|" + itoa(int64(v.Get("inv").Num()))
+		if out[key] != nil {
+			t.Fatalf("%s: duplicate golden %s", writerGoldenFile, key)
+		}
+		out[key] = v.Obj()
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// writerGoldenKinds is the shape of a golden line (gen-writers.ts runCase).
+var writerGoldenKinds = []struct {
+	key  string
+	kind jsjson.Kind
+}{
+	{"case", jsjson.String}, {"inv", jsjson.Number}, {"stdout", jsjson.String}, {"stderr", jsjson.String},
+	{"exit", jsjson.Number}, {"tree", jsjson.String}, {"modes", jsjson.String}, {"files", jsjson.Object}, {"argv", jsjson.Array},
+}
+
+// checkWriterGolden reports a golden line that lacks a field, has one of
+// the wrong type, or has one more; "" when the line is well formed.
+func checkWriterGolden(v jsjson.Value) string {
+	if v.Kind() != jsjson.Object {
+		return "not an object"
+	}
+	for _, f := range writerGoldenKinds {
+		field, ok := v.Obj().Get(f.key)
+		if !ok || field.Kind() != f.kind {
+			return "missing or mistyped " + f.key
+		}
+	}
+	if v.Obj().Len() != len(writerGoldenKinds) {
+		return "unexpected field"
+	}
+	for _, k := range v.Get("files").Obj().Keys() {
+		if v.Get("files", k).Kind() != jsjson.String {
+			return "files entry " + k + " is not a string"
+		}
+	}
+	for _, a := range v.Get("argv").Items() {
+		if a.Kind() != jsjson.String {
+			return "argv record is not a string"
+		}
+	}
+	return ""
 }
 
 // makeWriterRoots makes the workspace (the command's cwd), HOME and TMPDIR
@@ -208,12 +254,17 @@ func substituteRoots(s string, r writerRoots) string {
 }
 
 // treeEntries describes every path under root the way treeDigest walks it
-// (difftest/gen/gen-writers.ts treeEntries).
-func treeEntries(root string) map[string]string {
+// (difftest/gen/gen-writers.ts treeEntries): entries but symlinks end in
+// their octal permission bits, except on Windows, which has none to compare.
+func treeEntries(t *testing.T, root string) map[string]string {
+	t.Helper()
 	out := map[string]string{}
 	var walk func(rel string)
 	walk = func(rel string) {
-		names, _ := nodefs.ReadDirNames(filepath.Join(root, filepath.FromSlash(rel)))
+		names, err := nodefs.ReadDirNames(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("listing %s: %v", rel, err)
+		}
 		for _, name := range names {
 			r := name
 			if rel != "" {
@@ -221,24 +272,62 @@ func treeEntries(root string) map[string]string {
 			}
 			path := filepath.Join(root, filepath.FromSlash(r))
 			info, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mode := ""
+			if !windows {
+				mode = " " + strconv.FormatUint(uint64(info.Mode().Perm()), 8)
+			}
 			switch {
-			case err != nil:
 			case info.Mode()&os.ModeSymlink != 0:
-				target, _ := os.Readlink(path)
+				target, err := os.Readlink(path)
+				if err != nil {
+					t.Fatal(err)
+				}
 				out[r] = "symlink:" + filepath.ToSlash(target)
 			case info.IsDir():
-				out[r] = "dir"
+				out[r] = "dir" + mode
 				walk(r)
 			case !info.Mode().IsRegular():
-				out[r] = "special"
+				out[r] = "special" + mode
 			default:
-				b, _ := os.ReadFile(path)
-				out[r] = canonical.SHA256HexBytes(b)
+				b, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out[r] = canonical.SHA256HexBytes(b) + mode
 			}
 		}
 	}
 	walk("")
 	return out
+}
+
+// modesDigest hashes "<path> <mode>" for every entry but symlinks
+// (gen-writers.ts modesDigest); "" on Windows, where it is not compared.
+func modesDigest(entries map[string]string) string {
+	if windows {
+		return ""
+	}
+	var lines []string
+	for _, path := range slices.Sorted(maps.Keys(entries)) {
+		if e := entries[path]; !strings.HasPrefix(e, "symlink:") {
+			lines = append(lines, path+" "+e[strings.LastIndex(e, " ")+1:])
+		}
+	}
+	return canonical.SHA256Hex(strings.Join(lines, "\n"))
+}
+
+// withoutMode drops the permission bits from a golden entry, for Windows.
+func withoutMode(entry string) string {
+	if strings.HasPrefix(entry, "symlink:") || entry == "deleted" {
+		return entry
+	}
+	if i := strings.LastIndex(entry, " "); i >= 0 {
+		return entry[:i]
+	}
+	return entry
 }
 
 // changedFiles lists what one invocation changed: the new entry, or "deleted".
@@ -296,7 +385,7 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 	}
 	var out []writerResult
 	for inv, argv := range tpl.Argv {
-		before := treeEntries(r.ws)
+		before := treeEntries(t, r.ws)
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
@@ -311,14 +400,15 @@ func runWriterCase(t *testing.T, repo string, tpl writerTemplate) []writerResult
 		if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
 			t.Fatalf("running fl: %v", err)
 		}
-		after := treeEntries(r.ws)
+		after := treeEntries(t, r.ws)
 		res := writerResult{Inv: inv, Stdout: normalizeWriter(stdout.String(), r), Stderr: normalizeWriter(stderr.String(), r),
-			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigest(r.ws), Files: changedFiles(before, after), contents: map[string][]byte{}}
+			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigest(r.ws), Modes: modesDigest(after), Files: changedFiles(before, after),
+			contents: map[string][]byte{}}
 		for _, record := range readArgvLog(r.argvLog) {
 			res.Argv = append(res.Argv, normalizeRecord(record, r))
 		}
 		for rel, entry := range res.Files {
-			if len(entry) == 64 {
+			if !strings.HasPrefix(entry, "symlink:") && len(entry) >= 64 && !strings.HasPrefix(entry, "dir") {
 				res.contents[rel], _ = os.ReadFile(filepath.Join(r.ws, filepath.FromSlash(rel)))
 			}
 		}
@@ -343,12 +433,15 @@ func compareWriter(t *testing.T, key string, got writerResult, want *jsjson.Obj)
 	if !slices.Equal(got.Argv, wantArgv) {
 		t.Fatalf("%s: git/docker argv differ\n--- Go\n%s\n--- TS\n%s", key, strings.Join(got.Argv, "\n"), strings.Join(wantArgv, "\n"))
 	}
-	if got.Tree == want.Field("tree").Str() {
+	if got.Tree == want.Field("tree").Str() && (windows || got.Modes == want.Field("modes").Str()) {
 		return
 	}
 	wantFiles := map[string]string{}
 	for _, k := range want.Field("files").Obj().Keys() {
 		wantFiles[k] = want.Field("files").Obj().Field(k).Str()
+		if windows {
+			wantFiles[k] = withoutMode(wantFiles[k])
+		}
 	}
 	var report strings.Builder
 	keys := slices.Sorted(func(yield func(string) bool) {
@@ -377,7 +470,7 @@ func compareWriter(t *testing.T, key string, got writerResult, want *jsjson.Obj)
 	if report.Len() == 0 {
 		report.WriteString("\n(this invocation changed the same files; an earlier one, or the scenario and mutations, differ)")
 	}
-	t.Fatalf("%s: workspace tree digest differs%s", key, report.String())
+	t.Fatalf("%s: workspace tree or permission bits differ%s", key, report.String())
 }
 
 func orNone(s string) string {
@@ -388,6 +481,7 @@ func orNone(s string) string {
 }
 
 func TestWriterReplay(t *testing.T) {
+	setWriterUmask()
 	repo := repoRoot(t)
 	templates := loadWriterTemplates(t, repo)
 	goldens := loadWriterGoldens(t, repo)
@@ -397,9 +491,15 @@ func TestWriterReplay(t *testing.T) {
 		// Marked before running, so a case that stops early or skips does
 		// not report its later goldens as orphans.
 		for inv := range tpl.Argv {
-			seen[tpl.ID+"|"+itoa(int64(inv))] = true
+			key := tpl.ID + "|" + itoa(int64(inv))
+			seen[key] = true
+			// Windows runs no sh recorder, so a case that records git or
+			// docker argv must not run there.
+			if want := goldens[key]; want != nil && len(want.Field("argv").Items()) > 0 && !tpl.PosixOnly {
+				t.Errorf("%s records git/docker argv but is not posixOnly", key)
+			}
 		}
-		t.Run(tpl.ID, func(t *testing.T) {
+		t.Run(writerSubtest(tpl), func(t *testing.T) {
 			if tpl.PosixOnly && windows {
 				t.Skip("POSIX fake git/docker recorders")
 			}
@@ -409,7 +509,7 @@ func TestWriterReplay(t *testing.T) {
 				if !ok {
 					t.Fatalf("no golden for %s", key)
 				}
-				compareWriter(t, key, got, want) // stdout, stderr, exit, tree (names changed files), argv
+				compareWriter(t, key, got, want) // stdout, stderr, exit, argv, tree and modes (naming changed files)
 			}
 		})
 	}
@@ -418,4 +518,84 @@ func TestWriterReplay(t *testing.T) {
 			t.Errorf("golden %s has no template", key)
 		}
 	}
+	t.Run("posix/recorder-fake-docker", func(t *testing.T) {
+		if windows {
+			t.Skip("POSIX fake git/docker recorders")
+		}
+		testRecorderFakeDocker(t, repo)
+	})
+}
+
+// writerSubtest names a case's subtest: posixOnly ones are under posix/, the
+// only writer subtests the Windows job may see skipped.
+func writerSubtest(tpl writerTemplate) string {
+	if tpl.PosixOnly {
+		return "posix/" + tpl.ID
+	}
+	return tpl.ID
+}
+
+// testRecorderFakeDocker drives `docker run` through the recorder into the
+// pass-fail fake Docker, which no ported command reaches yet: the record,
+// and the fixture's output for a bad and a good state (difftest/gen/fixtures.ts
+// deterministicDockerRunner).
+func testRecorderFakeDocker(t *testing.T, repo string) {
+	r := makeWriterRoots(t)
+	tpl := writerTemplate{ID: "recorder-fake-docker", FakeDocker: "pass-fail"}
+	result := func(outcome string) string {
+		return `FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"` + outcome + `"}`
+	}
+	for _, tc := range []struct {
+		state, stdout, stderr string
+		exit                  int
+	}{
+		{"bad", "state=bad\n" + result("PREDICATE_FAIL") + "\n", "witness failed", 1},
+		{"good", "state=good\n" + result("PREDICATE_PASS") + "\n", "", 0},
+	} {
+		if err := os.WriteFile(filepath.Join(r.ws, "state.txt"), []byte(tc.state+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		os.Remove(r.argvLog)
+		args := []string{"run", "--rm", "--mount", "type=bind,src=" + r.ws + ",dst=/workspace/source,readonly", "img", "-lc", "a b\nc"}
+		env := writerEnv(repo, r, tpl.ID, tpl)
+		var docker string
+		for _, kv := range env {
+			if list, ok := strings.CutPrefix(kv, "PATH="); ok {
+				// Looked up on the case's PATH, as fl's spawn would.
+				var err error
+				if docker, err = lookPathIn("docker", list); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		cmd := exec.Command(docker, args...)
+		cmd.Env = env
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		var exitErr *exec.ExitError
+		if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
+			t.Fatal(err)
+		}
+		if stdout.String() != tc.stdout || stderr.String() != tc.stderr || cmd.ProcessState.ExitCode() != tc.exit {
+			t.Errorf("state %s: exit %d\nstdout %q\nstderr %q", tc.state, cmd.ProcessState.ExitCode(), stdout.String(), stderr.String())
+		}
+		wantLog := "docker " + strings.Join(args, "\x1f") + "\x1e"
+		if b, _ := os.ReadFile(r.argvLog); string(b) != wantLog {
+			t.Errorf("state %s: recorder log %q, want %q", tc.state, b, wantLog)
+		}
+		if got := readArgvLog(r.argvLog); len(got) != 1 || normalizeRecord(got[0], r) != "docker run\x1f--rm\x1f--mount\x1ftype=bind,src=<WS>,dst=/workspace/source,readonly\x1fimg\x1f-lc\x1fa b\nc" {
+			t.Errorf("state %s: normalized record %q", tc.state, got)
+		}
+	}
+}
+
+// lookPathIn finds an executable file named name in the PATH list.
+func lookPathIn(name, list string) (string, error) {
+	for _, dir := range filepath.SplitList(list) {
+		p := filepath.Join(dir, name)
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() && info.Mode()&0o111 != 0 {
+			return p, nil
+		}
+	}
+	return "", errors.New(name + " not found on PATH")
 }

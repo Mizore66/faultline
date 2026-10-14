@@ -5,7 +5,7 @@
 // files fl would have written instead of rebuilding them.
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -134,6 +134,20 @@ export function copyScenario(name: string, ws: string): void {
   const dir = join(scenariosDir, name);
   for (const rel of readFileSync(join(dir, "dirs.txt"), "utf8").split("\n").filter(Boolean)) mkdirSync(join(ws, rel), { recursive: true });
   if (existsSync(join(dir, "tree"))) cpSync(join(dir, "tree"), ws, { recursive: true });
+  resetModes(ws);
+}
+
+// resetModes makes a copied scenario's modes independent of the checkout:
+// directories 0755, files 0644 (the Go twin does the same).
+function resetModes(root: string, rel = ""): void {
+  for (const name of readdirSync(join(root, rel))) {
+    const r = rel ? `${rel}/${name}` : name;
+    const stat = lstatSync(join(root, r));
+    if (stat.isDirectory()) {
+      chmodSync(join(root, r), 0o755);
+      resetModes(root, r);
+    } else if (stat.isFile()) chmodSync(join(root, r), 0o644);
+  }
 }
 
 // listDirs returns every directory under root, sorted; it refuses anything
@@ -176,6 +190,7 @@ async function buildScenario(name: string): Promise<void> {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  process.umask(0o022);
   requireOracleNode();
   requireFreshBuild();
   for (const entry of existsSync(scenariosDir) ? readdirSync(scenariosDir) : []) {

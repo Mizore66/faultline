@@ -43,6 +43,24 @@ func copyScenario(t *testing.T, repo, name, ws string) {
 	if _, err := os.Stat(filepath.Join(dir, "tree")); err == nil {
 		copyTree(t, filepath.Join(dir, "tree"), ws)
 	}
+	// Modes independent of the checkout and the umask: directories 0755,
+	// files 0644 (scenarios.ts resetModes).
+	err = filepath.WalkDir(ws, func(path string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case path == ws:
+			return nil
+		case d.IsDir():
+			return os.Chmod(path, 0o755)
+		case d.Type().IsRegular():
+			return os.Chmod(path, 0o644)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // checkScenarioDirs fails when a committed scenario directory has no

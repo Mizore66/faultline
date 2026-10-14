@@ -43,7 +43,7 @@ jobs:
           allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestEchoRoundTripsLoneSurrogate'
           case "$RUNNER_OS" in
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
-            Windows) allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestGoldenReplay/.+|TestWriterReplay/.+" ;;
+            Windows) allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestGoldenReplay/.+|TestWriterReplay/posix/[a-z0-9-]+" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status

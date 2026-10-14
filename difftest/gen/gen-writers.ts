@@ -38,7 +38,8 @@ const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 // treeEntries describes every path under root the way treeDigest walks it:
 // a file by its SHA-256, a symlink by its target, a directory, or anything
-// else (a FIFO).
+// else (a FIFO); all but symlinks also carry their permission bits in octal
+// ("<sha256> 600", "dir 700"), since the stores are written 0600/0700.
 export function treeEntries(root: string): Map<string, string> {
   const out = new Map<string, string>();
   if (!existsSync(root)) return out;
@@ -47,14 +48,25 @@ export function treeEntries(root: string): Map<string, string> {
       const r = rel ? `${rel}/${name}` : name;
       const path = join(root, r);
       const stat = lstatSync(path);
+      const mode = ` ${(stat.mode & 0o777).toString(8)}`;
       if (stat.isSymbolicLink()) out.set(r, `symlink:${readlinkSync(path)}`);
-      else if (stat.isDirectory()) { out.set(r, "dir"); walk(r); }
-      else if (!stat.isFile()) out.set(r, "special");
-      else out.set(r, sha256(readFileSync(path)));
+      else if (stat.isDirectory()) { out.set(r, `dir${mode}`); walk(r); }
+      else if (!stat.isFile()) out.set(r, `special${mode}`);
+      else out.set(r, `${sha256(readFileSync(path))}${mode}`);
     }
   };
   walk("");
   return out;
+}
+
+// modesDigest hashes "<path> <mode>" for every entry but symlinks (their
+// own mode differs across systems): the permission bits treeDigest leaves out.
+export function modesDigest(entries: Map<string, string>): string {
+  const lines: string[] = [];
+  for (const [path, entry] of [...entries].sort(([a], [b]) => byCodeUnit(a, b))) {
+    if (!entry.startsWith("symlink:")) lines.push(`${path} ${entry.slice(entry.lastIndexOf(" ") + 1)}`);
+  }
+  return sha256(lines.join("\n"));
 }
 
 // changedFiles lists what one invocation changed, sorted: the new entry, or
@@ -96,10 +108,14 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       const before = treeEntries(roots.ws);
       rmSync(roots.argvLog, { force: true });
       const r = await runCli(roots, argv.map((a) => substitute(a, roots)), writerEnv(roots, t.id, t.fakeDocker, env));
+      const after = treeEntries(roots.ws);
+      const records = readArgvLog(roots.argvLog);
+      // Windows runs no sh recorder: a case that records argv is POSIX-only.
+      if (records.length > 0 && !t.posixOnly) throw new Error(`${t.id}: records git/docker argv but is not posixOnly`);
       lines.push(JSON.stringify({
         case: t.id, inv, stdout: normalizeWriter(r.stdout, roots), stderr: normalizeWriter(r.stderr, roots), exit: r.exit,
-        tree: treeDigest(roots.ws), files: changedFiles(before, treeEntries(roots.ws)),
-        argv: readArgvLog(roots.argvLog).map((record) => normalizeRecord(record, roots))
+        tree: treeDigest(roots.ws), modes: modesDigest(after), files: changedFiles(before, after),
+        argv: records.map((record) => normalizeRecord(record, roots))
       }));
     }
     return lines;
@@ -110,6 +126,8 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
 
 requireOracleNode();
 requireFreshBuild();
+// Modes are compared: fl's own and the harness's files follow the umask.
+process.umask(0o022);
 const repo = resolve(".");
 const templates = JSON.parse(readFileSync(join(repo, "difftest/testdata/writers.json"), "utf8")) as WriterTemplate[];
 checkTemplates(templates);
