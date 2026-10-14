@@ -1562,48 +1562,6 @@
       "note": "First key character percent-encoded."
     },
     {
-      "id": "miss-lone-surrogate-break-0",
-      "path": "should_miss/gen-lone-surrogate-break-0.txt",
-      "label": "should_miss",
-      "family": "lone-surrogate-break",
-      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
-    },
-    {
-      "id": "miss-lone-surrogate-break-1",
-      "path": "should_miss/gen-lone-surrogate-break-1.txt",
-      "label": "should_miss",
-      "family": "lone-surrogate-break",
-      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
-    },
-    {
-      "id": "miss-lone-surrogate-break-2",
-      "path": "should_miss/gen-lone-surrogate-break-2.txt",
-      "label": "should_miss",
-      "family": "lone-surrogate-break",
-      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
-    },
-    {
-      "id": "miss-lone-surrogate-break-3",
-      "path": "should_miss/gen-lone-surrogate-break-3.txt",
-      "label": "should_miss",
-      "family": "lone-surrogate-break",
-      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
-    },
-    {
-      "id": "miss-lone-surrogate-break-4",
-      "path": "should_miss/gen-lone-surrogate-break-4.txt",
-      "label": "should_miss",
-      "family": "lone-surrogate-break",
-      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
-    },
-    {
-      "id": "miss-lone-surrogate-break-5",
-      "path": "should_miss/gen-lone-surrogate-break-5.txt",
-      "label": "should_miss",
-      "family": "lone-surrogate-break",
-      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
-    },
-    {
       "id": "tiny-binary-0",
       "path": "true_secret/gen-tiny-binary-0.bin",
       "label": "true_secret",
@@ -1686,6 +1644,48 @@
       "label": "true_secret",
       "expectedKind": "GITHUB_TOKEN",
       "family": "github-json-escaped"
+    },
+    {
+      "id": "miss-lone-surrogate-break-0",
+      "path": "should_miss/gen-lone-surrogate-break-0.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "miss-lone-surrogate-break-1",
+      "path": "should_miss/gen-lone-surrogate-break-1.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "miss-lone-surrogate-break-2",
+      "path": "should_miss/gen-lone-surrogate-break-2.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "miss-lone-surrogate-break-3",
+      "path": "should_miss/gen-lone-surrogate-break-3.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "miss-lone-surrogate-break-4",
+      "path": "should_miss/gen-lone-surrogate-break-4.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
+    },
+    {
+      "id": "miss-lone-surrogate-break-5",
+      "path": "should_miss/gen-lone-surrogate-break-5.txt",
+      "label": "should_miss",
+      "family": "lone-surrogate-break",
+      "note": "Lone surrogate inside the key; read lossily as U+FFFD."
     }
   ]
 }

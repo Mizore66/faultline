@@ -20,7 +20,6 @@ function b64(seed) {
   return Buffer.from(h(seed), "hex").toString("base64");
 }
 
-const readFileSync_ = (buf) => buf.toString("utf8"); // same lossy decoding as readFileSync(p, "utf8")
 const cases = [];
 
 function add(id, label, relPath, body, extra = {}) {
@@ -256,7 +255,7 @@ for (let i = 0; i < 6; i += 1) {
   const key = skKey(`lsb-${i}`);
   // A lone surrogate (ED A0 80, WTF-8) inside the key; both sides read it as U+FFFD.
   ensure(`miss-lone-surrogate-break-${i}`, "should_miss", `should_miss/gen-lone-surrogate-break-${i}.txt`,
-    Buffer.concat([Buffer.from(key.slice(0, 20)), Buffer.from([0xed, 0xa0, 0x80]), Buffer.from(`${key.slice(20)}\n`)]),
+    Buffer.concat([Buffer.from(key.slice(0, 3)), Buffer.from([0xed, 0xa0, 0x80]), Buffer.from(`${key.slice(3)}\n`)]),
     { family: "lone-surrogate-break", note: "Lone surrogate inside the key; read lossily as U+FFFD." });
 }
 {
@@ -269,7 +268,7 @@ for (let i = 0; i < 6; i += 1) {
     for (let n = 0; noise.length < total; n += 1) noise = Buffer.concat([noise, Buffer.from(h(`tbb-${i}-${n}`), "hex")]);
     const at = parseInt(h(`tbp-${i}`).slice(0, 4), 16) % (Math.max(1, total - key.length));
     const body = Buffer.concat([noise.subarray(0, at), key, noise.subarray(at, total)]);
-    const text = readFileSync_(body);
+    const text = body.toString("utf8") /* same lossy decoding as readFileSync(p, "utf8") */;
     const redacted = redactText(text, `corpus:tiny-binary-${i}`).report.redacted === true;
     const label = redacted ? "true_secret" : "should_miss";
     ensure(`tiny-binary-${i}`, label, `${label}/gen-tiny-binary-${i}.bin`, body,
