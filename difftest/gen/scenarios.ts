@@ -10,6 +10,7 @@ import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readF
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { canonicalJson, digestJson } from "../../src/canonical.js";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const cli = join(repo, "dist", "cli.js");
@@ -119,6 +120,12 @@ const FREEZE = ["witness", "freeze", PROPOSAL_ID];
 // once: a well-formed key that is not Ed25519.
 const PKCS8_ED25519_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 const EC_PUBLIC_PEM = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEU2XZiU7j36AfpHTmuOZEZ2mFYM+I\nZTCOIJ2bfqCoMGaDZCGDX78GItE2wsgVj+xSpCzpOJ/9EwO81d3+N1OiDA==\n-----END PUBLIC KEY-----\n";
+// Well-formed keys that are not Ed25519 (generated once; Ed448/secp256k1 and
+// the encrypted key are not reproducible from a seed).
+const ED448_PRIVATE_PEM = "-----BEGIN PRIVATE KEY-----\nMEcCAQAwBQYDK2VxBDsEOdqvXW7sO1iXB6BRc4sn+F/f0jMqrH6lGHY+Oy03FHKu\nqZ2KYhuuf16t1NvHuCZG3Hi6+H6DqLYapA==\n-----END PRIVATE KEY-----\n";
+const ED448_PUBLIC_PEM = "-----BEGIN PUBLIC KEY-----\nMEMwBQYDK2VxAzoAOj/Ms7xqdC1QlHezuPgrgdUyvK7uYmT4vkmVrRtDGaVn2TWQ\nawWjXb5D0TGKIzuUeUZf0pptOtoA\n-----END PUBLIC KEY-----\n";
+const SECP256K1_PRIVATE_PEM = "-----BEGIN EC PRIVATE KEY-----\nMHQCAQEEIDSHyk7wRzw0YflBhDutD562C5xXxxbstdZfiip/QlncoAcGBSuBBAAK\noUQDQgAEUp5H3ToOAUymGbgmlDpwHeWE9ArepYvcrSfjhvTtjfM8Yi0WopHoLU5u\n7qqxBe7j1HjnB7paWOwQwI60+l4dhQ==\n-----END EC PRIVATE KEY-----\n";
+const ENCRYPTED_PRIVATE_PEM = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIGjMF8GCSqGSIb3DQEFDTBSMDEGCSqGSIb3DQEFDDAkBBAVpSZOUbkT/x3QSiHy\nue+pAgIIADAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQLOooz/ez8eiHfX+2\nLk8lugRAj0sFD8p9nJ0j5ztbsKwOL/kG0bGjbnVE7Lao3p/qEOk6IZAxm6pEVR/5\n+3ajc+6Z0dCzY7XmRqjz3tqpQgOfJA==\n-----END ENCRYPTED PRIVATE KEY-----\n";
 function reviewerKey(seedByte: number) {
   const privateKey = createPrivateKey({ key: Buffer.concat([PKCS8_ED25519_PREFIX, Buffer.alloc(32, seedByte)]), format: "der", type: "pkcs8" });
   const publicKey = createPublicKey(privateKey);
@@ -145,15 +152,37 @@ const KEY_FILES: Record<string, string> = {
   "keys/keyring-ec.json": keyring({ approvedBy: REVIEWER, keyId: KEY1.keyId, algorithm: "ED25519", publicKeyPem: EC_PUBLIC_PEM }),
   "keys/keyring-bad-pem.json": keyring({ approvedBy: REVIEWER, keyId: KEY1.keyId, algorithm: "ED25519", publicKeyPem: "not a pem" }),
   "keys/keyring-wrong-keyid.json": keyring({ approvedBy: REVIEWER, keyId: KEY2.keyId, algorithm: "ED25519", publicKeyPem: KEY1.publicPem }),
-  "keys/keyring-empty.json": keyring()
+  "keys/keyring-empty.json": keyring(),
+  "keys/ed448.pem": ED448_PRIVATE_PEM,
+  "keys/secp256k1.pem": SECP256K1_PRIVATE_PEM,
+  "keys/encrypted.pem": ENCRYPTED_PRIVATE_PEM,
+  "keys/keyring-ed448.json": keyring({ approvedBy: REVIEWER, keyId: KEY1.keyId, algorithm: "ED25519", publicKeyPem: ED448_PUBLIC_PEM }),
+  // OpenSSL reads the PUBLIC KEY block first whatever the order of the blocks.
+  "keys/keyring-mixed-pub-priv.json": keyring({ ...reviewerEntry(REVIEWER, KEY1), publicKeyPem: KEY1.publicPem + KEY2.privatePem }),
+  "keys/keyring-mixed-priv-pub.json": keyring({ ...reviewerEntry(REVIEWER, KEY1), publicKeyPem: KEY2.privatePem + KEY1.publicPem }),
+  "keys/keyring-mixed-mismatch.json": keyring({ ...reviewerEntry(REVIEWER, KEY2), publicKeyPem: KEY1.publicPem + KEY2.privatePem }),
+  "keys/keyring-two-reviewers.json": keyring(reviewerEntry(REVIEWER, KEY2), reviewerEntry("someone-else@example.test", KEY1))
 };
 const SIGN = ["witness", "sign", PROPOSAL_ID, "--private-key", "keys/reviewer.pem", "--keyring", "keys/keyring.json"];
 const PROPOSAL_FILES = { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` };
 
+// forgeSignature flips one signature byte of the receipt and recomputes
+// receiptDigest, so only the Ed25519 check can fail.
+function forgeSignature(ws: string): void {
+  const path = join(ws, ".faultline", "witnesses", "authenticated-approvals", `${PROPOSAL_ID}.json`);
+  const receipt = JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
+  const signature = Buffer.from(receipt.signatureBase64!, "base64");
+  signature[0]! ^= 0x01;
+  receipt.signatureBase64 = signature.toString("base64");
+  delete receipt.receiptDigest;
+  receipt.receiptDigest = digestJson(receipt);
+  writeFileSync(path, `${canonicalJson(receipt)}\n`);
+}
+
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
-type Scenario = { bases?: Record<string, string>; files: Record<string, string>; argv: string[][] };
+type Scenario = { bases?: Record<string, string>; files: Record<string, string>; argv: string[][]; after?: (ws: string) => void };
 export const SCENARIOS: Record<string, Scenario> = {
   "empty": { files: {}, argv: [] },
   "witness-proposed": { files: { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` }, argv: [PROPOSE] },
@@ -162,6 +191,7 @@ export const SCENARIOS: Record<string, Scenario> = {
   "witness-approved-keys": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE] },
   "witness-frozen-keys": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE] },
   "witness-signed": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE, SIGN] },
+  "witness-signed-forged": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE, SIGN], after: forgeSignature },
   // A Git proof bundle: `fl verify bundle` runs git, so it checks the
   // recorders and the argv normalization.
   "git-two-states-bundle": { bases: { bundle: "git-two-states" }, files: {}, argv: [] }
@@ -222,6 +252,7 @@ async function buildScenario(name: string): Promise<void> {
       const r = await runCli(roots, argv, writerEnv(roots, `scenario:${name}`, "pass-fail", {}));
       if (r.exit !== 0) throw new Error(`scenario ${name}: fl ${argv.join(" ")} exited ${r.exit}\n${r.stdout}${r.stderr}`);
     }
+    scenario.after?.(roots.ws);
     const dirs = listDirs(roots.ws);
     const out = join(scenariosDir, name);
     rmSync(out, { recursive: true, force: true });

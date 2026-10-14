@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "faultline.reviewer-keyring.v1",
+  "reviewers": [
+    {
+      "approvedBy": "reviewer@example.test",
+      "keyId": "sha256:47dea58ea00fae9417ee19d76755bfef690899021132effb04fe1f9e4f0c8059",
+      "algorithm": "ED25519",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAiojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=\n-----END PUBLIC KEY-----\n-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC\n-----END PRIVATE KEY-----\n"
+    }
+  ]
+}

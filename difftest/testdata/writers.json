@@ -76,5 +76,18 @@
   {"id":"verify-receipt-oversized","scenario":"witness-signed","argv":[["witness","verify","demo-1","--keyring","keys/keyring.json"]],"mutations":[{"op":"sparse-file","path":".faultline/witnesses/authenticated-approvals/demo-1.json","size":500001}]},
   {"id":"verify-receipt-not-json","scenario":"witness-signed","argv":[["witness","verify","demo-1","--keyring","keys/keyring.json"]],"mutations":[{"op":"add-file","path":".faultline/witnesses/authenticated-approvals/demo-1.json","content":"not json\n"}]},
   {"id":"verify-receipt-bad-schema","scenario":"witness-signed","argv":[["witness","verify","demo-1","--keyring","keys/keyring.json"]],"mutations":[{"op":"add-file","path":".faultline/witnesses/authenticated-approvals/demo-1.json","content":"{\"schemaVersion\":1}\n"}]},
-  {"id":"verify-receipt-symlink","scenario":"witness-signed","argv":[["witness","verify","demo-1","--keyring","keys/keyring.json"]],"mutations":[{"op":"symlink","file":".faultline/witnesses/authenticated-approvals/demo-1.json","target":"../frozen/demo-1.json"}],"posixOnly":true}
+  {"id":"verify-receipt-symlink","scenario":"witness-signed","argv":[["witness","verify","demo-1","--keyring","keys/keyring.json"]],"mutations":[{"op":"symlink","file":".faultline/witnesses/authenticated-approvals/demo-1.json","target":"../frozen/demo-1.json"}],"posixOnly":true},
+  {"id":"sign-private-key-ed448","scenario":"witness-frozen-keys","argv":[["witness","sign","demo-1","--private-key","keys/ed448.pem","--keyring","keys/keyring.json"]]},
+  {"id":"sign-private-key-secp256k1","scenario":"witness-frozen-keys","argv":[["witness","sign","demo-1","--private-key","keys/secp256k1.pem","--keyring","keys/keyring.json"]]},
+  {"id":"sign-private-key-encrypted","scenario":"witness-frozen-keys","argv":[["witness","sign","demo-1","--private-key","keys/encrypted.pem","--keyring","keys/keyring.json"]]},
+  {"id":"sign-keyring-ed448","scenario":"witness-frozen-keys","argv":[["witness","sign","demo-1","--private-key","keys/reviewer.pem","--keyring","keys/keyring-ed448.json"]]},
+  {"id":"sign-keyring-mixed-pub-priv","scenario":"witness-frozen-keys","argv":[["witness","sign","demo-1","--private-key","keys/reviewer.pem","--keyring","keys/keyring-mixed-pub-priv.json"]]},
+  {"id":"sign-keyring-mixed-priv-pub","scenario":"witness-frozen-keys","argv":[["witness","sign","demo-1","--private-key","keys/reviewer.pem","--keyring","keys/keyring-mixed-priv-pub.json"]]},
+  {"id":"sign-keyring-mixed-mismatch","scenario":"witness-frozen-keys","argv":[["witness","sign","demo-1","--private-key","keys/reviewer.pem","--keyring","keys/keyring-mixed-mismatch.json"]]},
+  {"id":"verify-keyring-ed448","scenario":"witness-signed","argv":[["witness","verify","demo-1","--keyring","keys/keyring-ed448.json"]]},
+  {"id":"verify-keyring-mixed-pub-priv","scenario":"witness-signed","argv":[["witness","verify","demo-1","--keyring","keys/keyring-mixed-pub-priv.json"]]},
+  {"id":"verify-keyring-mixed-priv-pub","scenario":"witness-signed","argv":[["witness","verify","demo-1","--keyring","keys/keyring-mixed-priv-pub.json"]]},
+  {"id":"verify-keyring-mixed-mismatch","scenario":"witness-signed","argv":[["witness","verify","demo-1","--keyring","keys/keyring-mixed-mismatch.json"]]},
+  {"id":"verify-keyring-two-reviewers","scenario":"witness-signed","argv":[["witness","verify","demo-1","--keyring","keys/keyring-two-reviewers.json"]]},
+  {"id":"verify-receipt-forged-signature","scenario":"witness-signed-forged","argv":[["witness","verify","demo-1","--keyring","keys/keyring.json"]]}
 ]
