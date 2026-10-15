@@ -224,9 +224,8 @@ func TestStringifyStackOverflow(t *testing.T) {
 			{SiteGitProof, "arr", 2610}, {SiteGitProof, "obj", 6088}, {SiteGitProof, "idx", 2490}, {SiteGitProof, "alt", 3652},
 			{SiteGitLedger, "arr", 2609}, {SiteGitLedger, "obj", 6087}, {SiteGitLedger, "idx", 2490}, {SiteGitLedger, "alt", 3652},
 			{SiteDemoWitness, "arr", 2609}, {SiteDemoWitness, "obj", 6086}, {SiteDemoWitness, "idx", 2490}, {SiteDemoWitness, "alt", 3652},
-			// Estimated from Node 22.23.3 (stack.go); the alternating shape is
-			// one level past the estimate, 3657.
-			{SiteCLI, "arr", 2614}, {SiteCLI, "obj", 6097}, {SiteCLI, "idx", 2494}, {SiteCLI, "alt", 3658},
+			// Measured on Node 22.22.2 (stack-live, macos-latest CI).
+			{SiteCLI, "arr", 2613}, {SiteCLI, "obj", 6096}, {SiteCLI, "idx", 2494}, {SiteCLI, "alt", 3658},
 		}},
 		{"linux", "arm64", []row{
 			{SiteDemo, "arr", 1827}, {SiteDemo, "arr0", 1826}, {SiteDemo, "obj", 3653}, {SiteDemo, "idx", 1956}, {SiteDemo, "alt", 2434}, {SiteDemo, "dup", 1956},
