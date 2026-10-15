@@ -1,3 +1,5 @@
+//go:build faultline_test
+
 package difftest
 
 import (
@@ -14,8 +16,8 @@ import (
 	"github.com/Mizore66/faultline/difftest/oracle"
 )
 
-// unreachableLiterals are error texts in internal/bundle that no golden can
-// produce, each with the reason. Everything else must appear in some golden
+// unreachableLiterals are error texts in the gated packages (gatedDirs)
+// that no golden can produce, each with the reason. Everything else must appear in some golden
 // output, so a dropped or reworded check fails replay.
 var unreachableLiterals = map[string]string{
 	"Git proof bundle directory does not exist":                               "a Git bundle is only recognised by reading its manifest.json, so its directory exists (short of a race)",
@@ -55,12 +57,53 @@ var unreachableLiterals = map[string]string{
 	"Git proof writer did not produce the complete expected artifact set.":            "the writer puts exactly requiredArtifactPaths",
 	"Git proof source artifact changed before package assembly:":                      "race only: the bundle git just wrote is read back unchanged",
 	"Git proof bundle output appeared during assembly and will not be replaced:":      "race only: the output was refused when it existed before staging",
+
+	// Slice 2 writers. Git's own invariants: hardened git prints what these
+	// checks expect unless it is broken.
+	"Git returned an invalid tree object id for commit":                                                     "git rev-parse --verify <commit>^{tree} prints a full object id or fails",
+	"Git range enumeration returned an invalid commit object id.":                                           "git rev-list prints full object ids",
+	"Git returned an invalid commit object id for revision":                                                 "git rev-parse --verify <revision>^{commit} prints a full object id or fails",
+	"Git returned an invalid tree object id for revision":                                                   "git rev-parse --verify <commit>^{tree} prints a full object id or fails",
+	"Git did not return an absolute repository root.":                                                       "git rev-parse --show-toplevel prints an absolute path or fails",
+	"Git did not return an absolute repository metadata directory.":                                         "git rev-parse --absolute-git-dir prints an absolute path or fails",
+	"Git -z output ended without a NUL terminator.":                                                         "git diff --name-status -z ends every field with NUL",
+	"Git path unexpectedly contains a NUL byte.":                                                            "the -z output is split at NUL, so no field holds one",
+	"Git --name-status -z output was malformed.":                                                            "git diff --name-status -z gives a status then one or two paths",
+	"Unable to verify ancestry:":                                                                            "git merge-base --is-ancestor of two commits rev-parse just resolved exits 0 or 1 unless git fails on an I/O error",
+	"Could not enumerate changed Git paths:":                                                                "git diff --name-status between two resolved commits fails only on an I/O error",
+	"Could not derive an exact binary patch for":                                                            "git diff --binary of a path the same diff just listed fails only on an I/O error",
+	"Could not prepare external Git index for":                                                              "assertSafeGitMaterialization resolved the commit with the same hardened git just before; read-tree of it fails only on an I/O error",
+	"Could not materialize Git tree":                                                                        "checkout-index of a resolved commit into a fresh empty worktree fails only on an I/O error",
+	"Git contains a non-UTF-8 or empty path; FaultLine refuses to pass it through a lossy argv conversion.": "not covered: needs a tree entry whose name is not UTF-8, which APFS and NTFS refuse, so no writer scenario (replayed on every runner) holds one",
+	// Internal invariants and earlier refusals.
+	"Missing preflight environment fingerprint for":                            "the preflight fingerprints every state this loop materializes",
+	"Missing runtime image mapping for":                                        "buildEffectiveRuntimeMapping maps every preflight digest to a non-empty image, and a heterogeneous range with a gap is refused just before",
+	"Candidate references a patch unit that does not belong to this Git diff.": "candidates are built from the same diff's patch unit ids",
+	"Refusing to write an invalid Git minimization result:":                    "minimizeGitDiff only returns results its own verifier accepts",
+	"trusted reviewer public key is invalid:":                                  "parseReviewerKeyring already refused keys that are not Ed25519 or whose fingerprint is not their keyId",
+	"Frozen overlay path escaped its worktree:":                                "safeOverlayParts refuses empty, '.' and '..' segments and backslashes first, so the target stays inside the worktree",
+	"Minimization output root is not a real directory:":                        "the CLI's safeManagedFileOutput refuses the same output first",
+	"Minimization output parent is not a real directory:":                      "race only: the directory was just created by mkdir",
+	"Minimization output cannot traverse a symbolic link or non-directory:":    "the CLI's safeManagedFileOutput refuses the same output first",
+	"minimization result verification failed safely:":                          "a throw inside the checks of a record that passed the schema: only a V8 limit (string length, stack depth) gets there",
+	// Races: the file or directory changes between two steps of fl.
+	"Could not remove temporary materialized tree:":                                        "race only: rm of the worktree and index fl just created under its private 0700 temp root",
+	"Could not verify materialized Git tree":                                               "race only: update-index --refresh right after checkout-index into the same worktree",
+	"Materialized Git tree does not match its external index for":                          "race only: filters are refused and core.autocrlf is off, so a fresh checkout matches its index",
+	"FaultLine could not verify exact materialized overlay bytes:":                         "race only: the overlay was just renamed into place",
+	"Could not safely create overlay directory:":                                           "race only: the directory was just created by mkdir",
+	"Path is a directory: rm returned EISDIR (is a directory)":                             "race only: the staged name carries a fresh UUID",
+	"Git minimization result already exists and will not be replaced:":                     "race only: the CLI's safeManagedFileOutput refused an existing output just before",
+	"minimization result changed beyond FaultLine's verification read limit while reading": "race only: lstat just reported a size within the limit",
+	"Generated Git proof bundle failed verification:":                                      "race only: the bundle fl just wrote verifies unless it changes underneath",
+	"Refusing to render a Git proof bundle that changed during verification:":              "race only: the bundle is verified twice in a row",
+	"Unable to read verified":                                                              "race only: the file was just verified, so it exists and parses",
 }
 
 // errorLiterals collects the string literals passed to errors.New,
 // fmt.Errorf, schema.Regex and schema.Refine (as their message), append(errs,
 // ...) and local error-adding closures (such as
-// `add := func(s string) { errs = append(errs, s) }`) in internal/bundle.
+// `add := func(s string) { errs = append(errs, s) }`) in dir.
 func errorLiterals(t *testing.T, dir string) map[string]string {
 	sites, err := errorSites(dir)
 	if err != nil {
@@ -231,19 +274,61 @@ func exprString(e ast.Expr) string {
 	return ""
 }
 
-// liveGatedFiles are checked by a live test against TS instead of goldens:
-// their functions run on thousands of generated inputs there, and the live
-// test fails when one of the file's literals was never produced
-// (requireReached).
-var liveGatedFiles = map[string]string{
-	"gitproof/ledger.go":  "TestLiveLedger",
-	"gitproof/sandbox.go": "TestLiveSandbox",
-	"gitproof/witness.go": "TestLiveWitness",
-	"gitproof/write.go":   "TestLiveProofWriter",
+// gatedDirs are the packages (relative to the module root) whose error
+// literals the goldens must reach (TestGoldensReachEveryErrorLiteral) and
+// whose error sites the replays must run (coverageGate): the verifier
+// (slice 1) and the slice 2 writers.
+var gatedDirs = []string{
+	"internal/bundle", "internal/clock", "internal/jsre", "internal/safedir", "internal/evidence",
+	"internal/witnessresult", "internal/redaction", "internal/witness", "internal/ledgerbind",
+	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli",
 }
 
-func TestGoldensReachEveryErrorLiteral(t *testing.T) {
-	repo := oracle.RepoRoot(t)
+// gatedLiterals is errorLiterals over every gatedDirs package.
+func gatedLiterals(t *testing.T, repo string) map[string]string {
+	out := map[string]string{}
+	for _, dir := range gatedDirs {
+		for lit, pos := range errorLiterals(t, filepath.Join(repo, filepath.FromSlash(dir))) {
+			out[lit] = pos
+		}
+	}
+	return out
+}
+
+// liveGatedFiles (relative to the module root) are checked by a live test
+// against TS instead of goldens: their functions run on thousands of
+// generated inputs there, and the live test fails when one of the file's
+// literals was never produced (requireReached).
+var liveGatedFiles = map[string]string{
+	"internal/bundle/gitproof/ledger.go":  "TestLiveLedger",
+	"internal/bundle/gitproof/sandbox.go": "TestLiveSandbox",
+	"internal/bundle/gitproof/witness.go": "TestLiveWitness",
+	"internal/bundle/gitproof/write.go":   "TestLiveProofWriter",
+	"internal/ledgerbind/ledgerbind.go":   "TestLiveLedgerBinding",
+	"internal/gitinv/config.go":           "TestLiveConfig",
+	"internal/gitinv/fingerprint.go":      "TestLiveRuntimeMapping",
+	"internal/gitinv/runtimemap.go":       "TestLiveRuntimeMapping",
+	"internal/gitinv/hardened.go":         "TestLiveMaterialize",
+	"internal/gitinv/overlay.go":          "TestLiveMaterialize",
+	"internal/minimize/verify.go":         "TestLiveMinimizationVerify",
+	"internal/sandbox/plan.go":            "TestLiveSandboxPlan",
+}
+
+// liveGated reports whether the file at pos (an absolute path, optionally
+// followed by :line) is live-gated.
+func liveGated(repo, pos string) bool {
+	rel, err := filepath.Rel(repo, pos)
+	if err != nil {
+		return false
+	}
+	file, _, _ := strings.Cut(filepath.ToSlash(rel), ":")
+	return liveGatedFiles[file] != ""
+}
+
+// goldenText is every committed golden (verifier and writer replay), as
+// one string.
+func goldenText(t *testing.T, repo string) string {
+	t.Helper()
 	files, err := filepath.Glob(filepath.Join(repo, "difftest", "testdata", "golden", "*.jsonl"))
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no goldens: %v", err)
@@ -256,11 +341,15 @@ func TestGoldensReachEveryErrorLiteral(t *testing.T) {
 		}
 		goldens.Write(b)
 	}
-	all := goldens.String()
-	literals := errorLiterals(t, filepath.Join(repo, "internal", "bundle"))
-	bundleDir := filepath.Join(repo, "internal", "bundle") + string(filepath.Separator)
+	return goldens.String()
+}
+
+func TestGoldensReachEveryErrorLiteral(t *testing.T) {
+	repo := oracle.RepoRoot(t)
+	all := goldenText(t, repo)
+	literals := gatedLiterals(t, repo)
 	for lit, pos := range literals {
-		if file, _, _ := strings.Cut(strings.TrimPrefix(pos, bundleDir), ":"); liveGatedFiles[filepath.ToSlash(file)] != "" {
+		if liveGated(repo, pos) {
 			continue
 		}
 		reached := true
@@ -280,7 +369,7 @@ func TestGoldensReachEveryErrorLiteral(t *testing.T) {
 	}
 	for lit := range unreachableLiterals {
 		if _, ok := literals[lit]; !ok {
-			t.Errorf("unreachableLiterals lists %q, which is no longer an error literal in internal/bundle", lit)
+			t.Errorf("unreachableLiterals lists %q, which is no longer an error literal in a gated package", lit)
 		}
 	}
 }

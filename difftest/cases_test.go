@@ -1,6 +1,14 @@
+//go:build faultline_test
+
 package difftest
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
 
 // Only git's own diagnostic lines are masked; FaultLine's text and anything
 // else around them must match exactly.
@@ -57,5 +65,34 @@ func TestSlashesAfter(t *testing.T) {
 	}
 	if _, slash := slashesAfter("<WS>/a", "<WS>", true); !slash {
 		t.Error("slashesAfter did not report a '/' after the mask")
+	}
+}
+
+// The Windows go job's skip guard lists the writer cases it may skip by
+// name (.github/scripts/windows-writer-skips.txt), so a case that is not
+// posixOnly cannot be skipped there unnoticed; the list must name exactly
+// the posixOnly cases.
+func TestWindowsWriterSkipsList(t *testing.T) {
+	repo := repoRoot(t)
+	text, err := os.ReadFile(filepath.Join(repo, ".github", "scripts", "windows-writer-skips.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed []string
+	for _, line := range strings.Split(string(text), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			listed = append(listed, line)
+		}
+	}
+	want := []string{"TestWriterReplay/posix/recorder-fake-docker"}
+	for _, tpl := range loadWriterTemplates(t, repo) {
+		if tpl.PosixOnly {
+			want = append(want, "TestWriterReplay/"+writerSubtest(tpl))
+		}
+	}
+	slices.Sort(listed)
+	slices.Sort(want)
+	if !slices.Equal(listed, want) {
+		t.Errorf("windows-writer-skips.txt lists\n%s\nthe posixOnly writer cases are\n%s", strings.Join(listed, "\n"), strings.Join(want, "\n"))
 	}
 }

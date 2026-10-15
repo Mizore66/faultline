@@ -1,4 +1,4 @@
-//go:build linux
+//go:build faultline_test && linux
 
 package difftest
 

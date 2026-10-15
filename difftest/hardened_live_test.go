@@ -1,4 +1,4 @@
-//go:build unix
+//go:build faultline_test && unix
 
 package difftest
 
@@ -418,8 +418,11 @@ func TestLiveMaterialize(t *testing.T) {
 			if (tsID == nil) != (len(got) == 1) || strings.Join(got, "\n---\n") != strings.Join(want, "\n---\n") {
 				t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n---\n"), strings.Join(want, "\n---\n"))
 			}
+			recordOutput(t, strings.Join(want, "\n"))
 		})
 	}
+	requireReached(t, "internal/gitinv/hardened.go", recordedOutputs(t))
+	requireReached(t, "internal/gitinv/overlay.go", recordedOutputs(t))
 }
 
 // indexesLeft lists what cleanup left in <root>/indexes.

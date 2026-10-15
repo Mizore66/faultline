@@ -1,3 +1,5 @@
+//go:build faultline_test
+
 package difftest
 
 import (
@@ -43,6 +45,7 @@ func liveCheck(t *testing.T, c *oracle.Client, op, args, got string) {
 	if got != want {
 		t.Fatalf("%s(%s):\ngot  %s\nwant %s", op, args, got, want)
 	}
+	recordOutput(t, want)
 }
 
 const liveDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -165,6 +168,8 @@ func TestLiveRuntimeMapping(t *testing.T) {
 		}
 		liveCheck(t, c, "resolveRuntimeImageForFingerprint", args+"}", got)
 	}
+	requireReached(t, "internal/gitinv/runtimemap.go", recordedOutputs(t))
+	requireReached(t, "internal/gitinv/fingerprint.go", recordedOutputs(t))
 }
 
 func TestLiveFingerprint(t *testing.T) {
@@ -259,4 +264,5 @@ func TestLiveConfig(t *testing.T) {
 		}
 		liveCheck(t, c, "readFaultLineConfig", `{"dir":`+jsjson.Quote(repo)+"}", got)
 	}
+	requireReached(t, "internal/gitinv/config.go", recordedOutputs(t))
 }

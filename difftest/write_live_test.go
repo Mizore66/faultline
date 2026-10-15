@@ -1,4 +1,4 @@
-//go:build unix
+//go:build faultline_test && unix
 
 package difftest
 
@@ -313,5 +313,5 @@ func TestLiveProofWriter(t *testing.T) {
 			t.Errorf("%s: %v", w.Directory, v.Errors)
 		}
 	}
-	requireReached(t, "gitproof/write.go", outputs.String())
+	requireReached(t, "internal/bundle/gitproof/write.go", outputs.String())
 }

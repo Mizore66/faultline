@@ -1,3 +1,5 @@
+//go:build faultline_test
+
 package difftest
 
 import (
@@ -9,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/gen"
@@ -79,12 +82,18 @@ func liveCompare(t *testing.T, op string, next func(c *oracle.Client, r *rand.Ra
 	return outputs.String()
 }
 
-// requireReached fails for each error literal in file (relative to
-// internal/bundle) that no TS result produced: the live test is the golden
-// gate for that file (liveGatedFiles in coverage_test.go).
+// requireReached fails for each error literal in file (relative to the
+// module root) that neither a TS result in outputs nor a committed golden
+// produced: the live test is the golden gate for that file (liveGatedFiles
+// in coverage_test.go).
 func requireReached(t *testing.T, file, outputs string) {
 	t.Helper()
-	for lit, pos := range errorLiterals(t, filepath.Join(oracle.RepoRoot(t), "internal", "bundle", filepath.FromSlash(file))) {
+	if liveGatedFiles[file] == "" {
+		t.Errorf("%s is not in liveGatedFiles", file)
+	}
+	repo := oracle.RepoRoot(t)
+	outputs += goldenText(t, repo)
+	for lit, pos := range errorLiterals(t, filepath.Join(repo, filepath.FromSlash(file))) {
 		if _, ok := unreachableLiterals[lit]; ok {
 			continue
 		}
@@ -96,6 +105,38 @@ func requireReached(t *testing.T, file, outputs string) {
 			t.Errorf("%s: no generated input reached %q", pos, lit)
 		}
 	}
+}
+
+// liveOutputs collects, per top-level test, the TS results a live test
+// compared (recordOutput), for requireReached.
+var (
+	liveOutputsMu sync.Mutex
+	liveOutputs   = map[string]*strings.Builder{}
+)
+
+// recordOutput adds a compared TS result to t's top-level test's outputs.
+func recordOutput(t *testing.T, s string) {
+	top, _, _ := strings.Cut(t.Name(), "/")
+	liveOutputsMu.Lock()
+	defer liveOutputsMu.Unlock()
+	b := liveOutputs[top]
+	if b == nil {
+		b = &strings.Builder{}
+		liveOutputs[top] = b
+	}
+	b.WriteString(s)
+	b.WriteByte('\n')
+}
+
+// recordedOutputs is what recordOutput collected for t's top-level test.
+func recordedOutputs(t *testing.T) string {
+	top, _, _ := strings.Cut(t.Name(), "/")
+	liveOutputsMu.Lock()
+	defer liveOutputsMu.Unlock()
+	if b := liveOutputs[top]; b != nil {
+		return b.String()
+	}
+	return ""
 }
 
 // oracleText calls an oracle op that returns a string.
@@ -134,7 +175,7 @@ func TestLiveWitness(t *testing.T) {
 		}
 		return args + "}", canonicalOf(gitproof.VerifyFrozenWitnessRecord(value, expected, provided).JSON())
 	})
-	requireReached(t, "gitproof/witness.go", outputs+liveWitnessOverlays(t))
+	requireReached(t, "internal/bundle/gitproof/witness.go", outputs+liveWitnessOverlays(t))
 }
 
 // liveWitnessOverlays compares multi-overlay witnesses built by frozen TS
@@ -247,7 +288,7 @@ func TestLiveLedger(t *testing.T) {
 		value, _ := jsjson.Parse(text)
 		return `{"text":` + jsjson.Quote(text) + "}", canonicalOf(gitproof.VerifyCodexLifecycleLedger(value).JSON())
 	})
-	requireReached(t, "gitproof/ledger.go", outputs)
+	requireReached(t, "internal/bundle/gitproof/ledger.go", outputs)
 	if !strings.Contains(rich, "TURN_TREE_SNAPSHOT") || !strings.Contains(rich, "TOOL_USE_STARTED") || !strings.Contains(rich, "SESSION_BASELINE_SNAPSHOT") {
 		t.Fatalf("rich ledger seed lacks snapshot or tool-use events")
 	}
@@ -294,7 +335,7 @@ func TestLiveLedgerBinding(t *testing.T) {
 		}
 		return args + "}", canonicalOf(ledgerbind.Verify(value, expected, provided))
 	})
-	requireReached(t, "../ledgerbind/ledgerbind.go", outputs)
+	requireReached(t, "internal/ledgerbind/ledgerbind.go", outputs)
 }
 
 // ledgerBoundDuplicates are two re-signed variants random corruption does not
@@ -421,7 +462,7 @@ func TestLiveSandbox(t *testing.T) {
 		}
 		return `{"text":` + jsjson.Quote(text) + "}", canonicalOf(jsjson.MakeArray(items))
 	})
-	requireReached(t, "gitproof/sandbox.go", outputs)
+	requireReached(t, "internal/bundle/gitproof/sandbox.go", outputs)
 	t.Logf("accepted audits among generated inputs: %v", accepted)
 	for _, kind := range []string{"DOCKER_ISOLATED", "UNSAFE_LOCAL"} {
 		if accepted[kind] == 0 {

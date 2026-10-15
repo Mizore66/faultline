@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build faultline_test && (linux || darwin)
 
 package difftest
 

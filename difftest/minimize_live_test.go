@@ -1,4 +1,4 @@
-//go:build unix
+//go:build faultline_test && unix
 
 package difftest
 
@@ -336,10 +336,27 @@ func TestLiveMinimizationVerify(t *testing.T) {
 	r := rand.New(rand.NewPCG(31, 7))
 	seen := map[string]bool{}
 	valid := 0
-	for i := 0; i < 3000; i++ {
-		text := seeds[r.IntN(len(seeds))]
-		if i >= len(seeds) {
-			text = gen.CorruptDeep(r, text)
+	var outputs strings.Builder
+	targeted := targetedMinimizationEdits(t, seeds)
+	for i := 0; i < len(targeted)+6000; i++ {
+		var text string
+		if i < len(targeted) {
+			text = targeted[i]
+		} else if text = seeds[r.IntN(len(seeds))]; i-len(targeted) >= len(seeds) {
+			// Schema-breaking corruption, and kind-preserving edits that
+			// keep the schema and reach the cross-field checks.
+			switch r.IntN(3) {
+			case 0:
+				text = gen.CorruptDeep(r, text)
+			case 1:
+				for n := 1 + r.IntN(2); n > 0; n-- {
+					text = gen.CorruptLeaf(r, text)
+				}
+			default:
+				for n := 1 + r.IntN(2); n > 0; n-- {
+					text = gen.SwapLeaf(r, text)
+				}
+			}
 		}
 		value, err := jsjson.Parse(text)
 		if err != nil {
@@ -369,6 +386,7 @@ func TestLiveMinimizationVerify(t *testing.T) {
 		if want := oracleText(t, c, "verifyGitMinimizationResult", args); got != want {
 			t.Fatalf("case %d:\ngot  %s\nwant %s", i, got, want)
 		}
+		outputs.WriteString(got) // equal to TS's result
 		if minimize.Verify(value, expected, provided).Valid {
 			valid++
 		}
@@ -377,4 +395,160 @@ func TestLiveMinimizationVerify(t *testing.T) {
 	if valid == 0 {
 		t.Error("no generated record was valid")
 	}
+	requireReached(t, "internal/minimize/verify.go", outputs.String())
+}
+
+// targetedMinimizationEdits applies, to every seed record where it fits, one
+// edit aimed at each cross-field check the random corruption rarely reaches
+// (a certificate whose ids disagree, a run whose sandbox and result
+// disagree, an attempt without a run, interaction evidence, the status of a
+// proof).
+func targetedMinimizationEdits(t *testing.T, seeds []string) []string {
+	t.Helper()
+	at := func(v jsjson.Value, path ...any) jsjson.Value {
+		for _, p := range path {
+			switch p := p.(type) {
+			case string:
+				v = v.Get(p)
+			case int:
+				if v.Kind() != jsjson.Array || p >= len(v.Items()) {
+					return jsjson.Value{}
+				}
+				v = v.Items()[p]
+			}
+		}
+		return v
+	}
+	str := jsjson.MakeString
+	var evidence jsjson.Value // a seed's non-monotonic interaction evidence
+	for _, seed := range seeds {
+		v, _ := jsjson.Parse(seed)
+		if e := at(v, "minimality", "nonMonotonicInteraction", "evidence"); e.Kind() == jsjson.Object {
+			evidence = e
+		}
+	}
+	edits := []func(v jsjson.Value) bool{
+		func(v jsjson.Value) bool { // run and execution id counts differ
+			ids := at(v, "certification", "sufficiency", "runIds")
+			if len(ids.Items()) == 0 {
+				return false
+			}
+			v.Get("certification", "sufficiency").Obj().Set("runIds", jsjson.MakeArray(ids.Items()[:len(ids.Items())-1]))
+			return true
+		},
+		func(v jsjson.Value) bool { // NOT_RUN with execution references
+			if len(at(v, "certification", "sufficiency", "runIds").Items()) == 0 {
+				return false
+			}
+			v.Get("certification", "sufficiency").Obj().Set("status", str("NOT_RUN"))
+			return true
+		},
+		func(v jsjson.Value) bool { // a repeated run id
+			ids := at(v, "certification", "necessity", "runIds").Items()
+			if len(ids) < 2 {
+				return false
+			}
+			ids[1] = ids[0]
+			return true
+		},
+		func(v jsjson.Value) bool { // complete evidence but not CERTIFIED
+			if at(v, "certification", "necessity", "status").Str() != "CERTIFIED" {
+				return false
+			}
+			v.Get("certification", "necessity").Obj().Set("status", str("NOT_CERTIFIED"))
+			return true
+		},
+		func(v jsjson.Value) bool { // a result without its sandbox
+			run := at(v, "runs", 0)
+			if run.Kind() != jsjson.Object || run.Get("result").Kind() != jsjson.Object {
+				return false
+			}
+			run.Obj().Set("sandbox", jsjson.MakeNull())
+			return true
+		},
+		func(v jsjson.Value) bool { // no result, yet resolved
+			run := at(v, "runs", 0)
+			if run.Kind() != jsjson.Object || run.Get("outcome").Str() == "UNRESOLVED" {
+				return false
+			}
+			run.Obj().Set("sandbox", jsjson.MakeNull())
+			run.Obj().Set("result", jsjson.MakeNull())
+			return true
+		},
+		func(v jsjson.Value) bool { // sandbox kind against result kind
+			sandbox := at(v, "runs", 0, "sandbox")
+			if sandbox.Kind() != jsjson.Object {
+				return false
+			}
+			sandbox.Obj().Set("kind", str("UNSAFE_LOCAL"))
+			return true
+		},
+		func(v jsjson.Value) bool { // unsafe-local executor, Docker result
+			result := at(v, "runs", 0, "result")
+			if result.Kind() != jsjson.Object {
+				return false
+			}
+			result.Obj().Set("executor", str("UNSAFE_LOCAL"))
+			return true
+		},
+		func(v jsjson.Value) bool { // Docker executor, unsafe-local result
+			result := at(v, "runs", 0, "result")
+			if result.Kind() != jsjson.Object {
+				return false
+			}
+			result.Obj().Set("kind", str("UNSAFE_LOCAL"))
+			return true
+		},
+		func(v jsjson.Value) bool { // an attempt that ran loses its run
+			attempt := at(v, "attempts", 0)
+			if attempt.Kind() != jsjson.Object || attempt.Get("runId").Kind() != jsjson.String {
+				return false
+			}
+			attempt.Obj().Set("runId", jsjson.MakeNull())
+			return true
+		},
+		func(v jsjson.Value) bool { // a non-monotonic verdict without evidence
+			interaction := at(v, "minimality", "nonMonotonicInteraction")
+			if interaction.Kind() != jsjson.Object || interaction.Get("evidence").Kind() != jsjson.Null {
+				return false
+			}
+			interaction.Obj().Set("verdict", str("NON_MONOTONIC_INTERACTION"))
+			return true
+		},
+		func(v jsjson.Value) bool { // evidence under another verdict
+			interaction := at(v, "minimality", "nonMonotonicInteraction")
+			if interaction.Kind() != jsjson.Object || evidence.Kind() != jsjson.Object ||
+				interaction.Get("verdict").Str() == "NON_MONOTONIC_INTERACTION" {
+				return false
+			}
+			copied, _ := jsjson.Parse(jsjson.Stringify(evidence))
+			interaction.Obj().Set("evidence", copied)
+			return true
+		},
+		func(v jsjson.Value) bool { // proof evidence under another status
+			if !at(v, "proof", "isProof").Bool() {
+				return false
+			}
+			v.Obj().Set("status", str("BUDGET_EXHAUSTED"))
+			return true
+		},
+	}
+	var out []string
+	for i, edit := range edits {
+		applied := false
+		for _, seed := range seeds {
+			v, err := jsjson.Parse(seed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if edit(v) {
+				out = append(out, jsjson.Stringify(v))
+				applied = true
+			}
+		}
+		if !applied {
+			t.Errorf("targeted edit %d fits no seed", i)
+		}
+	}
+	return out
 }

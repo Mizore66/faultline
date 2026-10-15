@@ -1,3 +1,5 @@
+//go:build faultline_test
+
 package difftest
 
 import (
@@ -15,13 +17,20 @@ import (
 // TestGoldensReachEveryErrorLiteral keys them by text: a literal counts as
 // reached there when another check prints the same or a longer text
 // (round 5, §8 F10). With FAULTLINE_COVERAGE_GATE=1, TestMain builds fl with
-// -cover over internal/bundle and runs the replay with GOCOVERDIR set; after
-// a full run (no -test.run), every statement in internal/bundle that builds
-// an error literal must have run in some golden case, unless the literal is
-// listed in unreachableLiterals or its file is live-gated.
-// cmd/fl is listed too: a binary whose main package is not instrumented
-// writes no coverage data at all.
-const coverPkgs = "github.com/Mizore66/faultline/cmd/fl,github.com/Mizore66/faultline/internal/bundle/..."
+// -cover over the gated packages (gatedDirs) and runs the golden and writer
+// replays with GOCOVERDIR set; after a full run (no -test.run), every
+// statement in a gated package that builds an error literal must have run in
+// some golden or writer case, unless the literal is listed in
+// unreachableLiterals, its line carries raceOnlyMarker, or its file is
+// live-gated. cmd/fl is listed too: a binary whose main package is not
+// instrumented writes no coverage data at all.
+var coverPkgs = func() string {
+	pkgs := []string{"github.com/Mizore66/faultline/cmd/fl"}
+	for _, dir := range gatedDirs {
+		pkgs = append(pkgs, "github.com/Mizore66/faultline/"+dir+"/...")
+	}
+	return strings.Join(pkgs, ",")
+}()
 
 func coverageGate(repo, coverDir string) error {
 	profile := filepath.Join(coverDir, "profile.txt")
@@ -57,17 +66,21 @@ func coverageGate(repo, coverDir string) error {
 		blocks[rel] = append(blocks[rel], block{start, end, count})
 	}
 	if len(blocks) == 0 {
-		return fmt.Errorf("coverage gate: the profile has no internal/bundle blocks")
+		return fmt.Errorf("coverage gate: the profile has no blocks of the gated packages")
 	}
-	sites, err := errorSites(filepath.Join(repo, "internal", "bundle"))
-	if err != nil {
-		return err
+	var sites []errorSite
+	for _, dir := range gatedDirs {
+		found, err := errorSites(filepath.Join(repo, filepath.FromSlash(dir)))
+		if err != nil {
+			return err
+		}
+		sites = append(sites, found...)
 	}
 	var missed bytes.Buffer
 	for _, s := range sites {
 		rel, _ := filepath.Rel(repo, s.file)
 		rel = filepath.ToSlash(rel)
-		if liveGatedFiles[strings.TrimPrefix(rel, "internal/bundle/")] != "" {
+		if liveGatedFiles[rel] != "" {
 			continue
 		}
 		if _, ok := unreachableLiterals[s.text]; ok {

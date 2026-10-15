@@ -1,4 +1,4 @@
-//go:build unix
+//go:build faultline_test && unix
 
 package difftest
 
@@ -163,6 +163,7 @@ func TestLiveSandboxPlan(t *testing.T) {
 	r := rand.New(rand.NewPCG(12, 1))
 	messages := map[string]int{}
 	plans := 0
+	var outputs strings.Builder
 	for i := 0; i < 2000; i++ {
 		text := randomSandboxRequest(r, valid, invalid)
 		want := oracleText(t, c, "createSandboxPlan", `{"request":`+text+`}`)
@@ -170,6 +171,7 @@ func TestLiveSandboxPlan(t *testing.T) {
 		if got != want {
 			t.Fatalf("createSandboxPlan(%s):\ngot  %s\nwant %s", text, got, want)
 		}
+		outputs.WriteString(want)
 		if !ok {
 			messages[got]++
 			continue
@@ -186,6 +188,7 @@ func TestLiveSandboxPlan(t *testing.T) {
 	for m := range messages {
 		t.Log(strings.ReplaceAll(m, "\n", `\n`))
 	}
+	requireReached(t, "internal/sandbox/plan.go", outputs.String())
 }
 
 // classifyPlanStub has the plan fields classifySandboxResult reads.
