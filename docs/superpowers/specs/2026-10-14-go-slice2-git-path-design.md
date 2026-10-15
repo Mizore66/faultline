@@ -4,6 +4,7 @@
 - **Status:** Approved design (brainstorming session, 2026-10-14)
 - **Parent:** [Go migration overview](2026-09-25-go-migration-overview.md); builds on [slice 1](2026-09-25-go-slice1-verify-design.md)
 - **TS oracle:** frozen TS at `faa98c0` (`v0.1.9-buildweek`), run as `node dist/cli.js`, the same oracle as slice 1
+- **Revised:** 2026-10-15, folding in the six corrections the [implementation plan](../plans/2026-10-14-go-slice2-git-path.md) found while planning (Sections 1, 2.1, 3.3, 3.4, 3.5)
 
 ## 1. Scope and layout
 
@@ -14,7 +15,7 @@
 | `investigate git` | `investigateCommand` (`src/cli-app.ts`, git branch), `investigateGitRange` | All flags: `--repo --from --to --proposal --expect-digest --image --store --draft-store --max-states --runtime-mapping --ledger --ledger-binding-output --output`, plus the new thread-ID flags (Section 3.6). Writes the Git proof bundle and the incident session binding. |
 | `minimize git`, `minimize verify` | `minimizeCommand`, `src/git-minimization.ts` | |
 | `judge-proof`, `commit-proof-preview` | `judgeProofCommand`, `src/judge-proof.ts`, `src/git-proof-view.ts`, `src/server.ts` | Static HTML export and the local server. |
-| `witness propose` (template mode), `approve`, `freeze`, `sign`, `verify`, `policy freeze`, `policy apply`, `resolve-autonomous`, `ratify` | `witnessCommand`, `src/witness-lock.ts`, `src/authenticated-witness-approval.ts`, `src/standing-approval-policy.ts`, `src/autonomous-session.ts` | They share the witness store, so they are ported together. |
+| `witness propose` (without `--live`), `approve`, `freeze`, `sign`, `verify`, `policy freeze`, `policy apply`, `resolve-autonomous`, `ratify` | `witnessCommand`, `src/witness-lock.ts`, `src/authenticated-witness-approval.ts`, `src/standing-approval-policy.ts`, `src/autonomous-session.ts` | They share the witness store, so they are ported together. Without `--input`, `witness propose` prints `defaultWitnessProposal()` (`src/ai.ts:44`), a constant, so it is ported too. |
 | `ledger bind`, `ledger verify` | `src/ledger-binding.ts` | `investigate git --ledger` already needs the binding. |
 
 Every other subcommand keeps throwing `not yet ported: <name>`, as in slice 1.
@@ -25,7 +26,7 @@ Every other subcommand keeps throwing `not yet ported: <name>`, as in slice 1.
 
 - `src/sandbox.ts`: Docker plan, execution, audit and cleanup;
 - `src/git-materialization.ts`, `src/safe-overlay.ts`, `src/environment-fingerprint.ts`;
-- `src/redaction.ts` and `src/secret-allowlist.ts`;
+- `src/redaction.ts` (`src/secret-allowlist.ts` is reachable only from `src/turn-snapshot.ts`, so it moves to slice 4 with `captureAllowlistedEvent`);
 - `src/config.ts` image resolution, `src/runtime-mapping-file.ts`, `src/incident-binding.ts`, `src/evidence-grade.ts` and `src/turn-proof-promotion.ts` as far as these commands reach them.
 
 Slice 3 keeps `runtime`, `doctor` and project init.
@@ -44,12 +45,14 @@ New packages, one Go file per TS module as in slice 1:
 internal/clock         Now, NewUUID; seeded in test builds (Section 2.1)
 internal/witness       store, propose, approve, freeze, sign, verify, policy, autonomous
 internal/sandbox       plan, Docker runner, audit, cleanup
-internal/redaction     detectors, allowlist
+internal/redaction     detectors (redactText, redactValue)
 internal/gitinv        materialization, overlay, fingerprint, investigateGitRange
 internal/minimize      minimizeGitDiff, result writer and verifier
 internal/proofview     judge-proof and preview HTML, local server
 internal/bundle/gitproof   gains the writer next to the slice-1 verifier, reusing its schemas
 ```
+
+Besides these, the port adds small leaf packages, one per TS module the commands share: `internal/jsre` (JS regular expressions as RE2), `internal/safedir` (`src/safe-directory.ts`), `internal/evidence` (`src/evidence-grade.ts`, `src/turn-proof-promotion.ts`), `internal/witnessresult` (`src/witness-result.ts`) and `internal/ledgerbind` (`src/ledger-binding.ts`). The read side of `src/config.ts` and `src/runtime-mapping-file.ts` lives in `internal/gitinv`, and `internal/cli` owns the browser opener.
 
 All writers use slice 1's `canonical`, `jsjson`, `schema`, `nodefs` and `nodeproc`.
 
@@ -61,8 +64,8 @@ Slice 1 compared stdout. Slice 2 also compares what each command writes and whic
 
 Frozen TS stamps `new Date()`, `Date.now()` and `crypto.randomUUID()` into what it writes (`proposedAt`, `approvedAt`, `frozenAt`, `generatedAt`, run `executionNonce` and timings, bundle and minimization directory names), and those values feed digests and the bundle root.
 
-- **TS:** the harness runs `node --import difftest/gen/seed.mjs dist/cli.js …`. The preload replaces `Date` (constructor without arguments and `Date.now`) and `crypto.randomUUID` with a sequence derived from `FAULTLINE_TEST_SEED`: the clock starts at a fixed instant and advances 1 ms per read; UUIDs are version-4-shaped values from a seeded generator. `src/` is not modified.
-- **Go:** every writer takes time and UUIDs from `internal/clock`. Under the `faultline_test` build tag it reads `FAULTLINE_TEST_SEED` and produces the same sequence; release builds ignore the variable.
+- **TS:** the harness runs `node --import difftest/gen/seed.mjs dist/cli.js …`. The preload replaces `Date` (constructor without arguments and `Date.now`) and `crypto.randomUUID` with a sequence derived from `FAULTLINE_TEST_SEED`: the clock starts at a fixed instant and advances 1 ms per read; UUIDs are version-4-shaped values from a seeded generator. Node's `mkdtemp` suffix comes from libuv, not `randomUUID`, and `src/git-minimization.ts:994-995` hashes the worktree path into `worktreeDigest`, so the preload also replaces `fs.mkdtemp`, `fs.mkdtempSync` and `fs.promises.mkdtemp` with seeded suffixes. `src/` is not modified.
+- **Go:** every writer takes time, UUIDs and `mkdtemp` suffixes from `internal/clock`. Under the `faultline_test` build tag it reads `FAULTLINE_TEST_SEED` and produces the same sequence; release builds ignore the variable.
 - Both sides must read values in the same order. The port keeps TS's call order; a mismatch shows up as a digest difference in replay and is fixed in Go.
 
 ### 2.2 Fake Docker
@@ -101,15 +104,15 @@ stdout, stderr and exit status match frozen TS byte for byte, including Node-for
 
 ### 3.3 Docker execution
 
-`docker` is spawned through slice 1's `nodeproc` (libuv `spawnSync` semantics): the same container names, `--rm`, `docker rm --force` cleanup after errors, output caps (`maxBuffer`) and timeouts. A SIGINT during a run stops the container and ends `fl` by the signal, with the cleanup Node performs.
+`runHardenedGit` and `createNodeSandboxRunner` use Node's async `spawn` with their own timers and kill signals (SIGTERM for git, SIGKILL for Docker), not `spawnSync`; Go starts them through `nodeproc.Spawn`, which models `child_process.spawn`: the same container names, `--rm`, `docker rm --force` cleanup after errors, output caps and timeouts. Neither call site installs a signal handler: a SIGINT from the terminal reaches the `docker` CLI through the process group, and `fl` dies by the default action, in both implementations.
 
 ### 3.4 `judge-proof` and `commit-proof-preview`
 
-The same routes, headers and HTML; the same port-binding errors (`EADDRINUSE`); `--serve-ms` timing; no browser under `CI`, `GITHUB_ACTIONS` or `FAULTLINE_NO_BROWSER=1`; on stop, exit status 0 as with `process.exit(0)`. `--export-only` output is compared byte for byte.
+The same routes, headers and HTML; the same default port, 4174 (`src/cli-app.ts:997-1039`; the demo server's is 4173); the same port-binding errors (`EADDRINUSE`); `--serve-ms` timing; no browser under `CI`, `GITHUB_ACTIONS` or `FAULTLINE_NO_BROWSER=1`; on stop, exit status 0 as with `process.exit(0)`. `--export-only` output is compared byte for byte.
 
 ### 3.5 Secret redaction
 
-The same detector kinds (`OPENAI_API_KEY`, `GITHUB_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AUTHORIZATION_BEARER`, `AUTHORIZATION_BASIC`, `PRIVATE_KEY_BLOCK`, `GENERIC_SECRET_ASSIGNMENT`), the same regular expressions, the 256 KiB scan window, and the same allowlist matching (path, kind, occurrence digest, optional file digest).
+The same detector kinds (`OPENAI_API_KEY`, `GITHUB_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AUTHORIZATION_BEARER`, `AUTHORIZATION_BASIC`, `PRIVATE_KEY_BLOCK`, `GENERIC_SECRET_ASSIGNMENT`), and the same regular expressions. The allowlist (`src/secret-allowlist.ts`, whose 256 KiB limit is the allowlist file's size cap, `secret-allowlist.ts:41`, not a scan window) is reachable only from `src/turn-snapshot.ts` and moves to slice 4.
 
 The secret-scanner corpus (`benchmarks/secret-scanner-corpus`, 151 cases) is grown as PR #195's `secret-scanner-corpus-growth` spec describes: more true-secret encodings, false positives, Unicode and multiline cases, split secrets labelled `should_miss`, tiny binary fixtures. Go must give the same detections, offsets and redacted text as TS on every case. New detector kinds change behaviour and wait until after parity.
 
@@ -126,7 +129,7 @@ These cases are tested directly, not against goldens. Thread IDs on turn manifes
 
 ### 3.7 Expected KNOWN_DIFFERENCES entries
 
-Added as they are confirmed: git's bundle byte layout across git versions; Docker daemon diagnostics, masked like git stderr.
+Added as they are confirmed: git's bundle byte layout across git versions; Docker daemon diagnostics; the judge-proof server's wire details. `difftest/KNOWN_DIFFERENCES.md` holds the final list.
 
 ## 4. CI and done criteria
 
