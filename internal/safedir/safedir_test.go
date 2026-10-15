@@ -44,16 +44,21 @@ func TestResolveSafeDirectorySegmentPropagatesNodeError(t *testing.T) {
 		t.Skip("root bypasses directory permissions")
 	}
 	dir := t.TempDir()
-	locked := filepath.Join(dir, "locked")
-	if err := os.Mkdir(locked, 0o000); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chmod(locked, 0o755)
-	path := filepath.Join(locked, "child")
-	_, ok, err := ResolveSafeDirectorySegment(path)
-	want := "EACCES: permission denied, lstat '" + path + "'"
-	if ok || err == nil || err.Error() != want {
-		t.Fatalf("ok=%v err=%v, want %s", ok, err, want)
+	// A 0000 directory refuses lstat beneath it on POSIX only: Windows
+	// ignores the mode (no EACCES to propagate there), so only the ENOENT
+	// half runs on Windows.
+	if runtime.GOOS != "windows" {
+		locked := filepath.Join(dir, "locked")
+		if err := os.Mkdir(locked, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Chmod(locked, 0o755)
+		path := filepath.Join(locked, "child")
+		_, ok, err := ResolveSafeDirectorySegment(path)
+		want := "EACCES: permission denied, lstat '" + path + "'"
+		if ok || err == nil || err.Error() != want {
+			t.Fatalf("ok=%v err=%v, want %s", ok, err, want)
+		}
 	}
 	if _, _, err := ResolveSafeDirectorySegment(filepath.Join(dir, "missing")); err == nil {
 		t.Fatal("ENOENT must propagate")

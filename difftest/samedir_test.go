@@ -38,6 +38,7 @@ func TestWriterSameDirectory(t *testing.T) {
 		templates[tpl.ID] = tpl
 	}
 	raw := func(_ string, b []byte) string { return canonical.SHA256HexBytes(b) }
+	defer liveSummary(t, "%d writer cases compared in the same directory, unmasked", len(sameDirectoryCases))
 	for _, id := range sameDirectoryCases {
 		tpl, ok := templates[id]
 		if !ok {

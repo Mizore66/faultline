@@ -259,7 +259,7 @@ func TestLiveProofWriter(t *testing.T) {
 			longest = wc
 		}
 	}
-	t.Logf("%d written, refused %v", written, refused)
+	liveSummary(t, "%d written, refused %v", written, refused)
 	if base == nil {
 		t.Fatal("no generated case was written")
 	}

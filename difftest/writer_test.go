@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
@@ -594,6 +595,9 @@ func (rel *relocated) fileDigest(_ string, b []byte) string {
 // crossVerify is the spec 2.4 cross-check of a bundle Go wrote: Go `fl
 // verify --expect-root <printed root>` must report it valid, and so must
 // frozen TS when FAULTLINE_NODE_ORACLE=1.
+// tsCrossVerified counts the bundles Go wrote that frozen TS verified.
+var tsCrossVerified atomic.Int64
+
 func crossVerify(t *testing.T, repo string, inv int, id, bundle, root string) {
 	t.Helper()
 	ok := func(out string, code int) bool {
@@ -607,6 +611,7 @@ func crossVerify(t *testing.T, repo string, inv int, id, bundle, root string) {
 		if out, code := runTSVerify(t, repo, bundle, root); !ok(out, code) {
 			t.Fatalf("%s|%d: TS verify of the bundle Go wrote failed (exit %d)\n%s", id, inv, code, out)
 		}
+		tsCrossVerified.Add(1)
 	}
 }
 
@@ -852,6 +857,10 @@ func TestWriterReplay(t *testing.T) {
 	goldens := loadWriterGoldens(t, repo)
 	checkScenarioDirs(t, repo)
 	seen := map[string]bool{}
+	ran := 0
+	defer func() {
+		liveSummary(t, "%d of %d writer cases run (%d golden invocations), %d Go bundles verified by TS", ran, len(templates), len(goldens), tsCrossVerified.Load())
+	}()
 	for _, tpl := range templates {
 		// Marked before running, so a case that stops early or skips does
 		// not report its later goldens as orphans.
@@ -868,6 +877,7 @@ func TestWriterReplay(t *testing.T) {
 			if tpl.PosixOnly && windows {
 				t.Skip("POSIX fake git/docker recorders")
 			}
+			ran++
 			for _, got := range runWriterCase(t, repo, tpl) {
 				key := tpl.ID + "|" + itoa(int64(got.Inv))
 				want, ok := goldens[key]

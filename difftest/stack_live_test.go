@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
+	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
 // The V8 stack model (internal/jsjson/stack.go) is fitted per platform and
@@ -32,12 +33,14 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 	// whose zod message formatCliFailure prints (past the limit TS dies of
 	// the uncaught RangeError and Go prints it as a FaultLine error).
 	sites := []struct{ name, base, file, old string }{
+		// cli first: its darwin/arm64 offset is the one still estimated, so
+		// it is measured (and logged) before any other site can fail.
+		{"cli", "scenarios/git-two-states/tree", "proposal.json", `"network": "disabled"`},
 		{"demo", "demo-replay", "analysis.json", `"schemaVersion": "faultline.demo.v1"`},
 		{"witness", "demo-replay", "witness/witness.json", `"network": "disabled"`},
 		{"prevention", "prevention-verified", "prevention.json", `"schemaVersion":"faultline.prevention-proof.v1"`},
 		{"git", "git-fully-bound", "manifest.json", `"integrityScope":"complete-declared-file-set"`},
 		{"ledger", "git-fully-bound", "lifecycle/ledger.json", `"schemaVersion":"faultline.codex-lifecycle-ledger.v1"`},
-		{"cli", "scenarios/git-two-states/tree", "proposal.json", `"network": "disabled"`},
 	}
 	shapes := map[string]func(n int) string{
 		"arr": func(n int) string { return strings.Repeat("[", n) + strings.Repeat("]", n) },
@@ -64,6 +67,9 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 	}
 	var report []string
 	for _, site := range sites {
+		var tsLasts []int
+		var shapeFns []func(int) string
+		siteDiffers := false
 		for _, shape := range []string{"arr", "obj", "idx", "alt"} {
 			prints := func(argv []string, n int) bool {
 				dir := filepath.Join(t.TempDir(), "b")
@@ -124,8 +130,20 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 			wg.Wait()
 			line := fmt.Sprintf("%s/%s %-10s %s: TS %d, Go %d", runtime.GOOS, runtime.GOARCH, site.name, shape, ts, goLast)
 			t.Log(line)
+			tsLasts, shapeFns = append(tsLasts, ts), append(shapeFns, shapes[shape])
 			if ts != goLast {
 				report = append(report, line)
+				siteDiffers = true
+			}
+		}
+		// The cli offset is the one still estimated on some platforms: when
+		// Go misses TS there, report the offsets that would reproduce TS's
+		// depths (internal/jsjson/stack.go SiteCLI).
+		if site.name == "cli" && siteDiffers {
+			if lo, hi, ok := jsjson.FitSiteOffsetForTest(shapeFns, tsLasts); ok {
+				t.Logf("%s/%s cli refit: SiteCLI offsets %d to %d reproduce TS", runtime.GOOS, runtime.GOARCH, lo, hi)
+			} else {
+				t.Logf("%s/%s cli refit: no SiteCLI offset reproduces TS on all four shapes", runtime.GOOS, runtime.GOARCH)
 			}
 		}
 	}

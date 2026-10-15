@@ -283,7 +283,7 @@ func TestLiveMinimize(t *testing.T) {
 			t.Fatalf("case %d (%s) verification:\ngot  %s\nwant %s", i, tc.label, canonicalOf(verification.JSON()), wantVerification)
 		}
 	}
-	t.Logf("statuses %v", statuses)
+	liveSummary(t, "%d cases compared, statuses %v", len(cases), statuses)
 	for _, status := range []string{"COMPLETED", "EXECUTION_ERROR", "BUDGET_EXHAUSTED", "BASELINE_NOT_PASS", "FULL_PATCH_NOT_FAIL", "NO_PATCHES",
 		"SANDBOX_UNAVAILABLE", "RANGE_ERROR", "INVALID_WITNESS"} {
 		if statuses[status] == 0 {
@@ -391,7 +391,7 @@ func TestLiveMinimizationVerify(t *testing.T) {
 			valid++
 		}
 	}
-	t.Logf("verified %d distinct records (%d valid)", len(seen), valid)
+	liveSummary(t, "%d distinct records compared (%d targeted edits, %d valid)", len(seen), len(targeted), valid)
 	if valid == 0 {
 		t.Error("no generated record was valid")
 	}

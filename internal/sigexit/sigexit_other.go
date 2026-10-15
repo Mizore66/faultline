@@ -16,3 +16,7 @@ func Die(sig syscall.Signal) {
 // RecordIgnored is only needed where Die resets dispositions through
 // os/signal.
 func RecordIgnored() {}
+
+// restoreRuntimeHandler is a no-op here: boot leaves the runtime's handlers
+// in place, so signal.Notify alone delivers an intercepted signal.
+func restoreRuntimeHandler(syscall.Signal) {}

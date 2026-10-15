@@ -317,7 +317,7 @@ func TestLiveInvestigate(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("statuses %v, %d transitions", statuses, transitions)
+	liveSummary(t, "%d generated repositories compared, statuses %v, %d transitions", len(cases), statuses, transitions)
 	for _, status := range []string{"COMPLETED", "RANGE_ERROR", "CONFIGURATION_ERROR", "EXECUTION_ERROR", "INVALID_WITNESS", "SANDBOX_UNAVAILABLE", "THREW"} {
 		if statuses[status] == 0 {
 			t.Errorf("no case reached %s", status)

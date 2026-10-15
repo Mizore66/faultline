@@ -5,6 +5,7 @@ package witness
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,6 +13,20 @@ import (
 )
 
 func ptr(s string) *string { return &s }
+
+// requireMode checks the permission bits fl asked for. Windows has no POSIX
+// modes (Go and Node both report 0666 or 0444 for files, 0777 for
+// directories), so there the check is skipped, not the test.
+func requireMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != want {
+		t.Fatalf("%s: mode %v, want %v", path, info.Mode().Perm(), want)
+	}
+}
 
 func TestSessionBindingWriteReadInherit(t *testing.T) {
 	clock.ResetForTest("binding")
@@ -33,9 +48,7 @@ func TestSessionBindingWriteReadInherit(t *testing.T) {
 	if string(text) != want {
 		t.Fatalf("%s", text)
 	}
-	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v", info.Mode())
-	}
+	requireMode(t, path, 0o600)
 	facts := ResolveInheritedSessionFacts(InheritInput{StoreDirectory: store, IncidentID: "inc-1", LedgerPath: ptr("/explicit")})
 	if *facts.ExpectDigest != digest || *facts.LedgerPath != "/explicit" || !facts.InheritedExpectDigest || facts.InheritedLedgerPath {
 		t.Fatalf("%+v", facts)

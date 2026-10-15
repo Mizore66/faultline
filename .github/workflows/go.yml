@@ -38,6 +38,10 @@ jobs:
       # per-platform cases may skip; on Windows, the writer cases marked
       # posixOnly (sh recorders, fake Docker), listed by name in
       # .github/scripts/windows-writer-skips.txt.
+      # TestErrorPathReplacesLoneSurrogate pins the Unix error text (the JS
+      # path string through UTF-8, as given); on Windows Node prints the
+      # resolved path with backslashes (errorPath's Windows branch), which its
+      # expected texts do not model.
       - name: go test
         shell: bash
         run: |
@@ -50,7 +54,7 @@ jobs:
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
             Windows)
               posix=$(tr -d '\r' < .github/scripts/windows-writer-skips.txt | grep -v '^#' | paste -sd '|' -)
-              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestGoldenReplay/.+|$posix" ;;
+              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestGoldenReplay/.+|$posix" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status
@@ -312,10 +316,17 @@ jobs:
       - name: Measured stack depths
         # The CLI site's darwin/arm64 offset (jsjson.SiteCLI) was fitted from
         # an estimate: annotate what TS and Go reached at every site, so a
-        # failing row can be refitted from the check run alone.
+        # failing row can be refitted from the check run alone. One notice
+        # per site (its four shapes on one line): GitHub keeps only ten
+        # notices per step. The test measures the cli site first and also
+        # logs an unexpected output there before failing.
         if: always()
         run: |
-          grep -E '^ *stack_live_test\.go:[0-9]+: [a-z0-9]+/[a-z0-9]+ ' "$RUNNER_TEMP/live.log" | sed 's/^ *stack_live_test\.go:[0-9]*: //' | while read -r line; do echo "::notice title=stack depth::$line"; done
+          grep -E '^ *stack_live_test\.go:[0-9]+: [a-z0-9]+/[a-z0-9_]+ ' "$RUNNER_TEMP/live.log" | sed 's/^ *stack_live_test\.go:[0-9]*: //' |
+            awk '{ key = $1 " " $2; $1 = ""; $2 = ""; sub(/^ +/, ""); rows[key] = rows[key] (rows[key] == "" ? "" : "; ") $0; if (!(key in seen)) { seen[key] = 1; order[++n] = key } }
+                 END { for (i = 1; i <= n; i++) print order[i] " " rows[order[i]] }' |
+            while read -r line; do echo "::notice title=stack depth::$line"; done
+          grep -E 'stack_live_test\.go:[0-9]+: .*(unexpected output|lacks)' "$RUNNER_TEMP/live.log" | head -5 | while read -r line; do echo "::warning title=stack site::$line"; done
       - name: TimSort against V8
         run: |
           set -o pipefail

@@ -100,7 +100,9 @@ func TestLiveWriterFaults(t *testing.T) {
 		templates[tpl.ID] = tpl
 	}
 	discovered := map[string]string{}
-	for _, f := range writerFaultMatrix() {
+	matrix := writerFaultMatrix()
+	defer func() { liveSummary(t, "%d fault cases (path x syscall group x errno)", len(matrix)) }()
+	for _, f := range matrix {
 		t.Run(f.name(), func(t *testing.T) {
 			tpl, ok := templates[f.caseID]
 			if !ok || len(tpl.Argv) != 1 {

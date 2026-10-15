@@ -104,9 +104,10 @@ func TestReadPolicyCreatesDirectoryAndWriteIsOnce(t *testing.T) {
 	if _, err := ReadPolicy(store, "p1"); err == nil || !strings.HasPrefix(err.Error(), "ENOENT: no such file or directory, lstat ") {
 		t.Fatalf("%v", err)
 	}
-	if info, err := os.Stat(filepath.Join(store, "standing-policies")); err != nil || info.Mode().Perm() != 0o700 {
+	if _, err := os.Stat(filepath.Join(store, "standing-policies")); err != nil {
 		t.Fatalf("a read must create the directory: %v", err)
 	}
+	requireMode(t, filepath.Join(store, "standing-policies"), 0o700)
 	policy := testPolicy(t)
 	path, err := WritePolicy(store, policy)
 	if err != nil {

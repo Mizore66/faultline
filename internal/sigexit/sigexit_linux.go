@@ -19,11 +19,29 @@ type sigaction struct {
 	mask     uint64
 }
 
+// runtimeAction is the Go runtime's handler for each signal SetDefault
+// replaced, kept so that Intercept can give it back: the runtime installs
+// its handler once, and os/signal does not install it again, so a signal
+// set to SIG_DFL here would end fl even after signal.Notify.
+var runtimeAction [65]sigaction
+
 // SetDefault sets sig's disposition to SIG_DFL in the kernel, behind the Go
 // runtime's back.
 func SetDefault(sig syscall.Signal) {
-	var act sigaction // SIG_DFL
-	syscall.RawSyscall6(syscall.SYS_RT_SIGACTION, uintptr(sig), uintptr(unsafe.Pointer(&act)), 0, 8, 0, 0)
+	var act, old sigaction // SIG_DFL
+	syscall.RawSyscall6(syscall.SYS_RT_SIGACTION, uintptr(sig), uintptr(unsafe.Pointer(&act)), uintptr(unsafe.Pointer(&old)), 8, 0, 0)
+	if sig > 0 && int(sig) < len(runtimeAction) && old.handler > 1 && runtimeAction[sig].handler == 0 {
+		runtimeAction[sig] = old
+	}
+}
+
+// restoreRuntimeHandler gives sig back to the Go runtime's handler, so that
+// os/signal delivers it (Intercept).
+func restoreRuntimeHandler(sig syscall.Signal) {
+	if sig > 0 && int(sig) < len(runtimeAction) && runtimeAction[sig].handler > 1 {
+		act := runtimeAction[sig]
+		syscall.RawSyscall6(syscall.SYS_RT_SIGACTION, uintptr(sig), uintptr(unsafe.Pointer(&act)), 0, 8, 0, 0)
+	}
 }
 
 // SetIgnored sets sig's disposition to SIG_IGN in the kernel, which also

@@ -3,7 +3,6 @@
 package witness
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,10 +45,7 @@ func TestProposeApproveFreezeVerify(t *testing.T) {
 	if !v.Valid || v.ExternalDigestStatus != "MATCH" {
 		t.Fatalf("%+v", v)
 	}
-	info, _ := os.Stat(filepath.Join(store, "frozen", "demo-1.json"))
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v", info.Mode())
-	}
+	requireMode(t, filepath.Join(store, "frozen", "demo-1.json"), 0o600)
 	if _, err := Propose(store, proposalInput(t)); err == nil || !strings.HasPrefix(err.Error(), "Immutable witness lock record already exists: ") {
 		t.Fatalf("second propose: %v", err)
 	}

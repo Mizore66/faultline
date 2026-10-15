@@ -107,6 +107,14 @@ func requireReached(t *testing.T, file, outputs string) {
 	}
 }
 
+// liveSummary logs how much a long live test compared, marked so that CI
+// turns it into a check-run notice (proof that the test ran in full).
+func liveSummary(t *testing.T, format string, args ...any) {
+	t.Helper()
+	top, _, _ := strings.Cut(t.Name(), "/")
+	t.Logf("LIVE-SUMMARY %s: "+format, append([]any{top}, args...)...)
+}
+
 // liveOutputs collects, per top-level test, the TS results a live test
 // compared (recordOutput), for requireReached.
 var (

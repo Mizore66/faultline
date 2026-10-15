@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/pem"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -70,10 +69,7 @@ func TestSignThenVerify(t *testing.T) {
 	if v.Get("signatureStatus").Str() != "VERIFIED" || !v.Get("valid").Bool() || receipt.Get("keyId").Str() == "" {
 		t.Fatal(jsjson.Stringify(v))
 	}
-	info, _ := os.Stat(filepath.Join(store, "authenticated-approvals", "demo-1.json"))
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v", info.Mode())
-	}
+	requireMode(t, filepath.Join(store, "authenticated-approvals", "demo-1.json"), 0o600)
 	if _, err := SignAuthenticatedApproval(store, "demo-1", SignOptions{PrivateKeyPEM: privPEM, Keyring: keyring}); err == nil ||
 		!strings.HasPrefix(err.Error(), "Authenticated witness approval already exists and cannot be overwritten: ") {
 		t.Fatalf("second sign: %v", err)
