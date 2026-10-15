@@ -2073,7 +2073,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Overview update (spec 4.2 point 7):** move sandbox, git-materialization, safe-overlay, environment-fingerprint, redaction, config read side, runtime-mapping load side, incident-binding, evidence-grade and turn-proof-promotion into slice 2; move `secret-allowlist` and `captureAllowlistedEvent` into slice 4; slice 4 lists PR #195's batch turn-snapshot staging (`--stdin-paths --no-filters` with the TAB/LF/CR fallback, gated on identical tree digests) and hostile-verifier corpus parity for turn bundles; check that every subcommand in `src/cli-app.ts` has a slice.
 
-- [ ] **Step 1: Apply the CI, gate and docs changes; push the branch and read CI through the public API**
+- [x] **Step 1: Apply the CI, gate and docs changes; push the branch and read CI through the public API**
 
 ```bash
 git push -u origin go-migration/slice2
@@ -2082,7 +2082,7 @@ curl -s "https://api.github.com/repos/Mizore66/faultline/commits/$(git rev-parse
 
 Expected: every job `success`. Failing tests appear as check-run annotations (`check-skips.sh` emits them).
 
-- [ ] **Step 2: Done check against spec 4.2**
+- [x] **Step 2: Done check against spec 4.2**
 
 1. `go test ./...` green on all six runners; every writer case matches its golden.
 2. `difftest-live` and `stack-live` green, including `TestLiveRealDocker`.
@@ -2093,7 +2093,7 @@ Expected: every job `success`. Failing tests appear as check-run annotations (`c
 7. Overview updated.
 8. BENCHMARK recorded.
 
-- [ ] **Step 3: Commit and hand off for adversarial review**
+- [x] **Step 3: Commit and hand off for adversarial review**
 
 ```bash
 git add .github difftest docs
