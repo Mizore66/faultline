@@ -197,37 +197,46 @@ func TestLiveJudgeServer(t *testing.T) {
 
 // TestLiveJudgeSignalStop serves without --serve-ms and stops each side with
 // SIGINT and with SIGTERM once the page URL is printed: both print the
-// stopped line and exit 0.
+// stopped line and exit 0. Each signal is also sent to a judge-proof that
+// inherited it as SIG_IGN (a shell traps it to nothing, then execs): Node
+// resets it to SIG_DFL and its listener catches it, so fl must too (round 7
+// #6: on Linux an ignored SIGTERM was left at SIG_DFL and killed fl).
 func TestLiveJudgeSignalStop(t *testing.T) {
 	oracle.Skip(t)
 	repo := repoRoot(t)
 	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
-		t.Run(sig.String(), func(t *testing.T) {
-			got := map[string]string{}
-			for _, side := range judgeSides(repo) {
-				cmd, _, out, rest, stderr := startJudge(t, repo, side, judgeEnv("FAULTLINE_NO_BROWSER=1"), "--port", "0")
-				// Two lines follow the URL ("Press Ctrl+C", the browser
-				// line); the listeners come right after, so wait a moment.
-				line, _ := rest.ReadString('\n')
-				out.WriteString(line)
-				line, _ = rest.ReadString('\n')
-				out.WriteString(line)
-				time.Sleep(300 * time.Millisecond)
-				if err := cmd.Process.Signal(sig); err != nil {
-					t.Fatal(err)
+		for _, inherited := range []string{"default", "ignored"} {
+			t.Run(sig.String()+"/"+inherited, func(t *testing.T) {
+				got := map[string]string{}
+				for _, side := range judgeSides(repo) {
+					if inherited == "ignored" {
+						name := map[syscall.Signal]string{syscall.SIGINT: "INT", syscall.SIGTERM: "TERM"}[sig]
+						side.argv = append([]string{"sh", "-c", "trap '' " + name + `; exec "$@"`, "sh"}, side.argv...)
+					}
+					cmd, _, out, rest, stderr := startJudge(t, repo, side, judgeEnv("FAULTLINE_NO_BROWSER=1"), "--port", "0")
+					// Two lines follow the URL ("Press Ctrl+C", the browser
+					// line); the listeners come right after, so wait a moment.
+					line, _ := rest.ReadString('\n')
+					out.WriteString(line)
+					line, _ = rest.ReadString('\n')
+					out.WriteString(line)
+					time.Sleep(300 * time.Millisecond)
+					if err := cmd.Process.Signal(sig); err != nil {
+						t.Fatal(err)
+					}
+					tail, _ := io.ReadAll(rest)
+					out.Write(tail)
+					cmd.Wait()
+					got[side.name] = loopbackPort.ReplaceAllString(out.String(), "127.0.0.1:<PORT>") + "--- stderr\n" + stderr.String() + "--- " + cmd.ProcessState.String()
 				}
-				tail, _ := io.ReadAll(rest)
-				out.Write(tail)
-				cmd.Wait()
-				got[side.name] = loopbackPort.ReplaceAllString(out.String(), "127.0.0.1:<PORT>") + "--- stderr\n" + stderr.String() + "--- " + cmd.ProcessState.String()
-			}
-			if got["Go"] != got["TS"] {
-				t.Errorf("Go\n%s\nTS\n%s", got["Go"], got["TS"])
-			}
-			if !strings.Contains(got["Go"], "FaultLine judge-proof stopped.") || !strings.HasSuffix(got["Go"], "exit status 0") {
-				t.Errorf("not a clean stop:\n%s", got["Go"])
-			}
-		})
+				if got["Go"] != got["TS"] {
+					t.Errorf("Go\n%s\nTS\n%s", got["Go"], got["TS"])
+				}
+				if !strings.Contains(got["Go"], "FaultLine judge-proof stopped.") || !strings.HasSuffix(got["Go"], "exit status 0") {
+					t.Errorf("not a clean stop:\n%s", got["Go"])
+				}
+			})
+		}
 	}
 }
 

@@ -27,8 +27,12 @@ var runtimeAction [65]sigaction
 
 // SetDefault sets sig's disposition to SIG_DFL in the kernel, behind the Go
 // runtime's back.
-func SetDefault(sig syscall.Signal) {
-	var act, old sigaction // SIG_DFL
+func SetDefault(sig syscall.Signal) { replaceAction(sig, sigaction{}) }
+
+// replaceAction sets sig's disposition in the kernel and keeps the Go
+// runtime's handler it replaces, the first time it replaces one.
+func replaceAction(sig syscall.Signal, act sigaction) {
+	var old sigaction
 	syscall.RawSyscall6(syscall.SYS_RT_SIGACTION, uintptr(sig), uintptr(unsafe.Pointer(&act)), uintptr(unsafe.Pointer(&old)), 8, 0, 0)
 	if sig > 0 && int(sig) < len(runtimeAction) && old.handler > 1 && runtimeAction[sig].handler == 0 {
 		runtimeAction[sig] = old
@@ -45,8 +49,12 @@ func restoreRuntimeHandler(sig syscall.Signal) {
 }
 
 // SetIgnored sets sig's disposition to SIG_IGN in the kernel, which also
-// discards it if it is pending.
-func SetIgnored(sig syscall.Signal) { setIgnore(sig) }
+// discards it if it is pending. Like SetDefault it keeps the runtime's
+// handler: boot sets a signal the parent ignored to SIG_IGN before SIG_DFL,
+// and the runtime installs its handler for an inherited-ignored SIGTERM
+// (unlike SIGHUP and SIGINT), so this is the only call that sees it
+// (round 7 #6).
+func SetIgnored(sig syscall.Signal) { replaceAction(sig, sigaction{handler: 1}) }
 
 // setIgnore sets sig's disposition to SIG_IGN in the kernel.
 func setIgnore(sig syscall.Signal) {
