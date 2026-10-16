@@ -100,12 +100,30 @@ Go holds a JSON input as UTF-16 while parsing it and builds one `Obj` per object
 
 ## Key parsing errors in `witness sign` and `witness verify --keyring`
 
-TS parses reviewer keys with Node's `crypto.createPublicKey` / `createPrivateKey`. Go ports the path OpenSSL takes (`internal/witness/pemread.go`, `asn1dec.go`): `PEM_read_bio_ex` line by line in 254-byte `BIO_gets` chunks, BOM and trailing-byte stripping, RFC 1421 header and blank-line rules, `EVP_DecodeUpdate` base64, `PEM_get_EVP_CIPHER_INFO`, ncrypto's three public passes (`PUBLIC KEY`, `RSA PUBLIC KEY`, `CERTIFICATE`/`X509 CERTIFICATE`) with the private-key fallback, the private decoder loop and the legacy reader, and OpenSSL's table-driven DER decoder for SubjectPublicKeyInfo, PKCS#8, X509_SIG, RSAPublicKey and certificates. Error messages follow Node's rule (the oldest error in OpenSSL's queue). `TestLivePEMKeyParsing` compares 4,562 generated keys (the round 7 fuzz flips, the reviewers' variants, DER and character edits under every label and header) with Node, verdict and message. It matched on macOS arm64 (Node 22.23.3, OpenSSL 3.6.5) and on Linux arm64 and x64 (Node 22.22.2, OpenSSL 3.5.5). What still differs:
+TS parses reviewer keys with Node's `crypto.createPublicKey` / `createPrivateKey`. Go ports the whole path ncrypto and OpenSSL 3.5 take (`internal/witness`). Message and `opensslErrorStack` match Node for every algorithm OpenSSL's default provider decodes, not only the verdict. The port covers:
 
-- **Keys that are not Ed25519.** Go decodes Ed25519 exactly. For RSA, EC, DSA, DH, X25519, Ed448 and X448 key content it only approximates OpenSSL's algorithm decoders (`otherKey`, `typeSpecificPrivate`). Such a key is refused by both sides; when the approximation is wrong, the text differs: `is not Ed25519` / `must use Ed25519` on one side, an OpenSSL error such as `DECODER routines::unsupported` or `digital envelope routines::decode error` on the other. The live test compares only the Ed25519 verdict for these inputs.
-- **An encrypted block in a public pass.** Node passes no passphrase callback there, so OpenSSL's `PEM_def_callback` opens `/dev/tty` and prompts (`Enter PEM pass phrase:`) for a `PUBLIC KEY`, `RSA PUBLIC KEY` or `CERTIFICATE` block with a valid `Proc-Type: 4,ENCRYPTED` / `DEK-Info` header. Go never prompts and treats the pass as failed, which is what happens on both sides when there is no terminal (CI, and the live test, which starts Node with `setsid` and stdin on `/dev/null`). Run interactively, TS waits for a passphrase that Go never asks for.
-- **OpenSSL version.** A long-form DER length with no content byte after it (`30 81 00`) is `header too long` with OpenSSL 3.5 (Node 22.22.2's bundled copy, which Go follows) and `field missing` with 3.6 (a Node linked against a system OpenSSL 3.6, such as Homebrew's).
-- **Platform.** These follow the platform as OpenSSL does, so a key can be accepted on one machine and refused on another, by both implementations alike. `sanitize_line` strips trailing bytes `<= ' '` as C `char`. Where `char` is signed (x86, macOS, Windows) every byte >= 0x80 also counts as whitespace, so a UTF-8 NBSP or `é` after a PEM line is ignored. Where `char` is unsigned (Linux on arm64, arm, ppc64, s390x, riscv64) it is not. Likewise the AES-NI cipher names (`AES-128-CBC-HMAC-SHA1` and the like) are known in a `DEK-Info` header only on x86. That changes only which error an encrypted header gets.
+- **PEM reading.** The PEM layer (`PEM_read_bio_ex`, BOM and trailing-byte stripping, RFC 1421 headers, `EVP_DecodeUpdate`, `PEM_get_EVP_CIPHER_INFO`).
+- **Node's control flow.** ncrypto's three public passes (`PUBLIC KEY`, `RSA PUBLIC KEY`, `CERTIFICATE`) with the private-key fallback, then `PEM_read_bio_PrivateKey`'s `OSSL_DECODER` loop and legacy reader.
+- **Algorithms.** Every algorithm decoder:
+  - RSA and RSA-PSS;
+  - DSA, DH and DHX;
+  - EC with named and explicit parameters over GF(p) and GF(2^m), and SM2;
+  - X25519, X448, Ed25519 and Ed448;
+  - ML-DSA and ML-KEM, including their load checks and ML-KEM's pairwise test;
+  - SLH-DSA.
+- **DER and errors.** OpenSSL's table-driven DER decoder, and its 16-slot error queue with marks.
+
+`TestLivePEMKeyParsing` compares about 14,000 keys with Node: generated mutations of every algorithm, the reviewers' corpora, and a targeted case for each OpenSSL reason that random inputs miss. It compares verdict, key type, message and full error stack. It matched on macOS arm64 (Node 22.23.3, OpenSSL 3.6.5) and Linux arm64 (Node 22.22.2, OpenSSL 3.5.5). What still differs:
+
+- **An encrypted block in a public pass.** Node passes no passphrase callback there, so OpenSSL's `PEM_def_callback` opens `/dev/tty` and prompts (`Enter PEM pass phrase:`). This happens for a `PUBLIC KEY`, `RSA PUBLIC KEY` or `CERTIFICATE` block with a valid `Proc-Type: 4,ENCRYPTED` / `DEK-Info` header. Go never prompts and treats the pass as failed. Both sides do that when there is no terminal (CI, and the live test, which starts Node with `setsid` and stdin on `/dev/null`). Run interactively, TS waits for a passphrase that Go never asks for.
+- **`BN_mod_sqrt`'s random search on a composite modulus.** This needs an explicit-parameter EC key with a compressed point, whose field "prime" is composite, is ≡ 1 mod 8, and has Jacobi symbol 1 for every number below 22. For such a key OpenSSL tries random candidates, and the result can change from run to run. Go reports `too many iterations`. For a prime modulus the result does not depend on the candidates, and Go matches. No real key has a composite field.
+- **OpenSSL version.** Go follows Node 22.22.2's bundled OpenSSL 3.5.5. OpenSSL 3.6.5 (a Node linked against a system OpenSSL, such as Homebrew's) differs in two places:
+  - a long-form DER length with no content byte after it (`30 81 00`) is `field missing` rather than `header too long`;
+  - a malformed DH PKCS#8 key reports `Diffie-Hellman routines::decode error` rather than `invalid parameter nid`.
+- **Platform.** These follow the platform as OpenSSL does, so a key can be accepted on one machine and refused on another, by both implementations alike:
+  - `sanitize_line` strips trailing bytes `<= ' '` as C `char`. Where `char` is signed (x86, macOS, Windows), every byte >= 0x80 also counts as whitespace, so a UTF-8 NBSP or `é` after a PEM line is ignored. Where `char` is unsigned (Linux on arm64, arm, ppc64, s390x, riscv64), it is not.
+  - The AES-NI cipher names (`AES-128-CBC-HMAC-SHA1` and the like) are known in a `DEK-Info` header only on x86. That changes only which error an encrypted header gets.
+  - Windows has no live oracle run.
 
 ## The judge-proof server and browser opener
 

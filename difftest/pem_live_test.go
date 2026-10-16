@@ -417,7 +417,7 @@ func TestLivePEMKeyParsing(t *testing.T) {
 	m := loadPEMMaterial(t)
 	cases := genPEMCases(t, m)
 	cases = append(cases, genAlgorithmCases(m, 4000)...)
-	cases = append(cases, genPQCases(m, 600)...)
+	cases = append(cases, genPQCases(m, 1200)...)
 	cases = append(cases, genReasonCases(m)...)
 	cases = append(cases, loadPEMCorpus(t)...)
 	results := runPEMOracle(t, cases)
@@ -835,6 +835,23 @@ func genPQCases(m pemMaterial, n int) []pemCase {
 		k := keys[r.IntN(len(keys))]
 		const off = 24
 		inner := append([]byte(nil), k[off:]...)
+		// Half the cases use the priv-only layout (OCTET STRING of the
+		// expanded key, no seed), where ML-KEM's load runs the pairwise
+		// test and ML-DSA's the t0/tr consistency check, then flip a bit
+		// in the private vector s (ML-KEM) or s1/s2/t0 (ML-DSA).
+		if inner[0] == 0x30 && r.IntN(2) == 0 {
+			sl := int(inner[7])
+			inner = append([]byte(nil), inner[8+sl:]...)
+			if r.IntN(4) != 0 {
+				inner[4+r.IntN(len(inner)-4)] ^= 1 << r.IntN(8)
+			}
+			der := append(append(append([]byte(nil), k[:off-4]...), 0x04, 0x82, byte(len(inner)>>8), byte(len(inner))), inner...)
+			total := len(der) - 4
+			der[2], der[3] = byte(total>>8), byte(total)
+			text := pemWrap("PRIVATE KEY", der, 64)
+			cases = append(cases, pemCase{Text: text, Pub: true}, pemCase{Text: text, Pub: false})
+			continue
+		}
 		switch r.IntN(8) {
 		case 0:
 			inner[r.IntN(len(inner))] ^= 1 << r.IntN(8)
@@ -1121,6 +1138,57 @@ func genReasonCases(m pemMaterial) []pemCase {
 			label, header string
 			der           []byte
 		}{"CERTIFICATE", "", cert(name(derTLV(0x1c, []byte{0, 0x11, 0, 0})), utc)},
+	)
+	// EC explicit-parameter structure errors: an unknown characteristic-two
+	// basis, an empty seed, an empty base point, an even prime "p".
+	unkBasis := ecParams(char2(derOID("2a8648ce3d01020309"), derTLV(5)), nil, order, derSmall(1))
+	seedCurve := derSeq(derTLV(4, pad(big.NewInt(1))), derTLV(4, pad(big.NewInt(2))), derTLV(3))
+	emptySeed := derSeq(derSmall(1), primeField, seedCurve, derTLV(4, pt), derInt(order), derSmall(1))
+	emptyBase := ecParams(nil, []byte{}, order, derSmall(1))
+	evenP := derSeq(derSmall(1), derSeq(derOID("2a8648ce3d0101"), derSmall(34)),
+		derSeq(derTLV(4, []byte{1}), derTLV(4, []byte{2})), derTLV(4, []byte{4, 1, 2}), derSmall(31))
+	// RSA-PSS with an unknown hash, a PKCS#8 with a 2-byte BOOLEAN in an
+	// extension-like attribute (asn1 boolean length), and a DSA PKCS#8
+	// over an even p (BN_mod_exp_recp refuses the constant-time exponent).
+	pssUnknownHash := p8(derSeq(derOID("2a864886f70d01010a"), derSeq(derTLV(0xa0, derSeq(derOID("2a0304"))))),
+		derSeq(derSmall(0), derSmall(0xc5), derSmall(3), derSmall(3), derSmall(5), derSmall(7), derSmall(1), derSmall(1), derSmall(1)))
+	boolCert := func() []byte {
+		alg := derSeq(derOID("2b6570"))
+		ext := derTLV(0xa3, derSeq(derSeq(derOID("551d13"), derTLV(1, []byte{0xff, 0xff}), derTLV(4, derSeq()))))
+		tbs := derSeq(derTLV(0xa0, derSmall(2)), derSmall(1), alg, name(derTLV(0x13, []byte("r"))),
+			derSeq(derTLV(0x17, []byte("200101000000Z")), utc), name(derTLV(0x13, []byte("r"))), edSPKI, ext)
+		return derSeq(tbs, alg, derTLV(3, make([]byte, 65)))
+	}()
+	dsaEven := p8(derSeq(derOID("2a8648ce380401"), derSeq(derSmall(34), derSmall(7), derSmall(2))), derSmall(3))
+	blocks = append(blocks,
+		struct {
+			label, header string
+			der           []byte
+		}{"PUBLIC KEY", "", ecPub(unkBasis, pt)},
+		struct {
+			label, header string
+			der           []byte
+		}{"PUBLIC KEY", "", ecPub(emptySeed, pt)},
+		struct {
+			label, header string
+			der           []byte
+		}{"PUBLIC KEY", "", ecPub(emptyBase, pt)},
+		struct {
+			label, header string
+			der           []byte
+		}{"PUBLIC KEY", "", ecPub(evenP, []byte{4, 1, 2})},
+		struct {
+			label, header string
+			der           []byte
+		}{"PRIVATE KEY", "", pssUnknownHash},
+		struct {
+			label, header string
+			der           []byte
+		}{"CERTIFICATE", "", boolCert},
+		struct {
+			label, header string
+			der           []byte
+		}{"PRIVATE KEY", "", dsaEven},
 	)
 	for x := int64(2); x < 8; x++ {
 		blocks = append(blocks, struct {
