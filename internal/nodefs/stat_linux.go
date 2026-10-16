@@ -63,7 +63,7 @@ func exists(raw string) bool {
 // fstatDir is glibc 2.36's __fstat64 as opendir_tail calls it:
 // __fstatat64_time64(fd, "", AT_EMPTY_PATH). On 64-bit Linux that is
 // fstatat(fd, "", &st, AT_EMPTY_PATH) (newfstatat on most architectures);
-// on 32-bit (FSTATAT_USE_STATX: 386, arm, mips) it is statx(fd, "",
+// where glibc defines FSTATAT_USE_STATX (fstatatUsesStatx) it is statx(fd, "",
 // AT_NO_AUTOMOUNT | AT_EMPTY_PATH, STATX_BASIC_STATS), falling back to
 // fstatat64 on ENOSYS. It returns the file type bits.
 func fstatDir(fd int) (uint32, error) {
@@ -92,9 +92,14 @@ func fstatDir(fd int) (uint32, error) {
 	return st.Mode & syscall.S_IFMT, nil
 }
 
-// fstatatUsesStatx is glibc's FSTATAT_USE_STATX: 32-bit word and syscall
-// size (or a time32 stat), where glibc 2.33+ stats through statx.
-var fstatatUsesStatx = map[string]bool{"386": true, "arm": true, "mips": true, "mipsle": true}
+// fstatatUsesStatx is glibc 2.36's FSTATAT_USE_STATX by GOARCH, from its
+// sysdeps: a 32-bit word and syscall size (386, arm, mips o32), a kernel
+// stat with 32-bit timestamps (STAT_HAS_TIME32: mips64 n64), or neither
+// newfstatat nor fstatat64 in the syscall table (loongarch64). amd64,
+// arm64, riscv64, ppc64 and s390x have newfstatat and use it.
+var fstatatUsesStatx = map[string]bool{
+	"386": true, "arm": true, "mips": true, "mipsle": true, "mips64": true, "mips64le": true, "loong64": true,
+}
 
 const (
 	_AT_SYMLINK_NOFOLLOW = 0x100

@@ -34,11 +34,11 @@ func getcwdGeneric(size int) (string, syscall.Errno) {
 	if err := syscall.Lstat(".", &st); err != nil {
 		return "", err.(syscall.Errno)
 	}
-	thisDev, thisIno := st.Dev, st.Ino
+	thisDev, thisIno := uint64(st.Dev), st.Ino // Dev is uint32 on mips
 	if err := syscall.Lstat("/", &st); err != nil {
 		return "", err.(syscall.Errno)
 	}
-	rootDev, rootIno := st.Dev, st.Ino
+	rootDev, rootIno := uint64(st.Dev), st.Ino
 	path := []byte{} // built backwards; its length plus the NUL must fit in size
 	fd := _AT_FDCWD
 	defer func() {
@@ -59,7 +59,7 @@ func getcwdGeneric(size int) (string, syscall.Errno) {
 		if err := syscall.Fstat(fd, &st); err != nil {
 			return "", err.(syscall.Errno)
 		}
-		dotDev, dotIno := st.Dev, st.Ino
+		dotDev, dotIno := uint64(st.Dev), st.Ino
 		mountPoint := dotDev != thisDev
 		name, errno := findEntry(fd, thisDev, thisIno, mountPoint)
 		if errno != 0 {
@@ -108,7 +108,7 @@ func findEntry(fd int, dev, ino uint64, mountPoint bool) (string, syscall.Errno)
 		if useIno && entIno != ino && !mountPoint {
 			continue
 		}
-		if st, ok := lstatAt(fd, name); ok && st.Mode&syscall.S_IFMT == syscall.S_IFDIR && st.Dev == dev && st.Ino == ino {
+		if st, ok := lstatAt(fd, name); ok && st.Mode&syscall.S_IFMT == syscall.S_IFDIR && uint64(st.Dev) == dev && st.Ino == ino {
 			return name, 0
 		}
 	}
