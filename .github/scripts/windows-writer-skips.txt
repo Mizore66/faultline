@@ -96,3 +96,7 @@ TestWriterReplay/posix/minimize-verify-invalid-json
 TestWriterReplay/posix/minimize-verify-directory
 TestWriterReplay/posix/investigate-tmpdir-comma
 TestWriterReplay/posix/minimize-verify-oversized
+TestWriterReplay/posix/investigate-tmpdir-missing
+TestWriterReplay/posix/minimize-git-tmpdir-missing
+TestWriterReplay/posix/investigate-tmpdir-swapped
+TestWriterReplay/posix/minimize-git-tmpdir-swapped
