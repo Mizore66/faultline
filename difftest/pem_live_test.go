@@ -10,11 +10,15 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math/big"
 	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,21 +27,18 @@ import (
 	"github.com/Mizore66/faultline/internal/witness"
 )
 
-// pemCase is one createPublicKey (pub) or createPrivateKey input. approx
-// marks inputs whose key is not Ed25519: Go approximates OpenSSL's
-// algorithm-specific decoders there (KNOWN_DIFFERENCES.md), so only the
-// Ed25519 verdict is compared.
+// pemCase is one createPublicKey (pub) or createPrivateKey input.
 type pemCase struct {
-	Text   string `json:"text"`
-	Pub    bool   `json:"pub"`
-	approx bool
+	Text string `json:"text"`
+	Pub  bool   `json:"pub"`
 }
 
 type pemResult struct {
-	OK      bool   `json:"ok"`
-	Type    string `json:"type"`
-	SPKI    string `json:"spki"`
-	Message string `json:"message"`
+	OK      bool     `json:"ok"`
+	Type    string   `json:"type"`
+	SPKI    string   `json:"spki"`
+	Message string   `json:"message"`
+	Stack   []string `json:"stack"`
 }
 
 func pemWrap(label string, der []byte, width int) string {
@@ -59,13 +60,14 @@ func seedKey(seed byte) ed25519.PrivateKey {
 // pemMaterial is the DER the generators start from.
 type pemMaterial struct {
 	spki, pkcs8, cert, certExt, otherSPKI, otherPKCS8 []byte
-	others                                            map[string]string // non-Ed25519 fixtures (difftest/testdata/pemkeys)
+	others                                            map[string]string      // non-Ed25519 fixtures (difftest/testdata/pemkeys.json)
+	otherDER                                          map[string]pemKeyBlock // the same, unframed
 }
 
 func loadPEMMaterial(t *testing.T) pemMaterial {
 	t.Helper()
 	k1, k2 := seedKey(1), seedKey(2)
-	m := pemMaterial{others: map[string]string{}}
+	m := pemMaterial{others: map[string]string{}, otherDER: map[string]pemKeyBlock{}}
 	m.spki, _ = x509.MarshalPKIXPublicKey(k1.Public())
 	m.pkcs8, _ = x509.MarshalPKCS8PrivateKey(k1)
 	m.otherSPKI, _ = x509.MarshalPKIXPublicKey(k2.Public())
@@ -103,6 +105,9 @@ func loadPEMMaterial(t *testing.T) pemMaterial {
 			t.Fatal(err)
 		}
 		m.others[name] = framed(k.Label, k.Header, der, 64)
+		if k.Header == "" {
+			m.otherDER[name] = pemKeyBlock{label: k.Label, der: der}
+		}
 	}
 	return m
 }
@@ -212,8 +217,8 @@ func framed(label, header string, der []byte, width int) string {
 func genPEMCases(t *testing.T, m pemMaterial) []pemCase {
 	r := rand.New(rand.NewPCG(8, 1))
 	var cases []pemCase
-	both := func(text string, approx bool) {
-		cases = append(cases, pemCase{Text: text, Pub: true, approx: approx}, pemCase{Text: text, Pub: false, approx: approx})
+	both := func(text string, _ bool) {
+		cases = append(cases, pemCase{Text: text, Pub: true}, pemCase{Text: text, Pub: false})
 	}
 	pub, priv := pemWrap("PUBLIC KEY", m.spki, 64), pemWrap("PRIVATE KEY", m.pkcs8, 64)
 	// Built, not written out: the repository's secret scanner refuses
@@ -403,39 +408,730 @@ func runPEMOracle(t *testing.T, cases []pemCase) []pemResult {
 	return reply.Results
 }
 
-// TestLivePEMKeyParsing compares Go's PEM reader with Node's
-// createPublicKey/createPrivateKey on generated reviewer-key texts: the
-// verdict, the Ed25519 public key, and the exact error message.
+// TestLivePEMKeyParsing compares Go's port of Node's
+// createPublicKey/createPrivateKey with Node on generated and collected
+// reviewer-key texts of every key type: the key type, the Ed25519 public
+// key, and for refusals the message and the whole opensslErrorStack.
 func TestLivePEMKeyParsing(t *testing.T) {
 	oracle.Skip(t)
-	cases := genPEMCases(t, loadPEMMaterial(t))
+	m := loadPEMMaterial(t)
+	cases := genPEMCases(t, m)
+	cases = append(cases, genAlgorithmCases(m, 4000)...)
+	cases = append(cases, genPQCases(m, 600)...)
+	cases = append(cases, genReasonCases(m)...)
+	cases = append(cases, loadPEMCorpus(t)...)
 	results := runPEMOracle(t, cases)
 	accepted, fails := 0, 0
+	var messages strings.Builder
 	for i, c := range cases {
 		want := results[i]
-		ok, ed, spki, msg := witness.ParseKeyForTest(c.Text, c.Pub)
-		wantEd := want.OK && want.Type == "ed25519"
+		got := witness.ParseKeyForTest(c.Text, c.Pub)
 		var problem string
 		switch {
-		case ed != wantEd || (ed && hex.EncodeToString(spki) != want.SPKI):
-			problem = "Ed25519 verdict"
-		case c.approx:
-		case ok != want.OK:
+		case got.OK != want.OK:
 			problem = "accept/refuse"
-		case !ok && msg != want.Message:
+		case got.OK && (got.Type != want.Type || hex.EncodeToString(got.SPKI) != want.SPKI):
+			problem = "key"
+		case !got.OK && got.Message != want.Message:
 			problem = "message"
+		case !got.OK && strings.Join(got.Stack, "\n") != strings.Join(want.Stack, "\n"):
+			problem = "error stack"
 		}
-		if wantEd {
+		if want.OK && want.Type == "ed25519" {
 			accepted++
 		}
+		messages.WriteString(want.Message + "\n" + strings.Join(want.Stack, "\n") + "\n")
 		if problem != "" {
-			if fails++; fails <= 40 {
-				t.Errorf("%s differs (pub=%v): %q\n  go:   ok=%v ed=%v %q\n  node: ok=%v type=%q %q", problem, c.Pub, c.Text, ok, ed, msg, want.OK, want.Type, want.Message)
+			if fails++; fails <= pemShowDiffs() {
+				t.Errorf("%s differs (pub=%v): %q\n  go:   %+v\n  node: %+v", problem, c.Pub, c.Text, got, want)
 			}
 		}
 	}
 	if fails > 0 {
 		t.Errorf("%d of %d cases differ", fails, len(cases))
 	}
+	// Every OpenSSL reason the reader files can raise must come up against
+	// Node at least once (unless listed unreachable in coverage_test.go).
+	for _, f := range pemReaderFiles {
+		requireReachedReasons(t, f, messages.String())
+	}
 	liveSummary(t, "%d PEM cases (%d Ed25519 keys accepted)", len(cases), accepted)
+}
+
+// pemReaderFiles are the files of the OpenSSL port whose raised reasons
+// (the ERR_raise reason names) the live comparison must reach.
+var pemReaderFiles = []string{
+	"internal/witness/asn1dec.go",
+	"internal/witness/osslpem.go",
+	"internal/witness/decoder.go",
+	"internal/witness/keyalgs.go",
+	"internal/witness/ecgroup.go",
+	"internal/witness/nodekeys.go",
+	"internal/witness/pqkeys.go",
+	"internal/witness/mlkem.go",
+}
+
+// requireReachedReasons fails for every OpenSSL reason name in file (a
+// string literal naming a reason of the generated table) whose error text
+// no Node result contains, unless pemUnreachableReasons says why Node can
+// never show it. The generic error-literal gate skips reason codes, so the
+// reader files are checked here.
+func requireReachedReasons(t *testing.T, file, outputs string) {
+	t.Helper()
+	if liveGatedFiles[file] == "" {
+		t.Errorf("%s is not in liveGatedFiles", file)
+	}
+	path := filepath.Join(oracle.RepoRoot(t), filepath.FromSlash(file))
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		lit, ok := n.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return true
+		}
+		name, _ := strconv.Unquote(lit.Value)
+		text := witness.ReasonText(name)
+		if text == "" || !strings.Contains(name, "_R_") {
+			return true
+		}
+		if _, ok := pemUnreachableReasons[name]; ok {
+			return true
+		}
+		if !strings.Contains(outputs, "::"+text) {
+			t.Errorf("%s: no Node result raised %s (%q)", fset.Position(lit.Pos()), name, text)
+		}
+		return true
+	})
+}
+
+// pemUnreachableReasons are the reasons the port raises exactly where
+// OpenSSL 3.5 does but which Node can never show, each with why (verified
+// against the traced OpenSSL 3.5.5 driver and Node 22.22.2).
+var pemUnreachableReasons = map[string]string{
+	// Never raised for any input: template-shape checks the fixed templates
+	// rule out.
+	"ASN1_R_NESTED_TOO_DEEP":                  "tasn_dec counts template nesting, not data nesting; the deepest template Node's readers use (X509 → CINF → NAME → RDN → entry) is far below ASN1_MAX_CONSTRUCTED_NEST (30)",
+	"ASN1_R_ILLEGAL_OPTIONS_ON_ITEM_TEMPLATE": "raised only for an ITEM_TEMPLATE used with an implicit tag or OPTIONAL; no template the readers use does that",
+	"ASN1_R_BAD_TEMPLATE":                     "raised only for a CHOICE used with an implicit tag; ECPKPARAMETERS (the only CHOICE) is used untagged or EXPLICIT",
+	"ASN1_R_UNSUPPORTED_ANY_DEFINED_BY_TYPE":  "both ADB tables the readers use (X9_62_FIELDID, X9_62_CHARACTERISTIC_TWO) have a default entry, so an unknown selector never fails",
+	"ASN1_R_ILLEGAL_TAGGED_ANY":               "no template the readers use tags an ANY",
+	"ASN1_R_ILLEGAL_OPTIONAL_ANY":             "the only OPTIONAL ANY (X509_ALGOR parameter) is a SEQUENCE's last field, which tasn_dec decodes as not optional",
+	"ERR_R_PASSED_INVALID_ARGUMENT":           "der2key's selection check: OSSL_DECODER_CTX setup already dropped every decoder whose does_selection refuses Node's KEYPAIR / PUBLIC_KEY selection (same masks)",
+	"EVP_R_EXPECTING_AN_RSA_KEY":              "the typed SPKI decoder is chosen by the SPKI's own algorithm name (spki2typespki / the nested decoder context), and rsa_pub_decode assigns the method's base id, so the legacy key is always RSA or RSA-PSS there",
+	"EVP_R_EXPECTING_A_DSA_KEY":               "as EVP_R_EXPECTING_AN_RSA_KEY: dsa_pub_decode always assigns EVP_PKEY_DSA, and only an SPKI naming DSA reaches the DSA decoder",
+	"EVP_R_EXPECTING_A_ECX_KEY":               "as EVP_R_EXPECTING_AN_RSA_KEY: only an SPKI naming Ed25519 reaches the Ed25519 decoder, whose legacy key is Ed25519",
+	// Raised, then always removed before Node reads the queue.
+	"BN_R_NO_SOLUTION":                    "ec2_oct.c pops it (ERR_set_mark / ERR_pop_to_mark around BN_GF2m_mod_solve_quad_arr) and raises EC_R_INVALID_COMPRESSED_POINT instead",
+	"OBJ_R_UNKNOWN_NID":                   "raised only while evaluating ERR_raise_data's argument OBJ_nid2sn(-1) in EC_GROUP_new_by_curve_name; ERR_set_error then overwrites that slot with EC_R_UNKNOWN_GROUP",
+	"CRYPTO_R_PARAM_OF_INCOMPATIBLE_TYPE": "OSSL_PARAM_get_utf8_string_ptr's probe in decoder_process, always inside its own ERR_set_mark / ERR_pop_to_mark",
+	"OSSL_DECODER_R_DECODER_NOT_FOUND":    "only the nested SubjectPublicKeyInfo decoder context for an algorithm with no decoder is empty; x509_pubkey_ex_d2i_ex pops its errors",
+	"ASN1_R_NOT_ENOUGH_DATA":              "ossl_read_der fails only inside a decoder, which then returns empty-handed and decoder_process pops to its mark",
+	"PEM_R_NO_START_LINE":                 "the public PEM passes run inside ncrypto's MarkPop, pem2der returns empty-handed (popped by decoder_process), and pem_read_bio_key_legacy pops PEM read errors",
+	"PEM_R_BAD_BASE64_DECODE":             "as PEM_R_NO_START_LINE",
+	"PEM_R_BAD_END_LINE":                  "as PEM_R_NO_START_LINE",
+	"BN_R_NOT_A_SQUARE":                   "ecp_oct.c pops it (ERR_set_mark / ERR_pop_to_mark around BN_mod_sqrt) and raises EC_R_INVALID_COMPRESSED_POINT instead",
+	"UI_R_PROCESSING_ERROR":               "PEM_def_callback runs only in the public PEM passes (inside ncrypto's MarkPop); the private path uses Node's passphrase callback",
+	"PEM_R_PROBLEMS_GETTING_PASSWORD":     "as UI_R_PROCESSING_ERROR",
+	"DSA_R_PARAMETER_ENCODING_ERROR":      "raised only by dsa_pub_decode, which runs only inside x509_pubkey_ex_d2i_ex's mark (popped; Node sees EVP_R_DECODE_ERROR)",
+	"DH_R_PARAMETER_ENCODING_ERROR":       "raised only by dh_pub_decode, likewise inside x509_pubkey_ex_d2i_ex's mark",
+	"PROV_R_BAD_ENCODING":                 "ML-DSA/ML-KEM/SLH-DSA SPKI decoding runs only inside a der2key decoder; a failure returns empty-handed and decoder_process pops it (the legacy reader has no method for these types)",
+	"PROV_R_UNEXPECTED_KEY_PARAMETERS":    "as PROV_R_BAD_ENCODING (PKCS#8 decoding of ML-DSA/ML-KEM/SLH-DSA)",
+	"PROV_R_ML_DSA_NO_FORMAT":             "as PROV_R_BAD_ENCODING",
+	"PROV_R_ML_KEM_NO_FORMAT":             "as PROV_R_BAD_ENCODING",
+}
+
+// TestPEMUnreachableReasonsRaised keeps pemUnreachableReasons honest: every
+// entry is still a reason one of the reader files names.
+func TestPEMUnreachableReasonsRaised(t *testing.T) {
+	var all strings.Builder
+	for _, f := range pemReaderFiles {
+		b, err := os.ReadFile(filepath.Join(oracle.RepoRoot(t), filepath.FromSlash(f)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		all.Write(b)
+	}
+	for name := range pemUnreachableReasons {
+		if witness.ReasonText(name) == "" || !strings.Contains(all.String(), strconv.Quote(name)) {
+			t.Errorf("pemUnreachableReasons lists %s, which no reader file raises", name)
+		}
+	}
+}
+
+// --- generators over every key type ---------------------------------------
+
+// pemKeyBlocks are the non-Ed25519 fixtures (every algorithm), as DER.
+type pemKeyBlock struct {
+	label string
+	der   []byte
+}
+
+func (m pemMaterial) keyBlocks() []pemKeyBlock {
+	var out []pemKeyBlock
+	for _, name := range pemSortedKeys(m.otherDER) {
+		out = append(out, m.otherDER[name])
+	}
+	return out
+}
+
+func pemSortedKeys[V any](mm map[string]V) []string {
+	keys := make([]string, 0, len(mm))
+	for k := range mm {
+		keys = append(keys, k)
+	}
+	for i := 1; i < len(keys); i++ {
+		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
+			keys[j], keys[j-1] = keys[j-1], keys[j]
+		}
+	}
+	return keys
+}
+
+// tlv is a parsed DER node: tag bytes, and either content or children.
+type tlv struct {
+	tag  []byte
+	val  []byte
+	kids []*tlv
+}
+
+func parseTLVs(d []byte) []*tlv {
+	var out []*tlv
+	i := 0
+	for i < len(d) {
+		if i+2 > len(d) {
+			return nil
+		}
+		t0 := i
+		j := i + 1
+		if d[i]&0x1f == 0x1f {
+			for j < len(d) && d[j]&0x80 != 0 {
+				j++
+			}
+			j++
+		}
+		if j >= len(d) {
+			return nil
+		}
+		tag := d[t0:j]
+		l := int(d[j])
+		j++
+		if l&0x80 != 0 {
+			k := l & 0x7f
+			if k == 0 || k > 3 || j+k > len(d) {
+				return nil
+			}
+			l = 0
+			for _, c := range d[j : j+k] {
+				l = l<<8 | int(c)
+			}
+			j += k
+		}
+		if j+l > len(d) {
+			return nil
+		}
+		n := &tlv{tag: append([]byte(nil), tag...), val: d[j : j+l]}
+		if d[t0]&0x20 != 0 {
+			n.kids = parseTLVs(d[j : j+l])
+		}
+		out = append(out, n)
+		i = j + l
+	}
+	return out
+}
+
+func derLen(n int) []byte {
+	if n < 128 {
+		return []byte{byte(n)}
+	}
+	var b []byte
+	for x := n; x > 0; x >>= 8 {
+		b = append([]byte{byte(x)}, b...)
+	}
+	return append([]byte{0x80 | byte(len(b))}, b...)
+}
+
+func serTLVs(nodes []*tlv) []byte {
+	var out []byte
+	for _, n := range nodes {
+		body := n.val
+		if n.kids != nil {
+			body = serTLVs(n.kids)
+		}
+		out = append(append(append(out, n.tag...), derLen(len(body))...), body...)
+	}
+	return out
+}
+
+func allTLVs(nodes []*tlv, acc []*tlv) []*tlv {
+	for _, n := range nodes {
+		acc = append(acc, n)
+		if n.kids != nil {
+			acc = allTLVs(n.kids, acc)
+		}
+	}
+	return acc
+}
+
+// mutateTree edits one node of the DER tree and re-encodes the lengths:
+// drop, duplicate or swap a child, or flip, cut, extend, retag or prefix a
+// content.
+func mutateTree(r *rand.Rand, der []byte) []byte {
+	t := parseTLVs(der)
+	if len(t) == 0 {
+		return mutateDER(r, der)
+	}
+	nodes := allTLVs(t, nil)
+	n := nodes[r.IntN(len(nodes))]
+	op := r.IntN(9)
+	if n.kids != nil && op < 3 && len(n.kids) > 0 {
+		k := n.kids
+		switch op {
+		case 0:
+			i := r.IntN(len(k))
+			n.kids = append(k[:i:i], k[i+1:]...)
+		case 1:
+			i := r.IntN(len(k) + 1)
+			c := *k[r.IntN(len(k))]
+			n.kids = append(k[:i:i], append([]*tlv{&c}, k[i:]...)...)
+		default:
+			i, j := r.IntN(len(k)), r.IntN(len(k))
+			k[i], k[j] = k[j], k[i]
+		}
+		return serTLVs(t)
+	}
+	n.kids = nil
+	v := append([]byte(nil), n.val...)
+	switch op {
+	case 3:
+		if len(v) > 0 {
+			v[r.IntN(len(v))] ^= 1 << r.IntN(8)
+		}
+	case 4:
+		if len(v) > 0 {
+			v = v[:r.IntN(len(v))]
+		}
+	case 5:
+		v = append(v, byte(r.IntN(256)))
+	case 6:
+		n.tag = []byte{[]byte{0x02, 0x03, 0x04, 0x05, 0x06, 0x30, 0x31, 0xa0, 0xa1, 0x80, 0x81}[r.IntN(11)]}
+	case 7:
+		if len(v) > 0 {
+			v[0] = []byte{0, 1, 2, 3, 4, 5, 6, 7, 0x80, 0xff}[r.IntN(10)]
+		}
+	default:
+		pre := make([]byte, 1+r.IntN(4))
+		for i := range pre {
+			pre[i] = byte(r.IntN(256))
+		}
+		v = append(pre, v...)
+	}
+	n.val = v
+	return serTLVs(t)
+}
+
+// pointEdit edits the EC point of a key: hybrid form with either parity,
+// off-curve, compressed with a right or wrong bit, the point at infinity,
+// or x out of range.
+func pointEdit(r *rand.Rand, der []byte) []byte {
+	t := parseTLVs(der)
+	for _, n := range allTLVs(t, nil) {
+		v := n.val
+		if len(n.tag) == 1 && n.tag[0] == 0x03 && len(v) > 2 && v[0] == 0 && (v[1] == 2 || v[1] == 3 || v[1] == 4 || v[1] == 6 || v[1] == 7) {
+			p := append([]byte(nil), v[1:]...)
+			switch r.IntN(6) {
+			case 0:
+				if p[0] == 4 {
+					p[0] = 6 | byte(r.IntN(2))
+				}
+			case 1:
+				p[len(p)-1] ^= 1
+			case 2:
+				if p[0] == 4 {
+					l := (len(p) - 1) / 2
+					p = append([]byte{2 | (p[len(p)-1] & 1) ^ byte(r.IntN(2))}, p[1:1+l]...)
+				}
+			case 3:
+				if p[0] == 2 || p[0] == 3 {
+					p[0] ^= 1
+				}
+			case 4:
+				p = []byte{0}
+			default:
+				p[1] ^= 0x80
+			}
+			n.kids = nil
+			n.val = append([]byte{0}, p...)
+			return serTLVs(t)
+		}
+	}
+	return mutateTree(r, der)
+}
+
+var algLabels = []string{"PUBLIC KEY", "PRIVATE KEY", "EC PRIVATE KEY", "ec PRIVATE KEY", "RSA PRIVATE KEY", "DSA PRIVATE KEY",
+	"RSA PUBLIC KEY", "CERTIFICATE", "X509 CERTIFICATE", "ENCRYPTED PRIVATE KEY", "SM2 PRIVATE KEY", "EC PARAMETERS", "DSA PARAMETERS"}
+
+var algHeaders = []string{"", "", "", "", "", "", "", "", "Comment: x",
+	"Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00000000000000000000000000000000", "Abcdefghi:"}
+
+// genAlgorithmCases builds n inputs from the fixtures of every key type:
+// tree-mutated, point-edited or byte-mutated DER under its own or another
+// label, sometimes with a header, a preceding block, and an Ed25519 key or
+// certificate after it (the case where a non-Ed25519 block's fate decides
+// the verdict).
+func genAlgorithmCases(m pemMaterial, n int) []pemCase {
+	r := rand.New(rand.NewPCG(8, 2))
+	keys := m.keyBlocks()
+	tails := []string{pemWrap("PUBLIC KEY", m.spki, 64), pemWrap("PRIVATE KEY", m.pkcs8, 64), pemWrap("CERTIFICATE", m.cert, 64)}
+	var cases []pemCase
+	for len(cases) < n {
+		k := keys[r.IntN(len(keys))]
+		der := k.der
+		switch x := r.IntN(10); {
+		case x < 3:
+			der = pointEdit(r, der)
+		case x < 8:
+			for i := 1 + r.IntN(2); i > 0; i-- {
+				der = mutateTree(r, der)
+			}
+		default:
+			der = mutateDER(r, der)
+		}
+		label := k.label
+		if r.Float64() >= 0.6 {
+			label = algLabels[r.IntN(len(algLabels))]
+		}
+		text := framed(label, algHeaders[r.IntN(len(algHeaders))], der, 64)
+		if r.Float64() < 0.7 {
+			text += tails[r.IntN(len(tails))]
+		}
+		if r.Float64() < 0.2 {
+			k2 := keys[r.IntN(len(keys))]
+			text = pemWrap(k2.label, k2.der, 64) + text
+		}
+		cases = append(cases, pemCase{Text: text, Pub: true}, pemCase{Text: text, Pub: false})
+	}
+	return cases[:n]
+}
+
+// genPQCases edits the ML-DSA/ML-KEM PKCS#8 fixtures where key loading
+// checks them: seed, private key bytes, the z/t0/tr tail, and the layout
+// (seed-priv → priv-only or seed-only).
+func genPQCases(m pemMaterial, n int) []pemCase {
+	r := rand.New(rand.NewPCG(8, 3))
+	var keys [][]byte
+	for _, k := range m.keyBlocks() {
+		if k.label == "PRIVATE KEY" && len(k.der) > 24 && bytes.HasPrefix(k.der[7:], []byte{0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04}) && (k.der[18] == 0x03 || k.der[18] == 0x04) && k.der[19] < 0x14 {
+			keys = append(keys, k.der)
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	var cases []pemCase
+	for len(cases) < n {
+		k := keys[r.IntN(len(keys))]
+		const off = 24
+		inner := append([]byte(nil), k[off:]...)
+		switch r.IntN(8) {
+		case 0:
+			inner[r.IntN(len(inner))] ^= 1 << r.IntN(8)
+		case 1:
+			if len(inner) > 200 {
+				inner[6+r.IntN(32)] ^= 1
+			}
+		case 2:
+			inner[len(inner)-1-r.IntN(64)] ^= 1 << r.IntN(8)
+		case 3:
+			inner[len(inner)/2] ^= 0xff
+		case 4:
+			if inner[0] == 0x30 {
+				sl := int(inner[7])
+				inner = append([]byte(nil), inner[8+sl:]...)
+			}
+		case 5:
+			if inner[0] == 0x30 {
+				sl := int(inner[7])
+				inner = append([]byte{0x80, byte(sl)}, inner[8:8+sl]...)
+			}
+		case 6:
+			inner[4+r.IntN(len(inner)-4)] = 0xff
+		}
+		der := append(append(append([]byte(nil), k[:off-4]...), 0x04, 0x82, byte(len(inner)>>8), byte(len(inner))), inner...)
+		total := len(der) - 4
+		der[2], der[3] = byte(total>>8), byte(total)
+		text := pemWrap("PRIVATE KEY", der, 64)
+		if r.Float64() < 0.5 {
+			text += pemWrap("PUBLIC KEY", m.spki, 64)
+		}
+		cases = append(cases, pemCase{Text: text, Pub: true}, pemCase{Text: text, Pub: false})
+	}
+	return cases[:n]
+}
+
+// loadPEMCorpus reads the round-8 review corpus (testdata/pemcorpus.json).
+func loadPEMCorpus(t *testing.T) []pemCase {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(oracle.RepoRoot(t), "difftest", "testdata", "pemcorpus.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Cases []struct {
+			RevHex string `json:"revHex"`
+			Pub    bool   `json:"pub"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	out := make([]pemCase, 0, len(corpus.Cases))
+	for _, c := range corpus.Cases {
+		b, err := hex.DecodeString(c.RevHex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
+			b[i], b[j] = b[j], b[i]
+		}
+		out = append(out, pemCase{Text: string(b), Pub: c.Pub})
+	}
+	return out
+}
+
+// pemShowDiffs is how many differing cases the live test prints
+// (PEM_SHOW_DIFFS, default 20).
+func pemShowDiffs() int {
+	if n, err := strconv.Atoi(os.Getenv("PEM_SHOW_DIFFS")); err == nil {
+		return n
+	}
+	return 20
+}
+
+// --- targeted reason cases ---------------------------------------------------
+
+func derTLV(tag byte, v ...[]byte) []byte {
+	body := bytes.Join(v, nil)
+	return append(append([]byte{tag}, derLen(len(body))...), body...)
+}
+
+func derSeq(v ...[]byte) []byte { return derTLV(0x30, v...) }
+
+func derInt(n *big.Int) []byte {
+	if n.Sign() >= 0 {
+		b := n.Bytes()
+		if len(b) == 0 || b[0]&0x80 != 0 {
+			b = append([]byte{0}, b...)
+		}
+		return derTLV(0x02, b)
+	}
+	// two's complement
+	l := 1
+	for new(big.Int).Lsh(big.NewInt(-1), uint(8*l-1)).Cmp(n) > 0 {
+		l++
+	}
+	m := new(big.Int).Add(n, new(big.Int).Lsh(big.NewInt(1), uint(8*l)))
+	return derTLV(0x02, m.FillBytes(make([]byte, l)))
+}
+
+func derSmall(n int64) []byte { return derInt(big.NewInt(n)) }
+
+func derOID(h string) []byte {
+	b, _ := hex.DecodeString(h)
+	return derTLV(0x06, b)
+}
+
+func bigHex(h string) *big.Int { n, _ := new(big.Int).SetString(h, 16); return n }
+
+// reTLV replaces the first node of der (depth first) whose encoding is old
+// with new, re-encoding the lengths above it.
+func reTLV(der []byte, match func(*tlv) bool, edit func(*tlv)) []byte {
+	t := parseTLVs(der)
+	for _, n := range allTLVs(t, nil) {
+		if match(n) {
+			edit(n)
+			return serTLVs(t)
+		}
+	}
+	return der
+}
+
+// genReasonCases are inputs built to raise the OpenSSL reasons the random
+// generators do not reach (each verified against Node 22 / OpenSSL 3.5.5
+// and the traced C driver): explicit EC parameters with a bad compressed
+// point, cofactor, order, basis or a generator at infinity; DH sizes;
+// RSA-PSS parameters; DSA/DH parameter encodings; Name and Time contents;
+// ML-DSA/ML-KEM PKCS#8 formats; PEM DEK-Info headers.
+func genReasonCases(m pemMaterial) []pemCase {
+	p256 := bigHex("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff")
+	order := bigHex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551")
+	pad := func(n *big.Int) []byte { return n.FillBytes(make([]byte, 32)) }
+	primeField := derSeq(derOID("2a8648ce3d0101"), derInt(p256))
+	ecParams := func(field, base []byte, ord *big.Int, cof []byte) []byte {
+		if field == nil {
+			field = primeField
+		}
+		if base == nil {
+			base = append(append([]byte{4}, pad(big.NewInt(1))...), make([]byte, 32)...)
+		}
+		curve := derSeq(derTLV(4, pad(new(big.Int).Sub(p256, big.NewInt(3)))), derTLV(4, pad(big.NewInt(2))))
+		return derSeq(derSmall(1), field, curve, derTLV(4, base), derInt(ord), cof)
+	}
+	ecPub := func(params, pt []byte) []byte {
+		return derSeq(derSeq(derOID("2a8648ce3d0201"), params), derTLV(3, append([]byte{0}, pt...)))
+	}
+	ecPriv := func(params, pub []byte) []byte {
+		body := [][]byte{derSmall(1), derTLV(4, pad(big.NewInt(5))), derTLV(0xa0, params)}
+		if pub != nil {
+			body = append(body, derTLV(0xa1, derTLV(3, append([]byte{0}, pub...))))
+		}
+		return derSeq(body...)
+	}
+	p8 := func(alg, inner []byte) []byte { return derSeq(derSmall(0), alg, derTLV(4, inner)) }
+	x1 := pad(big.NewInt(1))
+	xm2 := pad(new(big.Int).Sub(p256, big.NewInt(2)))
+	inf := ecParams(nil, []byte{0}, big.NewInt(3), nil)
+	char2 := func(basis ...[]byte) []byte {
+		return derSeq(derOID("2a8648ce3d0102"), derSeq(append([][]byte{derSmall(163)}, basis...)...))
+	}
+	pt := append(append([]byte{4}, x1...), make([]byte, 32)...)
+	edSPKI := m.spki
+	name := func(v []byte) []byte { return derSeq(derTLV(0x31, derSeq(derOID("550403"), v))) }
+	cert := func(subject, notAfter []byte) []byte {
+		alg := derSeq(derOID("2b6570"))
+		tbs := derSeq(derTLV(0xa0, derSmall(2)), derSmall(1), alg, name(derTLV(0x13, []byte("r"))),
+			derSeq(derTLV(0x17, []byte("200101000000Z")), notAfter), subject, edSPKI)
+		return derSeq(tbs, alg, derTLV(3, make([]byte, 65)))
+	}
+	utc := derTLV(0x17, []byte("300101000000Z"))
+	nested := derTLV(0x13, []byte("r"))
+	for range 7 {
+		nested = append(append([]byte{0x33}, derLen(len(nested))...), nested...)
+	}
+	dhP8 := func(p, g, q *big.Int) []byte {
+		oid, prm := "2a864886f70d010301", [][]byte{derInt(p), derInt(g)}
+		if q != nil {
+			oid, prm = "2a8648ce3e0201", append(prm, derInt(q))
+		}
+		return p8(derSeq(derOID(oid), derSeq(prm...)), derSmall(3))
+	}
+	big1 := func(bits uint) *big.Int {
+		return new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), bits), big.NewInt(1))
+	}
+	other := func(name string) []byte { return m.otherDER[name].der }
+	isOID := func(h string) func(*tlv) bool {
+		return func(n *tlv) bool { return n.tag[0] == 6 && hex.EncodeToString(n.val) == h }
+	}
+	// The ML-DSA/ML-KEM private key OCTET STRING shortened by a byte (no
+	// PKCS#8 format matches), the ML-DSA public key BIT STRING likewise,
+	// and an ML-DSA algorithm with parameters.
+	shortenLast := func(der []byte, tag byte) []byte {
+		t := parseTLVs(der)
+		top := t[0].kids
+		for i := len(top) - 1; i >= 0; i-- {
+			if top[i].tag[0] == tag {
+				top[i].kids = nil
+				top[i].val = top[i].val[:len(top[i].val)-1]
+				break
+			}
+		}
+		return serTLVs(t)
+	}
+	mldsaParams := reTLV(other("pq-ML-DSA-44.pem#0"), func(n *tlv) bool {
+		return n.tag[0] == 0x30 && len(n.kids) == 1 && n.kids[0].tag[0] == 6
+	}, func(n *tlv) { n.kids = append(n.kids, &tlv{tag: []byte{5}, val: []byte{}}) })
+	rsaAlias := reTLV(other("k_rsa.pub#0"), isOID("2a864886f70d010101"), func(n *tlv) { n.val = []byte{0x55, 0x08, 0x01, 0x01} })
+	dsaAlias := reTLV(other("dsa.pub#0"), isOID("2a8648ce380401"), func(n *tlv) { n.val = []byte{0x2b, 0x0e, 0x03, 0x02, 0x0c} })
+	krsa := other("k_rsa.pem#0")
+	blocks := []struct {
+		label, header string
+		der           []byte
+	}{
+		{"PUBLIC KEY", "", ecPub(ecParams(nil, nil, order, derSmall(1)), append([]byte{3}, x1...))},
+		{"PUBLIC KEY", "", ecPub(ecParams(nil, nil, order, derSmall(1)), append([]byte{3}, xm2...))},
+		{"PUBLIC KEY", "", ecPub(ecParams(nil, nil, order, derSmall(-1)), pt)},
+		{"PUBLIC KEY", "", ecPub(ecParams(nil, nil, big.NewInt(0), derSmall(1)), pt)},
+		{"PUBLIC KEY", "", ecPub(ecParams(char2(derOID("2a8648ce3d01020302"), derSmall(0)), nil, order, derSmall(1)), pt)},
+		{"PUBLIC KEY", "", ecPub(ecParams(char2(derOID("2a8648ce3d01020301"), derTLV(5)), nil, order, derSmall(1)), pt)},
+		{"EC PRIVATE KEY", "", ecPriv(inf, nil)},
+		{"EC PRIVATE KEY", "", ecPriv(ecParams(nil, nil, order, derSmall(1)), append([]byte{3}, x1...))},
+		{"EC PRIVATE KEY", "", ecPriv(ecParams(nil, nil, order, derSmall(1)), append([]byte{3}, xm2...))},
+		{"EC PRIVATE KEY", "", derSeq(derSmall(1), derTLV(4, x1), derTLV(0xa0, derOID("2a8648ce3d030107")), derTLV(0xa1, derTLV(3, []byte{0})))},
+		{"EC PRIVATE KEY", "", derSeq(derSmall(1), derTLV(4, x1), derTLV(0xa0, derSmall(1)))},
+		{"EC PRIVATE KEY", "", derSeq(derSmall(1), derTLV(4, x1), derTLV(0x80, derOID("2a8648ce3d030107")))},
+		{"PUBLIC KEY", "", derSeq(append(append([]byte{0x30, 11}, derOID("2a864886f70d010101")...), 0x10, 0), derTLV(3, append([]byte{0}, derSmall(5)...)))},
+		{"PRIVATE KEY", "", p8(append(append([]byte{0x30, 13}, derOID("2a864886f70d010101")...), 0x10, 0), derSmall(5))},
+		{"PUBLIC KEY", "", derSeq(derSeq(derOID("2b6570")), derTLV(3))},
+		{"PRIVATE KEY", "", p8(derSeq(derOID("2a864886f70d01010a"), derTLV(5)), derSeq(derSmall(0), derSmall(0xc5), derSmall(3), derSmall(3), derSmall(5), derSmall(7), derSmall(1), derSmall(1), derSmall(1)))},
+		{"PRIVATE KEY", "", dhP8(big1(10000), big.NewInt(2), nil)},
+		{"PRIVATE KEY", "", dhP8(big1(2047), big.NewInt(2), big1(10000))},
+		{"PRIVATE KEY", "", dhP8(big.NewInt(23), big.NewInt(5), nil)},
+		{"PUBLIC KEY", "", derSeq(derSeq(derOID("2a8648ce380401"), derSmall(5)), derTLV(3, append([]byte{0}, derSmall(3)...)))},
+		{"PUBLIC KEY", "", derSeq(derSeq(derOID("2a864886f70d010301")), derTLV(3, append([]byte{0}, derSmall(3)...)))},
+		{"CERTIFICATE", "", cert(name(nested), utc)},
+		{"CERTIFICATE", "", cert(name(derTLV(0x1e, []byte("abc"))), utc)},
+		{"CERTIFICATE", "", cert(name(derTLV(0x1c, []byte("abc"))), utc)},
+		{"CERTIFICATE", "", cert(name(derTLV(0x13, []byte("r"))), derTLV(0x18, []byte("2060")))},
+		{"PRIVATE KEY", "", mldsaParams},
+		{"PRIVATE KEY", "", shortenLast(other("pq-ML-DSA-44.pem#0"), 4)},
+		{"PRIVATE KEY", "", shortenLast(other("pq-ML-KEM-512.pem#0"), 4)},
+		{"PUBLIC KEY", "", shortenLast(other("pq-ML-DSA-44.pub#0"), 3)},
+		{"PUBLIC KEY", "", rsaAlias},
+		{"PUBLIC KEY", "", dsaAlias},
+		{"PRIVATE KEY", "", krsa[:len(krsa)/2]},
+		{"RSA PRIVATE KEY", "Proc-Type: 4,ENCRYPTED x\nDEK-Info: AES-128-CBC,00000000000000000000000000000000", []byte{0x30, 0}},
+		{"RSA PRIVATE KEY", "Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC x", []byte{0x30, 0}},
+	}
+	// Explicit prime-field parameters over a small or composite p with
+	// G = (1, 2) on y² = x³ + x + b, and a compressed public key at x:
+	// BN_mod_sqrt's failures (p = 33: a small factor; p = (2^127-1)²:
+	// every small candidate a residue) and its random search for a prime
+	// with no non-residue below 22 (p = 53881).
+	smallCurve := func(p *big.Int, ord int64, x int64, label string) []byte {
+		n := (p.BitLen() + 7) / 8
+		b := new(big.Int).Sub(big.NewInt(4), big.NewInt(2))
+		b.Mod(b, p)
+		fe := func(v *big.Int) []byte { return v.FillBytes(make([]byte, n)) }
+		base := append(append([]byte{4}, fe(big.NewInt(1))...), fe(big.NewInt(2))...)
+		params := derSeq(derSmall(1), derSeq(derOID("2a8648ce3d0101"), derInt(p)),
+			derSeq(derTLV(4, fe(big.NewInt(1))), derTLV(4, fe(b))), derTLV(4, base), derSmall(ord))
+		pub := append([]byte{2 | byte(x&1)}, fe(big.NewInt(x))...)
+		if label == "PUBLIC KEY" {
+			return ecPub(params, pub)
+		}
+		return derSeq(derSmall(1), derTLV(4, pad(big.NewInt(5))), derTLV(0xa0, params), derTLV(0xa1, derTLV(3, append([]byte{0}, pub...))))
+	}
+	m127 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
+	blocks = append(blocks,
+		struct {
+			label, header string
+			der           []byte
+		}{"EC PRIVATE KEY", "", smallCurve(big.NewInt(33), 31, 2, "")},
+		struct {
+			label, header string
+			der           []byte
+		}{"EC PRIVATE KEY", "", smallCurve(new(big.Int).Mul(m127, m127), 3, 2, "")},
+		struct {
+			label, header string
+			der           []byte
+		}{"CERTIFICATE", "", cert(name(derTLV(0x1e, []byte{0xd8, 0x00})), utc)},
+		struct {
+			label, header string
+			der           []byte
+		}{"CERTIFICATE", "", cert(name(derTLV(0x1c, []byte{0, 0x11, 0, 0})), utc)},
+	)
+	for x := int64(2); x < 8; x++ {
+		blocks = append(blocks, struct {
+			label, header string
+			der           []byte
+		}{"PUBLIC KEY", "", smallCurve(big.NewInt(53881), 53882, x*7919%53881, "PUBLIC KEY")})
+	}
+	var cases []pemCase
+	for _, b := range blocks {
+		text := framed(b.label, b.header, b.der, 64)
+		cases = append(cases, pemCase{Text: text, Pub: true}, pemCase{Text: text, Pub: false})
+	}
+	return cases
 }
