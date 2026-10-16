@@ -85,11 +85,15 @@ func judgeProofCommand(e *env, args []string) error {
 // selfIncidentRootLine is the line judgeProofCommand prints after the
 // verified root (src/cli-app.ts:1011-1015).
 func selfIncidentRootLine(rootDigest string) string {
-	if rootDigest == proofview.RecordedSelfIncidentRoot {
+	if rootDigest == recordedSelfIncidentRoot {
 		return "Matched historical self-incident root.\n"
 	}
-	return "Note: historical self-incident root is " + proofview.RecordedSelfIncidentRoot + " (see docs/faultline-self-incident.md).\n"
+	return "Note: historical self-incident root is " + recordedSelfIncidentRoot + " (see docs/faultline-self-incident.md).\n"
 }
+
+// recordedSelfIncidentRoot is proofview.RecordedSelfIncidentRoot; test
+// builds may replace it (selfroot_seeded.go).
+var recordedSelfIncidentRoot = proofview.RecordedSelfIncidentRoot
 
 // commitProofPreviewCommand ports src/cli-app.ts:1041 commitProofPreviewCommand.
 func commitProofPreviewCommand(e *env, args []string) error {

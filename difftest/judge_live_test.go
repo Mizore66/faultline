@@ -314,3 +314,35 @@ func (l *lockedBuffer) String() string {
 	defer l.mu.Unlock()
 	return l.b.String()
 }
+
+// TestLiveSelfIncidentMatch runs `judge-proof --export-only` on the
+// committed sample with the recorded self-incident root replaced by the
+// sample's own root on both sides (TS: the difftest/gen/selfroot.mjs
+// preload; Go: FAULTLINE_TEST_SELF_INCIDENT_ROOT), so the "Matched
+// historical self-incident root." branch is compared end to end (round 7
+// #14, mutant P3).
+func TestLiveSelfIncidentMatch(t *testing.T) {
+	oracle.Skip(t)
+	repo := repoRoot(t)
+	const sampleRoot = "sha256:f85c446dfd5ab92222b10a314e79209a8a7dc10ee69af9d2deaa04aceafeb7d9"
+	got := map[string]string{}
+	for _, side := range []judgeSide{
+		{"TS", []string{"node", "--import", "file://" + filepath.Join(repo, "difftest", "gen", "selfroot.mjs"), filepath.Join(repo, "dist", "cli.js")}},
+		{"Go", []string{flBinary}},
+	} {
+		cmd := exec.Command(side.argv[0], append(side.argv[1:], "judge-proof", "--export-only")...)
+		cmd.Dir = judgeWorkspace(t, repo)
+		cmd.Env = judgeEnv("FAULTLINE_TEST_SELF_INCIDENT_ROOT=" + sampleRoot)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", side.name, err, out)
+		}
+		got[side.name] = string(out)
+	}
+	if got["Go"] != got["TS"] {
+		t.Errorf("Go\n%s\nTS\n%s", got["Go"], got["TS"])
+	}
+	if !strings.Contains(got["TS"], "\nMatched historical self-incident root.\n") {
+		t.Errorf("TS did not take the match branch:\n%s", got["TS"])
+	}
+}
