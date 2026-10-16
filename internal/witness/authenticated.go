@@ -99,13 +99,6 @@ func canonicalBase64(v jsjson.Value) bool {
 	return err == nil && base64.StdEncoding.EncodeToString(decoded) == v.Str()
 }
 
-// keyObject is the part of a Node KeyObject this module reads.
-type keyObject struct {
-	ed25519 bool
-	public  ed25519.PublicKey
-	private ed25519.PrivateKey
-}
-
 func publicKeyDER(k keyObject) []byte {
 	der, err := x509.MarshalPKIXPublicKey(k.public)
 	if err != nil {

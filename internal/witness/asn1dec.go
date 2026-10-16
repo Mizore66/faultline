@@ -1,21 +1,22 @@
 package witness
 
 import (
-	"fmt"
 	"math"
+	"math/big"
 	"runtime"
 )
 
 // A port of OpenSSL's table-driven DER/BER decoder (crypto/asn1/tasn_dec.c,
-// asn1_lib.c and the c2i functions it calls, OpenSSL 3.5/3.6) for the
-// templates Node's createPublicKey and createPrivateKey reach. OpenSSL
-// raises an error at the point of failure and its callers add "nested asn1
-// error" on the way out; Node reports the oldest error in the queue, so the
-// message is the first reason raised (asn1Dec.first).
+// asn1_lib.c and the c2i functions it calls, OpenSSL 3.5) for the templates
+// Node's createPublicKey and createPrivateKey reach. Every ERR_raise lands
+// in the error queue in the order OpenSSL raises it, including the "nested
+// asn1 error" each caller adds on the way out: when the queue is full the
+// oldest error is overwritten, so the exact count matters for the message
+// Node prints.
 //
 // The TLC header cache (ASN1_TLC) is left out: it only memoises a header
 // already parsed at the same position and length, so it never changes the
-// outcome or the first error.
+// outcome or the errors.
 
 // Universal tags (V_ASN1_*) and the pseudo types the decoder uses.
 const (
@@ -45,56 +46,6 @@ const (
 	classContext   = 0x80
 )
 
-// asn1Err is the Node message of an ASN1 library error (ERR_LIB_ASN1 = 13).
-func asn1Err(reason int, text string) string {
-	return fmt.Sprintf("error:%08X:asn1 encoding routines::%s", 13<<23|reason, text)
-}
-
-// ASN1_R_* reasons (crypto/asn1/asn1_err.c) the templates below can raise.
-var (
-	errAsn1TooSmall            = asn1Err(224, "too small")
-	errAsn1HeaderTooLong       = asn1Err(123, "header too long")
-	errAsn1TooLong             = asn1Err(155, "too long")
-	errAsn1BadObjectHeader     = asn1Err(102, "bad object header")
-	errAsn1WrongTag            = asn1Err(168, "wrong tag")
-	errAsn1SeqNotConstructed   = asn1Err(149, "sequence not constructed")
-	errAsn1UnexpectedEOC       = asn1Err(159, "unexpected eoc")
-	errAsn1MissingEOC          = asn1Err(137, "missing eoc")
-	errAsn1SeqLengthMismatch   = asn1Err(148, "sequence length mismatch")
-	errAsn1FieldMissing        = asn1Err(121, "field missing")
-	errAsn1AuxError            = asn1Err(100, "aux error")
-	errAsn1ExplicitNotCons     = asn1Err(120, "explicit tag not constructed")
-	errAsn1ExplicitLenMismatch = asn1Err(119, "explicit length mismatch")
-	errAsn1TypeNotConstructed  = asn1Err(156, "type not constructed")
-	errAsn1TypeNotPrimitive    = asn1Err(195, "type not primitive")
-	errAsn1NestedString        = asn1Err(197, "nested asn1 string")
-	errAsn1MstringNotUniversal = asn1Err(139, "mstring not universal")
-	errAsn1MstringWrongTag     = asn1Err(140, "mstring wrong tag")
-	errAsn1InvalidObject       = asn1Err(216, "invalid object encoding")
-	errAsn1NullWrongLength     = asn1Err(144, "null is wrong length")
-	errAsn1BooleanWrongLength  = asn1Err(106, "boolean is wrong length")
-	errAsn1StringTooShort      = asn1Err(152, "string too short")
-	errAsn1BitsLeft            = asn1Err(220, "invalid bit string bits left")
-	errAsn1ZeroContent         = asn1Err(222, "illegal zero content")
-	errAsn1IllegalPadding      = asn1Err(221, "illegal padding")
-	errAsn1BMPWrongLength      = asn1Err(214, "bmpstring is wrong length")
-	errAsn1UniversalWrongLen   = asn1Err(215, "universalstring is wrong length")
-	errAsn1GenTimeTooShort     = asn1Err(232, "generalizedtime is too short")
-	errAsn1UTCTimeTooShort     = asn1Err(233, "utctime is too short")
-	errAsn1InvalidUTF8         = asn1Err(134, "invalid utf8string")
-	errAsn1IllegalCharacters   = asn1Err(124, "illegal characters")
-	errAsn1IllegalTaggedAny    = asn1Err(127, "illegal tagged any")
-	errAsn1IllegalOptionalAny  = asn1Err(126, "illegal optional any")
-	errAsn1IllegalOptions      = asn1Err(170, "illegal options on item template")
-	errAsn1BadTemplate         = asn1Err(230, "bad template")
-	// ERR_R_NESTED_ASN1_ERROR is a common reason: callers raise it after the
-	// real error, so it is never the message.
-	errAsn1Nested = "error:0688010A:asn1 encoding routines::nested asn1 error"
-	// EVP_R_DECODE_ERROR from X509_PUBKEY_get0: the SPKI structure decoded
-	// but its key did not.
-	errEVPDecode = "error:03000072:digital envelope routines::decode error"
-)
-
 // C long is 32 bits on Windows (LLP64), which bounds asn1_get_length.
 var cLongSize, cLongMax = func() (int, uint64) {
 	if runtime.GOOS == "windows" {
@@ -103,21 +54,30 @@ var cLongSize, cLongMax = func() (int, uint64) {
 	return 8, math.MaxInt64
 }()
 
-// lengthNeedsContentByte is asn1_get_length's "max < i + 1" in OpenSSL
-// 3.5 (the long form needs one byte after the length octets), which Node
-// 22.22.2 bundles; OpenSSL 3.6.5 checks "max < i". Only the error text of a
-// truncated header differs (KNOWN_DIFFERENCES.md).
+// lengthNeedsContentByte is asn1_get_length's "max < i + 1" (the long
+// form needs one byte after the length octets) in OpenSSL 3.5 and up to
+// 3.6.0; 3.6.5 checks "max < i" (openssl-3.6.0 and openssl-3.6.5 sources,
+// crypto/asn1/asn1_lib.c). Node 22.22.2 bundles 3.5.5. Only the error of a
+// truncated header differs (header too long or field missing).
 var lengthNeedsContentByte = true
 
-// Item kinds (ASN1_ITYPE_*, with the two EXTERN items and ITEM_TEMPLATE
-// split out).
+// Item kinds (ASN1_ITYPE_*, with the EXTERN items and ITEM_TEMPLATE split
+// out).
 const (
 	itemPrimitive = iota
 	itemMString
 	itemSequence
+	itemChoice
 	itemTemplate // ASN1_ITEM_TEMPLATE: a PRIMITIVE item holding one template
 	itemPubkey   // X509_PUBKEY (crypto/x509/x_pubkey.c x509_pubkey_ex_d2i_ex)
 	itemName     // X509_NAME (crypto/x509/x_name.c x509_name_ex_d2i)
+)
+
+// Primitive content functions (ASN1_PRIMITIVE_FUNCS prim_c2i).
+const (
+	primPlain  = iota
+	primBignum // x_bignum.c bn_c2i: BN_bin2bn, any content
+	primInt32  // x_int64.c uint32_c2i with INTxx_FLAG_SIGNED (INT32, ZINT32)
 )
 
 // Template flags (ASN1_TFLG_*).
@@ -127,55 +87,69 @@ const (
 	tImplicit
 	tSetOf
 	tSeqOf
+	tADB // ASN1_ADB_OBJECT: the template is chosen by the OID in field adbField
 )
 
 type asn1Item struct {
 	kind   int
 	utype  int    // primitive: V_ASN1_* (tagAny for ASN1_ANY)
 	mask   uint32 // mstring: B_ASN1_* bits
-	bignum bool   // BIGNUM's prim_c2i: BN_bin2bn, no content checks
+	prim   int
 	tt     []asn1Template
-	post   func(*asn1Value) bool // ASN1_OP_D2I_POST
+	post   func(*asn1Dec, *asn1Value) bool // ASN1_OP_D2I_POST
+	extern func(d *asn1Dec, in []byte, tag, aclass int, opt bool) (*asn1Value, int, int)
 }
 
 type asn1Template struct {
 	flags int
 	tag   int
 	item  *asn1Item
+	// adb: for a tADB template, the field holding the selector OID and
+	// the template per OID content (hex), with adbDefault for any other.
+	adbField   int
+	adb        map[string]*asn1Template
+	adbDefault *asn1Template
 }
 
 // asn1Value is a decoded item: a primitive's type and content, a
-// SEQUENCE's fields (nil when an OPTIONAL one is absent), a SET OF's items.
+// SEQUENCE's fields (nil when an OPTIONAL one is absent), a SET OF's items,
+// a CHOICE's selected field.
 type asn1Value struct {
 	utype  int
 	data   []byte // content octets; a bit string's without the unused-bits octet, masked
+	bits   int    // a bit string's unused bits
 	fields []*asn1Value
 	items  []*asn1Value
-	pub    *keyObject // X509_PUBKEY: the key OpenSSL decoded opportunistically, nil if none
+	choice int
+	pub    *pubKeyData // X509_PUBKEY: the key OpenSSL decoded opportunistically, nil if none
+	raw    []byte      // the whole TLV (SEQUENCE/SET/OTHER kept encoded, and every SEQUENCE)
+	neg    bool        // INTEGER: negative
+}
+
+// int32 is an INT32/ZINT32 field's value.
+func (v *asn1Value) int32() int64 {
+	n := new(big.Int).SetBytes(v.data)
+	if v.neg {
+		n.Neg(n)
+	}
+	return n.Int64()
 }
 
 type asn1Dec struct {
-	first string
+	q   *errQueue
+	env *osslEnv
 }
 
-func (d *asn1Dec) raise(reason string) {
-	if d.first == "" {
-		d.first = reason
-	}
-}
+func (d *asn1Dec) raise(reason string) { d.q.raise(libASN1, reason) }
 
-// d2i ports ASN1_item_d2i: the first error raised is returned as the reason.
-// Bytes after the top-level object are ignored, as in OpenSSL.
-func d2i(it *asn1Item, der []byte) (*asn1Value, string) {
-	d := &asn1Dec{}
-	v, _, ret := d.itemD2I(der, it, -1, 0, false)
-	if ret <= 0 {
-		if d.first == "" {
-			d.first = errAsn1Nested
-		}
-		return nil, d.first
-	}
-	return v, ""
+func (d *asn1Dec) nested() { d.q.raise(libASN1, "ERR_R_NESTED_ASN1_ERROR") }
+
+// d2i ports ASN1_item_d2i: false (and the errors queued) when the DER does
+// not decode. Bytes after the top-level object are ignored, as in OpenSSL.
+func (e *osslEnv) d2i(it *asn1Item, der []byte) (*asn1Value, int, bool) {
+	d := &asn1Dec{q: e.q, env: e}
+	v, n, ret := d.itemD2I(der, it, -1, 0, false, 0)
+	return v, n, ret > 0
 }
 
 // Port of asn1_lib.c ASN1_get_object: ret carries 0x20 (constructed),
@@ -183,11 +157,11 @@ func d2i(it *asn1Item, der []byte) (*asn1Value, string) {
 func (d *asn1Dec) getObject(in []byte) (ret, hdr int, plen int64, tag, class int) {
 	omax := len(in)
 	if omax <= 0 {
-		d.raise(errAsn1TooSmall)
+		d.raise("ASN1_R_TOO_SMALL")
 		return 0x80, 0, 0, 0, 0
 	}
 	fail := func() (int, int, int64, int, int) {
-		d.raise(errAsn1HeaderTooLong)
+		d.raise("ASN1_R_HEADER_TOO_LONG")
 		return 0x80, 0, 0, 0, 0
 	}
 	max := omax
@@ -232,7 +206,7 @@ func (d *asn1Dec) getObject(in []byte) (ret, hdr int, plen int64, tag, class int
 		return fail()
 	}
 	if length > int64(omax-p) {
-		d.raise(errAsn1TooLong)
+		d.raise("ASN1_R_TOO_LONG")
 		ret |= 0x80
 	}
 	if inf {
@@ -292,19 +266,19 @@ type tlen struct {
 // item's tag did not match.
 func (d *asn1Dec) checkTLen(in []byte, exptag, expclass int, opt bool) (tlen, int) {
 	if len(in) <= 0 {
-		d.raise(errAsn1TooSmall)
+		d.raise("ASN1_R_TOO_SMALL")
 		return tlen{}, 0
 	}
 	i, hdr, plen, ptag, pclass := d.getObject(in)
 	if i&0x80 != 0 {
-		d.raise(errAsn1BadObjectHeader)
+		d.raise("ASN1_R_BAD_OBJECT_HEADER")
 		return tlen{}, 0
 	}
 	if exptag >= 0 && (exptag != ptag || expclass != pclass) {
 		if opt {
 			return tlen{}, -1
 		}
-		d.raise(errAsn1WrongTag)
+		d.raise("ASN1_R_WRONG_TAG")
 		return tlen{}, 0
 	}
 	if i&1 != 0 {
@@ -320,61 +294,85 @@ func checkEOC(in []byte) bool {
 
 // Port of tasn_dec.c asn1_item_embed_d2i: 1 decoded (n bytes), 0 error,
 // -1 absent OPTIONAL item.
-func (d *asn1Dec) itemD2I(in []byte, it *asn1Item, tag, aclass int, opt bool) (*asn1Value, int, int) {
+func (d *asn1Dec) itemD2I(in []byte, it *asn1Item, tag, aclass int, opt bool, depth int) (*asn1Value, int, int) {
 	if len(in) <= 0 {
-		d.raise(errAsn1TooSmall)
+		d.raise("ASN1_R_TOO_SMALL")
+		return nil, 0, 0
+	}
+	if it.extern != nil {
+		return it.extern(d, in, tag, aclass, opt)
+	}
+	if depth++; depth > 30 { // ASN1_MAX_CONSTRUCTED_NEST
+		d.raise("ASN1_R_NESTED_TOO_DEEP")
 		return nil, 0, 0
 	}
 	switch it.kind {
 	case itemTemplate:
 		if tag != -1 || opt {
-			d.raise(errAsn1IllegalOptions)
+			d.raise("ASN1_R_ILLEGAL_OPTIONS_ON_ITEM_TEMPLATE")
 			return nil, 0, 0
 		}
-		return d.templateD2I(in, &it.tt[0], opt)
+		return d.templateD2I(in, &it.tt[0], opt, depth)
 	case itemPrimitive:
 		return d.primitiveD2I(in, it, tag, aclass, opt)
 	case itemMString:
 		if tag != -1 {
-			d.raise(errAsn1BadTemplate)
+			d.raise("ASN1_R_BAD_TEMPLATE")
 			return nil, 0, 0
 		}
 		r, ret := d.checkTLen(in, -1, 0, true)
 		if ret == 0 {
-			d.raise(errAsn1Nested)
+			d.nested()
 			return nil, 0, 0
 		}
 		if r.class != classUniversal {
 			if opt {
 				return nil, 0, -1
 			}
-			d.raise(errAsn1MstringNotUniversal)
+			d.raise("ASN1_R_MSTRING_NOT_UNIVERSAL")
 			return nil, 0, 0
 		}
 		if tag2bit(r.tag)&it.mask == 0 {
 			if opt {
 				return nil, 0, -1
 			}
-			d.raise(errAsn1MstringWrongTag)
+			d.raise("ASN1_R_MSTRING_WRONG_TAG")
 			return nil, 0, 0
 		}
 		return d.primitiveD2I(in, it, r.tag, 0, false)
-	case itemPubkey:
-		return d.pubkeyD2I(in, tag, aclass, opt)
-	case itemName:
-		return d.nameD2I(in, tag, aclass, opt)
+	case itemChoice:
+		if tag != -1 {
+			d.raise("ASN1_R_BAD_TEMPLATE")
+			return nil, 0, 0
+		}
+		for i := range it.tt {
+			v, n, ret := d.templateD2I(in, &it.tt[i], true, depth)
+			if ret == -1 {
+				continue
+			}
+			if ret > 0 {
+				return &asn1Value{choice: i, fields: []*asn1Value{v}}, n, 1
+			}
+			d.nested()
+			return nil, 0, 0
+		}
+		if opt {
+			return nil, 0, -1
+		}
+		d.raise("ASN1_R_NO_MATCHING_CHOICE_TYPE")
+		return nil, 0, 0
 	}
-	return d.sequenceD2I(in, it, tag, aclass, opt)
+	return d.sequenceD2I(in, it, tag, aclass, opt, depth)
 }
 
 // The SEQUENCE case of asn1_item_embed_d2i.
-func (d *asn1Dec) sequenceD2I(in []byte, it *asn1Item, tag, aclass int, opt bool) (*asn1Value, int, int) {
+func (d *asn1Dec) sequenceD2I(in []byte, it *asn1Item, tag, aclass int, opt bool, depth int) (*asn1Value, int, int) {
 	if tag == -1 {
 		tag, aclass = tagSequence, classUniversal
 	}
 	r, ret := d.checkTLen(in, tag, aclass, opt)
 	if ret == 0 {
-		d.raise(errAsn1Nested)
+		d.nested()
 		return nil, 0, 0
 	}
 	if ret == -1 {
@@ -383,19 +381,23 @@ func (d *asn1Dec) sequenceD2I(in []byte, it *asn1Item, tag, aclass int, opt bool
 	seqEOC := r.inf
 	seqNolen := seqEOC
 	if !r.cst {
-		d.raise(errAsn1SeqNotConstructed)
+		d.raise("ASN1_R_SEQUENCE_NOT_CONSTRUCTED")
 		return nil, 0, 0
 	}
 	p, length := r.hdr, r.plen
 	v := &asn1Value{utype: tagSequence, fields: make([]*asn1Value, len(it.tt))}
 	i := 0
 	for ; i < len(it.tt); i++ {
+		seqtt, ok := d.doADB(v, &it.tt[i], true)
+		if !ok {
+			return nil, 0, 0
+		}
 		if length == 0 {
 			break
 		}
 		if checkEOC(in[p : p+length]) {
 			if !seqEOC {
-				d.raise(errAsn1UnexpectedEOC)
+				d.raise("ASN1_R_UNEXPECTED_EOC")
 				return nil, 0, 0
 			}
 			p += 2
@@ -404,8 +406,8 @@ func (d *asn1Dec) sequenceD2I(in []byte, it *asn1Item, tag, aclass int, opt bool
 			break
 		}
 		// The last field is never OPTIONAL while data remains.
-		isopt := i != len(it.tt)-1 && it.tt[i].flags&tOptional != 0
-		fv, n, ret := d.templateD2I(in[p:p+length], &it.tt[i], isopt)
+		isopt := i != len(it.tt)-1 && seqtt.flags&tOptional != 0
+		fv, n, ret := d.templateD2I(in[p:p+length], seqtt, isopt, depth)
 		if ret == 0 {
 			return nil, 0, 0
 		}
@@ -418,67 +420,92 @@ func (d *asn1Dec) sequenceD2I(in []byte, it *asn1Item, tag, aclass int, opt bool
 	}
 	if seqEOC {
 		if !checkEOC(in[p : p+length]) {
-			d.raise(errAsn1MissingEOC)
+			d.raise("ASN1_R_MISSING_EOC")
 			return nil, 0, 0
 		}
 		p += 2
 		length -= 2
 	}
 	if !seqNolen && length != 0 {
-		d.raise(errAsn1SeqLengthMismatch)
+		d.raise("ASN1_R_SEQUENCE_LENGTH_MISMATCH")
 		return nil, 0, 0
 	}
 	for ; i < len(it.tt); i++ {
-		if it.tt[i].flags&tOptional == 0 {
-			d.raise(errAsn1FieldMissing)
+		seqtt, ok := d.doADB(v, &it.tt[i], true)
+		if !ok {
+			return nil, 0, 0
+		}
+		if seqtt.flags&tOptional == 0 {
+			d.raise("ASN1_R_FIELD_MISSING")
 			return nil, 0, 0
 		}
 	}
-	if it.post != nil && !it.post(v) {
-		d.raise(errAsn1AuxError)
+	if it.post != nil && !it.post(d, v) {
+		d.raise("ASN1_R_AUX_ERROR")
 		return nil, 0, 0
 	}
+	v.raw = in[:p]
 	return v, p, 1
 }
 
+// Port of tasn_utl.c ossl_asn1_do_adb.
+func (d *asn1Dec) doADB(v *asn1Value, tt *asn1Template, nullerr bool) (*asn1Template, bool) {
+	if tt.flags&tADB == 0 {
+		return tt, true
+	}
+	sel := v.fields[tt.adbField]
+	if sel != nil {
+		if t, ok := tt.adb[string(sel.data)]; ok {
+			return t, true
+		}
+	}
+	if tt.adbDefault != nil {
+		return tt.adbDefault, true
+	}
+	if nullerr {
+		d.raise("ASN1_R_UNSUPPORTED_ANY_DEFINED_BY_TYPE")
+	}
+	return nil, false
+}
+
 // Port of tasn_dec.c asn1_template_ex_d2i (the EXPLICIT tag).
-func (d *asn1Dec) templateD2I(in []byte, tt *asn1Template, opt bool) (*asn1Value, int, int) {
+func (d *asn1Dec) templateD2I(in []byte, tt *asn1Template, opt bool, depth int) (*asn1Value, int, int) {
 	if tt.flags&tExplicit == 0 {
-		return d.noexpD2I(in, tt, opt)
+		return d.noexpD2I(in, tt, opt, depth)
 	}
 	r, ret := d.checkTLen(in, tt.tag, classContext, opt)
 	if ret == 0 {
-		d.raise(errAsn1Nested)
+		d.nested()
 		return nil, 0, 0
 	}
 	if ret == -1 {
 		return nil, 0, -1
 	}
 	if !r.cst {
-		d.raise(errAsn1ExplicitNotCons)
+		d.raise("ASN1_R_EXPLICIT_TAG_NOT_CONSTRUCTED")
 		return nil, 0, 0
 	}
-	v, n, ret := d.noexpD2I(in[r.hdr:r.hdr+r.plen], tt, false)
+	v, n, ret := d.noexpD2I(in[r.hdr:r.hdr+r.plen], tt, false, depth)
 	if ret <= 0 {
-		d.raise(errAsn1Nested)
+		d.nested()
 		return nil, 0, 0
 	}
 	p, length := r.hdr+n, r.plen-n
 	if r.inf {
 		if !checkEOC(in[p : p+length]) {
-			d.raise(errAsn1MissingEOC)
+			d.raise("ASN1_R_MISSING_EOC")
 			return nil, 0, 0
 		}
 		p += 2
 	} else if length != 0 {
-		d.raise(errAsn1ExplicitLenMismatch)
+		d.raise("ASN1_R_EXPLICIT_LENGTH_MISMATCH")
 		return nil, 0, 0
 	}
 	return v, p, 1
 }
 
 // Port of tasn_dec.c asn1_template_noexp_d2i.
-func (d *asn1Dec) noexpD2I(in []byte, tt *asn1Template, opt bool) (*asn1Value, int, int) {
+func (d *asn1Dec) noexpD2I(in []byte, tt *asn1Template, opt bool, depth int) (*asn1Value, int, int) {
 	if tt.flags&(tSetOf|tSeqOf) != 0 {
 		sktag, skclass := tagSequence, classUniversal
 		if tt.flags&tImplicit != 0 {
@@ -488,7 +515,7 @@ func (d *asn1Dec) noexpD2I(in []byte, tt *asn1Template, opt bool) (*asn1Value, i
 		}
 		r, ret := d.checkTLen(in, sktag, skclass, opt)
 		if ret == 0 {
-			d.raise(errAsn1Nested)
+			d.nested()
 			return nil, 0, 0
 		}
 		if ret == -1 {
@@ -499,16 +526,16 @@ func (d *asn1Dec) noexpD2I(in []byte, tt *asn1Template, opt bool) (*asn1Value, i
 		for length > 0 {
 			if checkEOC(in[p : p+length]) {
 				if !skEOC {
-					d.raise(errAsn1UnexpectedEOC)
+					d.raise("ASN1_R_UNEXPECTED_EOC")
 					return nil, 0, 0
 				}
 				p += 2
 				skEOC = false
 				break
 			}
-			iv, n, ret := d.itemD2I(in[p:p+length], tt.item, -1, 0, false)
+			iv, n, ret := d.itemD2I(in[p:p+length], tt.item, -1, 0, false, depth)
 			if ret <= 0 {
-				d.raise(errAsn1Nested)
+				d.nested()
 				return nil, 0, 0
 			}
 			v.items = append(v.items, iv)
@@ -516,7 +543,7 @@ func (d *asn1Dec) noexpD2I(in []byte, tt *asn1Template, opt bool) (*asn1Value, i
 			length -= n
 		}
 		if skEOC {
-			d.raise(errAsn1MissingEOC)
+			d.raise("ASN1_R_MISSING_EOC")
 			return nil, 0, 0
 		}
 		return v, p, 1
@@ -525,9 +552,9 @@ func (d *asn1Dec) noexpD2I(in []byte, tt *asn1Template, opt bool) (*asn1Value, i
 	if tt.flags&tImplicit != 0 {
 		tag, aclass = tt.tag, classContext
 	}
-	v, n, ret := d.itemD2I(in, tt.item, tag, aclass, opt)
+	v, n, ret := d.itemD2I(in, tt.item, tag, aclass, opt, depth)
 	if ret == 0 {
-		d.raise(errAsn1Nested)
+		d.nested()
 	}
 	return v, n, ret
 }
@@ -540,16 +567,16 @@ func (d *asn1Dec) primitiveD2I(in []byte, it *asn1Item, tag, aclass int, opt boo
 	}
 	if utype == tagAny {
 		if tag >= 0 {
-			d.raise(errAsn1IllegalTaggedAny)
+			d.raise("ASN1_R_ILLEGAL_TAGGED_ANY")
 			return nil, 0, 0
 		}
 		if opt {
-			d.raise(errAsn1IllegalOptionalAny)
+			d.raise("ASN1_R_ILLEGAL_OPTIONAL_ANY")
 			return nil, 0, 0
 		}
 		r, ret := d.checkTLen(in, -1, 0, false)
 		if ret == 0 {
-			d.raise(errAsn1Nested)
+			d.nested()
 			return nil, 0, 0
 		}
 		utype = r.tag
@@ -562,7 +589,7 @@ func (d *asn1Dec) primitiveD2I(in []byte, it *asn1Item, tag, aclass int, opt boo
 	}
 	r, ret := d.checkTLen(in, tag, aclass, opt)
 	if ret == 0 {
-		d.raise(errAsn1Nested)
+		d.nested()
 		return nil, 0, 0
 	}
 	if ret == -1 {
@@ -574,7 +601,7 @@ func (d *asn1Dec) primitiveD2I(in []byte, it *asn1Item, tag, aclass int, opt boo
 	case utype == tagSequence || utype == tagSet || utype == tagOther:
 		// Left in encoded form.
 		if utype != tagOther && !r.cst {
-			d.raise(errAsn1TypeNotConstructed)
+			d.raise("ASN1_R_TYPE_NOT_CONSTRUCTED")
 			return nil, 0, 0
 		}
 		if r.inf {
@@ -590,7 +617,7 @@ func (d *asn1Dec) primitiveD2I(in []byte, it *asn1Item, tag, aclass int, opt boo
 	case r.cst:
 		switch utype {
 		case tagNull, tagBoolean, tagObject, tagInteger, tagEnumerated:
-			d.raise(errAsn1TypeNotPrimitive)
+			d.raise("ASN1_R_TYPE_NOT_PRIMITIVE")
 			return nil, 0, 0
 		}
 		buf, n, ok := d.collect(in[p:p+r.plen], r.inf, 0)
@@ -607,6 +634,7 @@ func (d *asn1Dec) primitiveD2I(in []byte, it *asn1Item, tag, aclass int, opt boo
 	if !ok {
 		return nil, 0, 0
 	}
+	v.raw = in[:p]
 	return v, p, 1
 }
 
@@ -626,7 +654,7 @@ func (d *asn1Dec) findEnd(in []byte) (int, bool) {
 		q := p
 		r, ret := d.checkTLen(in[p:p+length], -1, 0, false)
 		if ret == 0 {
-			d.raise(errAsn1Nested)
+			d.nested()
 			return 0, false
 		}
 		p += r.hdr
@@ -638,7 +666,7 @@ func (d *asn1Dec) findEnd(in []byte) (int, bool) {
 		length -= p - q
 	}
 	if expected != 0 {
-		d.raise(errAsn1MissingEOC)
+		d.raise("ASN1_R_MISSING_EOC")
 		return 0, false
 	}
 	return p, true
@@ -653,7 +681,7 @@ func (d *asn1Dec) collect(in []byte, inf bool, depth int) ([]byte, int, bool) {
 		q := p
 		if checkEOC(in[p : p+length]) {
 			if !inf {
-				d.raise(errAsn1UnexpectedEOC)
+				d.raise("ASN1_R_UNEXPECTED_EOC")
 				return nil, 0, false
 			}
 			p += 2
@@ -662,13 +690,13 @@ func (d *asn1Dec) collect(in []byte, inf bool, depth int) ([]byte, int, bool) {
 		}
 		r, ret := d.checkTLen(in[p:p+length], -1, classUniversal, false)
 		if ret == 0 {
-			d.raise(errAsn1Nested)
+			d.nested()
 			return nil, 0, false
 		}
 		p += r.hdr
 		if r.cst {
 			if depth >= 5 { // ASN1_MAX_STRING_NEST
-				d.raise(errAsn1NestedString)
+				d.raise("ASN1_R_NESTED_ASN1_STRING")
 				return nil, 0, false
 			}
 			sub, n, ok := d.collect(in[p:p+r.plen], r.inf, depth+1)
@@ -684,97 +712,194 @@ func (d *asn1Dec) collect(in []byte, inf bool, depth int) ([]byte, int, bool) {
 		length -= p - q
 	}
 	if inf {
-		d.raise(errAsn1MissingEOC)
+		d.raise("ASN1_R_MISSING_EOC")
 		return nil, 0, false
 	}
 	return buf, p, true
 }
 
+// c2iInteger ports a_int.c c2i_ibuf's checks: the content length without
+// the pad byte, or false (with the reason raised) for a malformed INTEGER.
+func (d *asn1Dec) c2iInteger(cont []byte) (int, bool, bool) {
+	if len(cont) == 0 {
+		d.raise("ASN1_R_ILLEGAL_ZERO_CONTENT")
+		return 0, false, false
+	}
+	neg := cont[0]&0x80 != 0
+	if len(cont) == 1 {
+		return 1, neg, true
+	}
+	pad := cont[0] == 0
+	if cont[0] == 0xFF {
+		pad = false
+		for _, c := range cont[1:] {
+			pad = pad || c != 0
+		}
+	}
+	if pad && neg == (cont[1]&0x80 != 0) {
+		d.raise("ASN1_R_ILLEGAL_PADDING")
+		return 0, false, false
+	}
+	n := len(cont)
+	if pad {
+		n--
+	}
+	return n, neg, true
+}
+
 // Port of tasn_dec.c asn1_ex_c2i and the c2i functions it calls
 // (a_object.c ossl_c2i_ASN1_OBJECT, a_bitstr.c ossl_c2i_ASN1_BIT_STRING,
-// a_int.c c2i_ibuf).
+// a_int.c ossl_c2i_ASN1_INTEGER, x_int64.c uint32_c2i, x_long.c long_c2i,
+// x_bignum.c bn_c2i).
 func (d *asn1Dec) c2i(cont []byte, utype int, it *asn1Item) (*asn1Value, bool) {
 	v := &asn1Value{utype: utype, data: cont}
-	if it.bignum {
+	switch it.prim {
+	case primBignum:
+		return v, true
+	case primInt32:
+		// Zero-length content is read as 0 (long_c2i compatibility).
+		if len(cont) == 0 {
+			return v, true
+		}
+		n, neg, ok := d.c2iInteger(cont)
+		if !ok {
+			return nil, false
+		}
+		if n > 8 {
+			d.raise("ASN1_R_TOO_LARGE")
+			return nil, false
+		}
+		mag := twosMagnitude(cont, neg)
+		if neg {
+			if mag.Cmp(big.NewInt(1<<31)) > 0 {
+				d.raise("ASN1_R_TOO_SMALL")
+				return nil, false
+			}
+		} else if mag.Cmp(big.NewInt(math.MaxInt32)) > 0 {
+			d.raise("ASN1_R_TOO_LARGE")
+			return nil, false
+		}
+		v.data, v.neg = mag.Bytes(), neg
 		return v, true
 	}
 	switch utype {
 	case tagObject:
 		if len(cont) == 0 || cont[len(cont)-1]&0x80 != 0 {
-			d.raise(errAsn1InvalidObject)
+			d.raise("ASN1_R_INVALID_OBJECT_ENCODING")
 			return nil, false
 		}
-		for i, c := range cont {
-			if c == 0x80 && (i == 0 || cont[i-1]&0x80 == 0) {
-				d.raise(errAsn1InvalidObject)
-				return nil, false
+		if objNames[string(cont)] == "" {
+			for i, c := range cont {
+				if c == 0x80 && (i == 0 || cont[i-1]&0x80 == 0) {
+					d.raise("ASN1_R_INVALID_OBJECT_ENCODING")
+					return nil, false
+				}
 			}
 		}
 	case tagNull:
 		if len(cont) != 0 {
-			d.raise(errAsn1NullWrongLength)
+			d.raise("ASN1_R_NULL_IS_WRONG_LENGTH")
 			return nil, false
 		}
 	case tagBoolean:
 		if len(cont) != 1 {
-			d.raise(errAsn1BooleanWrongLength)
+			d.raise("ASN1_R_BOOLEAN_IS_WRONG_LENGTH")
 			return nil, false
 		}
 	case tagBitString:
 		if len(cont) < 1 {
-			d.raise(errAsn1StringTooShort)
+			d.raise("ASN1_R_STRING_TOO_SHORT")
 			return nil, false
 		}
 		unused := int(cont[0])
 		if unused > 7 {
-			d.raise(errAsn1BitsLeft)
+			d.raise("ASN1_R_INVALID_BIT_STRING_BITS_LEFT")
 			return nil, false
 		}
 		data := append([]byte(nil), cont[1:]...)
 		if len(data) > 0 {
 			data[len(data)-1] &= byte(0xFF << unused)
 		}
-		v.data = data
+		v.data, v.bits = data, unused
 	case tagInteger, tagEnumerated:
-		if len(cont) == 0 {
-			d.raise(errAsn1ZeroContent)
+		_, neg, ok := d.c2iInteger(cont)
+		if !ok {
 			return nil, false
 		}
-		if len(cont) > 1 {
-			neg := cont[0] & 0x80
-			pad := cont[0] == 0
-			if cont[0] == 0xFF {
-				for _, c := range cont[1:] {
-					pad = pad || c != 0
-				}
-			}
-			if pad && neg == cont[1]&0x80 {
-				d.raise(errAsn1IllegalPadding)
-				return nil, false
-			}
-		}
+		v.neg = neg
 	case tagBMPString:
 		if len(cont)&1 != 0 {
-			d.raise(errAsn1BMPWrongLength)
+			d.raise("ASN1_R_BMPSTRING_IS_WRONG_LENGTH")
 			return nil, false
 		}
 	case tagUniversalString:
 		if len(cont)&3 != 0 {
-			d.raise(errAsn1UniversalWrongLen)
+			d.raise("ASN1_R_UNIVERSALSTRING_IS_WRONG_LENGTH")
 			return nil, false
 		}
 	case tagGeneralizedTime:
 		if len(cont) < 15 {
-			d.raise(errAsn1GenTimeTooShort)
+			d.raise("ASN1_R_GENERALIZEDTIME_IS_TOO_SHORT")
 			return nil, false
 		}
 	case tagUTCTime:
 		if len(cont) < 13 {
-			d.raise(errAsn1UTCTimeTooShort)
+			d.raise("ASN1_R_UTCTIME_IS_TOO_SHORT")
 			return nil, false
 		}
 	}
 	return v, true
+}
+
+// twosMagnitude is the absolute value of a two's-complement INTEGER.
+func twosMagnitude(cont []byte, neg bool) *big.Int {
+	n := new(big.Int).SetBytes(cont)
+	if neg {
+		n.Sub(n, new(big.Int).Lsh(big.NewInt(1), uint(8*len(cont))))
+		n.Neg(n)
+	}
+	return n
+}
+
+// integerValue is an ASN1_INTEGER's value (ASN1_INTEGER_to_BN keeps the
+// sign).
+func integerValue(v *asn1Value) *big.Int {
+	n := twosMagnitude(v.data, v.neg)
+	if v.neg {
+		n.Neg(n)
+	}
+	return n
+}
+
+// asn1IntegerGet ports ASN1_INTEGER_get without the error queue: -1 when
+// the value does not fit a long (or is -1).
+func asn1IntegerGet(v *asn1Value) int64 {
+	n := integerValue(v)
+	if !n.IsInt64() || (cLongSize == 4 && (n.Int64() > math.MaxInt32 || n.Int64() < math.MinInt32)) {
+		return -1
+	}
+	return n.Int64()
+}
+
+// integerGet ports ASN1_INTEGER_get with its errors: asn1_get_int64
+// raises TOO_LARGE for more than 8 content bytes or a positive value above
+// INT64_MAX, TOO_SMALL for a negative one below INT64_MIN.
+func (d *asn1Dec) integerGet(v *asn1Value) int64 {
+	mag := twosMagnitude(v.data, v.neg)
+	if len(mag.Bytes()) > 8 {
+		d.raise("ASN1_R_TOO_LARGE")
+		return -1
+	}
+	if v.neg {
+		if mag.Cmp(new(big.Int).Lsh(big.NewInt(1), 63)) > 0 {
+			d.raise("ASN1_R_TOO_SMALL")
+			return -1
+		}
+	} else if !mag.IsInt64() {
+		d.raise("ASN1_R_TOO_LARGE")
+		return -1
+	}
+	return asn1IntegerGet(v)
 }
 
 // B_ASN1_* bits (include/openssl/asn1.h) and tasn_dec.c tag2bit.
@@ -819,27 +944,31 @@ func tag2bit(tag int) uint32 {
 }
 
 // pubkeyD2I ports x509_pubkey_ex_d2i_ex: X509_PUBKEY_INTERNAL, then an
-// opportunistic key decode whose failure is not an error (the errors are
-// popped; X509_PUBKEY_get0 later reports EVP decode error).
+// opportunistic key decode whose errors are popped (X509_PUBKEY_get0 later
+// reports EVP decode error when it found no key).
 func (d *asn1Dec) pubkeyD2I(in []byte, tag, aclass int, opt bool) (*asn1Value, int, int) {
-	v, n, ret := d.itemD2I(in, pubkeyInternalItem, tag, aclass, opt)
+	v, n, ret := d.itemD2I(in, pubkeyInternalItem, tag, aclass, opt, 0)
 	if ret <= 0 {
 		return v, n, ret
 	}
-	alg := v.fields[0]
-	if key, ok := decodePublicKey(alg.fields[0].data, alg.fields[1], v.fields[1].data); ok {
-		v.pub = &key
+	d.q.setMark()
+	der := in[:n]
+	if aclass != classUniversal {
+		der = append([]byte{0x30}, in[1:n]...)
 	}
+	v.pub = d.env.decodeSPKIKey(v, der)
+	d.q.popToMark()
 	return v, n, 1
 }
 
 // nameD2I ports x509_name_ex_d2i: X509_NAME_INTERNAL, then x509_name_canon,
-// whose ASN1_STRING_to_UTF8 rejects malformed strings.
+// whose ASN1_STRING_to_UTF8 rejects malformed strings (raising nothing
+// itself but "nested asn1 error" on the way out).
 func (d *asn1Dec) nameD2I(in []byte, tag, aclass int, opt bool) (*asn1Value, int, int) {
 	if len(in) > 1024*1024 { // X509_NAME_MAX
 		in = in[:1024*1024]
 	}
-	v, n, ret := d.itemD2I(in, nameInternalItem, tag, aclass, opt)
+	v, n, ret := d.itemD2I(in, nameInternalItem, tag, aclass, opt, 0)
 	if ret <= 0 {
 		return v, n, ret
 	}
@@ -847,7 +976,7 @@ func (d *asn1Dec) nameD2I(in []byte, tag, aclass int, opt bool) (*asn1Value, int
 		for _, entry := range rdn.items {
 			if reason := canonString(entry.fields[1]); reason != "" {
 				d.raise(reason)
-				d.raise(errAsn1Nested)
+				d.nested()
 				return nil, 0, 0
 			}
 		}
@@ -855,9 +984,9 @@ func (d *asn1Dec) nameD2I(in []byte, tag, aclass int, opt bool) (*asn1Value, int
 	return v, n, 1
 }
 
-// canonString is the failure reason of x_name.c asn1_string_canon (via
-// a_strex.c ASN1_STRING_to_UTF8 and a_mbstr.c ASN1_mbstring_ncopy), "" when
-// it succeeds. Only UTF8String, BMPString and UniversalString can fail; the
+// canonString is the reason x_name.c asn1_string_canon (via a_strex.c
+// ASN1_STRING_to_UTF8 and a_mbstr.c ASN1_mbstring_ncopy) raises, "" when it
+// succeeds. Only UTF8String, BMPString and UniversalString can fail; the
 // one-byte types convert whatever their bytes.
 func canonString(v *asn1Value) string {
 	if tag2bit(v.utype)&bCanon == 0 {
@@ -869,20 +998,20 @@ func canonString(v *asn1Value) string {
 		for len(s) > 0 {
 			value, n := utf8Getc(s)
 			if n < 0 || !unicodeValid(value) {
-				return errAsn1InvalidUTF8
+				return "ASN1_R_INVALID_UTF8STRING"
 			}
 			s = s[n:]
 		}
 	case tagBMPString:
 		for i := 0; i+1 < len(s); i += 2 {
 			if !unicodeValid(uint32(s[i])<<8 | uint32(s[i+1])) {
-				return errAsn1IllegalCharacters
+				return "ASN1_R_ILLEGAL_CHARACTERS"
 			}
 		}
 	case tagUniversalString:
 		for i := 0; i+3 < len(s); i += 4 {
 			if !unicodeValid(uint32(s[i])<<24 | uint32(s[i+1])<<16 | uint32(s[i+2])<<8 | uint32(s[i+3])) {
-				return errAsn1IllegalCharacters
+				return "ASN1_R_ILLEGAL_CHARACTERS"
 			}
 		}
 	}
@@ -936,68 +1065,4 @@ func utf8Getc(s []byte) (uint32, int) {
 		return v, 4
 	}
 	return 0, -1
-}
-
-// The templates (crypto/asn1/x_algor.c, x_sig.c, p8_pkey.c,
-// crypto/x509/x_pubkey.c, x_attrib.c, x_name.c, x_exten.c, x_x509.c,
-// x_val.c, crypto/rsa/rsa_asn1.c).
-func prim(utype int) *asn1Item { return &asn1Item{kind: itemPrimitive, utype: utype} }
-
-func seq(tt ...asn1Template) *asn1Item { return &asn1Item{kind: itemSequence, tt: tt} }
-
-func field(item *asn1Item) asn1Template { return asn1Template{item: item} }
-
-var (
-	objectItem      = prim(tagObject)
-	integerItem     = prim(tagInteger)
-	bitStringItem   = prim(tagBitString)
-	octetStringItem = prim(tagOctetString)
-	anyItem         = prim(tagAny)
-	booleanItem     = prim(tagBoolean)
-	bignumItem      = &asn1Item{kind: itemPrimitive, utype: tagInteger, bignum: true}
-
-	algorItem          = seq(field(objectItem), asn1Template{flags: tOptional, item: anyItem})
-	pubkeyInternalItem = seq(field(algorItem), field(bitStringItem))
-	pubkeyItem         = &asn1Item{kind: itemPubkey}
-	x509SigItem        = seq(field(algorItem), field(octetStringItem))
-	attributeItem      = seq(field(objectItem), asn1Template{flags: tSetOf, item: anyItem})
-	pkcs8Item          = &asn1Item{kind: itemSequence, tt: []asn1Template{
-		field(integerItem),
-		field(algorItem),
-		field(octetStringItem),
-		{flags: tSetOf | tImplicit | tOptional, tag: 0, item: attributeItem},
-		{flags: tImplicit | tOptional, tag: 1, item: bitStringItem},
-	}, post: pkcs8Version}
-	rsaPublicKeyItem = seq(field(bignumItem), field(bignumItem))
-
-	nameEntryItem    = seq(field(objectItem), field(&asn1Item{kind: itemMString, mask: bPrintable}))
-	nameEntriesItem  = &asn1Item{kind: itemTemplate, tt: []asn1Template{{flags: tSetOf, item: nameEntryItem}}}
-	nameInternalItem = &asn1Item{kind: itemTemplate, tt: []asn1Template{{flags: tSeqOf, item: nameEntriesItem}}}
-	nameItem         = &asn1Item{kind: itemName}
-	timeItem         = &asn1Item{kind: itemMString, mask: bTime}
-	extensionItem    = seq(field(objectItem), asn1Template{flags: tOptional, item: booleanItem}, field(octetStringItem))
-	x509CinfItem     = seq(
-		asn1Template{flags: tExplicit | tOptional, tag: 0, item: integerItem},
-		field(integerItem),
-		field(algorItem),
-		field(nameItem),
-		field(seq(field(timeItem), field(timeItem))),
-		field(nameItem),
-		field(pubkeyItem),
-		asn1Template{flags: tImplicit | tOptional, tag: 1, item: bitStringItem},
-		asn1Template{flags: tImplicit | tOptional, tag: 2, item: bitStringItem},
-		asn1Template{flags: tExplicit | tSeqOf | tOptional, tag: 3, item: extensionItem},
-	)
-	x509Item = seq(field(x509CinfItem), field(algorItem), field(bitStringItem))
-)
-
-// pkcs8Version is p8_pkey.c pkey_cb's ASN1_OP_D2I_POST: the version must be
-// 0 or 1 (ASN1_INTEGER_get), and a version 0 key has no public key. c2i
-// already refused padded integers, so 0 and 1 have one encoding each.
-func pkcs8Version(v *asn1Value) bool {
-	version := v.fields[0].data
-	if len(version) != 1 || version[0] > 1 {
-		return false
-	}
-	return version[0] == 1 || v.fields[4] == nil
 }

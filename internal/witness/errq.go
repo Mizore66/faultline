@@ -1,6 +1,9 @@
 package witness
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // errQueue ports OpenSSL's per-thread error queue (crypto/err/err.c,
 // err_local.h, err_mark.c): a ring of ERR_NUM_ERRORS = 16 slots in which
@@ -13,6 +16,10 @@ type errQueue struct {
 	marks [16]int
 	top   int
 	bot   int
+	// trace, when set (tests), records every call as the traced OpenSSL
+	// build prints it: "E<code> " per error, "M ", "P ", "C " per
+	// ERR_set_mark, ERR_pop_to_mark, ERR_clear_last_mark.
+	trace *strings.Builder
 }
 
 // osslReason is one ERR_R_* or <LIB>_R_* reason: lib is 0 for the common
@@ -24,10 +31,9 @@ type osslReason struct {
 }
 
 // errCode packs lib and reason as ERR_PACK does (lib << 23 | reason).
+// ERR_raise(lib, reason) always uses the caller's lib, even with another
+// library's reason (ERR_raise(ERR_LIB_DH, EVP_R_DECODE_ERROR)).
 func errCode(lib uint32, r osslReason) uint32 {
-	if r.lib != 0 {
-		lib = r.lib
-	}
 	return lib<<23 | r.reason
 }
 
@@ -50,11 +56,11 @@ const (
 
 // raise is ERR_raise(lib, reason): name is a key of osslReasons or
 // osslCommon.
-func (q *errQueue) raise(lib uint32, name string) {
-	r, ok := osslReasons[name]
+func (q *errQueue) raise(lib uint32, reason string) {
+	r, ok := osslReasons[reason]
 	if !ok {
-		if r, ok = osslCommon[name]; !ok {
-			panic("unknown OpenSSL reason " + name)
+		if r, ok = osslCommon[reason]; !ok {
+			panic("unknown OpenSSL reason " + reason)
 		}
 	}
 	q.push(errCode(lib, r))
@@ -63,12 +69,35 @@ func (q *errQueue) raise(lib uint32, name string) {
 // push ports ERR_new: err_get_slot then err_clear (which drops the slot's
 // marks).
 func (q *errQueue) push(code uint32) {
+	if q.trace != nil {
+		fmt.Fprintf(q.trace, "E%08x ", code)
+	}
 	q.top = (q.top + 1) % 16
 	if q.top == q.bot {
 		q.bot = (q.bot + 1) % 16
 	}
 	q.buf[q.top] = code
 	q.marks[q.top] = 0
+}
+
+// raiseDataNested ports ERR_raise_data(lib, reason, fmt, arg) whose
+// argument raises innerReason first: the macro's ERR_new takes a slot (cleared, code 0)
+// before the arguments are evaluated, inner's ERR_raise takes the next
+// one, and ERR_set_error then writes lib/name over inner's slot. The
+// zero slot stays in the queue, and ERR_get_error stops at it.
+func (q *errQueue) raiseDataNested(lib uint32, reason string, innerLib uint32, innerReason string) {
+	q.top = (q.top + 1) % 16
+	if q.top == q.bot {
+		q.bot = (q.bot + 1) % 16
+	}
+	q.buf[q.top] = 0
+	q.marks[q.top] = 0
+	q.raise(innerLib, innerReason)
+	code := errCode(lib, osslReasons[reason])
+	if q.trace != nil {
+		fmt.Fprintf(q.trace, "E%08x ", code)
+	}
+	q.buf[q.top] = code
 }
 
 func (q *errQueue) empty() bool { return q.top == q.bot }
@@ -91,6 +120,7 @@ func (q *errQueue) peekLast() uint32 {
 
 // setMark is ERR_set_mark: a no-op on an empty queue.
 func (q *errQueue) setMark() {
+	q.note("M ")
 	if !q.empty() {
 		q.marks[q.top]++
 	}
@@ -99,6 +129,7 @@ func (q *errQueue) setMark() {
 // popToMark is ERR_pop_to_mark: drop the errors raised since the newest
 // mark and remove that mark.
 func (q *errQueue) popToMark() {
+	q.note("P ")
 	for !q.empty() && q.marks[q.top] == 0 {
 		q.buf[q.top] = 0
 		q.top = (q.top + 15) % 16
@@ -111,6 +142,7 @@ func (q *errQueue) popToMark() {
 // clearLastMark is ERR_clear_last_mark: remove the newest mark, keep the
 // errors.
 func (q *errQueue) clearLastMark() {
+	q.note("C ")
 	top := q.top
 	for q.bot != top && q.marks[top] == 0 {
 		top = (top + 15) % 16
@@ -120,13 +152,23 @@ func (q *errQueue) clearLastMark() {
 	}
 }
 
-// clear is ERR_clear_error.
-func (q *errQueue) clear() { *q = errQueue{} }
+func (q *errQueue) note(s string) {
+	if q.trace != nil {
+		q.trace.WriteString(s)
+	}
+}
 
-// errors lists the queue oldest first.
+// clear is ERR_clear_error.
+func (q *errQueue) clear() { *q = errQueue{trace: q.trace} }
+
+// errors lists the queue oldest first as repeated ERR_get_error calls
+// see it: up to the first empty (zero) slot.
 func (q *errQueue) errors() []uint32 {
 	var out []uint32
 	for i := (q.bot + 1) % 16; q.bot != q.top; i = (i + 1) % 16 {
+		if q.buf[i] == 0 {
+			break
+		}
 		out = append(out, q.buf[i])
 		if i == q.top {
 			break
@@ -140,20 +182,7 @@ func (q *errQueue) errors() []uint32 {
 func errorString(code uint32) string {
 	lib := code >> 23
 	reason := code & 0x7FFFFF
-	text := ""
-	for _, r := range osslCommon {
-		if code&0x7FFFFF == r.reason {
-			text = r.text
-		}
-	}
-	if text == "" {
-		for _, r := range osslReasons {
-			if r.lib == lib && r.reason == reason {
-				text = r.text
-				break
-			}
-		}
-	}
+	text := osslReasonText(lib, reason)
 	if text == "" {
 		text = fmt.Sprintf("reason(%d)", reason&^(0x1F<<18))
 	}
@@ -183,4 +212,24 @@ func nodeError(q *errQueue, err uint32) *keyError {
 		all = append(all, errorString(codes[i]))
 	}
 	return &keyError{message: errorString(err), stack: all}
+}
+
+var reasonTextIndex = func() map[[2]uint32]string {
+	m := map[[2]uint32]string{}
+	for _, r := range osslReasons {
+		m[[2]uint32{r.lib, r.reason}] = r.text
+	}
+	for _, r := range osslCommon {
+		m[[2]uint32{0, r.reason}] = r.text
+	}
+	return m
+}()
+
+// osslReasonText is ERR_reason_error_string: the library's own table,
+// then the common one.
+func osslReasonText(lib, reason uint32) string {
+	if t, ok := reasonTextIndex[[2]uint32{lib, reason}]; ok {
+		return t
+	}
+	return reasonTextIndex[[2]uint32{0, reason}]
 }

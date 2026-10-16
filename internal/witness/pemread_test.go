@@ -40,12 +40,13 @@ func derBlock(label, hexDER string) string {
 
 // Expected results: "OK" (an Ed25519 key) or the Node error message.
 const (
-	okKey      = "OK"
-	unsup      = opensslUnsupported
-	cancelled  = opensslCancelled
-	notProc    = "error:0480006B:PEM routines::not proc type"
-	asnTooLong = "error:0680009B:asn1 encoding routines::too long"
-	wrongTag   = "error:068000A8:asn1 encoding routines::wrong tag"
+	okKey        = "OK"
+	unsup        = "error:1E08010C:DECODER routines::unsupported"
+	cancelled    = "error:07880109:common libcrypto routines::interrupted or cancelled"
+	errEVPDecode = "error:03000072:digital envelope routines::decode error"
+	notProc      = "error:0480006B:PEM routines::not proc type"
+	asnTooLong   = "error:0680009B:asn1 encoding routines::too long"
+	wrongTag     = "error:068000A8:asn1 encoding routines::wrong tag"
 )
 
 func check(t *testing.T, name, text string, public bool, want string) {
@@ -152,42 +153,85 @@ func mustB64(s string) []byte {
 	return b
 }
 
-// TestLongFormLengthRule pins asn1_get_length's OpenSSL 3.5 rule (one
-// content byte after the length octets) against 3.6's.
+// TestLongFormLengthRule pins asn1_get_length's rule before OpenSSL 3.6.5
+// (3.5.x and 3.6.0: "max < i + 1", one content byte must follow the length
+// octets) against 3.6.5's ("max < i").
 func TestLongFormLengthRule(t *testing.T) {
 	defer func() { lengthNeedsContentByte = true }()
 	text := derBlock("PUBLIC KEY", "308100")
 	lengthNeedsContentByte = true
 	check(t, "3.5", text, true, "error:0680007B:asn1 encoding routines::header too long")
 	lengthNeedsContentByte = false
-	check(t, "3.6", text, true, "error:06800079:asn1 encoding routines::field missing")
+	check(t, "3.6.5", text, true, "error:06800079:asn1 encoding routines::field missing")
 }
 
 func TestCipherInfo(t *testing.T) {
 	for _, c := range []struct{ header, want string }{
 		{"", ""},
-		{"Comment: x", errPEMNotProcType},
+		{"Comment: x", "PEM_R_NOT_PROC_TYPE"},
 		{"Proc-Type: 3,ENCRYPTED", "silent"},
-		{"Proc-Type: 4,ENCRYPTEDX", errPEMNotEncrypted},
-		{"Proc-Type: 4,ENCRYPTED x", errPEMShortHeader},
-		{"Proc-Type: 4,ENCRYPTED\n", errPEMNotDEKInfo},
-		{"Proc-Type: 4,ENCRYPTED\nDEK-Info: NOPE,00", errPEMUnsupportedEn},
-		{"Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC", errPEMMissingDEKIV},
-		{"Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-ECB,", errPEMUnexpectedIV},
-		{"Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,zz", errPEMBadIVChars},
+		{"Proc-Type: 4,ENCRYPTEDX", "PEM_R_NOT_ENCRYPTED"},
+		{"Proc-Type: 4,ENCRYPTED x", "PEM_R_SHORT_HEADER"},
+		{"Proc-Type: 4,ENCRYPTED\n", "PEM_R_NOT_DEK_INFO"},
+		{"Proc-Type: 4,ENCRYPTED\nDEK-Info: NOPE,00", "PEM_R_UNSUPPORTED_ENCRYPTION"},
+		{"Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC x", "PEM_R_MISSING_DEK_IV"},
+		{"Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-ECB,", "PEM_R_UNEXPECTED_DEK_IV"},
+		{"Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,zz", "PEM_R_BAD_IV_CHARS"},
 		{"Proc-Type: 4,ENCRYPTED\nDEK-Info: aes128,00000000000000000000000000000000", "cipher"},
 		{"Proc-Type: 4,ENCRYPTED\nDEK-Info: 2.16.840.1.101.3.4.1.2,00000000000000000000000000000000", "cipher"},
 	} {
-		cipher, reason, ok := cipherInfo(c.header)
-		got := reason
+		q := &errQueue{}
+		e := &osslEnv{q: q}
+		cipher, ok := e.cipherInfo(c.header)
+		got := ""
 		switch {
 		case ok && cipher:
 			got = "cipher"
-		case !ok && reason == "":
+		case !ok && q.empty():
 			got = "silent"
+		case !ok:
+			got = errorString(q.peekLast())
 		}
-		if got != c.want {
-			t.Errorf("cipherInfo(%q) = %q, want %q", c.header, got, c.want)
+		want := c.want
+		if strings.Contains(want, "_R_") {
+			want = errorString(errCode(libPEM, osslReasons[want]))
 		}
+		if got != want {
+			t.Errorf("cipherInfo(%q) = %q, want %q", c.header, got, want)
+		}
+	}
+}
+
+// TestErrQueueRing pins the 16-slot ring: the oldest error is evicted
+// when a 16th is pushed, and a mark on an evicted slot is lost with it.
+func TestErrQueueRing(t *testing.T) {
+	q := &errQueue{}
+	q.raise(libPEM, "PEM_R_NO_START_LINE")
+	q.setMark()
+	for range 15 {
+		q.raise(libASN1, "ASN1_R_WRONG_TAG")
+	}
+	if n := len(q.errors()); n != 15 {
+		t.Fatalf("queue holds %d errors, want 15", n)
+	}
+	if got := errorString(q.peekFirst()); got != "error:068000A8:asn1 encoding routines::wrong tag" {
+		t.Fatalf("oldest = %q, want the first wrong tag (no start line evicted)", got)
+	}
+	q.popToMark() // the mark went with the evicted slot: pops everything
+	if !q.empty() {
+		t.Fatalf("pop to an evicted mark left %d errors", len(q.errors()))
+	}
+}
+
+// TestNestedRaiseData pins ERR_raise_data with an argument that raises
+// (EC_GROUP_new_by_curve_name(-1)): the macro's empty slot ends what
+// ERR_get_error returns.
+func TestNestedRaiseData(t *testing.T) {
+	q := &errQueue{}
+	q.raise(libEC, "EC_R_POINT_AT_INFINITY")
+	q.raiseDataNested(libEC, "EC_R_UNKNOWN_GROUP", libOBJ, "OBJ_R_UNKNOWN_NID")
+	q.raise(libEC, "ERR_R_EC_LIB")
+	if got := q.errors(); len(got) != 1 || errorString(got[0]) != "error:0800006A:elliptic curve routines::point at infinity" {
+		t.Fatalf("errors = %v", got)
 	}
 }
