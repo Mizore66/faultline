@@ -363,6 +363,10 @@ func cipherInfo(h string) (cipher bool, reason string, ok bool) {
 	h = h[len(name):]
 	h = h[strspn(h, " \t"):]
 	ivlen, known := pemCipherIVLength[asciiLower(name)]
+	if !known && runtime.GOARCH == "amd64" {
+		// The AES-NI stitched ciphers exist only on x86 builds.
+		ivlen, known = pemCipherIVLengthX86[asciiLower(name)]
+	}
 	if !known {
 		return false, errPEMUnsupportedEn, false
 	}
@@ -747,7 +751,9 @@ func typeSpecificPrivate(kind string, der []byte) bool {
 
 // pemCipherIVLength maps the DEK-Info cipher names EVP_get_cipherbyname
 // knows in Node 22 (lower case: the lookup ignores case) to their IV
-// length. Derived by probing createPrivateKey on Node 22.23.3 with every
+// length. Derived by probing createPrivateKey on Node 22.23.3 (macOS
+// arm64) and 22.22.2 (Linux arm64, Linux x64: identical bar
+// pemCipherIVLengthX86) with every
 // name and alias `openssl list -cipher-algorithms` prints; it only decides
 // the error text ("unsupported encryption" or a passphrase failure).
 var pemCipherIVLength = map[string]int{
@@ -815,4 +821,9 @@ var pemCipherIVLength = map[string]int{
 	"camellia-256-ofb": 16, "camellia128": 16, "camellia192": 16, "camellia256": 16, "chacha20": 16, "seed": 16,
 	"seed-cbc": 16, "seed-cfb": 16, "seed-ofb": 16, "sm4": 16, "sm4-cbc": 16, "sm4-cfb": 16, "sm4-cfb128": 16,
 	"sm4-ctr": 16, "sm4-ofb": 16, "sm4-ofb128": 16,
+}
+
+// pemCipherIVLengthX86 are the ciphers only x86 builds of OpenSSL provide.
+var pemCipherIVLengthX86 = map[string]int{
+	"aes-128-cbc-hmac-sha1": 16, "aes-128-cbc-hmac-sha256": 16, "aes-256-cbc-hmac-sha1": 16, "aes-256-cbc-hmac-sha256": 16,
 }
