@@ -856,6 +856,16 @@ func (e *osslEnv) dhGenerateKey(params *asn1Value, dhx bool) bool {
 		e.q.raise(libDH, "DH_R_MODULUS_TOO_SMALL")
 		return false
 	}
+	// ossl_dh_generate_public_key: dh_init sets DH_FLAG_CACHE_MONT_P, so
+	// BN_MONT_CTX_set(p) runs first; for an even p the inverse of R modulo
+	// p's low word does not exist (BN_mod_inverse). generate_key then adds
+	// its ERR_R_BN_LIB. With an odd p, BN_mod_exp_mont (constant time, as
+	// the private key is flagged) cannot fail.
+	if p.Bit(0) == 0 {
+		e.q.raise(libBN, "BN_R_NO_INVERSE")
+		e.q.raise(libDH, "ERR_R_BN_LIB")
+		return false
+	}
 	return true
 }
 

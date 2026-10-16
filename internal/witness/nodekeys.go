@@ -277,6 +277,12 @@ func (e *osslEnv) d2iPrivateKeyLegacy(name string, der []byte) *keyObject {
 	case "ec":
 		desc = descEC
 	}
+	if desc == nil {
+		// EVP_PKEY_asn1_find_str finds no method with an old_priv_decode
+		// (a block named exactly "ANY PRIVATE KEY" passes check_pem by
+		// name): goto p8err.
+		return nil
+	}
 	q := e.q
 	q.setMark()
 	if k := e.d2iTypeSpecificPrivate(desc, der); k != nil {
