@@ -19,10 +19,11 @@ type sigaction struct {
 	mask     uint64
 }
 
-// runtimeAction is the Go runtime's handler for each signal SetDefault
-// replaced, kept so that Intercept can give it back: the runtime installs
-// its handler once, and os/signal does not install it again, so a signal
-// set to SIG_DFL here would end fl even after signal.Notify.
+// runtimeAction is the Go runtime's handler for each signal SetDefault or
+// SetIgnored replaced (whichever replaced it first), kept so that Intercept
+// can give it back: the runtime installs its handler once, and os/signal
+// does not install it again, so a signal set to SIG_DFL here would end fl
+// even after signal.Notify.
 var runtimeAction [65]sigaction
 
 // SetDefault sets sig's disposition to SIG_DFL in the kernel, behind the Go
