@@ -92,6 +92,14 @@ func requireReached(t *testing.T, file, outputs string) {
 		t.Errorf("%s is not in liveGatedFiles", file)
 	}
 	repo := oracle.RepoRoot(t)
+	// FAULTLINE_DUMP_LIVE_OUTPUTS=<dir> keeps what the live test compared,
+	// to audit unreachableLiterals against it.
+	if dir := os.Getenv("FAULTLINE_DUMP_LIVE_OUTPUTS"); dir != "" {
+		name := strings.ReplaceAll(file, "/", "_") + ".txt"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(outputs), 0o644); err != nil {
+			t.Error(err)
+		}
+	}
 	outputs += goldenText(t, repo)
 	for lit, pos := range errorLiterals(t, filepath.Join(repo, filepath.FromSlash(file))) {
 		if _, ok := unreachableLiterals[lit]; ok {

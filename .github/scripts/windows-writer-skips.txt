@@ -109,3 +109,5 @@ TestWriterReplay/posix/investigate-docker-exact-limit
 TestWriterReplay/posix/judge-proof-default-port-in-use
 TestWriterReplay/posix/minimize-git-output-backslash
 TestWriterReplay/posix/commit-proof-preview-no-regression
+TestWriterReplay/posix/minimize-git-budget-before-necessity
+TestWriterReplay/posix/minimize-git-tagged-image

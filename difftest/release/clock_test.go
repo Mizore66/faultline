@@ -6,6 +6,7 @@ package release
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,7 +151,10 @@ func TestLiveReleaseClock(t *testing.T) {
 				var stdout, stderr bytes.Buffer
 				cmd.Stdout, cmd.Stderr = &stdout, &stderr
 				before := time.Now()
-				if err := cmd.Run(); err != nil {
+				// A budget-limited minimization exits 1 (BUDGET_EXHAUSTED)
+				// with its result on stdout.
+				var exitErr *exec.ExitError
+				if err := cmd.Run(); err != nil && !(errors.As(err, &exitErr) && args[0] == "minimize" && stdout.Len() > 0) {
 					t.Fatalf("%v: %v\n%s%s", args, err, stdout.String(), stderr.String())
 				}
 				return stdout.String(), before, time.Now()
@@ -199,10 +203,11 @@ func TestLiveReleaseClock(t *testing.T) {
 				t.Errorf("generatedAt %s is before the last run's finishedAt %s", m.GeneratedAt, lastFinished.Format(time.RFC3339Nano))
 			}
 			// minimize git: each run fact's startedAt is read before
-			// mkdtemp and finishedAt after Docker and cleanup.
+			// mkdtemp and finishedAt after Docker and cleanup. Three executions
+			// (baseline, full patch, one removal) keep it short.
 			out, _, _ = run("minimize", "git", "--repo", "repo", "--before", "HEAD~1", "--after", "HEAD", "--proposal", "demo-1",
 				"--expect-digest", "sha256:a1171dcd4e14e30d27b92009ede4756b36a0a9318ecd534190a8bc2a1da165d6",
-				"--image", "registry.example/faultline-node@sha256:"+strings.Repeat("b", 64))
+				"--image", "registry.example/faultline-node@sha256:"+strings.Repeat("b", 64), "--max-executions", "3")
 			var minimized struct {
 				Minimization struct {
 					Runs []runFact `json:"runs"`
