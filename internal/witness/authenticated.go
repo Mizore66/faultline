@@ -4,15 +4,10 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/pem"
-	"errors"
 	"regexp"
 	"runtime"
-	"slices"
 	"strings"
 
 	"github.com/Mizore66/faultline/internal/bundle"
@@ -109,137 +104,6 @@ type keyObject struct {
 	ed25519 bool
 	public  ed25519.PublicKey
 	private ed25519.PrivateKey
-}
-
-const (
-	opensslUnsupported = "error:1E08010C:DECODER routines::unsupported"
-	opensslWrongTag    = "error:068000A8:asn1 encoding routines::wrong tag"
-	opensslCancelled   = "error:07880109:common libcrypto routines::interrupted or cancelled"
-)
-
-// pemBlocks lists the PEM blocks of text in order.
-func pemBlocks(text string) []*pem.Block {
-	var blocks []*pem.Block
-	rest := []byte(jsstr.ToUTF8(text))
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			return blocks
-		}
-		blocks = append(blocks, block)
-	}
-}
-
-func firstBlock(blocks []*pem.Block, labels ...string) *pem.Block {
-	for _, block := range blocks {
-		if slices.Contains(labels, block.Type) {
-			return block
-		}
-	}
-	return nil
-}
-
-var privateLabels = []string{"PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "ENCRYPTED PRIVATE KEY"}
-
-// Algorithm and curve OIDs of well-formed keys that are not Ed25519.
-var otherKeyOIDs = map[string]bool{
-	"1.3.101.113":           true, // Ed448
-	"1.3.101.111":           true, // X448
-	"1.3.101.110":           true, // X25519
-	"1.2.840.10045.2.1":     true, // EC
-	"1.2.840.113549.1.1.1":  true, // RSA
-	"1.2.840.113549.1.1.10": true, // RSA-PSS
-	"1.2.840.10040.4.1":     true, // DSA
-	"1.2.840.113549.1.3.1":  true, // DH
-}
-
-// parsePrivateBlock decodes one private-class block. Keys that are not
-// Ed25519 give a keyObject with ed25519 false; an encrypted key gives
-// OpenSSL's "interrupted or cancelled" (no passphrase), anything else it
-// cannot decode its DECODER error.
-func parsePrivateBlock(block *pem.Block) (keyObject, error) {
-	unsupported := errors.New(opensslUnsupported)
-	if block.Type == "ENCRYPTED PRIVATE KEY" || strings.Contains(block.Headers["Proc-Type"], "ENCRYPTED") {
-		return keyObject{}, errors.New(opensslCancelled)
-	}
-	switch block.Type {
-	case "PRIVATE KEY":
-		if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
-			if priv, ok := key.(ed25519.PrivateKey); ok {
-				return keyObject{ed25519: true, private: priv, public: priv.Public().(ed25519.PublicKey)}, nil
-			}
-			return keyObject{}, nil
-		}
-		var outer struct {
-			Version int
-			Algo    pkix.AlgorithmIdentifier
-			Key     []byte
-			Rest    asn1.RawValue `asn1:"optional"`
-		}
-		if rest, err := asn1.Unmarshal(block.Bytes, &outer); err != nil || len(rest) > 0 || !otherKeyOIDs[outer.Algo.Algorithm.String()] {
-			return keyObject{}, unsupported
-		}
-	case "RSA PRIVATE KEY":
-		if _, err := x509.ParsePKCS1PrivateKey(block.Bytes); err != nil {
-			return keyObject{}, unsupported
-		}
-	default:
-		if _, err := x509.ParseECPrivateKey(block.Bytes); err != nil {
-			// A curve Go lacks (secp256k1): the outer SEC1 structure decides.
-			var ec struct {
-				Version int
-				Key     []byte
-				Params  asn1.ObjectIdentifier `asn1:"optional,explicit,tag:0"`
-				Public  asn1.BitString        `asn1:"optional,explicit,tag:1"`
-			}
-			if rest, err := asn1.Unmarshal(block.Bytes, &ec); err != nil || len(rest) > 0 {
-				return keyObject{}, unsupported
-			}
-		}
-	}
-	return keyObject{}, nil
-}
-
-// parsePrivate is createPrivateKey: the first private-class block in the text.
-func parsePrivate(text string) (keyObject, error) {
-	block := firstBlock(pemBlocks(text), privateLabels...)
-	if block == nil {
-		return keyObject{}, errors.New(opensslUnsupported)
-	}
-	return parsePrivateBlock(block)
-}
-
-// parsePublic is createPublicKey: OpenSSL tries a PUBLIC KEY block first,
-// then RSA PUBLIC KEY, then a private key block (its public half).
-func parsePublic(text string) (keyObject, error) {
-	blocks := pemBlocks(text)
-	if block := firstBlock(blocks, "PUBLIC KEY"); block != nil {
-		if len(block.Bytes) == 0 {
-			return keyObject{}, errors.New(opensslUnsupported)
-		}
-		if key, err := x509.ParsePKIXPublicKey(block.Bytes); err == nil {
-			if pub, ok := key.(ed25519.PublicKey); ok {
-				return keyObject{ed25519: true, public: pub}, nil
-			}
-			return keyObject{}, nil
-		}
-		var spki struct {
-			Algo pkix.AlgorithmIdentifier
-			Key  asn1.BitString
-		}
-		if rest, err := asn1.Unmarshal(block.Bytes, &spki); err != nil || len(rest) > 0 || !otherKeyOIDs[spki.Algo.Algorithm.String()] {
-			return keyObject{}, errors.New(opensslWrongTag)
-		}
-		return keyObject{}, nil
-	}
-	if block := firstBlock(blocks, "RSA PUBLIC KEY"); block != nil {
-		if _, err := x509.ParsePKCS1PublicKey(block.Bytes); err != nil {
-			return keyObject{}, errors.New(opensslWrongTag)
-		}
-		return keyObject{}, nil
-	}
-	return parsePrivate(text)
 }
 
 func publicKeyDER(k keyObject) []byte {
