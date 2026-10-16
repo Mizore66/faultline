@@ -4,6 +4,7 @@ package nodeproc
 
 import (
 	"bytes"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -163,5 +164,23 @@ func TestSpawnDeliversStreamsInArrivalOrder(t *testing.T) {
 			t.Fatalf("run %d: stderr %d bytes, last chunks %v", run, errBytes, last)
 		}
 		mu.Unlock()
+	}
+}
+
+// A signal Node's signo_string cannot name (a real-time signal; SIGEMT on
+// macOS) gives no signal to 'exit', so the child exits with code 0, as
+// Node 22 reports it on Linux and macOS.
+func TestSpawnUnnamedSignalExitsZero(t *testing.T) {
+	sig := "40"
+	if runtime.GOOS != "linux" {
+		sig = "7"
+	}
+	exit := Spawn("/bin/sh", []string{"-c", "kill -" + sig + " $$"}, SpawnOptions{}).Wait()
+	if exit.Code == nil || *exit.Code != 0 || exit.Signal != "" {
+		t.Fatalf("%+v", exit)
+	}
+	exit = Spawn("/bin/sh", []string{"-c", "kill -TERM $$"}, SpawnOptions{}).Wait()
+	if exit.Code != nil || exit.Signal != "SIGTERM" {
+		t.Fatalf("SIGTERM: %+v", exit)
 	}
 }

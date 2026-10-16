@@ -4,7 +4,6 @@ package nodeproc
 
 import (
 	"os"
-	"runtime"
 	"syscall"
 
 	"github.com/Mizore66/faultline/internal/sigexit"
@@ -48,8 +47,11 @@ func killProcess(p *os.Process, sig int) bool {
 }
 
 // exitFrom is ChildProcess's onexit for a reaped child: an exit code, or
-// the name of the signal that killed it (signo_string). A child killed by a
-// signal fl did not send is reported to sigexit, as SpawnSync does.
+// the name of the signal that killed it (signo_string). A signal
+// signo_string has no name for (a real-time signal, SIGEMT on macOS) gives
+// "", which onexit takes as no signal, so the child reports libuv's
+// exit_status, 0. A child killed by a signal fl did not send is reported to
+// sigexit, as SpawnSync does.
 func exitFrom(state *os.ProcessState, sent bool, _ string) Exit {
 	if state == nil {
 		return Exit{}
@@ -59,7 +61,11 @@ func exitFrom(state *os.ProcessState, sent bool, _ string) Exit {
 		if !sent {
 			sigexit.ChildKilled(ws.Signal())
 		}
-		return Exit{Signal: signalName(int(ws.Signal()))}
+		if name := signalName(int(ws.Signal())); name != "" {
+			return Exit{Signal: name}
+		}
+		zero := 0
+		return Exit{Code: &zero}
 	}
 	code := state.ExitCode()
 	return Exit{Code: &code}
@@ -93,9 +99,7 @@ var signalList, signalNumbers = func() ([]namedSignal, map[string]int) {
 		{"SIGUSR2", int(syscall.SIGUSR2)}, {"SIGPIPE", int(syscall.SIGPIPE)}, {"SIGALRM", int(syscall.SIGALRM)},
 		{"SIGTERM", int(syscall.SIGTERM)}, {"SIGCHLD", int(syscall.SIGCHLD)},
 	}
-	if runtime.GOOS == "linux" {
-		list = append(list, namedSignal{"SIGSTKFLT", 16})
-	}
+	list = append(list, stkfltSignal...)
 	list = append(list,
 		namedSignal{"SIGCONT", int(syscall.SIGCONT)}, namedSignal{"SIGSTOP", int(syscall.SIGSTOP)},
 		namedSignal{"SIGTSTP", int(syscall.SIGTSTP)}, namedSignal{"SIGTTIN", int(syscall.SIGTTIN)},
@@ -104,11 +108,7 @@ var signalList, signalNumbers = func() ([]namedSignal, map[string]int) {
 		namedSignal{"SIGVTALRM", int(syscall.SIGVTALRM)}, namedSignal{"SIGPROF", int(syscall.SIGPROF)},
 		namedSignal{"SIGWINCH", int(syscall.SIGWINCH)}, namedSignal{"SIGIO", int(syscall.SIGIO)},
 	)
-	if runtime.GOOS == "linux" {
-		list = append(list, namedSignal{"SIGPOLL", 29}, namedSignal{"SIGPWR", 30})
-	} else {
-		list = append(list, namedSignal{"SIGINFO", 29}, namedSignal{"SIGEMT", 7})
-	}
+	list = append(list, ioAliasSignals...)
 	list = append(list, namedSignal{"SIGSYS", int(syscall.SIGSYS)})
 	numbers := make(map[string]int, len(list))
 	for _, s := range list {
