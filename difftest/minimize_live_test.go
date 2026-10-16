@@ -54,6 +54,15 @@ func manyFiles(count int, state string) map[string]string {
 	return files
 }
 
+// manyStates is count state<i>.txt files (state.txt first) all holding state.
+func manyStates(count int, state string) map[string]string {
+	files := map[string]string{"state.txt": state + "\n"}
+	for i := 2; i <= count; i++ {
+		files["state"+strconv.Itoa(i)+".txt"] = state + "\n"
+	}
+	return files
+}
+
 // minimizeCases are the repositories TestLiveMinimize minimizes: 1 to 12
 // changed files, binary content, a rename (add plus delete, since the
 // recorder derives units with --no-renames), a mode change, a type change,
@@ -136,6 +145,72 @@ func minimizeCases() []minimizeCase {
 		{label: "bad-range", fake: "odd-bad", before: "no-such-revision", commits: []gitinv.RepoCommitForTest{
 			{Files: map[string]string{"state.txt": "good\n"}},
 			{Files: map[string]string{"state.txt": "bad\n"}},
+		}},
+		// Round 8: the search's remaining notes and reasons.
+		// The full patch FAILs but a later pass is unresolved (flaky-pass):
+		// a removal that cannot be executed, and certifications that do not
+		// complete.
+		{label: "unresolved-removal", fake: "flaky-pass", commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": "good\n", "other.txt": "a\n"}},
+			{Files: map[string]string{"state.txt": "bad\n", "other.txt": "b\n"}},
+		}},
+		// One file with two hunks where either hunk alone fails (both lines
+		// bad, odd-bad counts files): hunk refinement finds a smaller failing
+		// hunk candidate.
+		{label: "hunk-smaller", fake: "odd-bad", commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": lines(24, -1), "state2.txt": "good\n", "state3.txt": "good\n"}},
+			{Files: map[string]string{"state.txt": strings.Replace(lines(24, 2), "line 20", "bad", 1), "state2.txt": "bad\n", "state3.txt": "bad\n"}},
+		}},
+		// The budget runs out during hunk refinement, then during
+		// certification.
+		{label: "hunk-budget", fake: "odd-bad", budget: 6, commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": lines(24, -1)}},
+			{Files: map[string]string{"state.txt": strings.Replace(lines(24, 2), "line 20", "tail 20", 1)}},
+		}},
+		{label: "certification-budget", fake: "odd-bad", budget: 7, commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": "good\n"}},
+			{Files: map[string]string{"state.txt": "bad\n"}},
+		}},
+		{label: "necessity-budget", fake: "odd-bad", budget: 8, commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": "good\n"}},
+			{Files: map[string]string{"state.txt": "bad\n"}},
+		}},
+		// Five files that fail in odd numbers: the singles and the triples
+		// are 1-minimal, so enumeration stops at the retained-set bound of 8.
+		{label: "set-limit", fake: "odd-bad", commits: []gitinv.RepoCommitForTest{
+			{Files: manyStates(5, "good")},
+			{Files: manyStates(5, "bad")},
+		}},
+		// The budget runs out inside subset enumeration (3 units: 6
+		// subsets after baseline and full patch).
+		{label: "enumeration-budget", fake: "odd-bad", budget: 4, commits: []gitinv.RepoCommitForTest{
+			{Files: manyStates(3, "good")},
+			{Files: manyStates(3, "bad")},
+		}},
+		// flaky-pass on one file: the removal passes (pass 2), the
+		// necessity runs are unresolved, so a one-minimal candidate fails
+		// certification.
+		{label: "certification-unresolved", fake: "flaky-pass", commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": "good\n"}},
+			{Files: map[string]string{"state.txt": "bad\n"}},
+		}},
+		// flaky-pass on two hunks: the file-level removal passes (pass 2),
+		// the first hunk removal is an unresolved crash, so hunk refinement
+		// is abandoned.
+		{label: "hunk-unresolved", fake: "flaky-pass", commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": lines(24, -1)}},
+			{Files: map[string]string{"state.txt": strings.Replace(lines(24, 2), "line 20", "tail 20", 1)}},
+		}},
+		// The daemon goes down after three runs: certification is
+		// SANDBOX_UNAVAILABLE.
+		{label: "daemon-down-late", fake: "flaky-daemon", commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": "good\n"}},
+			{Files: map[string]string{"state.txt": "bad\n"}},
+		}},
+		// Two hunks; the budget runs out at the first hunk removal.
+		{label: "hunk-budget-early", fake: "odd-bad", budget: 3, commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": lines(24, -1)}},
+			{Files: map[string]string{"state.txt": strings.Replace(lines(24, 2), "line 20", "tail 20", 1)}},
 		}},
 		{label: "invalid-witness", fake: "odd-bad", expectedDigest: "sha256:" + strings.Repeat("0", 64),
 			commits: []gitinv.RepoCommitForTest{
@@ -228,6 +303,7 @@ func TestLiveMinimize(t *testing.T) {
 		t.Fatal(err)
 	}
 	statuses := map[string]int{}
+	var outputs strings.Builder // every compared TS result, for requireReached
 	for i, tc := range cases {
 		path := strings.Join([]string{filepath.Join(root, "difftest/testdata/recorder"), filepath.Join(root, "difftest/testdata/fakedocker", tc.fake),
 			filepath.Dir(gitPath), "/usr/bin", "/bin"}, ":")
@@ -236,8 +312,32 @@ func TestLiveMinimize(t *testing.T) {
 		if ts, goTick := oracleCall(t, c, "seededTick", "null"), clock.NowMillis()-seededEpochMillis; ts != strconv.FormatInt(goTick, 10) {
 			t.Fatalf("case %d: oracle clock at %s, Go clock at %d", i, ts, goTick)
 		}
+		// flaky-pass and flaky-daemon count runs in a file beside the
+		// script: each side runs a fresh private copy.
+		fresh := func() {}
+		if tc.fake == "flaky-pass" || tc.fake == "flaky-daemon" {
+			private := filepath.Join(logs, strconv.Itoa(i)+"-fake")
+			fresh = func() {
+				os.RemoveAll(private)
+				if err := os.Mkdir(private, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				for name, from := range map[string]string{"docker": tc.fake, "odd-bad": "odd-bad"} {
+					script, err := os.ReadFile(filepath.Join(root, "difftest/testdata/fakedocker", from, "docker"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(private, name), script, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			path = strings.Join([]string{filepath.Join(root, "difftest/testdata/recorder"), private, filepath.Dir(gitPath), "/usr/bin", "/bin"}, ":")
+		}
+		fresh()
 		requestText := jsjson.Stringify(requests[i])
 		want := oracleText(t, c, "minimizeGitDiff", `{"request":`+requestText+`,"path":`+jsjson.Quote(path)+`,"argvLog":`+jsjson.Quote(tsLog)+`}`)
+		fresh()
 		t.Setenv("PATH", path)
 		t.Setenv("FAULTLINE_ARGV_LOG", goLog)
 		result, err := minimize.MinimizeGitDiff(requests[i], sandbox.NativeRunner(), false)
@@ -250,6 +350,7 @@ func TestLiveMinimize(t *testing.T) {
 		if got != want {
 			t.Fatalf("case %d (%s):\ngot  %s\nwant %s", i, tc.label, got, want)
 		}
+		outputs.WriteString(want)
 		tsRecords, _ := os.ReadFile(tsLog)
 		goRecords, _ := os.ReadFile(goLog)
 		if string(tsRecords) != string(goRecords) {
@@ -284,6 +385,7 @@ func TestLiveMinimize(t *testing.T) {
 		}
 	}
 	liveSummary(t, "%d cases compared, statuses %v", len(cases), statuses)
+	requireReached(t, "internal/minimize/minimize.go", outputs.String())
 	for _, status := range []string{"COMPLETED", "EXECUTION_ERROR", "BUDGET_EXHAUSTED", "BASELINE_NOT_PASS", "FULL_PATCH_NOT_FAIL", "NO_PATCHES",
 		"SANDBOX_UNAVAILABLE", "RANGE_ERROR", "INVALID_WITNESS"} {
 		if statuses[status] == 0 {
