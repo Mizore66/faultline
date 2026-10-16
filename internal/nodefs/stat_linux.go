@@ -60,10 +60,24 @@ func exists(raw string) bool {
 	return retryEINTR(func() error { return syscall.Access(raw, 0) }) == nil
 }
 
-// fstatDir is glibc 2.36's __fstat64 as opendir_tail calls it on 64-bit
-// Linux: fstatat(fd, "", &st, AT_EMPTY_PATH) (newfstatat on most
-// architectures). It returns the file type bits.
+// fstatDir is glibc 2.36's __fstat64 as opendir_tail calls it:
+// __fstatat64_time64(fd, "", AT_EMPTY_PATH). On 64-bit Linux that is
+// fstatat(fd, "", &st, AT_EMPTY_PATH) (newfstatat on most architectures);
+// on 32-bit (FSTATAT_USE_STATX: 386, arm, mips) it is statx(fd, "",
+// AT_NO_AUTOMOUNT | AT_EMPTY_PATH, STATX_BASIC_STATS), falling back to
+// fstatat64 on ENOSYS. It returns the file type bits.
 func fstatDir(fd int) (uint32, error) {
+	empty := [1]byte{}
+	if fstatatUsesStatx[runtime.GOARCH] {
+		var buf statxBuf
+		_, _, e := syscall.Syscall6(sysStatx[runtime.GOARCH], uintptr(fd), uintptr(unsafe.Pointer(&empty[0])), _AT_NO_AUTOMOUNT|_AT_EMPTY_PATH, _STATX_BASIC_STATS, uintptr(unsafe.Pointer(&buf)), 0)
+		if e != syscall.ENOSYS {
+			if e != 0 {
+				return 0, e
+			}
+			return uint32(buf.Mode) & syscall.S_IFMT, nil
+		}
+	}
 	nr := sysFstatat[runtime.GOARCH]
 	if nr == 0 {
 		var st syscall.Stat_t
@@ -71,7 +85,6 @@ func fstatDir(fd int) (uint32, error) {
 		return st.Mode & syscall.S_IFMT, err
 	}
 	var st syscall.Stat_t
-	empty := [1]byte{}
 	_, _, e := syscall.Syscall6(nr, uintptr(fd), uintptr(unsafe.Pointer(&empty[0])), uintptr(unsafe.Pointer(&st)), _AT_EMPTY_PATH, 0, 0)
 	if e != 0 {
 		return 0, e
@@ -79,10 +92,16 @@ func fstatDir(fd int) (uint32, error) {
 	return st.Mode & syscall.S_IFMT, nil
 }
 
+// fstatatUsesStatx is glibc's FSTATAT_USE_STATX: 32-bit word and syscall
+// size (or a time32 stat), where glibc 2.33+ stats through statx.
+var fstatatUsesStatx = map[string]bool{"386": true, "arm": true, "mips": true, "mipsle": true}
+
 const (
 	_AT_SYMLINK_NOFOLLOW = 0x100
 	_AT_EMPTY_PATH       = 0x1000
+	_AT_NO_AUTOMOUNT     = 0x800
 	_STATX_MASK          = 0xFFF // STATX_BASIC_STATS + STATX_BTIME
+	_STATX_BASIC_STATS   = 0x7FF
 )
 
 // sysStatx and sysFstatat are the system call numbers (syscall's
