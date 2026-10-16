@@ -10,8 +10,9 @@ import (
 )
 
 // This is libuv 1.51's reading of a child's stdout and stderr on Windows
-// (src/win/pipe.c): each parent end is an overlapped named pipe server
-// associated with the loop's completion port; a read is a zero-byte
+// (src/win/pipe.c): each parent end is a duplex overlapped named pipe
+// server (Node's pipe slots are UV_CREATE_PIPE | UV_READABLE_PIPE |
+// UV_WRITABLE_PIPE) associated with the loop's completion port; a read is a zero-byte
 // overlapped ReadFile, whose completion means data (or EOF) is there; the
 // loop takes completions from GetQueuedCompletionStatus in the order the
 // kernel queued them, reads what is available in 64 KiB ReadFiles, hands
@@ -28,11 +29,15 @@ var (
 	procCancelIoEx       = kernel32.NewProc("CancelIoEx")
 	procCreateEventW     = kernel32.NewProc("CreateEventW")
 	procGetOverlapped    = kernel32.NewProc("GetOverlappedResult")
+	procConnectNamedPipe = kernel32.NewProc("ConnectNamedPipe")
 	pipeSerial           atomic.Uint64
 )
 
 const (
 	pipeAccessInbound     = 0x00000001
+	pipeAccessOutbound    = 0x00000002
+	errorPipeConnected    = syscall.Errno(535)
+	genericRead           = 0x80000000
 	fileFlagFirstInstance = 0x00080000
 	fileFlagOverlapped    = 0x40000000
 	writeDAC              = 0x00040000
@@ -44,22 +49,26 @@ const (
 	errorOperationAborted = syscall.ERROR_OPERATION_ABORTED
 	errorMoreData         = syscall.ERROR_MORE_DATA
 	genericWrite          = 0x40000000
-	fileReadAttributes    = 0x0080
 	invalidHandleValue    = ^uintptr(0)
 )
 
-// overlappedPipe is uv__create_pipe_pair for a readable slot: a named pipe
-// \\.\pipe\uv\<ptr>-<pid> created with PIPE_ACCESS_INBOUND |
-// FILE_FLAG_OVERLAPPED | WRITE_DAC | FILE_FLAG_FIRST_PIPE_INSTANCE, byte
-// mode, one instance, 64 KiB buffers; the client end, opened with
-// GENERIC_WRITE | FILE_READ_ATTRIBUTES and no overlapped flag, is the
-// child's (inheritable once os.StartProcess duplicates it into the child).
+// overlappedPipe is uv__create_stdio_pipe_pair for one of Node's pipe
+// slots (UV_CREATE_PIPE | UV_READABLE_PIPE | UV_WRITABLE_PIPE), through
+// uv__create_pipe_pair: the server, fl's end, is a named pipe
+// \\?\pipe\uv\<n>-<pid> created with PIPE_ACCESS_INBOUND |
+// PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED | WRITE_DAC |
+// FILE_FLAG_FIRST_PIPE_INSTANCE, byte mode, one instance, 64 KiB buffers
+// (a name in use is retried with the next); the client, the child's end, is
+// opened with GENERIC_READ | GENERIC_WRITE | WRITE_DAC, no sharing and no
+// overlapped flag; then ConnectNamedPipe joins the two, ERROR_PIPE_CONNECTED
+// counting as success. os.StartProcess makes the client inheritable in the
+// child.
 func overlappedPipe() (uintptr, *os.File, error) {
 	for {
-		name := `\\.\pipe\uv\` + strconv.FormatUint(pipeSerial.Add(1), 16) + "-" + strconv.Itoa(os.Getpid())
+		name := `\\?\pipe\uv\` + strconv.FormatUint(pipeSerial.Add(1), 10) + "-" + strconv.Itoa(os.Getpid())
 		cname := append([]byte(name), 0)
 		h, _, e := procCreateNamedPipeA.Call(uintptr(unsafe.Pointer(&cname[0])),
-			pipeAccessInbound|fileFlagOverlapped|writeDAC|fileFlagFirstInstance,
+			pipeAccessInbound|pipeAccessOutbound|fileFlagOverlapped|writeDAC|fileFlagFirstInstance,
 			pipeTypeByteReadByte, 1, 65536, 65536, 0, 0)
 		if h == invalidHandleValue {
 			if e == errorPipeBusy || e == errorAccessDenied {
@@ -68,13 +77,43 @@ func overlappedPipe() (uintptr, *os.File, error) {
 			return 0, nil, e
 		}
 		wname, _ := syscall.UTF16PtrFromString(name)
-		client, err := syscall.CreateFile(wname, genericWrite|fileReadAttributes, 0, nil, syscall.OPEN_EXISTING, 0, 0)
+		client, err := syscall.CreateFile(wname, genericRead|genericWrite|writeDAC, 0, nil, syscall.OPEN_EXISTING, 0, 0)
 		if err != nil {
+			syscall.CloseHandle(syscall.Handle(h))
+			return 0, nil, err
+		}
+		if err := connectServer(h); err != nil {
+			syscall.CloseHandle(client)
 			syscall.CloseHandle(syscall.Handle(h))
 			return 0, nil, err
 		}
 		return h, os.NewFile(uintptr(client), "|1"), nil
 	}
+}
+
+// connectServer is uv__create_pipe_pair's ConnectNamedPipe(server, NULL).
+// The server is overlapped, so the call is given an OVERLAPPED with a
+// private event and waited for (it completes at once: the client is
+// already open); ERROR_PIPE_CONNECTED is success.
+func connectServer(h uintptr) error {
+	ev, _, e := procCreateEventW.Call(0, 1, 0, 0)
+	if ev == 0 {
+		return e
+	}
+	defer syscall.CloseHandle(syscall.Handle(ev))
+	ov := syscall.Overlapped{HEvent: syscall.Handle(ev | 1)}
+	r, _, e := procConnectNamedPipe.Call(h, uintptr(unsafe.Pointer(&ov)))
+	switch {
+	case r != 0 || e == errorPipeConnected:
+		return nil
+	case e == errorIOPending:
+		var done uint32
+		if r, _, e := procGetOverlapped.Call(h, uintptr(unsafe.Pointer(&ov)), uintptr(unsafe.Pointer(&done)), 1); r == 0 && e != errorPipeConnected {
+			return e
+		}
+		return nil
+	}
+	return e
 }
 
 // newCompletionPort is the loop's port, with the non-zero handles
@@ -122,14 +161,21 @@ func pumpPolled(streams []pipedStream, port uintptr) []pipedStream {
 		return rest
 	}
 	reqs := make([]*zeroRead, len(raw))
+	events := make([]uintptr, len(raw))
 	defer func() {
-		// Only an aborted loop leaves reads pending: cancel them and keep
-		// their OVERLAPPED alive until the handles are closed.
+		// Only an aborted loop leaves reads pending: cancel each, wait for
+		// the cancelled request to finish (the kernel writes its
+		// OVERLAPPED until then), and only then close the handles.
 		for i, s := range raw {
-			if reqs[i] != nil {
-				procCancelIoEx.Call(s.raw, uintptr(unsafe.Pointer(&reqs[i].ov)))
+			if r := reqs[i]; r != nil {
+				procCancelIoEx.Call(s.raw, uintptr(unsafe.Pointer(&r.ov)))
+				var done uint32
+				procGetOverlapped.Call(s.raw, uintptr(unsafe.Pointer(&r.ov)), uintptr(unsafe.Pointer(&done)), 1)
 			}
 			closeRaw(s.raw)
+			if events[i] != 0 {
+				closeRaw(events[i])
+			}
 		}
 		closeRaw(port)
 		runtime.KeepAlive(reqs)
@@ -175,6 +221,12 @@ func pumpPolled(streams []pipedStream, port uintptr) []pipedStream {
 			continue
 		}
 		reqs[i] = nil
+		if r == 0 && e == errorOperationAborted {
+			// uv__process_pipe_read_req ignores a cancelled read and
+			// queues the next one.
+			queue(i)
+			continue
+		}
 		if r == 0 && e != errorMoreData {
 			// uv__process_pipe_read_req: a failed zero read is EOF for
 			// ERROR_BROKEN_PIPE and an error otherwise; both end the
@@ -182,7 +234,15 @@ func pumpPolled(streams []pipedStream, port uintptr) []pipedStream {
 			end(i)
 			continue
 		}
-		if readAvailable(raw[i]) {
+		if events[i] == 0 {
+			ev, _, _ := procCreateEventW.Call(0, 1, 0, 0)
+			if ev == 0 {
+				end(i)
+				continue
+			}
+			events[i] = ev
+		}
+		if readAvailable(raw[i], events[i]) {
 			end(i)
 			continue
 		}
@@ -195,7 +255,7 @@ func pumpPolled(streams []pipedStream, port uintptr) []pipedStream {
 // is available, read up to 64 KiB (uv__pipe_read_data) and hand it to the
 // listener; a read that fills the buffer means there may be more. It
 // reports whether the stream ended (EOF or an error).
-func readAvailable(s pipedStream) bool {
+func readAvailable(s pipedStream, event uintptr) bool {
 	var buf []byte
 	for {
 		var avail uint32
@@ -209,7 +269,7 @@ func readAvailable(s pipedStream) bool {
 			buf = make([]byte, segment)
 		}
 		want := min(uint32(len(buf)), avail)
-		n, err := overlappedRead(s.raw, buf[:want])
+		n, err := overlappedRead(s.raw, event, buf[:want])
 		if err != nil {
 			return true
 		}
@@ -227,15 +287,11 @@ func readAvailable(s pipedStream) bool {
 }
 
 // overlappedRead is a ReadFile of available data on the overlapped handle,
-// waited for with an event so that the completion does not reach the port
-// (an event handle with its low bit set suppresses the port notification).
-func overlappedRead(h uintptr, buf []byte) (int, error) {
-	ev, _, e := procCreateEventW.Call(0, 1, 0, 0)
-	if ev == 0 {
-		return 0, e
-	}
-	defer syscall.CloseHandle(syscall.Handle(ev))
-	ov := syscall.Overlapped{HEvent: syscall.Handle(ev | 1)}
+// waited for on the stream's event so that the completion does not reach
+// the port (an event handle with its low bit set suppresses the port
+// notification). The manual-reset event is reset by ReadFile itself.
+func overlappedRead(h, event uintptr, buf []byte) (int, error) {
+	ov := syscall.Overlapped{HEvent: syscall.Handle(event | 1)}
 	var done uint32
 	err := syscall.ReadFile(syscall.Handle(h), buf, &done, &ov)
 	if err == errorIOPending {
