@@ -113,15 +113,15 @@ func Spawn(file string, args []string, o SpawnOptions) *Child {
 		}(io.stdin)
 	}
 	var streams []pipedStream
-	for _, s := range []pipedStream{{io.stdout, o.OnStdout}, {io.stderr, o.OnStderr}} {
-		if s.f != nil {
+	for _, s := range []pipedStream{{io.stdout, io.rawStdout, o.OnStdout}, {io.stderr, io.rawStderr, o.OnStderr}} {
+		if s.f != nil || s.raw != 0 {
 			streams = append(streams, s)
 		}
 	}
 	dispatched := make(chan struct{})
 	go func() {
 		defer close(dispatched)
-		pump(streams)
+		pump(streams, io.port)
 	}()
 	go func() {
 		state, _ := proc.Wait()
@@ -138,9 +138,14 @@ func Spawn(file string, args []string, o SpawnOptions) *Child {
 }
 
 // asyncStdio holds the parent's ends of the piped slots (nil for "ignore")
-// and the descriptors the child gets.
+// and the descriptors the child gets. On Windows the parent's ends of
+// stdout and stderr are raw overlapped pipe handles (rawStdout, rawStderr)
+// that only the pump reads, as libuv's are: an *os.File would tie them to
+// the Go runtime's completion port.
 type asyncStdio struct {
 	stdin, stdout, stderr *os.File
+	rawStdout, rawStderr  uintptr
+	port                  uintptr // the completion port the raw handles are tied to
 	child                 []*os.File
 }
 
@@ -156,23 +161,31 @@ func (s *asyncStdio) closeParent() {
 			f.Close()
 		}
 	}
+	for _, h := range []uintptr{s.rawStdout, s.rawStderr, s.port} {
+		if h != 0 {
+			closeRaw(h)
+		}
+	}
 }
 
-// pipedStream is a piped child stream and its 'data' listener.
+// pipedStream is a piped child stream and its 'data' listener: an
+// *os.File, or on Windows a raw overlapped pipe handle.
 type pipedStream struct {
 	f      *os.File
+	raw    uintptr
 	listen func([]byte)
 }
 
 // pump delivers the streams' data to their listeners on one goroutine
-// until every stream has ended. Where the kernel can say in which order the
-// streams became readable (epoll, kqueue) it follows libuv's loop, so that
-// data the child wrote to one stream before the other reaches the listeners
-// in that order, as in Node (round 7 #7: two readers raced for the
-// docker output budget). Elsewhere, and should the poller fail, each stream
-// has its own reader and the listeners run in the order the reads finish.
-func pump(streams []pipedStream) {
-	if rest := pumpPolled(streams); len(rest) > 0 {
+// until every stream has ended. It follows libuv's loop where the kernel
+// says in which order the streams became readable (epoll, kqueue, and on
+// Windows an I/O completion port), so that data the child wrote to one
+// stream before the other reaches the listeners in that order, as in Node
+// (round 7 #7: two readers raced for the docker output budget). Elsewhere,
+// and should the poller fail, each stream has its own reader and the
+// listeners run in the order the reads finish.
+func pump(streams []pipedStream, port uintptr) {
+	if rest := pumpPolled(streams, port); len(rest) > 0 {
 		pumpEach(rest)
 	}
 }
@@ -208,11 +221,15 @@ type chunk struct {
 func readChunks(f *os.File, listen func([]byte), out chan<- chunk, done *sync.WaitGroup) {
 	defer done.Done()
 	defer f.Close()
+	var buf []byte
 	for {
-		buf := make([]byte, segment)
+		if buf == nil {
+			buf = make([]byte, segment)
+		}
 		n, err := f.Read(buf)
 		if n > 0 {
 			out <- chunk{listen, buf[:n]}
+			buf = nil // the listener owns the chunk
 		}
 		if err != nil {
 			return

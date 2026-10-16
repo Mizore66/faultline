@@ -21,7 +21,7 @@ type poller interface {
 // pumpPolled is libuv's loop over the piped streams: wait for readiness,
 // then for each ready stream, in the kernel's order, uv__read it. It
 // returns the streams still open should the poller fail (none normally).
-func pumpPolled(streams []pipedStream) []pipedStream {
+func pumpPolled(streams []pipedStream, _ uintptr) []pipedStream {
 	p, err := newPoller()
 	if err != nil {
 		return streams
@@ -94,8 +94,12 @@ func readStream(s pipedStream) bool {
 	if err != nil {
 		return true
 	}
+	var buf []byte
 	for count := 32; count > 0; count-- {
-		buf := make([]byte, segment)
+		// A read that returns no data leaves the buffer for the next one.
+		if buf == nil {
+			buf = make([]byte, segment)
+		}
 		var n int
 		var rerr error
 		rc.Read(func(fd uintptr) bool {
@@ -112,10 +116,12 @@ func readStream(s pipedStream) bool {
 		case rerr != nil || n <= 0:
 			return true
 		}
+		data := buf[:n]
+		buf = nil // the listener owns data
 		if s.listen != nil {
-			s.listen(buf[:n])
+			s.listen(data)
 		}
-		if n < len(buf) {
+		if n < segment {
 			return false
 		}
 	}

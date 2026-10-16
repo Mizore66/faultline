@@ -22,7 +22,18 @@ func newAsyncStdio(o SpawnOptions) (*asyncStdio, error) {
 		case piped && i == 0:
 			c, *parents[i], err = pipe64k()
 		case piped:
-			*parents[i], c, err = pipe64k()
+			// libuv's uv__create_stdio_pipe_pair: an overlapped named
+			// pipe server for fl, read through the loop's completion
+			// port (pump_windows.go), and a blocking client for the child.
+			var server uintptr
+			server, c, err = overlappedPipe()
+			if err == nil {
+				if i == 1 {
+					s.rawStdout = server
+				} else {
+					s.rawStderr = server
+				}
+			}
 		case i == 0:
 			c, err = os.OpenFile(os.DevNull, os.O_RDONLY, 0)
 		default:
@@ -34,6 +45,15 @@ func newAsyncStdio(o SpawnOptions) (*asyncStdio, error) {
 			return nil, err
 		}
 		s.child = append(s.child, c)
+	}
+	if s.rawStdout != 0 || s.rawStderr != 0 {
+		port, err := newCompletionPort(s.rawStdout, s.rawStderr)
+		if err != nil {
+			s.closeChild()
+			s.closeParent()
+			return nil, err
+		}
+		s.port = port
 	}
 	return s, nil
 }

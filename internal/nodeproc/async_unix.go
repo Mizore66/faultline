@@ -116,3 +116,6 @@ var signalList, signalNumbers = func() ([]namedSignal, map[string]int) {
 	}
 	return list, numbers
 }()
+
+// closeRaw is only needed on Windows (raw pipe handles).
+func closeRaw(uintptr) {}

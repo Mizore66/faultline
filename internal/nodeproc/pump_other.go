@@ -1,8 +1,7 @@
-//go:build !linux && !darwin && !freebsd && !netbsd && !openbsd && !dragonfly
+//go:build !linux && !darwin && !freebsd && !netbsd && !openbsd && !dragonfly && !windows
 
 package nodeproc
 
-// pumpPolled leaves every stream to pumpEach. On Windows libuv reads pipes
-// with overlapped I/O and runs the callbacks in completion order, which
-// the per-stream readers approximate.
-func pumpPolled(streams []pipedStream) []pipedStream { return streams }
+// pumpPolled leaves every stream to pumpEach (Solaris, illumos, AIX: Node's
+// official builds do not cover them).
+func pumpPolled(streams []pipedStream, _ uintptr) []pipedStream { return streams }
