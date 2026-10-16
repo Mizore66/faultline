@@ -104,6 +104,10 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 //   self:<rel>#<pointer>     a "sha256:<hex>" member equal to the digestJson
 //                            of the rest of its object (checkpoint digest,
 //                            event hash, bindingDigest)
+//   path:<masked path>       the SHA-256 of a case path a recorder logged
+//                            (a minimization worktree)
+//   worktree:<rel>#<k>       the k-th worktreeDigest member of rel whose
+//                            path no recorder logged
 // A file is derived from when it holds a case path or a digest found in the
 // previous pass (files sorted by code unit, JSON members in document order,
 // .git directories skipped); passes repeat until nothing new is found, and
@@ -116,6 +120,9 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 // unmasked. The Go twin is relocation in difftest/writer_test.go.
 export type Relocation = { text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string };
 const SELF_DIGEST = /^sha256:[0-9a-f]{64}$/;
+// A minimization run fact's worktreeDigest member, in canonical or indented
+// JSON (the Go twin is worktreeDigestMember).
+const WORKTREE_DIGEST = /"worktreeDigest":\s*"sha256:([0-9a-f]{64})"/g;
 const pointerToken = (key: string | number): string => String(key).split("~").join("~0").split("/").join("~1");
 
 // loggedCasePaths are the paths under the case root the recorders logged
@@ -175,6 +182,16 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
     const digest = sha256(Buffer.from(path, "utf8"));
     add(digest, `path:${normalizeWriter(path, roots)}`);
     seeds.push(digest);
+  }
+  // A worktree no recorder logged (a fault before git ran in it) is still
+  // hashed into its run fact: name each worktreeDigest value not named
+  // above after where it appears (round 7 #15).
+  for (const [rel, , text] of files) {
+    let k = 0;
+    for (const m of text.matchAll(WORKTREE_DIGEST)) {
+      if (!names.has(m[1]!)) { add(m[1]!, `worktree:${rel}#${k}`); seeds.push(m[1]!); }
+      k += 1;
+    }
   }
   let frontier = seeds;
   while (frontier.length > 0) {
@@ -240,14 +257,32 @@ async function crossVerify(id: string, inv: number, roots: CaseRoots, stdout: st
 // holdBusyPort in difftest/writer_test.go.
 export const BUSY_PORT = "<BUSYPORT>";
 
-async function holdBusyPort(t: WriterTemplate): Promise<{ port: string; server?: Server }> {
-  if (!t.argv.some((argv) => argv.some((a) => a.includes(BUSY_PORT)))) return { port: "" };
+// HOLD_PORT in a template's env names a fixed port the case holds on
+// 127.0.0.1 while it runs (a command's default port: judge-proof's 4174);
+// if another process already holds it, it is busy all the same. The Go
+// twin is holdPortVariable in difftest/writer_test.go.
+export const HOLD_PORT = "FAULTLINE_TEST_HOLD_PORT";
+
+async function listenOn(port: number): Promise<Server | undefined> {
   const server = createServer();
-  await new Promise<void>((resolveListen, rejectListen) => {
-    server.once("error", rejectListen);
-    server.listen(0, "127.0.0.1", () => resolveListen());
+  return new Promise((resolveListen) => {
+    server.once("error", () => resolveListen(undefined));
+    server.listen(port, "127.0.0.1", () => resolveListen(server));
   });
-  return { port: String((server.address() as { port: number }).port), server };
+}
+
+async function holdBusyPort(t: WriterTemplate): Promise<{ port: string; servers: Server[] }> {
+  const servers: Server[] = [];
+  const fixed = t.env?.[HOLD_PORT];
+  if (fixed !== undefined) {
+    const held = await listenOn(Number(fixed));
+    if (held) servers.push(held);
+  }
+  if (!t.argv.some((argv) => argv.some((a) => a.includes(BUSY_PORT)))) return { port: "", servers };
+  const server = await listenOn(0);
+  if (!server) throw new Error(`${t.id}: cannot listen on 127.0.0.1:0`);
+  servers.push(server);
+  return { port: String((server.address() as { port: number }).port), servers };
 }
 
 async function runCase(t: WriterTemplate): Promise<string[]> {
@@ -287,7 +322,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     }
     return lines;
   } finally {
-    busy.server?.close();
+    for (const server of busy.servers) server.close();
     rmSync(roots.root, { recursive: true, force: true });
   }
 }

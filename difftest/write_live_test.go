@@ -159,7 +159,9 @@ func TestLiveProofWriter(t *testing.T) {
 	// compare writes one case on both sides: output and proofRoot are the
 	// TS paths (under tsRoot, or named tsRoot+suffix); the Go side uses
 	// them with goRoot in place of tsRoot.
+	casePath := path // the PATH of the next compare (a fake git for the git failures below)
 	compare := func(label, output, proofRoot string, result, frozen, options jsjson.Value) (gitproof.Written, error) {
+		path := casePath
 		i := n
 		n++
 		if ts, goTick := oracleCall(t, c, "seededTick", "null"), clock.NowMillis()-seededEpochMillis; ts != strconv.FormatInt(goTick, 10) {
@@ -302,6 +304,25 @@ func TestLiveProofWriter(t *testing.T) {
 		compare(rc.label, filepath.Join(tsRoot, strings.ReplaceAll(rc.label, " ", "-"), "out"), tsRoot, rc.wc.result, rc.wc.frozen, none)
 		gitIn(repo, "replace", "-d", d)
 	}
+	// Each git step the writer labels fails once (a fake git that fails
+	// that one subcommand ahead of the real git), so every
+	// "<label> failed: …" message is compared.
+	for _, step := range []string{"show-toplevel", "rev-list", "show-object-format", "clone", "update-ref", "bundle-create"} {
+		fake := filepath.Join(work, "fail-writer-"+step)
+		if err := os.Mkdir(fake, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		script, err := os.ReadFile(filepath.Join(root, "difftest", "testdata", "fakegit", "fail-writer", "git"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(fake, "git"), script, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		casePath = fake + ":" + path
+		compare("git "+step+" fails", filepath.Join(tsRoot, "git-"+step, "out"), tsRoot, base.result, base.frozen, none)
+	}
+	casePath = path
 	if len(longest.result.Get("states").Items()) < 3 {
 		t.Errorf("no written case has three states, so the grafted range keeps its states")
 	}

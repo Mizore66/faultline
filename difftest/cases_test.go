@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Mizore66/faultline/internal/canonical"
 )
 
 // Only git's own diagnostic lines are masked; FaultLine's text and anything
@@ -94,5 +96,27 @@ func TestWindowsWriterSkipsList(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(listed, want) {
 		t.Errorf("windows-writer-skips.txt lists\n%s\nthe posixOnly writer cases are\n%s", strings.Join(listed, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A minimization run fact hashes its worktree path; when no recorder logged
+// that path (a fault before git ran there), relocation still names the
+// digest by where it appears, so it is masked whatever the case directory
+// (round 7 #15).
+func TestRelocationNamesUnloggedWorktreeDigest(t *testing.T) {
+	for _, root := range []string{"/tmp/case-one", "/var/case-two"} {
+		r := makeWriterRoots(t)
+		digest := canonical.SHA256Hex(filepath.Join(root, "tmp", "faultline-git-minimization-x", "worktrees", "worktree-1"))
+		if err := os.MkdirAll(filepath.Join(r.ws, ".faultline", "minimizations"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		text := "{\n  \"runs\": [\n    {\n      \"worktreeDigest\": \"sha256:" + digest + "\"\n    }\n  ]\n}\n"
+		if err := os.WriteFile(filepath.Join(r.ws, ".faultline", "minimizations", "m.json"), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := relocation(t, r, nil).text(text)
+		if want := "<PATHDIGEST:worktree:.faultline/minimizations/m.json#0>"; !strings.Contains(got, want) || strings.Contains(got, digest) {
+			t.Errorf("%s: %s", root, got)
+		}
 	}
 }

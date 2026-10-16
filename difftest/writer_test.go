@@ -441,6 +441,10 @@ func loggedCasePaths(records []string, r writerRoots) []string {
 	return out
 }
 
+// worktreeDigestMember is a minimization run fact's worktreeDigest member,
+// in canonical or indented JSON (gen-writers.ts WORKTREE_DIGEST).
+var worktreeDigestMember = regexp.MustCompile(`"worktreeDigest":\s*"sha256:([0-9a-f]{64})"`)
+
 // relocation ports gen-writers.ts relocation: the digests in the tree that
 // depend on the case paths, each named by where it was first derived.
 func relocation(t *testing.T, r writerRoots, records []string) *relocated {
@@ -556,6 +560,17 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 		digest := canonical.SHA256Hex(path)
 		add(digest, "path:"+normalizeWriter(path, r))
 		seeds = append(seeds, digest)
+	}
+	// A worktree no recorder logged (a fault before git ran in it) is still
+	// hashed into its run fact: name each worktreeDigest value not named
+	// above after where it appears (round 7 #15).
+	for _, f := range files {
+		for k, m := range worktreeDigestMember.FindAllStringSubmatch(f.text, -1) {
+			if _, ok := rel.names[m[1]]; !ok {
+				add(m[1], "worktree:"+f.rel+"#"+strconv.Itoa(k))
+				seeds = append(seeds, m[1])
+			}
+		}
 	}
 	for frontier := seeds; len(frontier) > 0; {
 		found = nil
@@ -746,10 +761,24 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 // on 127.0.0.1 while it runs (gen-writers.ts BUSY_PORT).
 const busyPortMarker = "<BUSYPORT>"
 
+// holdPortVariable in a template's env names a fixed port the case holds on
+// 127.0.0.1 while it runs (gen-writers.ts HOLD_PORT).
+const holdPortVariable = "FAULTLINE_TEST_HOLD_PORT"
+
 // holdBusyPort listens on 127.0.0.1:0 for the duration of the test when the
 // template uses busyPortMarker, and returns the port ("" otherwise); the
 // TS twin is holdBusyPort in gen-writers.ts.
 func holdBusyPort(t *testing.T, tpl writerTemplate) string {
+	// A fixed port named by the template's FAULTLINE_TEST_HOLD_PORT (a
+	// command's default port, judge-proof's 4174) is held too; if another
+	// process already holds it, it is busy all the same.
+	for _, kv := range tpl.Env {
+		if kv[0] == holdPortVariable {
+			if l, err := net.Listen("tcp4", "127.0.0.1:"+kv[1]); err == nil {
+				t.Cleanup(func() { l.Close() })
+			}
+		}
+	}
 	for _, argv := range tpl.Argv {
 		for _, a := range argv {
 			if strings.Contains(a, busyPortMarker) {

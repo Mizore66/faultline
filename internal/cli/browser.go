@@ -41,15 +41,7 @@ func openLocalDemoURL(e *env, url string) {
 		e.out("Browser auto-open skipped in CI. Open " + url + " manually if needed.\n")
 		return
 	}
-	var command string
-	switch runtime.GOOS {
-	case "windows":
-		command = `cmd /c start "" "` + url + `"`
-	case "darwin":
-		command = `open "` + url + `"`
-	default:
-		command = `xdg-open "` + url + `"`
-	}
+	command := openerCommand(runtime.GOOS, url)
 	failed := func() {
 		io.WriteString(e.stderr, jsstr.ToUTF8("FaultLine could not open a browser automatically. Open "+url+" manually.\n"))
 	}
@@ -64,6 +56,21 @@ func openLocalDemoURL(e *env, url string) {
 			failed()
 		}
 	}()
+}
+
+// openerCommand is the shell command line openLocalDemoUrl hands to exec()
+// on goos (src/cli-app.ts:891-895).
+func openerCommand(goos, url string) string {
+	var command string
+	switch goos {
+	case "windows":
+		command = `cmd /c start "" "` + url + `"`
+	case "darwin":
+		command = `open "` + url + `"`
+	default:
+		command = `xdg-open "` + url + `"`
+	}
+	return command
 }
 
 // awaitServeInterrupt ports src/cli-app.ts:904: wait for SIGINT, SIGTERM or

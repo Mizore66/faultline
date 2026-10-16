@@ -52,11 +52,7 @@ func judgeProofCommand(e *env, args []string) error {
 	e.out("Root: " + proof.RootDigest + "\n")
 	e.out("External root: " + proof.ExternalRootStatus + "\n")
 	e.out("This is the product Idea path (portable predicate proof), not the judge-demo fixture.\n")
-	if proof.RootDigest == proofview.RecordedSelfIncidentRoot {
-		e.out("Matched historical self-incident root.\n")
-	} else {
-		e.out("Note: historical self-incident root is " + proofview.RecordedSelfIncidentRoot + " (see docs/faultline-self-incident.md).\n")
-	}
+	e.out(selfIncidentRootLine(proof.RootDigest))
 	if hasFlag(args, "--export-only") {
 		e.out("Verified root summary: " + proof.RootDigest + " (" + proof.ExternalRootStatus + ")\n")
 		return nil
@@ -84,6 +80,15 @@ func judgeProofCommand(e *env, args []string) error {
 		e.out("FaultLine judge-proof stopped. Verified root: " + proof.RootDigest + " · External root: " + proof.ExternalRootStatus + "\n")
 	})
 	return nil
+}
+
+// selfIncidentRootLine is the line judgeProofCommand prints after the
+// verified root (src/cli-app.ts:1011-1015).
+func selfIncidentRootLine(rootDigest string) string {
+	if rootDigest == proofview.RecordedSelfIncidentRoot {
+		return "Matched historical self-incident root.\n"
+	}
+	return "Note: historical self-incident root is " + proofview.RecordedSelfIncidentRoot + " (see docs/faultline-self-incident.md).\n"
 }
 
 // commitProofPreviewCommand ports src/cli-app.ts:1041 commitProofPreviewCommand.

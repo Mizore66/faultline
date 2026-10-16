@@ -439,7 +439,9 @@ export const SCENARIOS: Record<string, Scenario> = {
   "git-non-monotonic": gitScenario([state("good"), state("bad"), state("good"), state("bad")]),
   "git-all-pass": gitScenario(repeat("good", 3)),
   "git-all-fail": gitScenario(repeat("bad", 3)),
-  // A one-second witness: the timeout fake Docker is killed after 1 s, not 30.
+  // A one-second witness. The CLI passes no sandbox limits, so this does
+  // not reach the sandbox (TS too): investigate-docker-timeout's fake
+  // Docker outlives the default 120 s timeout once instead.
   "git-short-timeout": gitScenario([state("good"), state("bad")], { proposal: witnessInput({ timeoutSeconds: 1 }) }),
   // judge-proof and commit-proof-preview read the committed COMMIT_PROOF
   // sample from the workspace by default.

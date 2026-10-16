@@ -162,11 +162,13 @@ jobs:
           .github/scripts/check-skips.sh "$RUNNER_TEMP/root.log" '^TestLiveFuseMatchesNode/zero-declared-demo$' "$RUNNER_TEMP/root.list" || status=1
           exit $status
       - name: Internal and oracle-client tests against Node
+        # TestLiveReleaseClock (difftest/release, untagged: a release build
+        # with the wall clock) also runs in the go job, Go side only.
         run: |
           set -o pipefail
           status=0
-          printf '%s\n' TestSortMatchesV8 TestToNumberMatchesNode TestEchoRoundTripsLoneSurrogate > "$RUNNER_TEMP/internal.list"
-          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ ./internal/jsjson/ ./difftest/oracle/ -run '^(TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate)$' -v | tee "$RUNNER_TEMP/internal.log" || status=$?
+          printf '%s\n' TestSortMatchesV8 TestToNumberMatchesNode TestEchoRoundTripsLoneSurrogate TestLiveReleaseClock > "$RUNNER_TEMP/internal.list"
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ ./internal/jsjson/ ./difftest/oracle/ ./difftest/release/ -run '^(TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestLiveReleaseClock)$' -v | tee "$RUNNER_TEMP/internal.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/internal.log" '^$' "$RUNNER_TEMP/internal.list" || status=1
           exit $status
 
