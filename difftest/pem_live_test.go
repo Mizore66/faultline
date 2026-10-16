@@ -419,6 +419,7 @@ func TestLivePEMKeyParsing(t *testing.T) {
 	cases = append(cases, genAlgorithmCases(m, 4000)...)
 	cases = append(cases, genPQCases(m, 1200)...)
 	cases = append(cases, genReasonCases(m)...)
+	cases = append(cases, genMixedCases(m, 6000)...)
 	cases = append(cases, loadPEMCorpus(t)...)
 	results := runPEMOracle(t, cases)
 	accepted, fails := 0, 0
@@ -1200,6 +1201,96 @@ func genReasonCases(m pemMaterial) []pemCase {
 	for _, b := range blocks {
 		text := framed(b.label, b.header, b.der, 64)
 		cases = append(cases, pemCase{Text: text, Pub: true}, pemCase{Text: text, Pub: false})
+	}
+	return cases
+}
+
+// mixLabels are the labels genMixedCases relabels blocks with, the ones
+// OpenSSL's legacy reader treats specially included ("ANY PRIVATE KEY",
+// lower-case "ec PRIVATE KEY", DH and X9.42 labels).
+var mixLabels = []string{"PUBLIC KEY", "PRIVATE KEY", "CERTIFICATE", "X509 CERTIFICATE", "TRUSTED CERTIFICATE",
+	"RSA PUBLIC KEY", "ENCRYPTED PRIVATE KEY", "EC PRIVATE KEY", "RSA PRIVATE KEY", "DSA PRIVATE KEY",
+	"SM2 PRIVATE KEY", "ec PRIVATE KEY", "DH PRIVATE KEY", "DSA PUBLIC KEY", "X9.42 DH PRIVATE KEY", "ANY PRIVATE KEY"}
+
+var mixHeaders = []string{"", "", "", "", "A:", "Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,00000000000000000000000000000000",
+	"Proc-Type: 4,ENCRYPTED\nDEK-Info: DES-EDE3-CBC,0000000000000000", "Comment: x"}
+
+// certWithSPKI is the Ed25519 certificate with its SubjectPublicKeyInfo
+// replaced by spki (the X509 public pass's key extraction for every key
+// type).
+func certWithSPKI(cert, edSPKI, spki []byte) []byte {
+	t := parseTLVs(cert)
+	if len(t) == 0 || len(t[0].kids) == 0 {
+		return cert
+	}
+	nt := parseTLVs(spki)
+	if len(nt) == 0 {
+		return cert
+	}
+	for _, kid := range t[0].kids[0].kids {
+		if kid.kids != nil && bytes.Equal(serTLVs([]*tlv{kid}), edSPKI) {
+			*kid = *nt[0]
+		}
+	}
+	return serTLVs(t)
+}
+
+// genMixedCases builds the round-8 reviewers' mixed multi-block inputs
+// (mix.py): one to four blocks, each a fixture of any algorithm (tree
+// mutated, relabelled), an Ed25519 certificate carrying another key's
+// SPKI, or an Ed25519 structure, with random headers, a BOM or a junk
+// line first, read as a public or a private key.
+func genMixedCases(m pemMaterial, n int) []pemCase {
+	r := rand.New(rand.NewPCG(8, 4))
+	keys := m.keyBlocks()
+	var spkis [][]byte
+	for _, k := range keys {
+		if k.label == "PUBLIC KEY" {
+			spkis = append(spkis, k.der)
+		}
+	}
+	eds := []pemKeyBlock{{"PRIVATE KEY", m.pkcs8}, {"PUBLIC KEY", m.spki}, {"CERTIFICATE", m.cert}, {"CERTIFICATE", m.certExt}, {"X509 CERTIFICATE", m.cert}}
+	cases := make([]pemCase, 0, n)
+	for len(cases) < n {
+		var sb strings.Builder
+		for b := 1 + r.IntN(4); b > 0; b-- {
+			var label string
+			var der []byte
+			switch c := r.IntN(10); {
+			case c < 5:
+				k := keys[r.IntN(len(keys))]
+				label, der = k.label, k.der
+				if r.Float64() < 0.4 {
+					der = mutateTree(r, der)
+				}
+				if r.Float64() < 0.3 {
+					label = mixLabels[r.IntN(len(mixLabels))]
+				}
+			case c < 7:
+				label, der = "CERTIFICATE", certWithSPKI(m.cert, m.spki, spkis[r.IntN(len(spkis))])
+				if r.Float64() < 0.3 {
+					der = mutateTree(r, der)
+				}
+			default:
+				e := eds[r.IntN(len(eds))]
+				label, der = e.label, e.der
+				if r.Float64() < 0.3 {
+					der = mutateTree(r, der)
+				}
+				if r.Float64() < 0.2 {
+					label = mixLabels[r.IntN(len(mixLabels))]
+				}
+			}
+			sb.WriteString(framed(label, mixHeaders[r.IntN(len(mixHeaders))], der, 64))
+		}
+		text := sb.String()
+		if r.Float64() < 0.1 {
+			text = "\ufeff" + text
+		}
+		if r.Float64() < 0.1 {
+			text = "junk\n" + text
+		}
+		cases = append(cases, pemCase{Text: text, Pub: r.Float64() < 0.55})
 	}
 	return cases
 }
