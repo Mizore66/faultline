@@ -358,6 +358,13 @@ func TestLiveNativeRunner(t *testing.T) {
 		{"fail", "pass-fail", "bad", 60_000, 1_048_576, "PREDICATE_FAIL"},
 		{"odd-bad", "odd-bad", "bad", 60_000, 1_048_576, "PREDICATE_FAIL"},
 		{"timeout", "timeout", "", 1_500, 1_048_576, "TIMEOUT"},
+		// docker exits 0 while its child still holds the pipes: TIMEOUT with
+		// exit code 0, and only timedOut forces the cleanup (round 7 mutant S5).
+		{"timeout-detached", "timeout-detached", "", 1_500, 1_048_576, "TIMEOUT"},
+		// The force-removal hangs past the 5 s cleanup limit.
+		{"rm-hang", "rm-hang", "", 1_500, 1_048_576, "TIMEOUT"},
+		// docker deletes itself and dies: rm --force cannot be spawned.
+		{"vanish", "vanish", "", 60_000, 1_048_576, "RUNNER_FAILURE"},
 		{"flood", "flood", "", 60_000, 1_006, "OUTPUT_LIMIT_EXCEEDED"},
 		{"daemon-down", "daemon-down", "", 60_000, 1_048_576, "SANDBOX_UNAVAILABLE"},
 		{"missing-image", "missing-image", "", 60_000, 1_048_576, "SANDBOX_UNAVAILABLE"},
@@ -381,12 +388,34 @@ func TestLiveNativeRunner(t *testing.T) {
 				path = strings.Join([]string{filepath.Join(repo, "difftest/testdata/recorder"), filepath.Join(repo, "difftest/testdata/fakedocker", tc.fake),
 					"/usr/bin", "/bin"}, ":")
 			}
+			// "vanish" deletes itself, so each side runs a private copy,
+			// put back before the Go side runs.
+			vanishDir := filepath.Join(root, "vanish-"+tc.name)
+			restoreVanish := func() {
+				script, err := os.ReadFile(filepath.Join(repo, "difftest/testdata/fakedocker/vanish/docker"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(vanishDir, "docker"), script, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.fake == "vanish" {
+				if err := os.Mkdir(vanishDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				restoreVanish()
+				path = strings.Join([]string{filepath.Join(repo, "difftest/testdata/recorder"), vanishDir, "/usr/bin", "/bin"}, ":")
+			}
 			request := `{"mode":"DOCKER_ISOLATED","sourceDirectory":` + jsjson.Quote(src) + `,"image":"node@sha256:` + hex64("a") +
 				`","witness":{"digest":"sha256:` + hex64("b") + `","command":"node witness.mjs"},"environment":{"FOO":"bar","API_TOKEN":"s"},` +
 				`"allowedEnvironment":["FOO"],"limits":{"timeoutMs":` + jsjson.FormatNumber(float64(tc.timeoutMs)) +
 				`,"maxOutputBytes":` + jsjson.FormatNumber(float64(tc.maxOutputBytes)) + `}}`
 			tsLog, goLog := filepath.Join(root, tc.name+"-ts.log"), filepath.Join(root, tc.name+"-go.log")
 			want := oracleText(t, c, "executeSandboxPlan", `{"request":`+request+`,"path":`+jsjson.Quote(path)+`,"argvLog":`+jsjson.Quote(tsLog)+`}`)
+			if tc.fake == "vanish" {
+				restoreVanish()
+			}
 			t.Setenv("PATH", path)
 			t.Setenv("FAULTLINE_ARGV_LOG", goLog)
 			req, _ := jsjson.Parse(request)
@@ -401,6 +430,7 @@ func TestLiveNativeRunner(t *testing.T) {
 			if got != want {
 				t.Fatalf("got  %s\nwant %s", got, want)
 			}
+			recordOutput(t, want)
 			if reason := o.Field("result").Get("reason").Str(); reason != tc.reason {
 				t.Fatalf("reason %s, want %s: %s", reason, tc.reason, got)
 			}
@@ -410,7 +440,7 @@ func TestLiveNativeRunner(t *testing.T) {
 				t.Fatalf("docker argv differ:\ngo %q\nts %q", goRecords, tsRecords)
 			}
 			records := strings.Split(strings.TrimSuffix(string(goRecords), "\x1e"), "\x1e")
-			cleanup := slices.Contains([]string{"timeout", "flood", "crash"}, tc.name)
+			cleanup := slices.Contains([]string{"timeout", "timeout-detached", "rm-hang", "vanish", "flood", "crash"}, tc.name)
 			if tc.fake != "" && (len(records) != 1+map[bool]int{true: 1}[cleanup] ||
 				cleanup && records[1] != "docker rm\x1f--force\x1f"+p.Value.Get("containerName").Str()) {
 				t.Fatalf("docker records %q", records)
@@ -420,4 +450,5 @@ func TestLiveNativeRunner(t *testing.T) {
 			}
 		})
 	}
+	requireReached(t, "internal/sandbox/run.go", recordedOutputs(t))
 }

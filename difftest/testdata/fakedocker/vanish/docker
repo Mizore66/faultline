@@ -1,0 +1,15 @@
+#!/bin/sh
+# Fake Docker "vanish" (README.md), for a private copy only
+# (difftest/sandbox_live_test.go copies it into a directory of its own):
+# `run` deletes this script, prints one line and dies of SIGKILL, so the
+# runner's `docker rm --force` finds no docker on PATH and reports that it
+# could not force-remove the container (spawn docker ENOENT).
+case "$1" in
+run)
+  rm -f "$0"
+  printf 'started\n'
+  kill -9 $$
+  ;;
+esac
+printf 'fake docker (vanish): unsupported command: %s\n' "$1" >&2
+exit 125
