@@ -100,3 +100,10 @@ TestWriterReplay/posix/investigate-tmpdir-missing
 TestWriterReplay/posix/minimize-git-tmpdir-missing
 TestWriterReplay/posix/investigate-tmpdir-swapped
 TestWriterReplay/posix/minimize-git-tmpdir-swapped
+TestWriterReplay/posix/investigate-draft-store-is-file
+TestWriterReplay/posix/investigate-binding-is-dir
+TestWriterReplay/posix/investigate-binding-other-id
+TestWriterReplay/posix/investigate-frozen-is-dir
+TestWriterReplay/posix/minimize-git-output-root-is-file
+TestWriterReplay/posix/investigate-docker-exact-limit
+TestWriterReplay/posix/judge-proof-default-port-in-use
