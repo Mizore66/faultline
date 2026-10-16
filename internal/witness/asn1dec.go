@@ -103,6 +103,12 @@ var cLongSize, cLongMax = func() (int, uint64) {
 	return 8, math.MaxInt64
 }()
 
+// lengthNeedsContentByte is asn1_get_length's "max < i + 1" in OpenSSL
+// 3.5 (the long form needs one byte after the length octets), which Node
+// 22.22.2 bundles; OpenSSL 3.6.5 checks "max < i". Only the error text of a
+// truncated header differs (KNOWN_DIFFERENCES.md).
+var lengthNeedsContentByte = true
+
 // Item kinds (ASN1_ITYPE_*, with the two EXTERN items and ITEM_TEMPLATE
 // split out).
 const (
@@ -249,7 +255,11 @@ func getLength(in []byte) (inf bool, length int64, n int, ok bool) {
 	if in[0]&0x80 == 0 {
 		return false, int64(i), 1, true
 	}
-	if max < i+1 {
+	need := i
+	if lengthNeedsContentByte {
+		need++
+	}
+	if max < need {
 		return false, 0, 0, false
 	}
 	p := 1

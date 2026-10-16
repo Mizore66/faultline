@@ -128,7 +128,7 @@ func getName(b *pemBIO) ([]byte, bool) {
 		}
 		s := sanitizeLine(line, first)
 		first = false
-		if bytes.HasPrefix(s, []byte("-----BEGIN ")) && len(s) >= 6 && bytes.HasSuffix(s, []byte("-----\n")) {
+		if bytes.HasPrefix(s, []byte("-----BEGIN ")) && len(s) >= 17 && bytes.HasSuffix(s, []byte("-----\n")) {
 			return cstr(s[11 : len(s)-6]), true
 		}
 	}
@@ -710,7 +710,7 @@ func otherKey(oid []byte, params *asn1Value, key []byte, private bool) bool {
 	case bytes.Equal(oid, oidDSA), bytes.Equal(oid, oidDH), bytes.Equal(oid, oidDHX):
 		var n *big.Int
 		rest, err := asn1.Unmarshal(key, &n)
-		return err == nil && len(rest) == 0 && (oid[len(oid)-1] != 1 || params != nil)
+		return err == nil && len(rest) == 0 && params != nil
 	}
 	return false
 }
