@@ -592,6 +592,11 @@ func (e *osslEnv) d2iTypedPUBKEY(desc *keyDesc, der []byte) *decodedKey {
 			e.q.raise(libEVP, "EVP_R_EXPECTING_A_DSA_KEY")
 			return nil
 		}
+		// ossl_d2i_DSA_PUBKEY: a key without p, q and g (absent or NULL
+		// parameters) is refused without an error.
+		if pub.noPQG {
+			return nil
+		}
 	case descDH:
 		// ossl_d2i_DH_PUBKEY checks EVP_PKEY_get_id first (no error).
 		if pub.typ != ktDH {
@@ -627,6 +632,7 @@ func (e *osslEnv) d2iTypedPUBKEY(desc *keyDesc, der []byte) *decodedKey {
 // legacyKey is a public key the legacy pub_decode methods produced.
 type legacyKey struct {
 	typ     keyType
+	noPQG   bool // a DSA key decoded without parameters (p, q, g unset)
 	sm2     bool
 	rsaFlag int
 	ed25519 ed25519.PublicKey
@@ -665,7 +671,8 @@ func (e *osslEnv) legacyPublicDecode(v *asn1Value) *legacyKey {
 		if !e.dsaPubDecode(alg, key.data) {
 			return nil
 		}
-		return &legacyKey{typ: ktDSA} // EVP_PKEY_assign_DSA
+		p := alg.fields[1]
+		return &legacyKey{typ: ktDSA, noPQG: p == nil || p.utype != tagSequence} // EVP_PKEY_assign_DSA
 	case ktDH, ktDHX:
 		if !e.dhPubDecode(baseType(t) == ktDHX, alg, key.data) {
 			return nil

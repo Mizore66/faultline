@@ -227,8 +227,7 @@ func kemParsePrivate(rank int, dk []byte) bool {
 // mlkemLoad ports ml_kem_load for a decoded PKCS#8 key: with a seed the
 // key is generated from it (after the seed's z is checked against an
 // explicit key's), and an explicit key must then match; without a seed the
-// explicit key is parsed. The pairwise test that follows uses random
-// entropy and passes for any key that parses.
+// explicit key is parsed and must pass the pairwise test.
 func (e *osslEnv) mlkemLoad(pp *pqParams, k *pqPending) bool {
 	rank := (pp.pubLen - 32) / 384
 	if k.seed != nil {
@@ -247,5 +246,178 @@ func (e *osslEnv) mlkemLoad(pp *pqParams, k *pqPending) bool {
 		e.q.raise(libPROV, "PROV_R_INVALID_KEY")
 		return false
 	}
+	if k.priv != nil && !kemPairwise(rank, k.priv) {
+		e.q.raise(libPROV, "PROV_R_INVALID_KEY") // ml_kem_pairwise_test
+		return false
+	}
 	return true
+}
+
+// kemInvNTT is FIPS 203 Algorithm 10 (NTT⁻¹).
+func kemInvNTT(f kemPoly) kemPoly {
+	k := 127
+	for l := 2; l <= 128; l *= 2 {
+		for start := 0; start < 256; start += 2 * l {
+			zeta := kemZetas[k]
+			k--
+			for j := start; j < start+l; j++ {
+				t := f[j]
+				f[j] = kemAdd(t, f[j+l])
+				f[j+l] = kemMul(zeta, kemSub(f[j+l], t))
+			}
+		}
+	}
+	for i := range f {
+		f[i] = kemMul(f[i], 3303) // 128⁻¹ mod q
+	}
+	return f
+}
+
+func kemCompress(x kemField, d uint) uint16 {
+	return uint16(((uint32(x)<<(d+1) + kemQ) / (2 * kemQ)) & (1<<d - 1))
+}
+
+func kemDecompress(y uint16, d uint) kemField {
+	return kemField((uint32(y)*kemQ*2 + 1<<d) >> (d + 1))
+}
+
+// kemEncodeD is ByteEncode_d∘Compress_d of f.
+func kemEncodeD(b []byte, f kemPoly, d uint) []byte {
+	var acc uint32
+	var bits uint
+	for _, x := range f {
+		acc |= uint32(kemCompress(x, d)) << bits
+		bits += d
+		for bits >= 8 {
+			b = append(b, byte(acc))
+			acc >>= 8
+			bits -= 8
+		}
+	}
+	return b
+}
+
+// kemDecodeD is Decompress_d∘ByteDecode_d of b (32·d bytes).
+func kemDecodeD(b []byte, d uint) kemPoly {
+	var f kemPoly
+	var acc uint32
+	var bits uint
+	i := 0
+	for j := range f {
+		for bits < d {
+			acc |= uint32(b[i]) << bits
+			i++
+			bits += 8
+		}
+		f[j] = kemDecompress(uint16(acc&(1<<d-1)), d)
+		acc >>= d
+		bits -= d
+	}
+	return f
+}
+
+func kemCompressBits(rank int) (du, dv uint) {
+	if rank == 4 {
+		return 11, 5
+	}
+	return 10, 4
+}
+
+// kemEncrypt is K-PKE.Encrypt(ek, m, r) (FIPS 203 Algorithm 14).
+func kemEncrypt(rank int, ek, m, r []byte) []byte {
+	eta1 := 2
+	if rank == 2 {
+		eta1 = 3
+	}
+	du, dv := kemCompressBits(rank)
+	that := make([]kemPoly, rank)
+	for i := range that {
+		that[i], _ = kemDecode12(ek[384*i : 384*(i+1)])
+	}
+	rho := ek[384*rank:]
+	var N byte
+	yhat := make([]kemPoly, rank)
+	for i := range yhat {
+		yhat[i] = kemNTT(kemSampleCBD(r, N, eta1))
+		N++
+	}
+	e1 := make([]kemPoly, rank)
+	for i := range e1 {
+		e1[i] = kemSampleCBD(r, N, 2)
+		N++
+	}
+	e2 := kemSampleCBD(r, N, 2)
+	var c []byte
+	for i := 0; i < rank; i++ {
+		var acc kemPoly
+		for j := 0; j < rank; j++ {
+			acc = kemPolyAdd(acc, kemNTTMul(kemSampleNTT(rho, byte(i), byte(j)), yhat[j])) // Âᵀ[i][j] = Â[j][i]
+		}
+		c = kemEncodeD(c, kemPolyAdd(kemInvNTT(acc), e1[i]), du)
+	}
+	var acc kemPoly
+	for j := 0; j < rank; j++ {
+		acc = kemPolyAdd(acc, kemNTTMul(that[j], yhat[j]))
+	}
+	v := kemPolyAdd(kemInvNTT(acc), e2)
+	for i := range v {
+		if m[i/8]>>(i%8)&1 == 1 {
+			v[i] = kemAdd(v[i], (kemQ+1)/2)
+		}
+	}
+	return kemEncodeD(c, v, dv)
+}
+
+// kemDecrypt is K-PKE.Decrypt(dk_pke, c) (FIPS 203 Algorithm 15).
+func kemDecrypt(rank int, dkPKE, c []byte) []byte {
+	du, dv := kemCompressBits(rank)
+	var acc kemPoly
+	for i := 0; i < rank; i++ {
+		u := kemDecodeD(c[32*int(du)*i:], du)
+		s, _ := kemDecode12(dkPKE[384*i : 384*(i+1)])
+		acc = kemPolyAdd(acc, kemNTTMul(s, kemNTT(u)))
+	}
+	v := kemDecodeD(c[32*int(du)*rank:], dv)
+	w := kemInvNTT(acc)
+	m := make([]byte, 32)
+	for i := range v {
+		if kemCompress(kemSub(v[i], w[i]), 1) == 1 {
+			m[i/8] |= 1 << (i % 8)
+		}
+	}
+	return m
+}
+
+// kemPairwise ports ml_kem_kmgmt.c ml_kem_pairwise_test for a parsed
+// expanded key dk: encapsulate to its public key, decapsulate with its
+// private key (implicit rejection on a mismatch) and compare the secrets.
+// OpenSSL's default provider uses random entropy here; for a consistent
+// key the test passes for every entropy, and for a key whose private
+// vector does not match the public key it fails for all but a negligible
+// fraction, so a fixed message (OpenSSL's FIXED_PCT value) decides it.
+func kemPairwise(rank int, dk []byte) bool {
+	vec := 384 * rank
+	ek := dk[vec : 2*vec+32]
+	h, z := dk[2*vec+32:2*vec+64], dk[2*vec+64:]
+	m := bytes.Repeat([]byte{0x55}, 32)
+	g := sha3.New512()
+	g.Write(m)
+	g.Write(h)
+	kr := g.Sum(nil)
+	c := kemEncrypt(rank, ek, m, kr[32:])
+	// Decapsulation.
+	m2 := kemDecrypt(rank, dk[:vec], c)
+	g.Reset()
+	g.Write(m2)
+	g.Write(h)
+	kr2 := g.Sum(nil)
+	secret := kr2[:32]
+	if !bytes.Equal(kemEncrypt(rank, ek, m2, kr2[32:]), c) {
+		j := sha3.NewSHAKE256()
+		j.Write(z)
+		j.Write(c)
+		secret = make([]byte, 32)
+		j.Read(secret)
+	}
+	return bytes.Equal(secret, kr[:32])
 }

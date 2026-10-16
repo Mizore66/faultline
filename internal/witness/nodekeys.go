@@ -239,11 +239,19 @@ func (e *osslEnv) pkcs82pkeyLegacy(p8 *asn1Value) *keyObject {
 
 // legacyPrivDecode is the method's priv_decode(_ex) (the same key_from_pkcs8
 // functions the provider uses; RSA's does not check the type flags).
+//
+// eckey_priv_decode assigns the key with EVP_PKEY_assign_EC_KEY, and
+// EVP_PKEY_assign makes a key on the SM2 curve an SM2 key whatever type
+// was asked for.
 func (e *osslEnv) legacyPrivDecode(desc *keyDesc, p8 *asn1Value) *decodedKey {
 	if desc == descSM2 {
 		desc = descEC
 	}
-	return e.keyFromPKCS8(desc, p8)
+	k := e.keyFromPKCS8(desc, p8)
+	if k != nil && desc == descEC && k.sm2 {
+		k.desc = descSM2
+	}
+	return k
 }
 
 func descForType(t keyType) *keyDesc {
