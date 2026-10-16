@@ -689,8 +689,15 @@ var liveGatedFiles = map[string]string{
 	"internal/sandbox/plan.go":            "TestLiveSandboxPlan",
 	// The OpenSSL PEM and DER readers: their reason texts are compared on
 	// thousands of generated key texts (round 8).
-	"internal/witness/pemread.go": "TestLivePEMKeyParsing",
-	"internal/witness/asn1dec.go": "TestLivePEMKeyParsing",
+	"internal/witness/pemread.go":  "TestLivePEMKeyParsing",
+	"internal/witness/asn1dec.go":  "TestLivePEMKeyParsing",
+	"internal/witness/osslpem.go":  "TestLivePEMKeyParsing",
+	"internal/witness/decoder.go":  "TestLivePEMKeyParsing",
+	"internal/witness/keyalgs.go":  "TestLivePEMKeyParsing",
+	"internal/witness/ecgroup.go":  "TestLivePEMKeyParsing",
+	"internal/witness/nodekeys.go": "TestLivePEMKeyParsing",
+	"internal/witness/pqkeys.go":   "TestLivePEMKeyParsing",
+	"internal/witness/mlkem.go":    "TestLivePEMKeyParsing",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally
