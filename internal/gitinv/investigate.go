@@ -757,7 +757,7 @@ func investigate(request jsjson.Value, runner sandbox.Runner, injected bool) (js
 		return nil
 	})
 	// mkdtemp created this exact directory beneath the OS temp root, never a caller-provided path.
-	if err := nodefs.RemoveAll(tempRoot); err != nil {
+	if err := nodefs.RemoveAllAsync(tempRoot); err != nil {
 		return jsjson.Value{}, err
 	}
 	if bodyErr != nil {

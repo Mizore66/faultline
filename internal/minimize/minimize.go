@@ -903,7 +903,7 @@ func (r *run) executeCandidate(direction string, candidateIDs []string, role str
 			r.errs = append(r.errs, jsexc.Message(cleanupError))
 		}
 	}
-	if err := nodefs.RemoveAll(tempRoot); err != nil {
+	if err := nodefs.RemoveAllAsync(tempRoot); err != nil {
 		jsexc.Throw(err)
 	}
 	finishedEpoch := clock.NowMillis()

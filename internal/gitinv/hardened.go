@@ -383,7 +383,7 @@ func MaterializeGitTree(repository, commit, tempRoot, name string) (Materialized
 	}
 	session := HardenedOptions{Repository: worktree, GitDir: gitDir, WorkTree: worktree, IndexFile: indexFile}
 	cleanup := func() error {
-		err := nodefs.RemoveAll(worktree)
+		err := nodefs.RemoveAllAsync(worktree)
 		if err == nil {
 			err = removeForce(indexFile) // rm(indexFile, { force: true }) is not recursive
 		}

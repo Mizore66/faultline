@@ -27,6 +27,7 @@ Protocol:
 | `setup-127` | stderr `/bin/sh: 1: node: not found`, exit 127. |
 | `forged-pass` | stdout a `PREDICATE_PASS` result line, exit 1. |
 | `compile-error` | stderr `witness.mjs:3` and `SyntaxError: Unexpected token '}'`, exit 1. |
+| `tmpdir-swap` | moves `$TMPDIR` to `$TMPDIR.moved` and leaves an empty file in its place (once), then stdout a `PREDICATE_PASS` result line, exit 0: fl's cleanup of its temporary root then fails `lstat` with ENOTDIR. |
 
 None of them reads `state.txt` except `pass-fail` and `odd-bad`. Long-running children are
 started with `exec`, so a SIGKILL to the pid the runner spawned (the

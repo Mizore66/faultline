@@ -1,0 +1,16 @@
+#!/bin/sh
+# Fake Docker "tmpdir-swap" (README.md): `run` moves $TMPDIR aside and puts
+# a file in its place, then passes like pass-fail's good state, so fl's
+# later temporary paths there fail with ENOTDIR. `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  if [ -d "$TMPDIR" ]; then
+    mv "$TMPDIR" "$TMPDIR.moved" && : > "$TMPDIR"
+  fi
+  printf 'FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n'
+  exit 0
+  ;;
+esac
+printf 'fake docker (tmpdir-swap): unsupported command: %s\n' "$1" >&2
+exit 125
