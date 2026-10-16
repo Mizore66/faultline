@@ -78,7 +78,7 @@ A ledger binding is staged as `.<base>.<pid>.<uuid>.tmp` next to its destination
 
 `investigate git` and `minimize git` remove their temporary root with `fs/promises.rm`, whose callback rimraf starts on every child of a directory at once and reports whichever failure completes first; Go removes the children in name order and reports the first failure in that order. Both attempt every child, so only the message can differ, and only when two children both fail to be removed.
 
-Error text under injected I/O faults: when a single `stat` of a bundle stage's `runs` or `source` directory fails (strace `inject` with `when=1`), TS reports `scandir '<stage>/runs'` and Go `mkdir '<stage>/runs'`. Node's `mkdirSync({ recursive: true })` checks the directory with `statx`, then `lstat`, then `opendir`, and Go's port with one `stat`, so the one failing call lands on different steps; when every such call fails both report `scandir`. No real filesystem fails one `stat` of a directory it has just created, so the call sequence is not reproduced.
+Stat calls follow libuv on Linux: `lstat`, `stat` and `fstat` are `statx` (with libuv's fallback to the old calls where `statx` is refused), and a directory opened for listing is checked with `fstatat(fd, "", AT_EMPTY_PATH)` as glibc 2.36's `opendir` does, so a fault injected on one stat-family syscall lands on the same step in both (round 7 #12). Other Unix systems use Go's `stat`, `lstat` and `fstat`, which are the calls libuv makes there.
 
 ## `ENOTDIR` on Windows
 

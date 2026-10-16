@@ -76,11 +76,12 @@ func scandirOnce(path string) ([]string, []uint8, error) {
 	defer syscall.Close(fd)
 	// glibc's opendir_tail fstats the new descriptor (for st_blksize) and
 	// checks S_ISDIR; a failing fstat fails the scandir with its errno.
-	var st syscall.Stat_t
-	if err := syscall.Fstat(fd, &st); err != nil {
+	// glibc 2.36's fstat is fstatat(fd, "", AT_EMPTY_PATH) (fstatDir).
+	typ, err := fstatDir(fd)
+	if err != nil {
 		return nil, nil, err
 	}
-	if st.Mode&syscall.S_IFMT != syscall.S_IFDIR {
+	if typ != syscall.S_IFDIR {
 		return nil, nil, syscall.ENOTDIR
 	}
 	d := direntReader{fd: fd}

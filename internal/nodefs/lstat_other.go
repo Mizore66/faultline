@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package nodefs
 
@@ -15,6 +15,9 @@ func statRaw(raw string, follow bool) (fs.FileInfo, error) {
 	}
 	return os.Lstat(raw)
 }
+
+// fstatFile is uv_fs_fstat: fstat(2).
+func fstatFile(f *os.File) (fs.FileInfo, error) { return f.Stat() }
 
 // exists is uv_fs_access(raw, F_OK): access(2), which libuv retries on
 // EINTR. It differs from stat(2) where a filesystem answers the two

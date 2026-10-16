@@ -275,7 +275,7 @@ func ReadBytes(path string) (data []byte, err error) {
 		return nil, err
 	}
 	var info fs.FileInfo
-	err = retryEINTR(func() (e error) { info, e = f.Stat(); return })
+	err = retryEINTR(func() (e error) { info, e = fstatFile(f); return })
 	if err != nil {
 		// The throw leaves tryStatSync before its closeSync, so Node never
 		// closes the descriptor; on a filesystem that fails getattr while

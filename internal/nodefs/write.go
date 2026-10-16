@@ -100,7 +100,7 @@ func mkdirp(raw string, mode fs.FileMode) string {
 				}
 			default:
 				orig := code
-				info, serr := os.Stat(next)
+				info, serr := statRaw(next, true) // uv_fs_stat
 				if serr == nil && !info.IsDir() {
 					if orig == "EEXIST" && len(paths) > 0 {
 						return "ENOTDIR"
