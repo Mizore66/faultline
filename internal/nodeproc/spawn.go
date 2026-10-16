@@ -275,12 +275,12 @@ func isArrayIndex(key string) bool {
 	if key == "" || len(key) > 10 || key[0] == '0' && len(key) > 1 {
 		return false
 	}
-	n := 0
+	var n uint64 // ten digits overflow a 32-bit int
 	for i := 0; i < len(key); i++ {
 		if key[i] < '0' || key[i] > '9' {
 			return false
 		}
-		n = n*10 + int(key[i]-'0')
+		n = n*10 + uint64(key[i]-'0')
 	}
 	return n < 1<<32-1
 }
