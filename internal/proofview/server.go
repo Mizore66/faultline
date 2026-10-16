@@ -139,8 +139,10 @@ func StartGitProofServer(v View, port float64) (*Server, error) {
 		nodeHeaders(h, r)
 		writeNodeBody(w, r, 404, "Not found")
 	})
-	// Node's keepAliveTimeout is 5 s.
-	srv := &http.Server{Handler: handler, IdleTimeout: 5 * time.Second}
+	// Node's keepAliveTimeout is 5 s. Node passes `OPTIONS *` to the
+	// handler like any other request (a 404 here); net/http would answer it
+	// with 200 itself.
+	srv := &http.Server{Handler: handler, IdleTimeout: 5 * time.Second, DisableGeneralOptionsHandler: true}
 	go srv.Serve(listener)
 	// A TCP listener always reports a TCP address, so the TS "did not
 	// report a TCP address" branch is unreachable and not ported.

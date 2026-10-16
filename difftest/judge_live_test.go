@@ -154,15 +154,16 @@ func startJudge(t *testing.T, repo string, side judgeSide, env []string, args ..
 
 // TestLiveJudgeServer serves the committed sample with TS and Go and
 // compares status, headers and body for GET /, GET /x, POST /api/rerun,
-// HEAD /, query, dot-segment and scheme-relative forms of /, HTTP/1.0
-// requests and a `Connection: close` request.
+// HEAD /, query, dot-segment and scheme-relative forms of /, `OPTIONS *`
+// (which net/http would answer itself), HTTP/1.0 requests and a
+// `Connection: close` request.
 func TestLiveJudgeServer(t *testing.T) {
 	oracle.Skip(t)
 	repo := repoRoot(t)
 	requests := []judgeRequest{
 		{"GET", "/", "HTTP/1.1", ""}, {"GET", "/x", "HTTP/1.1", ""}, {"POST", "/api/rerun", "HTTP/1.1", "Content-Length: 0"},
 		{"HEAD", "/", "HTTP/1.1", ""}, {"GET", "/?a=1", "HTTP/1.1", ""}, {"GET", "/x/..", "HTTP/1.1", ""}, {"GET", "/%2e", "HTTP/1.1", ""},
-		{"GET", "//host/", "HTTP/1.1", ""}, {"GET", "//host/x", "HTTP/1.1", ""},
+		{"GET", "//host/", "HTTP/1.1", ""}, {"GET", "//host/x", "HTTP/1.1", ""}, {"OPTIONS", "*", "HTTP/1.1", ""}, {"OPTIONS", "/", "HTTP/1.1", ""},
 		{"GET", "/", "HTTP/1.1", "Connection: close"}, {"GET", "/", "HTTP/1.0", ""}, {"GET", "/x", "HTTP/1.0", "Connection: keep-alive"}, {"HEAD", "/", "HTTP/1.0", ""},
 	}
 	replies := map[string][]httpReply{}
