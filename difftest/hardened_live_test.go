@@ -232,7 +232,15 @@ func TestLiveHardenedGit(t *testing.T) {
 				want.Stderr.Text != nil && string(latin1(*want.Stderr.Text)) != string(got.Stderr) {
 				t.Fatal("output text differs")
 			}
+			recordOutput(t, gotErr+"\n"+deref(want.Stderr.Text))
 		})
+	}
+	// The bounded-run reasons (listed in unreachableLiterals for the
+	// materialization gate, which cannot make a real git slow or flood).
+	for _, reason := range []string{"Git command exceeded bounded execution time", "Git command exceeded bounded output limit"} {
+		if !strings.Contains(recordedOutputs(t), reason) {
+			t.Errorf("no case reached %q", reason)
+		}
 	}
 }
 

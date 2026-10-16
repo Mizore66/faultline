@@ -107,3 +107,5 @@ TestWriterReplay/posix/investigate-frozen-is-dir
 TestWriterReplay/posix/minimize-git-output-root-is-file
 TestWriterReplay/posix/investigate-docker-exact-limit
 TestWriterReplay/posix/judge-proof-default-port-in-use
+TestWriterReplay/posix/minimize-git-output-backslash
+TestWriterReplay/posix/commit-proof-preview-no-regression

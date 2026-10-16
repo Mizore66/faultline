@@ -503,7 +503,9 @@ export function normalizeWriter(text: string, roots: { ws: string; tmp: string; 
   for (const [path, mask] of [[roots.ws, "<WS>"], [roots.tmp, "<TMP>"], [roots.home, "<HOME>"]] as const) {
     out = out.split(path).join(mask);
   }
-  out = out.replace(/127\.0\.0\.1:[0-9]+/g, "127.0.0.1:<PORT>");
+  // A random port; judge-proof's fixed default 4174 stays (the Go twin is
+  // loopbackPort).
+  out = out.replace(/127\.0\.0\.1:([0-9]+)/g, (whole, port: string) => (port === "4174" ? whole : "127.0.0.1:<PORT>"));
   // The process id in an atomic write's staged name (.<name>.<pid>.<uuid>.tmp).
   out = out.replace(/\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp/g, ".<pid>.$1.tmp");
   return maskGitOutput(out, true);

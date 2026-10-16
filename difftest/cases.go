@@ -827,7 +827,13 @@ func normalizeWriter(text string, roots writerRoots) string {
 			out = strings.ReplaceAll(out, p, m[1])
 		}
 	}
-	out = loopbackPort.ReplaceAllString(out, "127.0.0.1:<PORT>")
+	// A random port; judge-proof's fixed default 4174 stays (gen/cases.ts).
+	out = loopbackPort.ReplaceAllStringFunc(out, func(s string) string {
+		if s == "127.0.0.1:4174" {
+			return s
+		}
+		return "127.0.0.1:<PORT>"
+	})
 	out = stagedPID.ReplaceAllString(out, ".<pid>.$1.tmp")
 	out = maskGitOutput(out, true)
 	if runtime.GOOS == "windows" {

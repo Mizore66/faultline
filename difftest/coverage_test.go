@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -111,7 +112,6 @@ var unreachableLiterals = map[string]string{
 	"not yet ported: witness propose --live":         "witness propose --live calls OpenAI in TS (slice 5); TestWitnessUnported pins the text",
 	"not yet ported: witness %s":                     "witness implement/review call a model in TS; TestWitnessUnported pins the text",
 	"%s must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).": "Go-only flags (KNOWN_DIFFERENCES: Codex thread IDs): TS ignores them, so no golden can hold the refusal; TestInvestigateUsageAndGuards pins it",
-	"%s output must have a file name.": "the output resolves strictly beneath the managed root (checked just before), so its relative path has at least one segment",
 	// Witness store invariants and earlier refusals.
 	"Reviewer public key could not be exported as SPKI DER.":               "x509.MarshalPKIXPublicKey of an Ed25519 key never fails; Node's export of a parsed Ed25519 key neither",
 	"Reviewer key must use Ed25519.":                                       "publicKeyFingerprint is called only after the keyring parser or witness sign refused non-Ed25519 keys with their own messages",
@@ -128,6 +128,58 @@ var unreachableLiterals = map[string]string{
 	"Witness lock path escaped its configured store":                       "proposalId is schema-checked as a safe filename segment first",
 	"Standing approval refused:":                                           "the CLI applies a policy only after matchStandingApprovalPolicy accepted the same proposal (tryAutoFreezeFromStandingPolicy, resolveAutonomousProposal)",
 	"unknown OpenSSL reason":                                               "a programming error: every reason the PEM and DER readers raise is in the generated table (TestPEMProbes would panic)",
+
+	// Round 8 review: messages that flow through return values, []string
+	// helpers, cross-package helpers and message variables.
+	// Defaults overwritten before use or reached only through an earlier refusal:
+	"invalid ledger":                                               "errorSummary of an empty list: a failed schema parse has at least one issue and a failed verification at least one error",
+	"Investigation did not produce proof.":                         "baseResult's default reason; every caller passes at least one error",
+	"Frozen witness did not match the externally supplied digest.": "VerifyFrozenWitnessRecord reports an error whenever it is not a MATCH with an expected digest supplied, so the fallback list is never used",
+	"A separately supplied frozen witness digest did not match.":   "VerifyFrozenWitnessRecord reports an error whenever it is not a MATCH with an expected digest supplied, so the fallback list is never used",
+	"Git range resolved to no states.":                             "resolveCommitRange always returns the ancestor at least",
+	"Sandbox configuration failed.":                                "a configuration error is always recorded in errs first, whose first entry becomes the reason",
+	"An injected runner produced these observations; FaultLine refuses to certify it as native Docker proof.":                                                                                   "the CLI always runs the native Docker runner; only an injected runner (library callers) gets here",
+	"Unsafe local execution is explicitly inapplicable and cannot be proof.":                                                                                                                    "the sandbox schemas accept only DOCKER_ISOLATED for new runs, so no CLI run is UNSAFE_LOCAL",
+	"Unsafe local execution is explicitly inapplicable and cannot support proof.":                                                                                                               "the sandbox schemas accept only DOCKER_ISOLATED for new runs, so no CLI run is UNSAFE_LOCAL",
+	"Environment descriptors (lockfiles/toolchains) changed across the investigated range; FaultLine refuses a single-image proof grade. Provide per-fingerprint runtimes or narrow the range.": "the preflight refuses a heterogeneous range without a complete mapping (CONFIGURATION_ERROR) before any run, and a mapped range is complete",
+	"the bundle changed while its artifacts were being read":                                                                                                                                    "race only: a failed re-verification always reports its errors, which replace this default",
+	"the bundle presentation artifacts changed during verification":                                                                                                                             "race only: the bundle is verified three times in a row",
+	"no valid root digest was produced":                                                                                                                                                         "a failed verification always reports at least one error, which replaces this default",
+	"FaultLine refuses to name a first bad state without a stable bracket.":                                                                                                                     "page text: commit-proof-preview-no-regression writes it into the preview HTML, which the writer golden compares by digest (goldens hold file digests, not contents)",
+	"human owned the question after execution; digests identical":                                                                                                                               "the default ratification note is written into the ratification record, which the CLI does not print and the writer goldens hash (the file digest covers it)",
+	"--require-signature needs a reviewer keyring":                                                                                                                                              "the CLI refuses --require-signature without --keyring itself (\"--require-signature needs --keyring …\") before verification runs",
+	"authenticated reviewer signature cannot be trusted without a reviewer keyring":                                                                                                             "the CLI refuses --require-signature without --keyring itself before verification runs",
+	"frozen witness changed during authenticated approval verification":                                                                                                                         "race only: the frozen record verified an instant before is read again",
+	"policy network must be disabled":                                                                                                                                                           "the policy schema requires network \"disabled\" (a zod literal), parsed before matching",
+	"proposal network is not disabled":                                                                                                                                                          "the proposal schema requires network \"disabled\" (a zod literal)",
+	"proposal credentials are not redacted":                                                                                                                                                     "the proposal schema requires credentials \"redacted\" (a zod literal)",
+	"Invalid lifecycle ledger at":                                                                                                                                                               "both callers bind a ledger that readVerifiedCodexLifecycleLedger, or the bound-record schema, already parsed with the same schema",
+	"Invalid Git investigation at":                                                                                                                                                              "both callers bind an investigation already parsed with the same schema (the CLI, the investigation result, the bound-record schema)",
+	"Invalid Git checkpoint at":                                                                                                                                                                 "the ledger schema parses every WORKTREE_CHECKPOINT payload's checkpoint with the same schema first",
+	"Invalid turn tree snapshot at":                                                                                                                                                             "the ledger schema parses every snapshot payload with the same schema first",
+	"content mismatch":                                                                                                                                                                          "git diff-files --quiet reports a difference by exit 1 with no stderr only when the worktree changes under the fresh checkout (race only); the bounded-run reasons are checked by TestLiveHardenedGit",
+	"Git command exceeded bounded execution time":                                                                                                                                               "materialization runs a real git over a fresh checkout; TestLiveHardenedGit compares this reason with a slow fake git",
+	"Git command exceeded bounded output limit":                                                                                                                                                 "materialization runs a real git over a fresh checkout; TestLiveHardenedGit compares this reason with a flooding fake git",
+	"must be a string, Uint8Array, or URL without null bytes":                                                                                                                                   "a source directory holds no NUL byte: it is a worktree path fl built under its own temp root",
+	// minimize.go (live-gated by TestLiveMinimize): branches its generated
+	// repositories cannot take.
+	"Minimization did not produce proof.":                                            "baseResult's default reason; every caller passes at least one error",
+	"Git returned no patch.":                                                         "git diff of a path the same name-status listing just reported always prints a patch or fails with stderr",
+	"Sandbox plan could not be created:":                                             "the plan request is the validated sandbox with a worktree fl just created; createSandboxPlan accepts it (TestLiveSandboxPlan covers the refusals)",
+	"FaultLine did not produce a patch application result.":                          "every path through the probe sets the application fact before this fallback",
+	"No sandbox execution was produced.":                                             "every path through the probe sets a note before this fallback",
+	"Git apply failed.":                                                              "git apply --index of a patch derived from the same base commit applies; a failure needs a corrupted patch",
+	"Patch application is unresolved:":                                               "git apply --index of a patch derived from the same base commit applies, and only the selected paths change",
+	"Could not verify applied patch scope:":                                          "git diff --cached --name-only -z after an apply fl just ran fails only on an I/O error",
+	"Git apply changed paths outside the selected patch units:":                      "a patch built from the selected units' own diffs changes only their paths",
+	"Certification executions were not distinct.":                                    "each execution draws a fresh UUID nonce, so three executions are always distinct",
+	"Docker was unavailable; no counterfactual result is proof.":                     "a SANDBOX_UNAVAILABLE run makes the baseline unresolved, which ends the search before certification",
+	"Execution budget was exhausted before necessity certification.":                 "certification starts only below the budget, and necessity runs only if sufficiency left budget; the budget-exhausted outcome is reported through the status instead",
+	"The execution budget was exhausted before one-minimality could be established.": "the ddmin phases exhaust the budget first, which the minimality reason already reports (the other copy of this text, at the start of the removal pass, is reached)",
+	"Every single-unit removal was tested.":                                          "overwritten: a completed removal pass sets \"Every single-unit removal produced a Docker PASS.\" or the unresolved reason",
+	"A smaller failing candidate was found; retesting its removals.":                 "overwritten when the restarted removal pass completes",
+	"Every single-hunk removal was tested.":                                          "overwritten: a completed hunk pass sets the after-file-level-refinement reason",
+	"A smaller failing hunk candidate was found; retesting its removals.":            "overwritten when the restarted hunk pass completes",
 	// Labels of read helpers whose failure an earlier read of the same file
 	// reports first.
 	"portable Git bundle":       "race only: sourceMetadataFromArtifacts read the same file as \"source Git bundle\" just before (assertRegularFile, then the read)",
@@ -192,188 +244,544 @@ type errorSite struct {
 	line            int
 }
 
-// errorSites collects the string literals in dir that become error text:
-//   - the arguments of errors.New, fmt.Errorf, jsexc.Throw/bundle.Throw and
-//     panic, and the message of schema.Regex and schema.Refine (their last
-//     argument: zod's custom issue messages);
-//   - append(errs, ...) and local error-adding closures (such as
-//     `add := func(s string) { errs = append(errs, s) }`), and error lists
-//     built as literals (Result{Errors: []string{"…"}}, `return []string{…}`);
-//   - the message field of an error struct literal (&XError{...}, the field
-//     its Error method returns, positional or keyed);
-//   - the message argument of an error helper: a function or method whose
-//     string parameter reaches one of the above (directly, or through
-//     jsexc.Concat, fmt.Sprintf or +), found to a fixpoint, so throw(...)
-//     in witness, fail(...) in cli and the jsre parser's p.fail(...) count,
-//     and so does a helper that calls them (round 7: 26 messages thrown
-//     through these were never collected);
-//   - the text argument of a message constructor: a function named …Err
-//     that returns fmt.Sprintf of a string parameter (pemErr, asn1Err),
-//     wherever it is called.
+// errorSites collects the string literals in dir that become error or
+// refusal text, by following message flow through every internal package
+// (round 7 #4, round 8 review):
+//   - sinks: the arguments of errors.New, fmt.Errorf, jsexc.Throw /
+//     bundle.Throw and panic; the message of schema.Regex and schema.Refine
+//     (their last argument, zod's custom issue message); the message field
+//     of an error struct literal (the field its Error method returns); a
+//     composite-literal field or a JSON key ("errors", "reason", "note", …,
+//     followed by its value in obj(…), o.Set(…), MustObject(…)) named like a
+//     message (messageName);
+//   - message variables: a local variable, parameter or field named like a
+//     message, or one that some message expression reads; whatever is
+//     assigned or appended to it is a message expression too;
+//   - helpers: a function, method or local closure whose parameter is a
+//     message variable (witness throw, cli fail, jsre p.fail,
+//     failedVerification, a failure(errs []string, …) closure,
+//     gitproof.IssueLines, nodeproc.InvalidArgValue): its arguments there
+//     are message expressions, across packages;
+//   - message functions: a function whose result is used as a message
+//     (assigned to a message variable or read by a message expression:
+//     outcomeNote, forceRemoveContainer, errorSummary): its returned
+//     expressions at that position are message expressions;
+//   - error lists built as literals (`return []string{"…"}`);
+//   - the text argument of a message constructor (a function named …Err
+//     that returns fmt.Sprintf of a string parameter: pemErr, asn1Err).
+//
+// A message expression is followed through jsexc.Concat, fmt.Sprintf,
+// jsexc.Join, the jsjson/jsstr string wrappers, []string literals, append
+// and +; its literals of at least 12 characters (between format verbs) are
+// the sites. All of internal/ is analysed, so helpers in ungated packages
+// count, but only sites in dir are returned.
 func errorSites(dir string) ([]errorSite, error) {
-	type parsed struct {
-		file *ast.File
-		dir  string
+	a, err := loadFlow(dir)
+	if err != nil {
+		return nil, err
 	}
-	var files []parsed
-	fset := token.NewFileSet()
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+	return a.sites(dir), nil
+}
+
+// flowCache keeps one analysis per module root: errorSites is called once
+// per gated package.
+var flowCache = map[string]*flowAnalysis{}
+
+func loadFlow(dir string) (*flowAnalysis, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	root := abs
+	for {
+		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
+			break
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			return nil, os.ErrNotExist
+		}
+		root = parent
+	}
+	if a := flowCache[root]; a != nil {
+		return a, nil
+	}
+	a := &flowAnalysis{fset: token.NewFileSet(), root: root,
+		helpers: map[string]map[int]bool{}, results: map[string]map[int]bool{}, vars: map[string]bool{},
+		structs: map[string]errorStruct{}, constructors: map[string]int{}, found: map[string]errorSite{}}
+	err = filepath.Walk(filepath.Join(root, "internal"), func(path string, info os.FileInfo, err error) error {
+		// testing.go files are test support compiled into their package.
+		if err != nil || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || filepath.Base(path) == "testing.go" {
 			return err
 		}
-		f, err := parser.ParseFile(fset, path, nil, 0)
+		f, err := parser.ParseFile(a.fset, path, nil, 0)
 		if err != nil {
 			return err
 		}
-		files = append(files, parsed{f, filepath.Dir(path)})
+		a.files = append(a.files, flowFile{f, filepath.Dir(path), path, fileImports(f)})
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	// Per package directory: error struct types (name → message field
-	// index and name), helpers (name → message parameter indexes; methods
-	// are keyed ".name") and message constructors.
-	type pkgInfo struct {
-		structs      map[string]errorStruct
-		helpers      map[string]map[int]bool
-		constructors map[string]int
-	}
-	pkgs := map[string]*pkgInfo{}
-	for _, p := range files {
-		if pkgs[p.dir] == nil {
-			pkgs[p.dir] = &pkgInfo{map[string]errorStruct{}, map[string]map[int]bool{}, map[string]int{}}
+	for _, f := range a.files {
+		for name, s := range errorStructs(f.file) {
+			a.structs[f.dir+"."+name] = s
+		}
+		for name, i := range messageConstructors(f.file) {
+			a.constructors[f.dir+"."+name] = i
 		}
 	}
-	for _, p := range files {
-		info := pkgs[p.dir]
-		for name, s := range errorStructs(p.file) {
-			info.structs[name] = s
+	a.run()
+	flowCache[root] = a
+	return a, nil
+}
+
+type flowFile struct {
+	file      *ast.File
+	dir, path string
+	imports   map[string]string // local name → package directory
+}
+
+// fileImports maps the local names of f's module imports to their directories.
+func fileImports(f *ast.File) map[string]string {
+	const module = "github.com/Mizore66/faultline/"
+	out := map[string]string{}
+	for _, imp := range f.Imports {
+		p := strings.Trim(imp.Path.Value, `"`)
+		if !strings.HasPrefix(p, module) {
+			continue
 		}
-		for name, i := range messageConstructors(p.file) {
-			info.constructors[name] = i
+		name := p[strings.LastIndex(p, "/")+1:]
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		out[name] = filepath.FromSlash(strings.TrimPrefix(p, module))
+	}
+	return out
+}
+
+type flowAnalysis struct {
+	fset  *token.FileSet
+	root  string
+	files []flowFile
+	// helpers and results are keyed by function: "<dir>.<name>" (a method
+	// or closure: "<dir>..<name>"); vars by "<function>|<name>".
+	helpers, results map[string]map[int]bool
+	vars             map[string]bool
+	structs          map[string]errorStruct
+	constructors     map[string]int
+	found            map[string]errorSite // by position
+	changed          bool
+}
+
+// messageWords are the identifier words (camelCase split, lower case) and
+// JSON keys that name a message.
+var messageWords = map[string]bool{
+	"err": true, "errs": true, "error": true, "errors": true, "reason": true, "reasons": true,
+	"note": true, "notes": true, "detail": true, "details": true, "message": true, "messages": true,
+	"msg": true, "stderr": true,
+}
+
+var identWord = regexp.MustCompile(`[A-Z]?[a-z0-9]+|[A-Z]+(?:[A-Z][a-z]|$)`)
+
+// messageName reports whether an identifier or key names a message.
+func messageName(name string) bool {
+	for _, w := range identWord.FindAllString(name, -1) {
+		if messageWords[strings.ToLower(w)] {
+			return true
 		}
 	}
-	// sinkArgs gives the arguments of a call that carry error text, or nil.
-	sinkArgs := func(info *pkgInfo, adders map[string]bool, call *ast.CallExpr) []ast.Expr {
-		args := call.Args
-		switch fn := call.Fun.(type) {
-		case *ast.Ident:
-			switch {
-			case fn.Name == "panic" || adders[fn.Name]:
-				return args
-			case fn.Name == "append" && len(args) >= 2 && appendsToErrors(args[0]):
-				return args[1:]
-			case info.helpers[fn.Name] != nil:
-				return pickArgs(args, info.helpers[fn.Name])
+	return false
+}
+
+// dataName are parameter names that carry data a message quotes (a path,
+// a pattern, an id), never message text: a helper is not inferred from
+// them (jsre.MustCompile's source). Nor is one inferred in the system-call
+// wrappers (systemPackages), whose errors quote their arguments
+// (nodefs.Mkdtemp's prefix).
+var dataName = map[string]bool{
+	"path": true, "paths": true, "dir": true, "directory": true, "root": true, "file": true,
+	"source": true, "flags": true, "pattern": true, "target": true, "src": true, "dest": true,
+	"destination": true, "repository": true, "cwd": true, "id": true, "commit": true, "revision": true,
+	"name": true, "value": true, "argv": true, "args": true,
+}
+
+var systemPackages = map[string]bool{"nodefs": true, "nodeproc": true, "safedir": true}
+
+// flowFunc is one function body being analysed.
+type flowFunc struct {
+	key    string
+	params map[string]int
+	file   *flowFile
+}
+
+func (a *flowAnalysis) run() {
+	for pass := 0; ; pass++ {
+		a.changed = false
+		for i := range a.files {
+			f := &a.files[i]
+			a.visitFile(f)
+		}
+		if !a.changed || pass > 50 {
+			return
+		}
+	}
+}
+
+func (a *flowAnalysis) mark(m map[string]map[int]bool, key string, i int) {
+	if m[key] == nil {
+		m[key] = map[int]bool{}
+	}
+	if !m[key][i] {
+		m[key][i] = true
+		a.changed = true
+	}
+}
+
+func (a *flowAnalysis) markVar(fn *flowFunc, name string) {
+	k := fn.key + "|" + name
+	if !a.vars[k] {
+		a.vars[k] = true
+		a.changed = true
+	}
+	if i, ok := fn.params[name]; ok {
+		a.mark(a.helpers, fn.key, i)
+	}
+}
+
+func (a *flowAnalysis) isVar(fn *flowFunc, name string) bool {
+	return messageName(name) || a.vars[fn.key+"|"+name]
+}
+
+// funcKey resolves the function a call names: a package function or a
+// cross-package one, or a method or closure by name in the package.
+func (a *flowAnalysis) funcKeys(f *flowFile, call *ast.CallExpr) []string {
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		return []string{f.dir + "." + fn.Name, f.dir + ".." + fn.Name}
+	case *ast.SelectorExpr:
+		if x, ok := fn.X.(*ast.Ident); ok {
+			if d, ok := f.imports[x.Name]; ok {
+				return []string{filepath.Join(a.root, d) + "." + fn.Sel.Name}
 			}
-		case *ast.SelectorExpr:
-			switch fn.Sel.Name {
-			case "New", "Errorf", "Throw":
-				return args
-			case "Regex", "Refine":
-				if len(args) > 0 {
-					return args[len(args)-1:]
-				}
-			}
-			if h := info.helpers["."+fn.Sel.Name]; h != nil {
-				return pickArgs(args, h)
-			}
 		}
-		return nil
+		return []string{f.dir + ".." + fn.Sel.Name, "*.." + fn.Sel.Name}
 	}
-	// structArg is the message field's value of an error struct literal.
-	structArg := func(info *pkgInfo, lit *ast.CompositeLit) ast.Expr {
-		s, ok := info.structs[exprString(lit.Type)]
-		if !ok {
-			return nil
-		}
-		for i, e := range lit.Elts {
-			if kv, ok := e.(*ast.KeyValueExpr); ok {
-				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == s.field {
-					return kv.Value
-				}
-			} else if i == s.index {
-				return e
-			}
-		}
-		return nil
-	}
-	// Helpers to a fixpoint: a string parameter that reaches a sink.
-	for changed := true; changed; {
-		changed = false
-		for _, p := range files {
-			info := pkgs[p.dir]
-			adders := errorClosures(p.file)
-			forEachFunc(p.file, func(name string, typ *ast.FuncType, body *ast.BlockStmt) {
-				params := stringParams(typ)
-				if len(params) == 0 {
-					return
-				}
-				ast.Inspect(body, func(n ast.Node) bool {
-					var carried []ast.Expr
-					switch n := n.(type) {
-					case *ast.CallExpr:
-						carried = sinkArgs(info, adders, n)
-					case *ast.CompositeLit:
-						if e := structArg(info, n); e != nil {
-							carried = []ast.Expr{e}
-						}
+	return nil
+}
+
+func (a *flowAnalysis) lookup(m map[string]map[int]bool, keys []string) map[int]bool {
+	out := map[int]bool{}
+	for _, k := range keys {
+		if strings.HasPrefix(k, "*..") {
+			name := k[1:]
+			for key, v := range m {
+				if strings.HasSuffix(key, name) {
+					for i := range v {
+						out[i] = true
 					}
-					for _, e := range carried {
-						for _, i := range flowingParams(e, params) {
-							if info.helpers[name] == nil {
-								info.helpers[name] = map[int]bool{}
-							}
-							if !info.helpers[name][i] {
-								info.helpers[name][i] = true
-								changed = true
-							}
-						}
+				}
+			}
+			continue
+		}
+		for i := range m[k] {
+			out[i] = true
+		}
+	}
+	return out
+}
+
+func (a *flowAnalysis) visitFile(f *flowFile) {
+	forEachFunc(f.file, func(name string, typ *ast.FuncType, body *ast.BlockStmt, method bool) {
+		key := f.dir + "." + name
+		if method {
+			key = f.dir + ".." + name
+		}
+		fn := &flowFunc{key: key, params: map[string]int{}, file: f}
+		i := 0
+		for _, fld := range typ.Params.List {
+			if len(fld.Names) == 0 {
+				i++
+			}
+			for _, n := range fld.Names {
+				if !dataName[n.Name] && !systemPackages[filepath.Base(f.dir)] {
+					fn.params[n.Name] = i
+				}
+				if messageName(n.Name) {
+					a.mark(a.helpers, key, i)
+				}
+				i++
+			}
+		}
+		var named []string
+		if typ.Results != nil {
+			for _, fld := range typ.Results.List {
+				if len(fld.Names) == 0 {
+					named = append(named, "")
+				}
+				for _, n := range fld.Names {
+					named = append(named, n.Name)
+				}
+			}
+		}
+		ast.Inspect(body, func(n ast.Node) bool {
+			// A closure's returns are its own; the rest of its body shares
+			// the enclosing function's variables (a named closure is also
+			// analysed on its own, as a helper).
+			if lit, ok := n.(*ast.FuncLit); ok && lit.Body != body {
+				ast.Inspect(lit.Body, func(m ast.Node) bool {
+					if _, ok := m.(*ast.ReturnStmt); !ok {
+						a.visitNode(fn, m, nil)
 					}
 					return true
 				})
+				return false
+			}
+			a.visitNode(fn, n, named)
+			return true
+		})
+	})
+	// Package-level declarations (schemas with custom messages).
+	top := &flowFunc{key: f.dir + ".<package>", params: map[string]int{}, file: f}
+	for _, d := range f.file.Decls {
+		if gen, ok := d.(*ast.GenDecl); ok {
+			ast.Inspect(gen, func(n ast.Node) bool {
+				a.visitNode(top, n, nil)
+				return true
 			})
 		}
 	}
-	var out []errorSite
-	for _, p := range files {
-		info := pkgs[p.dir]
-		adders := errorClosures(p.file)
-		collect := func(exprs []ast.Expr) { collectLiterals(fset, exprs, &out) }
-		ast.Inspect(p.file, func(n ast.Node) bool {
-			// Error lists built as literals: Result{Errors: []string{"…"}}
-			// and `return []string{"…"}` (round 6: seven such messages
-			// were never collected).
-			var lists []ast.Expr
-			switch n := n.(type) {
-			case *ast.KeyValueExpr:
-				if key, ok := n.Key.(*ast.Ident); ok && key.Name == "Errors" {
-					lists = append(lists, n.Value)
+}
+
+// visitNode applies the sink rules of one node of fn.
+func (a *flowAnalysis) visitNode(fn *flowFunc, n ast.Node, named []string) {
+	f := fn.file
+	switch n := n.(type) {
+	case *ast.CallExpr:
+		for _, e := range a.sinkArgs(fn, n) {
+			a.message(fn, e)
+		}
+		if fid, ok := n.Fun.(*ast.Ident); ok {
+			if i, ok := a.constructors[f.dir+"."+fid.Name]; ok && i < len(n.Args) {
+				a.message(fn, n.Args[i])
+			}
+		}
+		// JSON keys: a literal key named like a message, then its value.
+		for i := 0; i+1 < len(n.Args); i++ {
+			if lit, ok := n.Args[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if k, _ := strconv.Unquote(lit.Value); messageWords[k] {
+					a.message(fn, n.Args[i+1])
 				}
-			case *ast.ReturnStmt:
-				lists = n.Results
-			case *ast.CompositeLit:
-				if e := structArg(info, n); e != nil {
-					collect([]ast.Expr{e})
+			}
+		}
+	case *ast.CompositeLit:
+		if s, ok := a.structs[f.dir+"."+exprString(n.Type)]; ok {
+			for i, e := range n.Elts {
+				if kv, ok := e.(*ast.KeyValueExpr); ok {
+					if key, ok := kv.Key.(*ast.Ident); ok && key.Name == s.field {
+						a.message(fn, kv.Value)
+					}
+				} else if i == s.index {
+					a.message(fn, e)
 				}
-			case *ast.CallExpr:
-				if fn, ok := n.Fun.(*ast.Ident); ok {
-					if i, ok := info.constructors[fn.Name]; ok && i < len(n.Args) {
-						collect(n.Args[i : i+1])
+			}
+		}
+		for _, e := range n.Elts {
+			if kv, ok := e.(*ast.KeyValueExpr); ok {
+				if key, ok := kv.Key.(*ast.Ident); ok && messageName(key.Name) {
+					a.message(fn, kv.Value)
+				}
+			}
+		}
+	case *ast.AssignStmt:
+		a.assign(fn, n.Lhs, n.Rhs)
+	case *ast.ValueSpec:
+		lhs := make([]ast.Expr, len(n.Names))
+		for i, id := range n.Names {
+			lhs[i] = id
+		}
+		a.assign(fn, lhs, n.Values)
+	case *ast.ReturnStmt:
+		res := a.results[fn.key]
+		for i, e := range n.Results {
+			if res[i] {
+				a.message(fn, e)
+			}
+			if lit, ok := e.(*ast.CompositeLit); ok && isStringSlice(lit.Type) {
+				a.collect(lit.Elts)
+			}
+		}
+		if len(n.Results) == 0 {
+			for i, name := range named {
+				if res[i] && name != "" {
+					a.markVar(fn, name)
+				}
+			}
+		}
+	}
+}
+
+// assign: a value assigned to a message variable is a message; a call's
+// result assigned to one makes that result a message.
+func (a *flowAnalysis) assign(fn *flowFunc, lhs, rhs []ast.Expr) {
+	target := func(e ast.Expr) bool {
+		for {
+			switch x := e.(type) {
+			case *ast.Ident:
+				return x.Name != "_" && a.isVar(fn, x.Name)
+			case *ast.SelectorExpr:
+				return messageName(x.Sel.Name)
+			case *ast.IndexExpr:
+				e = x.X
+				continue
+			case *ast.StarExpr:
+				e = x.X
+				continue
+			}
+			return false
+		}
+	}
+	if len(rhs) == 1 && len(lhs) > 1 {
+		if call, ok := rhs[0].(*ast.CallExpr); ok {
+			for i, l := range lhs {
+				if target(l) {
+					for _, k := range a.funcKeys(fn.file, call) {
+						a.mark(a.results, k, i)
 					}
 				}
-				collect(sinkArgs(info, adders, n))
 			}
-			for _, e := range lists {
-				if lit, ok := e.(*ast.CompositeLit); ok && isStringSlice(lit.Type) {
-					collect(lit.Elts)
+		}
+		return
+	}
+	for i, l := range lhs {
+		if i < len(rhs) && target(l) {
+			a.message(fn, rhs[i])
+		}
+	}
+}
+
+// sinkArgs are the arguments of call that carry message text.
+func (a *flowAnalysis) sinkArgs(fn *flowFunc, call *ast.CallExpr) []ast.Expr {
+	args := call.Args
+	switch x := call.Fun.(type) {
+	case *ast.Ident:
+		switch x.Name {
+		case "panic":
+			return args
+		case "append":
+			if len(args) >= 2 {
+				t := args[0]
+				for {
+					if s, ok := t.(*ast.SelectorExpr); ok {
+						if messageName(s.Sel.Name) {
+							return args[1:]
+						}
+						break
+					}
+					if st, ok := t.(*ast.StarExpr); ok {
+						t = st.X
+						continue
+					}
+					if id, ok := t.(*ast.Ident); ok && a.isVar(fn, id.Name) {
+						return args[1:]
+					}
+					break
 				}
 			}
-			return true
-		})
+			return nil
+		}
+	case *ast.SelectorExpr:
+		switch x.Sel.Name {
+		case "New", "Errorf", "Throw":
+			if id, ok := x.X.(*ast.Ident); ok && (id.Name == "errors" || id.Name == "fmt" || id.Name == "jsexc" || id.Name == "bundle") {
+				return args
+			}
+		case "Regex", "Refine":
+			if len(args) > 0 {
+				return args[len(args)-1:]
+			}
+		}
 	}
-	return out, nil
+	return pickArgs(args, a.lookup(a.helpers, a.funcKeys(fn.file, call)))
+}
+
+// transparent are the calls a message flows through unchanged.
+var transparent = map[string]bool{
+	"Concat": true, "Sprintf": true, "Join": true, "MakeString": true, "ToUTF8": true, "Trim": true, "TrimSpace": true,
+	"jsStrings": true, "stringList": true, "stringArray": true, "str": true, "FromUTF16": true, "append": true,
+}
+
+// message follows a message expression: identifiers become message
+// variables, calls make their result a message, literals are collected.
+func (a *flowAnalysis) message(fn *flowFunc, e ast.Expr) {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		a.collect([]ast.Expr{x})
+	case *ast.Ident:
+		if x.Name != "nil" && x.Name != "true" && x.Name != "false" {
+			a.markVar(fn, x.Name)
+		}
+	case *ast.ParenExpr:
+		a.message(fn, x.X)
+	case *ast.BinaryExpr:
+		if x.Op == token.ADD {
+			a.message(fn, x.X)
+			a.message(fn, x.Y)
+		}
+	case *ast.CompositeLit:
+		if isStringSlice(x.Type) {
+			for _, el := range x.Elts {
+				a.message(fn, el)
+			}
+		}
+	case *ast.CallExpr:
+		name := ""
+		switch f := x.Fun.(type) {
+		case *ast.Ident:
+			name = f.Name
+		case *ast.SelectorExpr:
+			name = f.Sel.Name
+		}
+		if transparent[name] {
+			for _, arg := range x.Args {
+				a.message(fn, arg)
+			}
+			return
+		}
+		for _, k := range a.funcKeys(fn.file, x) {
+			a.mark(a.results, k, 0)
+		}
+	}
+}
+
+func (a *flowAnalysis) collect(exprs []ast.Expr) {
+	var sites []errorSite
+	collectLiterals(a.fset, exprs, &sites)
+	for _, s := range sites {
+		if _, ok := a.found[s.pos]; !ok {
+			a.found[s.pos] = s
+			a.changed = true
+		}
+	}
+}
+
+// sites are the collected sites under dir, in position order.
+func (a *flowAnalysis) sites(dir string) []errorSite {
+	abs, _ := filepath.Abs(dir)
+	var out []errorSite
+	for _, s := range a.found {
+		if s.file == abs || strings.HasPrefix(s.file, abs+string(filepath.Separator)) {
+			out = append(out, s)
+		}
+	}
+	slices.SortFunc(out, func(x, y errorSite) int {
+		if c := strings.Compare(x.file, y.file); c != 0 {
+			return c
+		}
+		return x.line - y.line
+	})
+	return out
 }
 
 // errorStruct is the field an error type's Error method returns.
@@ -469,26 +877,21 @@ func messageConstructors(f *ast.File) map[string]int {
 	return out
 }
 
-// forEachFunc calls visit for every function declaration (a method as
-// ".name") and every local `name := func(...) {...}` of f.
-func forEachFunc(f *ast.File, visit func(name string, typ *ast.FuncType, body *ast.BlockStmt)) {
+// forEachFunc calls visit for every function declaration, method and local
+// `name := func(...) {...}` of f (method is true for the last two).
+func forEachFunc(f *ast.File, visit func(name string, typ *ast.FuncType, body *ast.BlockStmt, method bool)) {
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.FuncDecl:
-			if n.Body == nil {
-				return true
+			if n.Body != nil {
+				visit(n.Name.Name, n.Type, n.Body, n.Recv != nil)
 			}
-			name := n.Name.Name
-			if n.Recv != nil {
-				name = "." + name
-			}
-			visit(name, n.Type, n.Body)
 		case *ast.AssignStmt:
 			if len(n.Lhs) == 1 && len(n.Rhs) == 1 {
 				id, ok := n.Lhs[0].(*ast.Ident)
 				lit, ok2 := n.Rhs[0].(*ast.FuncLit)
 				if ok && ok2 {
-					visit(id.Name, lit.Type, lit.Body)
+					visit(id.Name, lit.Type, lit.Body, true)
 				}
 			}
 		}
@@ -513,36 +916,6 @@ func stringParams(typ *ast.FuncType) map[string]int {
 			i++
 		}
 	}
-	return out
-}
-
-// flowingParams lists the params that e carries as text: the identifier
-// itself, or inside jsexc.Concat, fmt.Sprintf or a + concatenation.
-func flowingParams(e ast.Expr, params map[string]int) []int {
-	var out []int
-	var walk func(e ast.Expr)
-	walk = func(e ast.Expr) {
-		switch e := e.(type) {
-		case *ast.Ident:
-			if i, ok := params[e.Name]; ok {
-				out = append(out, i)
-			}
-		case *ast.ParenExpr:
-			walk(e.X)
-		case *ast.BinaryExpr:
-			if e.Op == token.ADD {
-				walk(e.X)
-				walk(e.Y)
-			}
-		case *ast.CallExpr:
-			if sel, ok := e.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "Concat" || sel.Sel.Name == "Sprintf") {
-				for _, a := range e.Args {
-					walk(a)
-				}
-			}
-		}
-	}
-	walk(e)
 	return out
 }
 
@@ -579,7 +952,9 @@ func collectLiterals(fset *token.FileSet, exprs []ast.Expr, out *[]errorSite) {
 				s = strings.TrimSpace(s)
 				// Short literals ("; expected", "sequence") are glue
 				// around the longer literal of the same message.
-				if len(messageFragments(s)) > 0 {
+				// An all-caps identifier (DUPLICATE_CHECKPOINT) is a
+				// reason code beside the message, not its text.
+				if len(messageFragments(s)) > 0 && !reasonCode.MatchString(s) {
 					p := fset.Position(lit.Pos())
 					*out = append(*out, errorSite{s, p.String(), p.Filename, p.Line})
 				}
@@ -589,34 +964,7 @@ func collectLiterals(fset *token.FileSet, exprs []ast.Expr, out *[]errorSite) {
 	}
 }
 
-func appendsToErrors(e ast.Expr) bool { return strings.Contains(strings.ToLower(exprString(e)), "err") }
-
-// errorClosures names the local function variables whose body appends to an
-// error slice.
-func errorClosures(f *ast.File) map[string]bool {
-	out := map[string]bool{}
-	ast.Inspect(f, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
-			return true
-		}
-		name, ok := assign.Lhs[0].(*ast.Ident)
-		lit, ok2 := assign.Rhs[0].(*ast.FuncLit)
-		if !ok || !ok2 {
-			return true
-		}
-		ast.Inspect(lit.Body, func(m ast.Node) bool {
-			if call, ok := m.(*ast.CallExpr); ok {
-				if fn, ok := call.Fun.(*ast.Ident); ok && fn.Name == "append" && len(call.Args) >= 2 && appendsToErrors(call.Args[0]) {
-					out[name.Name] = true
-				}
-			}
-			return true
-		})
-		return true
-	})
-	return out
-}
+var reasonCode = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 var formatVerb = regexp.MustCompile(`%[-+# 0-9.]*[a-zA-Z%]`)
 
@@ -687,6 +1035,8 @@ var liveGatedFiles = map[string]string{
 	"internal/gitinv/overlay.go":          "TestLiveMaterialize",
 	"internal/minimize/verify.go":         "TestLiveMinimizationVerify",
 	"internal/sandbox/plan.go":            "TestLiveSandboxPlan",
+	"internal/minimize/minimize.go":       "TestLiveMinimize",
+	"internal/sandbox/run.go":             "TestLiveNativeRunner",
 	// The OpenSSL PEM and DER readers: their reason texts are compared on
 	// thousands of generated key texts (round 8).
 	"internal/witness/pemread.go":  "TestLivePEMKeyParsing",
