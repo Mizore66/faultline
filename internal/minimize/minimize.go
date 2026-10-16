@@ -810,7 +810,7 @@ func (r *run) executeCandidate(direction string, candidateIDs []string, role str
 	}
 	startedEpoch := clock.NowMillis()
 	startedAt := isoMillis(startedEpoch)
-	tempRoot := jsexc.Must(nodefs.Mkdtemp(nodefs.Join(nodefs.Tmpdir(), "faultline-git-minimization-")))
+	tempRoot := jsexc.Must(nodefs.MkdtempAsync(nodefs.Join(nodefs.Tmpdir(), "faultline-git-minimization-")))
 	materializationName := "worktree-" + clock.NewUUID()
 	worktree := nodefs.Join(tempRoot, "worktrees", materializationName)
 	worktreeDigest := sha256Digest(worktree)

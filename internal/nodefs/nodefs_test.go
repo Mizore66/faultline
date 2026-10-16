@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -248,5 +249,31 @@ func TestErrorPathReplacesLoneSurrogate(t *testing.T) {
 	}
 	if err := Mkdir(path, 0o700); err == nil || err.Error() != "ENOENT: no such file or directory, mkdir '"+shown+"'" {
 		t.Errorf("Mkdir error = %v", err)
+	}
+}
+
+// mkdtempSync names the template in its error, fs/promises.mkdtemp the path
+// it tried (req->path after the C library's mkdtemp filled it in); Windows
+// libuv prints the template for both (round 7 #3).
+func TestMkdtempErrorPath(t *testing.T) {
+	prefix := filepath.Join(t.TempDir(), "missing", "faultline-x-")
+	_, err := Mkdtemp(prefix)
+	if want := "ENOENT: no such file or directory, mkdtemp '" + errorPath(prefix) + "XXXXXX'"; err == nil || err.Error() != want {
+		t.Errorf("Mkdtemp: %v, want %s", err, want)
+	}
+	_, err = MkdtempAsync(prefix)
+	e, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("MkdtempAsync: %v", err)
+	}
+	suffix, found := strings.CutPrefix(e.Path, errorPath(prefix))
+	if isWindows {
+		if suffix != "XXXXXX" {
+			t.Errorf("MkdtempAsync on Windows: %v", err)
+		}
+		return
+	}
+	if !found || len(suffix) != 6 || suffix == "XXXXXX" || strings.Trim(suffix, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") != "" || e.Code != "ENOENT" {
+		t.Errorf("MkdtempAsync: %v", err)
 	}
 }

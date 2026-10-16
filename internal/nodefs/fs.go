@@ -485,12 +485,23 @@ func Tmpdir() string {
 // Mkdtemp is mkdtempSync(prefix): uv_fs_mkdtemp on prefix + "XXXXXX", with
 // Node's error text naming the template. Node does not namespace the
 // template on Windows.
-func Mkdtemp(prefix string) (string, error) {
+func Mkdtemp(prefix string) (string, error) { return mkdtemp(prefix, false) }
+
+// MkdtempAsync is fs/promises.mkdtemp(prefix). The async request reports
+// the error with req->path, which the C library's mkdtemp has overwritten
+// with the name it last tried, so the message names that path rather than
+// the template (round 7 #3). On Windows libuv copies the name into the
+// narrow path only on success, so the template is printed there as in the
+// sync form.
+func MkdtempAsync(prefix string) (string, error) { return mkdtemp(prefix, true) }
+
+func mkdtemp(prefix string, async bool) (string, error) {
 	var err error
+	var tried string
 	for range 100 {
-		path := prefix + clock.TempSuffix()
-		if err = os.Mkdir(jsstr.ToUTF8(path), 0o700); err == nil {
-			return path, nil
+		tried = prefix + clock.TempSuffix()
+		if err = os.Mkdir(jsstr.ToUTF8(tried), 0o700); err == nil {
+			return tried, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
 			break
@@ -502,8 +513,11 @@ func Mkdtemp(prefix string) (string, error) {
 		code = "ENOTDIR"
 	}
 	display := tmpl
-	if isWindows {
+	switch {
+	case isWindows:
 		display = DecodeUTF8([]byte(stringFromPath(jsstr.ToUTF8(tmpl))))
+	case async:
+		display = DecodeUTF8([]byte(jsstr.ToUTF8(tried)))
 	}
 	return "", &Error{Code: code, Syscall: "mkdtemp", Path: display}
 }

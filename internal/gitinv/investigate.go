@@ -623,7 +623,7 @@ func investigate(request jsjson.Value, runner sandbox.Runner, injected bool) (js
 	resolvedRange := jsjson.MustObject("ancestor", first.value(), "descendant", last.value())
 	fields := resultFields{jsjson.MakeString(repository), requestedRange, resolvedRange, summary}
 
-	tempRoot, err := nodefs.Mkdtemp(nodefs.Join(nodefs.Tmpdir(), "faultline-git-investigation-"))
+	tempRoot, err := nodefs.MkdtempAsync(nodefs.Join(nodefs.Tmpdir(), "faultline-git-investigation-"))
 	if err != nil {
 		return jsjson.Value{}, err
 	}

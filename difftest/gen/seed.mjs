@@ -23,7 +23,7 @@ if (seed) {
     return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
   };
   const suffix = () => { const h = hash("tmp", tmp++); let s = ""; for (let i = 0; i < 6; i++) s += ALPHABET[h[i] % 62]; return s; };
-  const realSync = fs.mkdtempSync, realAsync = fs.promises.mkdtemp;
+  const realSync = fs.mkdtempSync;
   fs.mkdtempSync = (prefix, options) => {
     for (;;) {
       const path = `${prefix}${suffix()}`;
@@ -31,11 +31,20 @@ if (seed) {
       catch (error) { if (error?.code !== "EEXIST") return realSync(prefix, options); }
     }
   };
+  // fs/promises.mkdtemp reports a failure with the name it tried (libuv's
+  // req->path, which mkdtemp(3) filled in), except on Windows, where libuv
+  // leaves the template there: rethrow mkdir's error as that mkdtemp error.
+  const mkdtempError = (error, path, prefix) => {
+    const tail = `, mkdir '${path}'`;
+    if (typeof error?.errno !== "number" || error.syscall !== "mkdir" || !error.message.endsWith(tail)) return error;
+    const shown = process.platform === "win32" ? `${prefix}XXXXXX` : path;
+    return Object.assign(new Error(`${error.message.slice(0, -tail.length)}, mkdtemp '${shown}'`), { errno: error.errno, code: error.code, syscall: "mkdtemp", path: shown });
+  };
   fs.promises.mkdtemp = async (prefix, options) => {
     for (;;) {
       const path = `${prefix}${suffix()}`;
       try { await fs.promises.mkdir(path, 0o700); return path; }
-      catch (error) { if (error?.code !== "EEXIST") return realAsync(prefix, options); }
+      catch (error) { if (error?.code !== "EEXIST") throw mkdtempError(error, path, prefix); }
     }
   };
   fs.mkdtemp = (prefix, options, callback) => {
