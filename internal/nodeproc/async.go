@@ -112,30 +112,16 @@ func Spawn(file string, args []string, o SpawnOptions) *Child {
 			stdin.Close()        // end(): the child reads EOF
 		}(io.stdin)
 	}
-	chunks := make(chan chunk)
-	var readers sync.WaitGroup
-	for _, s := range []struct {
-		f      *os.File
-		listen func([]byte)
-	}{{io.stdout, o.OnStdout}, {io.stderr, o.OnStderr}} {
-		if s.f == nil {
-			continue
+	var streams []pipedStream
+	for _, s := range []pipedStream{{io.stdout, o.OnStdout}, {io.stderr, o.OnStderr}} {
+		if s.f != nil {
+			streams = append(streams, s)
 		}
-		readers.Add(1)
-		go readChunks(s.f, s.listen, chunks, &readers)
 	}
-	go func() {
-		readers.Wait()
-		close(chunks)
-	}()
 	dispatched := make(chan struct{})
 	go func() {
 		defer close(dispatched)
-		for ch := range chunks {
-			if ch.listen != nil {
-				ch.listen(ch.data)
-			}
-		}
+		pump(streams)
 	}()
 	go func() {
 		state, _ := proc.Wait()
@@ -168,6 +154,45 @@ func (s *asyncStdio) closeParent() {
 	for _, f := range []*os.File{s.stdin, s.stdout, s.stderr} {
 		if f != nil {
 			f.Close()
+		}
+	}
+}
+
+// pipedStream is a piped child stream and its 'data' listener.
+type pipedStream struct {
+	f      *os.File
+	listen func([]byte)
+}
+
+// pump delivers the streams' data to their listeners on one goroutine
+// until every stream has ended. Where the kernel can say in which order the
+// streams became readable (epoll, kqueue) it follows libuv's loop, so that
+// data the child wrote to one stream before the other reaches the listeners
+// in that order, as in Node (round 7 #7: two readers raced for the
+// docker output budget). Elsewhere, and should the poller fail, each stream
+// has its own reader and the listeners run in the order the reads finish.
+func pump(streams []pipedStream) {
+	if rest := pumpPolled(streams); len(rest) > 0 {
+		pumpEach(rest)
+	}
+}
+
+// pumpEach reads each stream on its own goroutine and dispatches the
+// chunks on this one, in arrival order.
+func pumpEach(streams []pipedStream) {
+	chunks := make(chan chunk)
+	var readers sync.WaitGroup
+	for _, s := range streams {
+		readers.Add(1)
+		go readChunks(s.f, s.listen, chunks, &readers)
+	}
+	go func() {
+		readers.Wait()
+		close(chunks)
+	}()
+	for ch := range chunks {
+		if ch.listen != nil {
+			ch.listen(ch.data)
 		}
 	}
 }

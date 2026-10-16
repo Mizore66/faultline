@@ -130,3 +130,38 @@ func TestInspectString(t *testing.T) {
 		}
 	}
 }
+
+// Data a child writes to stderr before stdout reaches the listeners in that
+// order, as libuv's loop delivers it: Node's docker runner splits its
+// output budget between the streams in arrival order (round 7 #7, where
+// two reader goroutines let a stdout chunk overtake the last stderr one).
+func TestSpawnDeliversStreamsInArrivalOrder(t *testing.T) {
+	for run := 0; run < 30; run++ {
+		var mu sync.Mutex
+		var order []string
+		var errBytes int
+		record := func(name string) func([]byte) {
+			return func(b []byte) {
+				mu.Lock()
+				defer mu.Unlock()
+				if name == "stderr" {
+					errBytes += len(b)
+				}
+				order = append(order, name)
+			}
+		}
+		exit := Spawn("/bin/sh", []string{"-c", "head -c 1048482 /dev/zero >&2; printf 'line\\n'"}, SpawnOptions{
+			Stdout: StdioPipe, Stderr: StdioPipe, OnStdout: record("stdout"), OnStderr: record("stderr"),
+		}).Wait()
+		if exit.Code == nil || *exit.Code != 0 {
+			t.Fatalf("%+v", exit)
+		}
+		mu.Lock()
+		if errBytes != 1048482 || len(order) == 0 || order[len(order)-1] != "stdout" {
+			last := order[max(0, len(order)-3):]
+			mu.Unlock()
+			t.Fatalf("run %d: stderr %d bytes, last chunks %v", run, errBytes, last)
+		}
+		mu.Unlock()
+	}
+}
