@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -430,6 +431,7 @@ func TestLivePEMKeyParsing(t *testing.T) {
 	cases = append(cases, genReasonCases(m)...)
 	cases = append(cases, genMixedCases(m, 6000)...)
 	cases = append(cases, loadPEMCorpus(t)...)
+	explicitFrom := len(cases) // the explicit-curve sets: reducible fields, composite moduli
 	cases = append(cases, genReducibleCases(m)...)
 	cases = append(cases, loadReducibleFixtures(t)...)
 	results := runPEMOracle(t, cases)
@@ -450,23 +452,27 @@ func TestLivePEMKeyParsing(t *testing.T) {
 	// A disagreement is settled by running the case many times on both
 	// sides: over a reducible field or a composite modulus OpenSSL's
 	// blinding makes the result random, and Go draws it the same way
-	// (KNOWN_DIFFERENCES). Each outcome's share must agree; a case Node
-	// always parses one way must parse that way in Go too.
-	if len(redo) > 0 {
-		var again []pemCase
-		for _, i := range redo {
-			again = append(again, cases[i])
+	// (KNOWN_DIFFERENCES). Each outcome's share must agree, and a case
+	// Node always parses one way must parse that way in Go every time
+	// (pemCompareRepeated). A sample of the explicit-curve cases that
+	// agreed on one run is re-run too, so that a rare Go misfire on a case
+	// Node treats as deterministic is caught.
+	var agreeing []int
+	for i := explicitFrom; i < len(cases); i++ {
+		if !slices.Contains(redo, i) {
+			agreeing = append(agreeing, i)
 		}
-		counts := runPEMOracleRepeat(t, again, pemRepeat)
-		for k, i := range redo {
-			goCounts := map[string]int{}
-			for range pemRepeat {
-				goCounts[pemOutcome(witness.ParseKeyForTest(cases[i].Text, cases[i].Pub))]++
-			}
-			if why := pemSharesDiffer(counts[k], goCounts); why != "" {
-				if fails++; fails <= pemShowDiffs() {
-					t.Errorf("result differs (pub=%v), %s: %q\n  go:   %v\n  node: %v", cases[i].Pub, why, cases[i].Text, goCounts, counts[k])
-				}
+	}
+	sr := rand.New(rand.NewPCG(9, 9))
+	sr.Shuffle(len(agreeing), func(a, b int) { agreeing[a], agreeing[b] = agreeing[b], agreeing[a] })
+	sample := agreeing[:min(pemAgreeSample, len(agreeing))]
+	for _, batch := range []struct {
+		idx  []int
+		runs int
+	}{{redo, pemRepeat}, {sample, pemAgreeRepeat}} {
+		for _, i := range pemCompareRepeated(t, cases, batch.idx, batch.runs) {
+			if fails++; fails <= pemShowDiffs() {
+				t.Errorf("result differs (pub=%v): %s", cases[i.idx].Pub, i.why)
 			}
 		}
 	}
@@ -478,12 +484,84 @@ func TestLivePEMKeyParsing(t *testing.T) {
 	for _, f := range pemReaderFiles {
 		requireReachedReasons(t, f, messages.String())
 	}
-	liveSummary(t, "%d PEM cases (%d Ed25519 keys accepted; %d random ones compared over %d runs each)", len(cases), accepted, len(redo), pemRepeat)
+	liveSummary(t, "%d PEM cases (%d Ed25519 keys accepted; %d disagreeing ones re-run %d times and %d agreeing explicit-curve ones %d times per side)",
+		len(cases), accepted, len(redo), pemRepeat, len(sample), pemAgreeRepeat)
 }
 
 // pemRepeat is how often a case whose single runs disagree is re-run on
-// each side.
-const pemRepeat = 400
+// each side; pemAgreeSample explicit-curve cases that agreed are re-run
+// pemAgreeRepeat times; a case Node gave one way in every run is re-run
+// pemUnanimousRepeat times in Node before a Go misfire counts.
+const (
+	pemRepeat          = 400
+	pemAgreeSample     = 40
+	pemAgreeRepeat     = 200
+	pemUnanimousRepeat = 4000
+)
+
+type pemMismatch struct {
+	idx int
+	why string
+}
+
+// pemCompareRepeated runs each case runs times on both sides and returns
+// those whose outcomes disagree. Shares must agree (pemSharesDiffer).
+// When every Node run gave one outcome, Go must give only that outcome:
+// a Go run with another one fails unless Node, re-run pemUnanimousRepeat
+// times, also gives another one (the case is then random, and the shares
+// over all runs are compared).
+func pemCompareRepeated(t *testing.T, cases []pemCase, idx []int, runs int) []pemMismatch {
+	t.Helper()
+	if len(idx) == 0 {
+		return nil
+	}
+	var again []pemCase
+	for _, i := range idx {
+		again = append(again, cases[i])
+	}
+	counts := runPEMOracleRepeat(t, again, runs)
+	goCounts := make([]map[string]int, len(idx))
+	var unanimous []int // positions in idx where Node was unanimous and Go was not
+	for k, i := range idx {
+		goCounts[k] = map[string]int{}
+		for range runs {
+			goCounts[k][pemOutcome(witness.ParseKeyForTest(cases[i].Text, cases[i].Pub))]++
+		}
+		if len(counts[k]) == 1 && len(goCounts[k]) > 1 {
+			unanimous = append(unanimous, k)
+		}
+	}
+	if len(unanimous) > 0 {
+		var more []pemCase
+		for _, k := range unanimous {
+			more = append(more, cases[idx[k]])
+		}
+		extra := runPEMOracleRepeat(t, more, pemUnanimousRepeat)
+		for n, k := range unanimous {
+			for o, v := range extra[n] {
+				counts[k][o] += v
+			}
+		}
+	}
+	var out []pemMismatch
+	for k, i := range idx {
+		why := ""
+		if len(counts[k]) == 1 {
+			for o := range counts[k] {
+				if len(goCounts[k]) != 1 || goCounts[k][o] == 0 {
+					why = "Node gave one outcome in every run, Go did not"
+				}
+			}
+		}
+		if why == "" {
+			why = pemSharesDiffer(counts[k], goCounts[k])
+		}
+		if why != "" {
+			out = append(out, pemMismatch{i, fmt.Sprintf("%s: %q\n  go:   %v\n  node: %v", why, cases[i].Text, goCounts[k], counts[k])})
+		}
+	}
+	return out
+}
 
 // pemOutcome is one Go parse as the oracle prints it (the JSON of a
 // pemResult), so outcomes of both sides compare as strings.
