@@ -235,3 +235,31 @@ func TestNestedRaiseData(t *testing.T) {
 		t.Fatalf("errors = %v", got)
 	}
 }
+
+// shippedLength and shippedDHReason are the readers' settings as the
+// package initialises them, before any test (TestPEMProbes,
+// TestLongFormLengthRule) assigns them.
+var (
+	shippedLength   = lengthNeedsContentByte
+	shippedDHReason = dhKeyDecodeReason
+)
+
+// TestShippedOpenSSLDefaults pins the OpenSSL version the shipped fl
+// follows where 3.6.5 changed the readers: 3.5.5, which Node 22.22.2 (the
+// pinned oracle) bundles. Nothing here calls SetOpenSSLForTest; the live
+// test switches to the oracle's version, so without this a wrong default
+// would pass CI.
+func TestShippedOpenSSLDefaults(t *testing.T) {
+	if !shippedLength {
+		t.Error("lengthNeedsContentByte starts false: OpenSSL 3.5.5's asn1_get_length needs a content byte after long-form length octets")
+	}
+	if shippedDHReason != "EVP_R_DECODE_ERROR" {
+		t.Errorf("dhKeyDecodeReason starts as %q, want OpenSSL 3.5.5's EVP_R_DECODE_ERROR", shippedDHReason)
+	}
+	// The same through a parse: a truncated long form (3.5.5: header too
+	// long; 3.6.5: field missing).
+	saved := lengthNeedsContentByte
+	defer func() { lengthNeedsContentByte = saved }()
+	lengthNeedsContentByte = shippedLength
+	check(t, "308100", derBlock("PUBLIC KEY", "308100"), true, "error:0680007B:asn1 encoding routines::header too long")
+}

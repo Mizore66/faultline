@@ -304,7 +304,14 @@ func genPEMCases(t *testing.T, m pemMaterial) []pemCase {
 	// Header and length edge cases of the DER decoder.
 	for _, h := range []string{
 		"30", "3081", "308100", "30810000", "3082000100", "3080", "30800000", "308000", "3084ffffffff00",
-		"3089010000000000000000", "3f", "3f81", "3f8100", "3f818100", "1f2200", "3000", "300100",
+		"3089010000000000000000",
+		// Long forms with 8 length octets and with leading zero octets
+		// (asn1_get_length skips them before the sizeof(long) check), and
+		// 3.5's content-byte rule at the 8-octet boundary.
+		"308801000000000000000000", "30890001000000000000000000", "3088000000000000002a00",
+		"30880000000000000000", "308800000000000000", "3082002a00", "30830000002a", "308400000000",
+		"30887fffffffffffffff00", "3088800000000000000000", "308900000000000000002a00",
+		"3f", "3f81", "3f8100", "3f818100", "1f2200", "3000", "300100",
 		"3005300306012b", "300a300506032b6570030100", "300b300506032b657003020700", "300b300506032b657003020800",
 		"302c300706032b65700500032100" + strings.Repeat("aa", 32),
 		"302a300506032b7570032100" + strings.Repeat("aa", 32),
@@ -421,6 +428,8 @@ func TestLivePEMKeyParsing(t *testing.T) {
 	cases = append(cases, genReasonCases(m)...)
 	cases = append(cases, genMixedCases(m, 6000)...)
 	cases = append(cases, loadPEMCorpus(t)...)
+	cases = append(cases, genReducibleCases(m)...)
+	cases = append(cases, loadReducibleFixtures(t)...)
 	results := runPEMOracle(t, cases)
 	accepted, fails := 0, 0
 	var messages strings.Builder
