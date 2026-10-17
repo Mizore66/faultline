@@ -1032,6 +1032,8 @@ var liveGatedFiles = map[string]string{
 	"internal/witness/nodekeys.go": "TestLivePEMKeyParsing",
 	"internal/witness/pqkeys.go":   "TestLivePEMKeyParsing",
 	"internal/witness/mlkem.go":    "TestLivePEMKeyParsing",
+	"internal/witness/ecmul.go":    "TestLivePEMKeyParsing",
+	"internal/witness/gf2m.go":     "TestLivePEMKeyParsing",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally

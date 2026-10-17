@@ -479,6 +479,8 @@ var pemReaderFiles = []string{
 	"internal/witness/nodekeys.go",
 	"internal/witness/pqkeys.go",
 	"internal/witness/mlkem.go",
+	"internal/witness/ecmul.go",
+	"internal/witness/gf2m.go",
 }
 
 // requireReachedReasons fails for every OpenSSL reason name in file (a
