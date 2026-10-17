@@ -31,6 +31,11 @@ def pre():
         os.setpgid(0, 0)  # a group of its own whose parent is outside it: not orphaned, so stop signals stop it
         signal.signal(sig, signal.SIG_IGN if mode == "raise-ign" else signal.SIG_DFL)
         signal.pthread_sigmask(signal.SIG_BLOCK, [sig]); os.kill(os.getpid(), sig)
+    if mode == "raise-both":  # PIPE and XFSZ both pending, raised in the order sig names
+        both = [signal.SIGPIPE, signal.SIGXFSZ] if sig == signal.SIGPIPE else [signal.SIGXFSZ, signal.SIGPIPE]
+        for s in both: signal.signal(s, signal.SIG_DFL)
+        signal.pthread_sigmask(signal.SIG_BLOCK, both)
+        for s in both: os.kill(os.getpid(), s)
     if mode == "nofile":
         hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
         resource.setrlimit(resource.RLIMIT_NOFILE, (64, hard))
@@ -93,6 +98,11 @@ func TestLiveSignalsMatchNode(t *testing.T) {
 	// row 8): Node meets it with that disposition, before resetting any.
 	for _, sig := range strings.Fields("12 13 14 25") {
 		cases = append(cases, tc{sig, "raise-dfl"})
+	}
+	// PIPE and XFSZ both pending (raised in either order): Node dies of
+	// the one the kernel delivers first, PIPE (r9-3 B5).
+	for _, sig := range strings.Fields("13 25") {
+		cases = append(cases, tc{sig, "raise-both"})
 	}
 	// Ignored and pending: Node discards them (round 6; needs fl built with
 	// cgo, which records the inherited dispositions before the runtime).
