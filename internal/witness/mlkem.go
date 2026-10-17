@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"crypto/sha3"
 	"encoding/binary"
+
+	"github.com/Mizore66/faultline/internal/clock"
 )
 
 // ML-KEM (FIPS 203) as OpenSSL 3.5 loads a decoded private key
@@ -391,15 +393,21 @@ func kemDecrypt(rank int, dkPKE, c []byte) []byte {
 // kemPairwise ports ml_kem_kmgmt.c ml_kem_pairwise_test for a parsed
 // expanded key dk: encapsulate to its public key, decapsulate with its
 // private key (implicit rejection on a mismatch) and compare the secrets.
-// OpenSSL's default provider uses random entropy here; for a consistent
-// key the test passes for every entropy, and for a key whose private
-// vector does not match the public key it fails for all but a negligible
-// fraction, so a fixed message (OpenSSL's FIXED_PCT value) decides it.
+// The default provider's pct_type is "random" (ML_KEM_KEY_RANDOM_PCT), so
+// the message is ossl_ml_kem_encap_rand's 32 random bytes, drawn here from
+// internal/clock like the other random values OpenSSL draws (the system
+// CSPRNG in release builds, its own stream under the test seed). The
+// outcome does depend on them: a private key whose t = A·s + k·e carries
+// a scaled error passes the load checks, and decapsulation then recovers
+// some messages and not others (round 10, r10-1: pass rates from 0% to
+// 97% per key), so a fixed message would give one outcome where Node's
+// varies from call to call.
 func kemPairwise(rank int, dk []byte) bool {
 	vec := 384 * rank
 	ek := dk[vec : 2*vec+32]
 	h, z := dk[2*vec+32:2*vec+64], dk[2*vec+64:]
-	m := bytes.Repeat([]byte{0x55}, 32)
+	m := make([]byte, 32)
+	clock.RandRead(m) // ossl_ml_kem_encap_rand: RAND_bytes_ex
 	g := sha3.New512()
 	g.Write(m)
 	g.Write(h)

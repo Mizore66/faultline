@@ -3,15 +3,9 @@
 package difftest
 
 import (
-	"encoding/hex"
-	"encoding/json"
 	"math/big"
 	"math/rand/v2"
-	"os"
-	"path/filepath"
 	"testing"
-
-	"github.com/Mizore66/faultline/difftest/oracle"
 )
 
 // Explicit EC parameters OpenSSL accepts without checking the field: a
@@ -381,30 +375,5 @@ func smallCurvePoint(r int) (q, a, b, x, y *big.Int) {
 // same on every run. Stored as the hex of the text's bytes in reverse
 // order, as pemcorpus.json is.
 func loadReducibleFixtures(t *testing.T) []pemCase {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(oracle.RepoRoot(t), "difftest", "testdata", "pemreducible.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var corpus struct {
-		Cases []struct {
-			RevHex string `json:"revHex"`
-			Pub    bool   `json:"pub"`
-		} `json:"cases"`
-	}
-	if err := json.Unmarshal(raw, &corpus); err != nil {
-		t.Fatal(err)
-	}
-	out := make([]pemCase, 0, len(corpus.Cases))
-	for _, c := range corpus.Cases {
-		b, err := hex.DecodeString(c.RevHex)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
-			b[i], b[j] = b[j], b[i]
-		}
-		out = append(out, pemCase{Text: string(b), Pub: c.Pub})
-	}
-	return out
+	return loadRevHexCases(t, "pemreducible.json")
 }

@@ -17,5 +17,6 @@ func NewUUID() string { return wallNewUUID() }
 func TempSuffix() string { return wallTempSuffix() }
 
 // RandRead fills b with random bytes: OpenSSL's RAND_priv_bytes_ex, which
-// the key-parsing port's blinding and random searches draw from.
+// the key-parsing port's blinding, random searches and ML-KEM pairwise
+// test message draw from.
 func RandRead(b []byte) { wallRandRead(b) }

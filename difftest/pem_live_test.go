@@ -476,16 +476,28 @@ func TestLivePEMKeyParsing(t *testing.T) {
 			}
 		}
 	}
+	// ML-KEM keys whose pairwise test passes for some random messages and
+	// not others (testdata/pemkemnoise.json): Node's verdict is random on
+	// every one, even the key it refuses all but about 1 in 2,000 runs, so
+	// they skip the single-run comparison and their shares are compared
+	// over pemNoiseRepeat runs per side. A fixed message would make Go's
+	// verdict constant and fail each of them.
+	noise := loadRevHexCases(t, "pemkemnoise.json")
+	for _, why := range pemCompareShares(t, noise, pemNoiseRepeat) {
+		if fails++; fails <= pemShowDiffs() {
+			t.Errorf("ML-KEM pairwise share differs: %s", why)
+		}
+	}
 	if fails > 0 {
-		t.Errorf("%d of %d cases differ", fails, len(cases))
+		t.Errorf("%d of %d cases differ", fails, len(cases)+len(noise))
 	}
 	// Every OpenSSL reason the reader files can raise must come up against
 	// Node at least once (unless listed unreachable in coverage_test.go).
 	for _, f := range pemReaderFiles {
 		requireReachedReasons(t, f, messages.String())
 	}
-	liveSummary(t, "%d PEM cases (%d Ed25519 keys accepted; %d disagreeing ones re-run %d times and %d agreeing explicit-curve ones %d times per side)",
-		len(cases), accepted, len(redo), pemRepeat, len(sample), pemAgreeRepeat)
+	liveSummary(t, "%d PEM cases (%d Ed25519 keys accepted; %d disagreeing ones re-run %d times and %d agreeing explicit-curve ones %d times per side; %d noisy ML-KEM keys %d times per side)",
+		len(cases), accepted, len(redo), pemRepeat, len(sample), pemAgreeRepeat, len(noise), pemNoiseRepeat)
 }
 
 // pemRepeat is how often a case whose single runs disagree is re-run on
@@ -497,7 +509,29 @@ const (
 	pemAgreeSample     = 40
 	pemAgreeRepeat     = 200
 	pemUnanimousRepeat = 4000
+	pemNoiseRepeat     = 3000
 )
+
+// pemCompareShares runs each case runs times on both sides and returns a
+// description of each whose outcome shares disagree (pemSharesDiffer).
+// Unlike pemCompareRepeated it never asks a Node-unanimous sample to be
+// Go's every time: for a case known to be random, a rare outcome may be
+// missing from either sample.
+func pemCompareShares(t *testing.T, cases []pemCase, runs int) []string {
+	t.Helper()
+	counts := runPEMOracleRepeat(t, cases, runs)
+	var out []string
+	for k, c := range cases {
+		goCounts := map[string]int{}
+		for range runs {
+			goCounts[pemOutcome(witness.ParseKeyForTest(c.Text, c.Pub))]++
+		}
+		if why := pemSharesDiffer(counts[k], goCounts); why != "" {
+			out = append(out, fmt.Sprintf("%s (pub=%v): %q\n  go:   %v\n  node: %v", why, c.Pub, c.Text, goCounts, counts[k]))
+		}
+	}
+	return out
+}
 
 type pemMismatch struct {
 	idx int
@@ -1104,9 +1138,13 @@ func genPQCases(m pemMaterial, n int) []pemCase {
 }
 
 // loadPEMCorpus reads the round-8 review corpus (testdata/pemcorpus.json).
-func loadPEMCorpus(t *testing.T) []pemCase {
+func loadPEMCorpus(t *testing.T) []pemCase { return loadRevHexCases(t, "pemcorpus.json") }
+
+// loadRevHexCases reads a review corpus under testdata: {"cases": [{revHex,
+// pub}]}, each text stored as the hex of its bytes in reverse order.
+func loadRevHexCases(t *testing.T, name string) []pemCase {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(oracle.RepoRoot(t), "difftest", "testdata", "pemcorpus.json"))
+	raw, err := os.ReadFile(filepath.Join(oracle.RepoRoot(t), "difftest", "testdata", name))
 	if err != nil {
 		t.Fatal(err)
 	}
