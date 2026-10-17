@@ -277,3 +277,60 @@ func TestMkdtempErrorPath(t *testing.T) {
 		t.Errorf("MkdtempAsync: %v", err)
 	}
 }
+
+// TestMkdirAllFollowsSymlinks pins MKDirpSync's uv_fs_stat (not lstat) of
+// an existing path: a symlink to a directory counts as the directory
+// (r9-3 F2). Expected results from Node 22's mkdirSync({recursive: true}).
+func TestMkdirAllFollowsSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	dir := t.TempDir()
+	for _, p := range []string{"real", "file", "link", "flink", "dangle", "link2"} {
+		var err error
+		switch p {
+		case "real":
+			err = os.Mkdir(filepath.Join(dir, p), 0o755)
+		case "file":
+			err = os.WriteFile(filepath.Join(dir, p), nil, 0o644)
+		case "link":
+			err = os.Symlink("real", filepath.Join(dir, p))
+		case "flink":
+			err = os.Symlink("file", filepath.Join(dir, p))
+		case "dangle":
+			err = os.Symlink("nowhere", filepath.Join(dir, p))
+		case "link2":
+			err = os.Symlink("link", filepath.Join(dir, p))
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct{ path, want string }{
+		{"link", ""},
+		{"link/sub", ""},
+		{"link2", ""},
+		{"link2/a/b", ""},
+		{"flink", "EEXIST: file already exists, mkdir '%s'"},
+		{"flink/x", "ENOTDIR: not a directory, mkdir '%s'"},
+		{"dangle", "ENOENT: no such file or directory, mkdir '%s'"},
+		{"dangle/x", "ENOENT: no such file or directory, mkdir '%s'"},
+	} {
+		p := filepath.Join(dir, c.path)
+		err := MkdirAll(p, 0o755)
+		got := ""
+		if err != nil {
+			got = err.Error()
+		}
+		want := c.want
+		if want != "" {
+			want = strings.Replace(want, "%s", p, 1)
+		}
+		if got != want {
+			t.Errorf("MkdirAll(%s) = %q, want %q", c.path, got, want)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(dir, "real", "a", "b")); err != nil || !info.IsDir() {
+		t.Errorf("link2/a/b was not created through the links: %v", err)
+	}
+}
