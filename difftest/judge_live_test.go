@@ -208,7 +208,8 @@ func TestLiveJudgeServer(t *testing.T) {
 // stopped line and exit 0. Each signal is also sent to a judge-proof that
 // inherited it as SIG_IGN (a shell traps it to nothing, then execs): Node
 // resets it to SIG_DFL and its listener catches it, so fl must too (round 7
-// #6: on Linux an ignored SIGTERM was left at SIG_DFL and killed fl).
+// #6: on Linux an ignored SIGTERM was left at SIG_DFL and killed fl). The
+// held-connection subtests stop it while a client holds a connection open.
 func TestLiveJudgeSignalStop(t *testing.T) {
 	oracle.Skip(t)
 	repo := repoRoot(t)
@@ -245,6 +246,131 @@ func TestLiveJudgeSignalStop(t *testing.T) {
 				}
 			})
 		}
+	}
+	t.Run("held-connection", func(t *testing.T) { testJudgeHeldConnection(t, repo) })
+}
+
+// testJudgeHeldConnection (TestLiveJudgeSignalStop/held-connection) stops judge-proof while a client
+// holds a connection open, as Node's server.close() treats each kind
+// (round 10, r10-2): close destroys only idle connections and completes once
+// the others have closed.
+//   - stall: a POST whose body never completes is answered at once (Node
+//     calls the listener on the headers), then destroyed by the keep-alive
+//     socket timeout 6 s after the response; fl exits then.
+//   - served-partial: a served keep-alive connection that started a second
+//     request is not idle either; the same timeout ends it.
+//   - silent / partial-headers: a connection that sent nothing (a browser
+//     preconnect) or half a header is never idle and has no timeout after
+//     close (the 30 s request-timeout check stops with it), so fl keeps
+//     serving until the client gives up; here the client closes after 8 s.
+//   - a second identical signal ends the process by that signal (Node's
+//     process.once listener is gone); a different second signal is
+//     consumed, a third (repeating it) kills.
+//
+// Each case compares the stopped line, the exit status, what the client
+// received and when the server closed the connection (within 1.5 s).
+func testJudgeHeldConnection(t *testing.T, repo string) {
+	type heldCase struct {
+		name     string
+		send     []string // written in turn, 0.5 s apart
+		signals  []syscall.Signal
+		clientMs int // the client closes after this long (0: never)
+	}
+	cases := []heldCase{
+		{"stall", []string{"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 1000\r\n\r\na=1"}, []syscall.Signal{syscall.SIGTERM}, 0},
+		{"stall-sigint", []string{"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 10\r\n\r\nab"}, []syscall.Signal{syscall.SIGINT}, 0},
+		{"served-partial", []string{"GET / HTTP/1.1\r\nHost: x\r\n\r\n", "GET / HT"}, []syscall.Signal{syscall.SIGTERM}, 0},
+		{"silent", nil, []syscall.Signal{syscall.SIGTERM}, 8000},
+		{"partial-headers", []string{"GET / HTTP/1.1\r\nHost:"}, []syscall.Signal{syscall.SIGINT}, 8000},
+		{"silent-sigint-twice", nil, []syscall.Signal{syscall.SIGINT, syscall.SIGINT}, 0},
+		{"silent-sigterm-twice", nil, []syscall.Signal{syscall.SIGTERM, syscall.SIGTERM}, 0},
+		{"silent-sigint-sigterm", nil, []syscall.Signal{syscall.SIGINT, syscall.SIGTERM}, 6000},
+		{"silent-int-term-term", nil, []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGTERM}, 0},
+		{"stall-sigterm-twice", []string{"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 10\r\n\r\nab"}, []syscall.Signal{syscall.SIGTERM, syscall.SIGTERM}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			type outcome struct {
+				text   string
+				closed time.Duration // when the server closed the connection, after the first signal
+			}
+			got := map[string]outcome{}
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			for _, side := range judgeSides(repo) {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					cmd, url, out, rest, stderr := startJudge(t, repo, side, judgeEnv("FAULTLINE_NO_BROWSER=1"), "--port", "0")
+					line, _ := rest.ReadString('\n')
+					out.WriteString(line)
+					line, _ = rest.ReadString('\n')
+					out.WriteString(line)
+					conn, err := net.Dial("tcp", strings.TrimPrefix(url, "http://"))
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					defer conn.Close()
+					var received bytes.Buffer
+					closedAt := make(chan time.Time, 1)
+					go func() {
+						io.Copy(&received, conn)
+						closedAt <- time.Now()
+					}()
+					for _, chunk := range tc.send {
+						io.WriteString(conn, chunk)
+						time.Sleep(500 * time.Millisecond)
+					}
+					time.Sleep(300 * time.Millisecond)
+					start := time.Now()
+					for _, sig := range tc.signals {
+						cmd.Process.Signal(sig)
+						time.Sleep(300 * time.Millisecond)
+					}
+					if tc.clientMs > 0 {
+						time.AfterFunc(time.Duration(tc.clientMs)*time.Millisecond, func() { conn.Close() })
+					}
+					exited := make(chan struct{})
+					go func() {
+						tail, _ := io.ReadAll(rest)
+						out.Write(tail)
+						cmd.Wait()
+						close(exited)
+					}()
+					select {
+					case <-exited:
+					case <-time.After(30 * time.Second):
+						cmd.Process.Kill()
+						<-exited
+						out.WriteString("--- still running 30 s after the first signal\n")
+					}
+					conn.Close()
+					closed := time.Duration(-1)
+					select {
+					case at := <-closedAt:
+						closed = at.Sub(start)
+					case <-time.After(time.Second):
+					}
+					head, _, _ := strings.Cut(received.String(), "\r\n")
+					text := loopbackPort.ReplaceAllString(out.String(), "127.0.0.1:<PORT>") + "--- stderr\n" + stderr.String() +
+						"--- " + cmd.ProcessState.String() + "\n--- client got " + head
+					mu.Lock()
+					got[side.name] = outcome{text, closed}
+					mu.Unlock()
+				}()
+			}
+			wg.Wait()
+			if got["Go"].text != got["TS"].text {
+				t.Errorf("Go\n%s\nTS\n%s", got["Go"].text, got["TS"].text)
+			}
+			if d := got["Go"].closed - got["TS"].closed; d > 1500*time.Millisecond || d < -1500*time.Millisecond {
+				t.Errorf("server closed the connection %v after the signal in Go, %v in TS", got["Go"].closed, got["TS"].closed)
+			}
+			t.Logf("connection closed %v (Go) / %v (TS) after the first signal; %s", got["Go"].closed.Round(100*time.Millisecond),
+				got["TS"].closed.Round(100*time.Millisecond), got["Go"].text[strings.LastIndex(got["Go"].text, "--- "):])
+		})
 	}
 }
 

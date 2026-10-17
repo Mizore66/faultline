@@ -75,12 +75,15 @@ func openerCommand(goos, url string) string {
 
 // awaitServeInterrupt ports src/cli-app.ts:904: wait for SIGINT, SIGTERM or
 // the --serve-ms timer, then close (its error ignored) and onStop (a panic
-// swallowed); the caller then exits 0. Node's process.once listeners stay
-// until fl exits here: a second SIGINT or SIGTERM while closing is ignored
-// (in Node a second identical signal would take the default action;
-// KNOWN_DIFFERENCES.md).
+// swallowed); the caller then exits 0. Node's listeners are
+// process.once("SIGINT") and process.once("SIGTERM"): each runs once, and
+// once a signal's listener has run nothing handles that signal any more, so
+// its next arrival takes the default action and ends the process, also
+// while close waits for open connections. A signal whose listener has not
+// run yet (SIGTERM after a SIGINT, or either after the timer) is consumed
+// without effect.
 func awaitServeInterrupt(close func() error, serveMs *float64, onStop func()) {
-	signals := make(chan os.Signal, 2)
+	signals := make(chan os.Signal, 8)
 	// Notify first: a signal arriving between the two calls then reaches
 	// this channel (and boot's handler dies of it, as Node would before the
 	// listeners exist) rather than being lost.
@@ -91,10 +94,21 @@ func awaitServeInterrupt(close func() error, serveMs *float64, onStop func()) {
 	if serveMs != nil && !math.IsInf(*serveMs, 0) && !math.IsNaN(*serveMs) && *serveMs >= 0 {
 		timer = time.After(timeoutDuration(*serveMs))
 	}
+	listenerRan := map[syscall.Signal]bool{}
 	select {
-	case <-signals:
+	case sig := <-signals:
+		listenerRan[sig.(syscall.Signal)] = true
 	case <-timer:
 	}
+	go func() {
+		for sig := range signals {
+			s := sig.(syscall.Signal)
+			if listenerRan[s] {
+				sigexit.Die(s)
+			}
+			listenerRan[s] = true
+		}
+	}()
 	close()
 	func() {
 		defer func() { recover() }() // Keep the verified summary path fail-open on stop.

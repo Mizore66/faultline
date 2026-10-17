@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Mizore66/faultline/internal/jsjson"
@@ -16,18 +17,290 @@ import (
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
-// Server is the FaultLineServer startGitProofServer returns.
+// Server is the FaultLineServer startGitProofServer returns. Its
+// connections follow Node's http.Server (lib/_http_server.js, Node 22's
+// defaults) rather than net/http's own lifecycle:
+//   - a connection is "idle" once its last request message is complete
+//     (body included) and no byte of the next has arrived (the parser's
+//     last_message_start_ is 0) and no response is in flight; a new
+//     connection is not idle until it has sent a whole request;
+//   - after a keep-alive response, the socket gets an inactivity timeout of
+//     keepAliveTimeout + keepAliveTimeoutBuffer (6 s), refreshed by every
+//     read and write and cleared when the next request's headers arrive;
+//     it is destroyed when the timeout fires, also mid-body;
+//   - every 30 s (connectionsCheckingInterval, from listen until close) a
+//     connection inside a message whose headers are not complete after
+//     headersTimeout (60 s), or whose message is older than requestTimeout
+//     (300 s), gets `408 Request Timeout` and is destroyed;
+//   - close() destroys the idle connections, stops the 30 s check and the
+//     listener, and completes once every other connection has closed, by
+//     its timeout or by the client, however long that takes.
+//
+// The response is written before the request body is read (Node calls the
+// listener once the headers are parsed, and dumps an unread body after the
+// response), so net/http runs in full-duplex mode.
 type Server struct {
-	url string
-	srv *http.Server
+	url      string
+	srv      *http.Server
+	listener net.Listener
+	stop     chan struct{} // closed by Close: ends the 30 s check
+
+	mu      sync.Mutex
+	conns   map[*nodeConn]struct{}
+	closing bool
+	drained chan struct{} // closed once closing and no connection is left
 }
 
 // URL is the server's http://127.0.0.1:<port> address.
 func (s *Server) URL() string { return s.url }
 
-// Close is server.close(): stop accepting, close idle connections (Node 19+
-// closes them on close) and wait for in-flight requests.
-func (s *Server) Close() error { return s.srv.Shutdown(context.Background()) }
+// Node's http.Server timing defaults (lib/_http_server.js storeHTTPOptions).
+const (
+	keepAliveSocketTimeout      = 5*time.Second + time.Second // keepAliveTimeout + keepAliveTimeoutBuffer
+	headersTimeout              = 60 * time.Second
+	requestTimeout              = 300 * time.Second
+	connectionsCheckingInterval = 30 * time.Second
+)
+
+// requestTimeoutResponse is what Node writes before destroying an expired
+// connection (socketOnError, ERR_HTTP_REQUEST_TIMEOUT).
+const requestTimeoutResponse = "HTTP/1.1 408 Request Timeout\r\nConnection: close\r\n\r\n"
+
+// Close is server.close(): httpServerPreClose (closeIdleConnections, then
+// the connections check stops), net.Server.close (the listener), and the
+// callback once the last connection has closed.
+func (s *Server) Close() error {
+	close(s.stop)
+	err := s.listener.Close()
+	s.mu.Lock()
+	s.closing = true
+	var idle []*nodeConn
+	for c := range s.conns {
+		if c.idle() {
+			idle = append(idle, c)
+		}
+	}
+	if len(s.conns) == 0 {
+		close(s.drained)
+	}
+	s.mu.Unlock()
+	for _, c := range idle {
+		c.destroy()
+	}
+	<-s.drained
+	return err
+}
+
+// untrack forgets a closed connection and completes a pending Close when
+// it was the last.
+func (s *Server) untrack(c *nodeConn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.conns[c]; !ok {
+		return
+	}
+	delete(s.conns, c)
+	if s.closing && len(s.conns) == 0 {
+		close(s.drained)
+	}
+}
+
+// checkConnections is Node's checkConnections, every
+// connectionsCheckingInterval until Close.
+func (s *Server) checkConnections() {
+	ticker := time.NewTicker(connectionsCheckingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case now := <-ticker.C:
+			s.mu.Lock()
+			var expired []*nodeConn
+			for c := range s.conns {
+				if c.expired(now) {
+					expired = append(expired, c)
+				}
+			}
+			s.mu.Unlock()
+			for _, c := range expired {
+				c.requestTimedOut()
+			}
+		}
+	}
+}
+
+// nodeListener tracks every accepted connection as a nodeConn.
+type nodeListener struct {
+	net.Listener
+	s *Server
+}
+
+func (l nodeListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	c := &nodeConn{Conn: conn, s: l.s, inMessage: true, messageStart: now, lastActivity: now}
+	l.s.mu.Lock()
+	l.s.conns[c] = struct{}{}
+	l.s.mu.Unlock()
+	return c, nil
+}
+
+// nodeConn is one connection with the state Node's HTTP parser and socket
+// keep for it.
+type nodeConn struct {
+	net.Conn
+	s *Server
+
+	mu sync.Mutex
+	// inMessage is last_message_start_ != 0: true from the connection (the
+	// parser is initialized with the time) and from the first byte of each
+	// message until the message is complete. begun is on_message_begin
+	// having run for the current message.
+	inMessage, begun bool
+	messageStart     time.Time
+	headersComplete  bool
+	responding       bool // a response is in flight (_httpMessage not finished)
+	keepAlive        bool // the keep-alive socket timeout is armed
+	lastActivity     time.Time
+	timer            *time.Timer
+	destroyed        bool
+}
+
+func (c *nodeConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.mu.Lock()
+		c.lastActivity = time.Now()
+		if !c.begun {
+			// on_message_begin: the message starts at its first byte.
+			c.begun, c.inMessage, c.headersComplete, c.messageStart = true, true, false, c.lastActivity
+		}
+		c.mu.Unlock()
+	}
+	return n, err
+}
+
+func (c *nodeConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 {
+		c.mu.Lock()
+		c.lastActivity = time.Now()
+		c.mu.Unlock()
+	}
+	return n, err
+}
+
+// idle is closeIdleConnections' test.
+func (c *nodeConn) idle() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.inMessage && !c.responding
+}
+
+// expired is ConnectionsList::Expired's test for a connection.
+func (c *nodeConn) expired(now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.inMessage || c.destroyed {
+		return false
+	}
+	age := now.Sub(c.messageStart)
+	return (!c.headersComplete && age > headersTimeout) || age > requestTimeout
+}
+
+// requestTimedOut is onRequestTimeout: socketOnError writes the 408 unless
+// a response has started, then destroys the socket.
+func (c *nodeConn) requestTimedOut() {
+	c.mu.Lock()
+	responding := c.responding
+	c.mu.Unlock()
+	if !responding {
+		c.Conn.SetWriteDeadline(time.Now().Add(time.Second))
+		io.WriteString(c.Conn, requestTimeoutResponse)
+	}
+	c.destroy()
+}
+
+// headersReceived is parserOnIncoming: the request's headers are complete
+// (resetSocketTimeout clears the keep-alive timeout), and a request without
+// a body is complete with them. The response counts as in flight until
+// net/http has flushed it and gone back to waiting (StateIdle).
+func (c *nodeConn) headersReceived(bodyless bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.begun, c.inMessage, c.headersComplete, c.responding, c.keepAlive = true, true, true, true, false
+	if bodyless {
+		c.inMessage, c.begun = false, false
+	}
+}
+
+// responseFinished is resOnFinish: a keep-alive response arms the socket
+// timeout.
+func (c *nodeConn) responseFinished(keepAlive bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !keepAlive || c.destroyed {
+		return
+	}
+	c.keepAlive = true
+	c.lastActivity = time.Now()
+	if c.timer == nil {
+		c.timer = time.AfterFunc(keepAliveSocketTimeout, c.socketTimeout)
+	} else {
+		c.timer.Reset(keepAliveSocketTimeout)
+	}
+}
+
+// messageComplete is on_message_complete (net/http has read the whole
+// request, body included, flushed the response and gone back to waiting:
+// StateIdle).
+func (c *nodeConn) messageComplete() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inMessage, c.begun, c.responding = false, false, false
+}
+
+// socketTimeout is socketOnTimeout with no listeners: destroy, unless
+// there was activity since (the timeout counts from the last read or
+// write).
+func (c *nodeConn) socketTimeout() {
+	c.mu.Lock()
+	if !c.keepAlive || c.destroyed {
+		c.mu.Unlock()
+		return
+	}
+	if rest := keepAliveSocketTimeout - time.Since(c.lastActivity); rest > 0 {
+		c.timer.Reset(rest)
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+	c.destroy()
+}
+
+// destroy is socket.destroy(). The connection stops counting for Close at
+// once, as Node's does: net/http may still linger on it (closeWriteAndWait
+// sleeps 500 ms after an unread body) before reporting StateClosed.
+func (c *nodeConn) destroy() {
+	c.mu.Lock()
+	if c.destroyed {
+		c.mu.Unlock()
+		return
+	}
+	c.destroyed = true
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	c.mu.Unlock()
+	c.Conn.Close()
+	c.s.untrack(c)
+}
+
+type connKey struct{}
 
 const contentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 
@@ -122,6 +395,12 @@ func StartGitProofServer(v View, port float64) (*Server, error) {
 		return nil, errors.New("listen " + code + ": " + nodefs.Describe(code) + " " + address)
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := r.Context().Value(connKey{}).(*nodeConn)
+		c.headersReceived(r.Body == http.NoBody)
+		// Respond before the body is read, as Node does; net/http drains it
+		// afterwards (finishRequest).
+		http.NewResponseController(w).EnableFullDuplex()
+		defer func() { c.responseFinished(w.Header().Get("Connection") == "keep-alive") }()
 		h := w.Header()
 		if r.Method == "GET" && requestPathname(r.RequestURI) == "/" {
 			h.Set("Content-Type", "text/html; charset=utf-8")
@@ -139,12 +418,36 @@ func StartGitProofServer(v View, port float64) (*Server, error) {
 		nodeHeaders(h, r)
 		writeNodeBody(w, r, 404, "Not found")
 	})
-	// Node's keepAliveTimeout is 5 s. Node passes `OPTIONS *` to the
-	// handler like any other request (a 404 here); net/http would answer it
-	// with 200 itself.
-	srv := &http.Server{Handler: handler, IdleTimeout: 5 * time.Second, DisableGeneralOptionsHandler: true}
-	go srv.Serve(listener)
+	s := &Server{
+		url:      "http://127.0.0.1:" + strconv.Itoa(listener.Addr().(*net.TCPAddr).Port),
+		listener: listener,
+		stop:     make(chan struct{}),
+		conns:    map[*nodeConn]struct{}{},
+		drained:  make(chan struct{}),
+	}
+	// Node passes `OPTIONS *` to the handler like any other request (a 404
+	// here); net/http would answer it with 200 itself. Timeouts are the
+	// nodeConn's (no IdleTimeout: the keep-alive socket timeout closes an
+	// idle connection after 6 s, as Node does).
+	s.srv = &http.Server{
+		Handler:                      handler,
+		DisableGeneralOptionsHandler: true,
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			return context.WithValue(ctx, connKey{}, conn)
+		},
+		ConnState: func(conn net.Conn, state http.ConnState) {
+			c := conn.(*nodeConn)
+			switch state {
+			case http.StateIdle:
+				c.messageComplete()
+			case http.StateClosed, http.StateHijacked:
+				c.destroy()
+			}
+		},
+	}
+	go s.srv.Serve(nodeListener{listener, s})
+	go s.checkConnections()
 	// A TCP listener always reports a TCP address, so the TS "did not
 	// report a TCP address" branch is unreachable and not ported.
-	return &Server{url: "http://127.0.0.1:" + strconv.Itoa(listener.Addr().(*net.TCPAddr).Port), srv: srv}, nil
+	return s, nil
 }
