@@ -3,6 +3,7 @@ package nodeproc
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -34,6 +35,13 @@ type SpawnOptions struct {
 	// OnStdout and OnStderr are the 'data' listeners. They are called on
 	// one goroutine, in arrival order, and may call Kill.
 	OnStdout, OnStderr func(chunk []byte)
+	// OnStreamError is the streams' 'error' listener: a read that fails
+	// with anything but end of file (libuv's read_cb with an error other
+	// than UV_EOF) ends the stream with err, whose message is Node's
+	// ("read ECONNRESET"), and stream is "stdout" or "stderr". It is
+	// called on the listeners' goroutine; nil ignores the error, as the
+	// call sites (which add no 'error' listener on the streams) do.
+	OnStreamError func(stream string, err error)
 	// WindowsVerbatimArguments is windowsVerbatimArguments: on Windows
 	// libuv joins file and args with spaces without quoting any of them
 	// (child_process.exec passes `/d /s /c "<command>"` this way). Ignored
@@ -113,7 +121,14 @@ func Spawn(file string, args []string, o SpawnOptions) *Child {
 		}(io.stdin)
 	}
 	var streams []pipedStream
-	for _, s := range []pipedStream{{io.stdout, io.rawStdout, o.OnStdout}, {io.stderr, io.rawStderr, o.OnStderr}} {
+	failer := func(name string) func(error) {
+		return func(err error) {
+			if o.OnStreamError != nil {
+				o.OnStreamError(name, &StreamError{Code: nodefs.SystemErrorName(err)})
+			}
+		}
+	}
+	for _, s := range []pipedStream{{io.stdout, io.rawStdout, o.OnStdout, failer("stdout")}, {io.stderr, io.rawStderr, o.OnStderr, failer("stderr")}} {
 		if s.f != nil || s.raw != 0 {
 			streams = append(streams, s)
 		}
@@ -174,7 +189,14 @@ type pipedStream struct {
 	f      *os.File
 	raw    uintptr
 	listen func([]byte)
+	fail   func(error) // the stream's 'error': a read error other than EOF
 }
+
+// StreamError is the error a piped stream emits when a read fails with
+// anything but end of file: Node's errnoException(nread, 'read').
+type StreamError struct{ Code string }
+
+func (e *StreamError) Error() string { return "read " + e.Code }
 
 // pump delivers the streams' data to their listeners on one goroutine
 // until every stream has ended. It follows libuv's loop where the kernel
@@ -197,41 +219,51 @@ func pumpEach(streams []pipedStream) {
 	var readers sync.WaitGroup
 	for _, s := range streams {
 		readers.Add(1)
-		go readChunks(s.f, s.listen, chunks, &readers)
+		go readChunks(s, chunks, &readers)
 	}
 	go func() {
 		readers.Wait()
 		close(chunks)
 	}()
 	for ch := range chunks {
-		if ch.listen != nil {
-			ch.listen(ch.data)
+		switch {
+		case ch.err != nil:
+			if ch.s.fail != nil {
+				ch.s.fail(ch.err)
+			}
+		case ch.s.listen != nil:
+			ch.s.listen(ch.data)
 		}
 	}
 }
 
-// chunk is one read from a piped stream, for its 'data' listener.
+// chunk is one read from a piped stream, for its 'data' listener, or the
+// read error that ended it.
 type chunk struct {
-	listen func([]byte)
-	data   []byte
+	s    pipedStream
+	data []byte
+	err  error
 }
 
-// readChunks reads f in libuv's 64 KiB reads until EOF or an error, which
-// for a socket the child holds ends the stream as well.
-func readChunks(f *os.File, listen func([]byte), out chan<- chunk, done *sync.WaitGroup) {
+// readChunks reads the stream in libuv's 64 KiB reads until EOF or an
+// error, which ends the stream as well ('error' first).
+func readChunks(s pipedStream, out chan<- chunk, done *sync.WaitGroup) {
 	defer done.Done()
-	defer f.Close()
+	defer s.f.Close()
 	var buf []byte
 	for {
 		if buf == nil {
 			buf = make([]byte, segment)
 		}
-		n, err := f.Read(buf)
+		n, err := s.f.Read(buf)
 		if n > 0 {
-			out <- chunk{listen, buf[:n]}
+			out <- chunk{s: s, data: buf[:n]}
 			buf = nil // the listener owns the chunk
 		}
 		if err != nil {
+			if err != io.EOF {
+				out <- chunk{s: s, err: err}
+			}
 			return
 		}
 	}

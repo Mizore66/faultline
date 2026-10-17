@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
 // TestReadStreamBudget pins uv__read's budget (libuv unix/stream.c,
@@ -41,5 +43,24 @@ func TestReadStreamBudget(t *testing.T) {
 	sizes = nil
 	if ended := readStream(s); !ended || len(sizes) != 0 {
 		t.Fatalf("third wakeup: %v (ended %v), want EOF", sizes, ended)
+	}
+}
+
+// TestReadStreamError pins uv__read's error path: a read that fails with
+// anything but EAGAIN goes to the stream's 'error' listener and ends the
+// stream (a directory stands in for a failing stream: read gives EISDIR).
+func TestReadStreamError(t *testing.T) {
+	f, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var got []error
+	s := pipedStream{f: f, listen: func([]byte) { t.Error("data from a directory") }, fail: func(e error) { got = append(got, e) }}
+	if !readStream(s) || len(got) != 1 {
+		t.Fatalf("ended without one error: %v", got)
+	}
+	if code := (&StreamError{Code: nodefs.SystemErrorName(got[0])}).Error(); code != "read EISDIR" {
+		t.Errorf("error = %q", code)
 	}
 }

@@ -88,7 +88,7 @@ func rawFd(f *os.File) int {
 // reads of 64 KiB, each handed to the listener at once (Node emits 'data'
 // from the read callback), stopping at a read that comes back short or
 // would block. It reports whether the stream ended: EOF, or an error,
-// which for a socket the child holds ends the stream as well.
+// which goes to the stream's 'error' listener first.
 func readStream(s pipedStream) bool {
 	rc, err := s.f.SyscallConn()
 	if err != nil {
@@ -113,8 +113,14 @@ func readStream(s pipedStream) bool {
 		switch {
 		case rerr == syscall.EAGAIN:
 			return false
-		case rerr != nil || n <= 0:
+		case rerr != nil:
+			// uv__read hands the error to read_cb: Node emits 'error'.
+			if s.fail != nil {
+				s.fail(rerr)
+			}
 			return true
+		case n <= 0:
+			return true // EOF
 		}
 		data := buf[:n]
 		buf = nil // the listener owns data

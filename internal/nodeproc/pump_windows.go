@@ -15,14 +15,14 @@ import (
 // UV_WRITABLE_PIPE) associated with the loop's completion port; a read is a zero-byte
 // overlapped ReadFile, whose completion means data (or EOF) is there; the
 // loop takes completions from GetQueuedCompletionStatus in the order the
-// kernel queued them, reads what is available in 64 KiB ReadFiles, hands
-// each chunk to its 'data' listener, and posts the next zero read. So data
+// kernel queued them, reads in 64 KiB overlapped ReadFiles until one comes
+// back short, hands each chunk to its 'data' listener, and posts the next
+// zero read. So data
 // the child wrote to stderr before stdout reaches the listeners in that
 // order, as with epoll (round 7 #7).
 
 var (
 	procCreateNamedPipeA = kernel32.NewProc("CreateNamedPipeA")
-	procPeekNamedPipe    = kernel32.NewProc("PeekNamedPipe")
 	procCreateIoCP       = kernel32.NewProc("CreateIoCompletionPort")
 	procGetQueuedStatus  = kernel32.NewProc("GetQueuedCompletionStatus")
 	procReadFile         = kernel32.NewProc("ReadFile")
@@ -47,7 +47,6 @@ const (
 	errorBrokenPipe       = syscall.ERROR_BROKEN_PIPE
 	errorIOPending        = syscall.ERROR_IO_PENDING
 	errorOperationAborted = syscall.ERROR_OPERATION_ABORTED
-	errorMoreData         = syscall.ERROR_MORE_DATA
 	genericWrite          = 0x40000000
 	invalidHandleValue    = ^uintptr(0)
 )
@@ -195,8 +194,10 @@ func pumpPolled(streams []pipedStream, port uintptr) []pipedStream {
 		ok, _, err := procReadFile.Call(raw[i].raw, uintptr(unsafe.Pointer(&r.zero[0])), 0, 0, uintptr(unsafe.Pointer(&r.ov)))
 		if ok == 0 && err != errorIOPending {
 			// A failed queue is reported through the port in libuv
-			// (uv__insert_pending_req); here it ends the stream.
+			// (uv__insert_pending_req), then processed as a failed zero
+			// read: EOF or the stream's 'error'.
 			reqs[i] = nil
+			readErrorOrEOF(raw[i], err)
 			end(i)
 		}
 	}
@@ -227,10 +228,11 @@ func pumpPolled(streams []pipedStream, port uintptr) []pipedStream {
 			queue(i)
 			continue
 		}
-		if r == 0 && e != errorMoreData {
+		if r == 0 {
 			// uv__process_pipe_read_req: a failed zero read is EOF for
 			// ERROR_BROKEN_PIPE and an error otherwise; both end the
 			// stream (Node emits 'end' or 'error', then 'close').
+			readErrorOrEOF(raw[i], e)
 			end(i)
 			continue
 		}
@@ -251,57 +253,62 @@ func pumpPolled(streams []pipedStream, port uintptr) []pipedStream {
 	return rest
 }
 
-// readAvailable is the read loop of uv__process_pipe_read_req: while data
-// is available, read up to 64 KiB (uv__pipe_read_data) and hand it to the
-// listener; a read that fills the buffer means there may be more. It
-// reports whether the stream ended (EOF or an error).
+// readAvailable is the read loop of uv__process_pipe_read_req after a
+// zero read completed: uv__pipe_read_data (overlapped pipe) until a read
+// comes back short. Each read is an overlapped ReadFile of up to 64 KiB
+// (Node's alloc_cb buffer), cancelled with CancelIoEx if it pends; there
+// is no PeekNamedPipe on this path, so data still buffered after the
+// child closed its end is read before ReadFile reports ERROR_BROKEN_PIPE.
+// A read that returns data (or is cancelled, ERROR_OPERATION_ABORTED)
+// goes to the listener; ERROR_BROKEN_PIPE is EOF and any other error the
+// stream's 'error' (uv__pipe_read_error_or_eof); both end the stream. It
+// reports whether the stream ended.
 func readAvailable(s pipedStream, event uintptr) bool {
-	var buf []byte
 	for {
-		var avail uint32
-		if r, _, _ := procPeekNamedPipe.Call(s.raw, 0, 0, 0, uintptr(unsafe.Pointer(&avail)), 0); r == 0 {
-			return true // the write end is closed: EOF
-		}
-		if avail == 0 {
-			return false
-		}
-		if buf == nil {
-			buf = make([]byte, segment)
-		}
-		want := min(uint32(len(buf)), avail)
-		n, err := overlappedRead(s.raw, event, buf[:want])
-		if err != nil {
+		buf := make([]byte, segment)
+		n, err := overlappedRead(s.raw, event, buf)
+		switch err {
+		case nil, errorOperationAborted:
+			if n > 0 && s.listen != nil {
+				s.listen(buf[:n]) // Node ignores a read of 0 bytes
+			}
+		default:
+			readErrorOrEOF(s, err)
 			return true
 		}
-		if n > 0 {
-			data := buf[:n]
-			buf = nil // the listener owns data
-			if s.listen != nil {
-				s.listen(data)
-			}
-		}
-		if n < segment {
+		if n != len(buf) {
 			return false
 		}
 	}
 }
 
-// overlappedRead is a ReadFile of available data on the overlapped handle,
-// waited for on the stream's event so that the completion does not reach
-// the port (an event handle with its low bit set suppresses the port
-// notification). The manual-reset event is reset by ReadFile itself.
+// readErrorOrEOF is uv__pipe_read_error_or_eof: ERROR_BROKEN_PIPE ends the
+// stream quietly ('end'), any other error is the stream's 'error'.
+func readErrorOrEOF(s pipedStream, err error) {
+	if err != errorBrokenPipe && s.fail != nil {
+		s.fail(err)
+	}
+}
+
+// overlappedRead is uv__pipe_read_data's ReadFile on the overlapped
+// handle, with the stream's event in the OVERLAPPED (its low bit set, so
+// that the completion does not reach the port): a read that pends is
+// cancelled (CancelIoEx) and its result waited for, which gives the bytes
+// it read or ERROR_OPERATION_ABORTED with none.
 func overlappedRead(h, event uintptr, buf []byte) (int, error) {
 	ov := syscall.Overlapped{HEvent: syscall.Handle(event | 1)}
 	var done uint32
 	err := syscall.ReadFile(syscall.Handle(h), buf, &done, &ov)
 	if err == errorIOPending {
+		procCancelIoEx.Call(h, uintptr(unsafe.Pointer(&ov)))
+		done = 0
 		err = nil
 		if r, _, e := procGetOverlapped.Call(h, uintptr(unsafe.Pointer(&ov)), uintptr(unsafe.Pointer(&done)), 1); r == 0 {
-			err = e
+			err, done = e, 0
 		}
+	} else if err != nil {
+		done = 0
 	}
-	if err != nil && err != errorMoreData {
-		return int(done), err
-	}
-	return int(done), nil
+	runtime.KeepAlive(&ov)
+	return int(done), err
 }
