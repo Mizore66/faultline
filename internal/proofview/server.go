@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
@@ -141,7 +142,7 @@ func (l nodeListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
+	now := clock.Monotonic()
 	c := &nodeConn{Conn: conn, s: l.s, inMessage: true, messageStart: now, lastActivity: now}
 	l.s.mu.Lock()
 	l.s.conns[c] = struct{}{}
@@ -174,7 +175,7 @@ func (c *nodeConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
 		c.mu.Lock()
-		c.lastActivity = time.Now()
+		c.lastActivity = clock.Monotonic()
 		if !c.begun {
 			// on_message_begin: the message starts at its first byte.
 			c.begun, c.inMessage, c.headersComplete, c.messageStart = true, true, false, c.lastActivity
@@ -188,7 +189,7 @@ func (c *nodeConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
 	if n > 0 {
 		c.mu.Lock()
-		c.lastActivity = time.Now()
+		c.lastActivity = clock.Monotonic()
 		c.mu.Unlock()
 	}
 	return n, err
@@ -219,7 +220,7 @@ func (c *nodeConn) requestTimedOut() {
 	responding := c.responding
 	c.mu.Unlock()
 	if !responding {
-		c.Conn.SetWriteDeadline(time.Now().Add(time.Second))
+		c.Conn.SetWriteDeadline(clock.Monotonic().Add(time.Second))
 		io.WriteString(c.Conn, requestTimeoutResponse)
 	}
 	c.destroy()
@@ -247,7 +248,7 @@ func (c *nodeConn) responseFinished(keepAlive bool) {
 		return
 	}
 	c.keepAlive = true
-	c.lastActivity = time.Now()
+	c.lastActivity = clock.Monotonic()
 	if c.timer == nil {
 		c.timer = time.AfterFunc(keepAliveSocketTimeout, c.socketTimeout)
 	} else {
@@ -273,7 +274,7 @@ func (c *nodeConn) socketTimeout() {
 		c.mu.Unlock()
 		return
 	}
-	if rest := keepAliveSocketTimeout - time.Since(c.lastActivity); rest > 0 {
+	if rest := keepAliveSocketTimeout - clock.Monotonic().Sub(c.lastActivity); rest > 0 {
 		c.timer.Reset(rest)
 		c.mu.Unlock()
 		return
