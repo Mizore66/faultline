@@ -32,6 +32,7 @@ type minimizeCase struct {
 	budget         int    // 0 keeps the schema default
 	expectedDigest string // "" takes the witness's own frozen digest
 	notesOverlay   bool   // the witness also overlays notes.txt
+	fakeGit        string // a difftest/testdata/fakegit directory ahead of git on PATH
 }
 
 func lines(count int, bad int) string {
@@ -212,6 +213,16 @@ func minimizeCases() []minimizeCase {
 			{Files: map[string]string{"state.txt": lines(24, -1)}},
 			{Files: map[string]string{"state.txt": strings.Replace(lines(24, 2), "line 20", "tail 20", 1)}},
 		}},
+		// rev-parse prints something that is not an object id for the
+		// commit, then for the tree.
+		{label: "bad-commit-oid", fake: "odd-bad", fakeGit: "bad-oid", commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": "good\n"}},
+			{Files: map[string]string{"state.txt": "bad\n"}},
+		}},
+		{label: "bad-tree-oid", fake: "odd-bad", fakeGit: "bad-tree-oid", commits: []gitinv.RepoCommitForTest{
+			{Files: map[string]string{"state.txt": "good\n"}},
+			{Files: map[string]string{"state.txt": "bad\n"}},
+		}},
 		{label: "invalid-witness", fake: "odd-bad", expectedDigest: "sha256:" + strings.Repeat("0", 64),
 			commits: []gitinv.RepoCommitForTest{
 				{Files: map[string]string{"state.txt": "good\n"}},
@@ -335,6 +346,9 @@ func TestLiveMinimize(t *testing.T) {
 			path = strings.Join([]string{filepath.Join(root, "difftest/testdata/recorder"), private, filepath.Dir(gitPath), "/usr/bin", "/bin"}, ":")
 		}
 		fresh()
+		if tc.fakeGit != "" {
+			path = filepath.Join(root, "difftest/testdata/fakegit", tc.fakeGit) + ":" + path
+		}
 		requestText := jsjson.Stringify(requests[i])
 		want := oracleText(t, c, "minimizeGitDiff", `{"request":`+requestText+`,"path":`+jsjson.Quote(path)+`,"argvLog":`+jsjson.Quote(tsLog)+`}`)
 		fresh()

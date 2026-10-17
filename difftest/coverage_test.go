@@ -60,10 +60,7 @@ var unreachableLiterals = map[string]string{
 
 	// Slice 2 writers. Git's own invariants: hardened git prints what these
 	// checks expect unless it is broken.
-	"Git returned an invalid tree object id for commit":             "git rev-parse --verify <commit>^{tree} prints a full object id or fails",
 	"Git range enumeration returned an invalid commit object id.":   "git rev-list prints full object ids",
-	"Git returned an invalid commit object id for revision":         "git rev-parse --verify <revision>^{commit} prints a full object id or fails",
-	"Git returned an invalid tree object id for revision":           "git rev-parse --verify <commit>^{tree} prints a full object id or fails",
 	"Git did not return an absolute repository root.":               "git rev-parse --show-toplevel prints an absolute path or fails",
 	"Git did not return an absolute repository metadata directory.": "git rev-parse --absolute-git-dir prints an absolute path or fails",
 	"Git -z output ended without a NUL terminator.":                 "git diff --name-status -z ends every field with NUL",
@@ -74,7 +71,6 @@ var unreachableLiterals = map[string]string{
 	"Missing preflight environment fingerprint for":                            "the preflight fingerprints every state this loop materializes",
 	"Missing runtime image mapping for":                                        "buildEffectiveRuntimeMapping maps every preflight digest to a non-empty image, and a heterogeneous range with a gap is refused just before",
 	"Candidate references a patch unit that does not belong to this Git diff.": "candidates are built from the same diff's patch unit ids",
-	"Refusing to write an invalid Git minimization result:":                    "minimizeGitDiff only returns results its own verifier accepts",
 	"trusted reviewer public key is invalid:":                                  "parseReviewerKeyring already refused keys that are not Ed25519 or whose fingerprint is not their keyId",
 	"Frozen overlay path escaped its worktree:":                                "safeOverlayParts refuses empty, '.' and '..' segments and backslashes first, so the target stays inside the worktree",
 	"Minimization output root is not a real directory:":                        "the CLI's safeManagedFileOutput refuses the same output first",
@@ -83,7 +79,6 @@ var unreachableLiterals = map[string]string{
 	"minimization result verification failed safely:":                          "a throw inside the checks of a record that passed the schema: only a V8 limit (string length, stack depth) gets there",
 	// Races: the file or directory changes between two steps of fl.
 	"Could not remove temporary materialized tree:":                                        "race only: rm of the worktree and index fl just created under its private 0700 temp root",
-	"Unable to verify ancestry:":                                                           "only a commit missing from the object store reaches it (merge-base --is-ancestor fails), and git's exit status there differs by version (2.39 exits 1, a non-ancestor; 2.47 and 2.54 exit 128), so no golden can hold one text for every runner; verified by hand on 2.47 and 2.54",
 	"Could not verify materialized Git tree":                                               "only a filesystem that folds case reaches it (a tree with A.txt and a.txt: update-index --refresh fails); TestLiveMaterialize requires it on macOS (stack-live), and on Linux both files check out",
 	"Materialized Git tree does not match its external index for":                          "race only: filters are refused and core.autocrlf is off, so a fresh checkout matches its index",
 	"FaultLine could not verify exact materialized overlay bytes:":                         "race only: the overlay was just renamed into place",
@@ -1024,6 +1019,7 @@ var liveGatedFiles = map[string]string{
 	"internal/minimize/verify.go":         "TestLiveMinimizationVerify",
 	"internal/sandbox/plan.go":            "TestLiveSandboxPlan",
 	"internal/minimize/minimize.go":       "TestLiveMinimize",
+	"internal/gitinv/investigate.go":      "TestLiveGitRefusals",
 	"internal/sandbox/run.go":             "TestLiveNativeRunner",
 	// The OpenSSL PEM and DER readers: their reason texts are compared on
 	// thousands of generated key texts (round 8).

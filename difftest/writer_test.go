@@ -1135,3 +1135,25 @@ func tamperManifestField(t *testing.T, dir, field, value string) {
 	}
 	rehash(dir, "writer")
 }
+
+// asGolden is res as a writer golden line, for compareWriter.
+func asGolden(res writerResult) *jsjson.Obj {
+	o := jsjson.NewObj()
+	o.Set("stdout", jsjson.MakeString(res.Stdout))
+	o.Set("stderr", jsjson.MakeString(res.Stderr))
+	o.Set("exit", jsjson.MakeNumber(float64(res.Exit)))
+	o.Set("tree", jsjson.MakeString(res.Tree))
+	o.Set("modes", jsjson.MakeString(res.Modes))
+	files := jsjson.NewObj()
+	for k, v := range res.Files {
+		files.Set(k, jsjson.MakeString(v))
+	}
+	o.Set("files", jsjson.MakeObject(files))
+	argv := make([]jsjson.Value, len(res.Argv))
+	for i, a := range res.Argv {
+		argv[i] = jsjson.MakeString(a)
+	}
+	o.Set("argv", jsjson.MakeArray(argv))
+	o.Set("inv", jsjson.MakeNumber(float64(res.Inv)))
+	return o
+}

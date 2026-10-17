@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
-	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
 // writerFault fails the first call of one syscall group on one writer path
@@ -256,26 +255,4 @@ func discoverFaultPath(t *testing.T, repo string, tpl writerTemplate, glob strin
 	}
 	t.Logf("%s: faulting %s", tpl.ID, found)
 	return found
-}
-
-// asGolden is res as a writer golden line, for compareWriter.
-func asGolden(res writerResult) *jsjson.Obj {
-	o := jsjson.NewObj()
-	o.Set("stdout", jsjson.MakeString(res.Stdout))
-	o.Set("stderr", jsjson.MakeString(res.Stderr))
-	o.Set("exit", jsjson.MakeNumber(float64(res.Exit)))
-	o.Set("tree", jsjson.MakeString(res.Tree))
-	o.Set("modes", jsjson.MakeString(res.Modes))
-	files := jsjson.NewObj()
-	for k, v := range res.Files {
-		files.Set(k, jsjson.MakeString(v))
-	}
-	o.Set("files", jsjson.MakeObject(files))
-	argv := make([]jsjson.Value, len(res.Argv))
-	for i, a := range res.Argv {
-		argv[i] = jsjson.MakeString(a)
-	}
-	o.Set("argv", jsjson.MakeArray(argv))
-	o.Set("inv", jsjson.MakeNumber(float64(res.Inv)))
-	return o
 }

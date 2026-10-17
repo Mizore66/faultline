@@ -31,7 +31,7 @@ Protocol:
 | `rm-hang` | like `timeout`, but `rm` runs `exec sleep 30`: the runner kills it after its 5 s cleanup limit and reports `FaultLine timed out while force-removing its named container.` |
 | `vanish` | for a private copy only: `run` deletes the script, prints `started` and dies of SIGKILL, so `docker rm --force` cannot be spawned (`FaultLine could not force-remove its named container: spawn docker ENOENT`). |
 | `flaky-pass` | for a private copy only: `odd-bad`, except that every passing `run` after the first two dies of SIGTERM after printing `partial` (an unresolved run); it counts passes in a file beside the script. |
-| `flaky-daemon` | for a private copy only, beside a copy of `odd-bad` named `odd-bad`: the first three runs play `odd-bad`, every later one is the `daemon-down` refusal. |
+| `flaky-daemon` | the first three runs play `odd-bad`, every later one is the `daemon-down` refusal; it counts runs in `$FAULTLINE_FAKE_DOCKER_STATE` (a writer case sets it to `<TMP>`) or else beside a private copy of the script. |
 | `timeout-once` | the first `run` of a case leaves a marker in `$TMPDIR`, prints `started` and then `exec sleep 300`, past the default 120 s sandbox timeout (`investigate git` passes no limits, so the witness's `timeoutSeconds` does not reach the sandbox); every later `run` plays back `pass-fail`. The runner's timeout kills it and force-removes the container (`docker rm --force`). |
 | `exact-limit` | `pass-fail`, but a passing `run` writes exactly 1,048,576 bytes (the default `maxOutputBytes`) to stdout, ending in the `PREDICATE_PASS` result line: output at the limit is not truncated. |
 | `slow` | `pass-fail` after `sleep 1` on `run`, for the release-build clock check (`difftest/release`). |

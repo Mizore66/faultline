@@ -117,3 +117,4 @@ TestWriterReplay/posix/investigate-dot-git-entry
 TestWriterReplay/posix/minimize-git-file-to-directory
 TestWriterReplay/posix/investigate-lost-blob
 TestWriterReplay/posix/minimize-git-lost-blob
+TestWriterReplay/posix/minimize-git-daemon-down-late
