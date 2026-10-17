@@ -282,9 +282,6 @@ func TestMkdtempErrorPath(t *testing.T) {
 // an existing path: a symlink to a directory counts as the directory
 // (r9-3 F2). Expected results from Node 22's mkdirSync({recursive: true}).
 func TestMkdirAllFollowsSymlinks(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need privileges on Windows")
-	}
 	dir := t.TempDir()
 	for _, p := range []string{"real", "file", "link", "flink", "dangle", "link2"} {
 		var err error
@@ -303,6 +300,11 @@ func TestMkdirAllFollowsSymlinks(t *testing.T) {
 			err = os.Symlink("link", filepath.Join(dir, p))
 		}
 		if err != nil {
+			if runtime.GOOS == "windows" {
+				// CI's Windows runners are administrators, who may create
+				// symlinks; elsewhere that needs Developer Mode.
+				t.Skip("creating a symlink: " + err.Error())
+			}
 			t.Fatal(err)
 		}
 	}
@@ -316,7 +318,13 @@ func TestMkdirAllFollowsSymlinks(t *testing.T) {
 		{"dangle", "ENOENT: no such file or directory, mkdir '%s'"},
 		{"dangle/x", "ENOENT: no such file or directory, mkdir '%s'"},
 	} {
-		p := filepath.Join(dir, c.path)
+		if runtime.GOOS == "windows" && c.want != "" {
+			// The error texts were measured on Unix only; on Windows
+			// (CI's runners can create symlinks) only the links to
+			// directories, which F2 is about, are checked.
+			continue
+		}
+		p := filepath.Join(dir, filepath.FromSlash(c.path))
 		err := MkdirAll(p, 0o755)
 		got := ""
 		if err != nil {

@@ -5,14 +5,15 @@ package nodefs
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 // TestRemoveAllUnlinkEPERM pins rimraf's EPERM path off Windows: a child
-// whose unlink fails with EPERM is tried with rmdir, which fails ENOTDIR,
-// and the original unlink error is reported (r9-3 F6). Expected results
-// from Node 22's fs/promises.rm and rmSync(dir, {recursive, force}) on a
-// directory holding an immutable file (macOS chflags uchg).
+// whose unlink fails with EPERM is tried with rmdir (r9-3 F6). Expected
+// results from Node 22's fs/promises.rm and rmSync(dir, {recursive,
+// force}) on a directory holding an immutable file (macOS chflags uchg,
+// Linux chattr +i, Node 22.22.2).
 func TestRemoveAllUnlinkEPERM(t *testing.T) {
 	for _, rm := range []struct {
 		name string
@@ -34,8 +35,15 @@ func TestRemoveAllUnlinkEPERM(t *testing.T) {
 		}
 		err := rm.fn(d)
 		setImmutable(f, false)
-		if err == nil || err.Error() != "EPERM: operation not permitted, unlink '"+f+"'" {
-			t.Errorf("%s: %v", rm.name, err)
+		// macOS: unlink EPERM, rmdir ENOTDIR, so the unlink error is
+		// reported. Linux checks the immutable flag first, so rmdir fails
+		// EPERM too and rimraf scans the file: ENOTDIR from scandir.
+		want := "EPERM: operation not permitted, unlink '" + f + "'"
+		if runtime.GOOS == "linux" {
+			want = "ENOTDIR: not a directory, scandir '" + f + "'"
+		}
+		if err == nil || err.Error() != want {
+			t.Errorf("%s: %v, want %s", rm.name, err, want)
 		}
 		if err := RemoveAll(d); err != nil {
 			t.Fatal(err)

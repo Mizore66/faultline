@@ -38,6 +38,10 @@ jobs:
       # per-platform cases may skip; on Windows, the writer cases marked
       # posixOnly (sh recorders, fake Docker), listed by name in
       # .github/scripts/windows-writer-skips.txt.
+      # TestMkdirAllFollowsSymlinks skips on Windows only where the runner
+      # may not create symlinks (no administrator, no Developer Mode).
+      # TestRemoveAllUnlinkEPERM sets the immutable flag with sudo -n chattr
+      # on Linux (the runners' passwordless sudo) and must not skip.
       # TestErrorPathReplacesLoneSurrogate pins the Unix error text (the JS
       # path string through UTF-8, as given); on Windows Node prints the
       # resolved path with backslashes (errorPath's Windows branch), which its
@@ -54,7 +58,7 @@ jobs:
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
             Windows)
               posix=$(tr -d '\r' < .github/scripts/windows-writer-skips.txt | grep -v '^#' | paste -sd '|' -)
-              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestGoldenReplay/.+|$posix" ;;
+              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestGoldenReplay/.+|$posix" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status
