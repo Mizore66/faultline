@@ -28,7 +28,7 @@ type ecGroup struct {
 	nid      int // NID_undef (0) for an unnamed explicit group
 	binary   bool
 	p, a, b  *big.Int
-	poly     []int // binary: the nonzero exponents, highest first
+	gf       *gf2Field // binary: p as a reduction polynomial
 	gx, gy   *big.Int
 	order    *big.Int
 	cofactor *big.Int
@@ -56,7 +56,7 @@ func (e *osslEnv) groupByNID(nid int) *ecGroup {
 			g.seed, _ = hex.DecodeString(c.seed)
 		}
 		if g.binary {
-			g.poly = polyExponents(g.p)
+			g.gf = newGF2Field(g.p)
 		}
 		return g
 	}
@@ -179,9 +179,9 @@ func (e *osslEnv) groupFromECParameters(v *asn1Value) *ecGroup {
 		// ossl_ec_GF2m_simple_group_set_curve's EC_R_UNSUPPORTED_FIELD needs
 		// a polynomial of other than 3 or 5 terms; the basis checks above
 		// leave exactly 3 (trinomial) or 5 (pentanomial) distinct exponents.
-		g.poly = polyExponents(p)
-		g.a = gf2Mod(a, p)
-		g.b = gf2Mod(b, p)
+		g.gf = newGF2Field(p)
+		g.a = g.gf.mod(a)
+		g.b = g.gf.mod(b)
 	case string(oidPrimeField):
 		p := integerValue(fieldID.fields[1])
 		if p.Sign() <= 0 {
@@ -315,13 +315,18 @@ func guessCofactor(g *ecGroup) *big.Int {
 	return h.Div(h, g.order)
 }
 
-// curveNIDFromParams ports ec_curve.c ossl_ec_curve_nid_from_params for an
-// unnamed group (seed and cofactor ignored only where OpenSSL ignores them).
+// curveNIDFromParams ports ec_curve.c ossl_ec_curve_nid_from_params as
+// EC_GROUP_new_from_ecparameters calls it: on a copy of the group with the
+// seed removed (EC_GROUP_set_seed(dup, NULL, 0)) and the generator set
+// again with no cofactor (EC_GROUP_set_generator(dup, point, order, NULL)),
+// so the cofactor compared is ec_guess_cofactor's and the seed is never
+// compared. The parameters' own cofactor and seed do not stop a match.
 func curveNIDFromParams(g *ecGroup) int {
 	paramLen := (g.order.BitLen() + 7) / 8
 	if l := (g.p.BitLen() + 7) / 8; l > paramLen {
 		paramLen = l
 	}
+	cofactor := guessCofactor(g)
 	pad := func(n *big.Int) []byte { return n.FillBytes(make([]byte, paramLen)) }
 	want := bytes.Join([][]byte{pad(g.p), pad(g.a), pad(g.b), pad(g.gx), pad(g.gy), pad(g.order)}, nil)
 	for _, entry := range curveList {
@@ -329,10 +334,7 @@ func curveNIDFromParams(g *ecGroup) int {
 		if c == nil || c.binary != g.binary || entry.paramLen != paramLen {
 			continue
 		}
-		if g.cofactor.Sign() != 0 && g.cofactor.Cmp(big.NewInt(int64(entry.cofactor))) != 0 {
-			continue
-		}
-		if entry.seedLen != 0 && len(g.seed) != 0 && (entry.seedLen != len(g.seed) || hex.EncodeToString(g.seed) != c.seed) {
+		if cofactor.Sign() != 0 && cofactor.Cmp(big.NewInt(int64(entry.cofactor))) != 0 {
 			continue
 		}
 		have := bytes.Join([][]byte{pad(hexInt(c.p)), pad(hexInt(c.a)), pad(hexInt(c.b)), pad(hexInt(c.gx)), pad(hexInt(c.gy)), pad(hexInt(c.order))}, nil)
@@ -430,9 +432,17 @@ func (e *osslEnv) oct2point(g *ecGroup, buf []byte) (x, y *big.Int, inf, ok bool
 						q.raise(libEC, "EC_R_INVALID_ENCODING")
 						return nil, nil, false, false
 					}
-				} else if uint(gf2Div(y, x, g.p).Bit(0)) != uint(ybit) {
-					q.raise(libEC, "EC_R_INVALID_ENCODING")
-					return nil, nil, false, false
+				} else {
+					// field_div: BN_GF2m_mod_div fails, raising nothing,
+					// when x has no inverse modulo a reducible polynomial.
+					yxi, ok := gf2Div(y, x, g.gf)
+					if !ok {
+						return nil, nil, false, false
+					}
+					if uint(yxi.Bit(0)) != uint(ybit) {
+						q.raise(libEC, "EC_R_INVALID_ENCODING")
+						return nil, nil, false, false
+					}
 				}
 			} else if uint(y.Bit(0)) != uint(ybit) {
 				q.raise(libEC, "EC_R_INVALID_ENCODING")
@@ -452,13 +462,12 @@ func (g *ecGroup) degree() int { return g.p.BitLen() - 1 }
 // onCurve is the simple is_on_curve check for an affine point.
 func (g *ecGroup) onCurve(x, y *big.Int) bool {
 	if g.binary {
-		// y^2 + x*y = x^3 + a*x^2 + b
-		x = gf2Mod(x, g.p)
-		y = gf2Mod(y, g.p)
-		lhs := gf2Add(gf2MulMod(y, y, g.p), gf2MulMod(x, y, g.p))
-		x2 := gf2MulMod(x, x, g.p)
-		rhs := gf2Add(gf2Add(gf2MulMod(x2, x, g.p), gf2MulMod(g.a, x2, g.p)), g.b)
-		return lhs.Cmp(rhs) == 0
+		// ossl_ec_GF2m_simple_is_on_curve: ((x + a)·x + y)·x + b + y² = 0.
+		f := g.gf
+		lh := f.mul(gf2Add(x, g.a), x)
+		lh = f.mul(gf2Add(lh, y), x)
+		lh = gf2Add(gf2Add(lh, g.b), f.sqr(y))
+		return lh.Sign() == 0
 	}
 	lhs := new(big.Int).Mul(y, y)
 	lhs.Mod(lhs, g.p)
@@ -474,24 +483,36 @@ func (g *ecGroup) onCurve(x, y *big.Int) bool {
 func (e *osslEnv) decompress(g *ecGroup, x *big.Int, ybit int) (*big.Int, bool) {
 	q := e.q
 	if g.binary {
+		// ossl_ec_GF2m_simple_set_compressed_coordinates.
+		f := g.gf
 		var y *big.Int
-		xr := gf2Mod(x, g.p)
+		xr := f.mod(x)
 		if xr.Sign() == 0 {
-			y = gf2Sqrt(g.b, g.p)
+			y = gf2Sqrt(g.b, f)
 		} else {
-			t := gf2MulMod(xr, xr, g.p)
-			t = gf2Div(g.b, t, g.p)
+			t := f.sqr(xr)
+			t, ok := gf2Div(g.b, t, f)
+			if !ok {
+				return nil, false // field_div fails silently
+			}
 			t = gf2Add(gf2Add(g.a, t), xr)
 			q.setMark()
-			z, ok := gf2SolveQuad(t, g.p, g.degree())
-			if !ok {
-				q.raise(libBN, "BN_R_NO_SOLUTION")
+			z, reason := gf2SolveQuad(t, f)
+			switch reason {
+			case "":
+				q.clearLastMark()
+			case "BN_R_NO_SOLUTION":
+				q.raise(libBN, reason)
 				q.popToMark()
 				q.raise(libEC, "EC_R_INVALID_COMPRESSED_POINT")
 				return nil, false
+			default:
+				q.raise(libBN, reason)
+				q.clearLastMark()
+				q.raise(libEC, "ERR_R_BN_LIB")
+				return nil, false
 			}
-			q.clearLastMark()
-			y = gf2MulMod(xr, z, g.p)
+			y = f.mul(xr, z)
 			if int(z.Bit(0)) != ybit {
 				y = gf2Add(y, xr)
 			}
@@ -683,164 +704,6 @@ func kronecker(a, b *big.Int) int {
 	return big.Jacobi(a, b)
 }
 
-// --- binary field arithmetic (GF(2)[x] modulo poly) ----------------------
-
-func polyExponents(p *big.Int) []int {
-	var out []int
-	for i := p.BitLen() - 1; i >= 0; i-- {
-		if p.Bit(i) == 1 {
-			out = append(out, i)
-		}
-	}
-	return out
-}
-
-func gf2Add(a, b *big.Int) *big.Int { return new(big.Int).Xor(a, b) }
-
-func gf2Mod(a, p *big.Int) *big.Int {
-	r := new(big.Int).Set(a)
-	d := p.BitLen() - 1
-	for r.BitLen()-1 >= d {
-		r.Xor(r, new(big.Int).Lsh(p, uint(r.BitLen()-1-d)))
-	}
-	return r
-}
-
-func gf2MulMod(a, b, p *big.Int) *big.Int {
-	r := new(big.Int)
-	aa := new(big.Int).Set(a)
-	for i := 0; i < b.BitLen(); i++ {
-		if b.Bit(i) == 1 {
-			r.Xor(r, aa)
-		}
-		aa.Lsh(aa, 1)
-	}
-	return gf2Mod(r, p)
-}
-
-func gf2Inv(a, p *big.Int) *big.Int {
-	// a^(2^m - 2)
-	m := p.BitLen() - 1
-	r := big.NewInt(1)
-	sq := gf2Mod(a, p)
-	for i := 1; i < m; i++ {
-		sq = gf2MulMod(sq, sq, p)
-		r = gf2MulMod(r, sq, p)
-	}
-	return r
-}
-
-func gf2Div(a, b, p *big.Int) *big.Int { return gf2MulMod(gf2Mod(a, p), gf2Inv(b, p), p) }
-
-func gf2Sqrt(a, p *big.Int) *big.Int {
-	m := p.BitLen() - 1
-	r := gf2Mod(a, p)
-	for i := 0; i < m-1; i++ {
-		r = gf2MulMod(r, r, p)
-	}
-	return r
-}
-
-// gf2SolveQuad finds z with z^2 + z = a, or false (BN_R_NO_SOLUTION).
-func gf2SolveQuad(a, p *big.Int, m int) (*big.Int, bool) {
-	a = gf2Mod(a, p)
-	if a.Sign() == 0 {
-		return new(big.Int), true
-	}
-	var z *big.Int
-	if m&1 == 1 {
-		// half-trace
-		z = new(big.Int).Set(a)
-		for j := 1; j <= (m-1)/2; j++ {
-			z = gf2MulMod(z, z, p)
-			z = gf2MulMod(z, z, p)
-			z = gf2Add(z, a)
-		}
-	} else {
-		// trace must be 0; any solution's parity matters only via z0.
-		tr := new(big.Int).Set(a)
-		t := new(big.Int).Set(a)
-		for i := 1; i < m; i++ {
-			t = gf2MulMod(t, t, p)
-			tr = gf2Add(tr, t)
-		}
-		if tr.Sign() != 0 {
-			return nil, false
-		}
-		// Solve by linear algebra over GF(2).
-		z = gf2SolveLinear(a, p, m)
-		if z == nil {
-			return nil, false
-		}
-	}
-	w := gf2Add(gf2MulMod(z, z, p), z)
-	if w.Cmp(a) != 0 {
-		return nil, false
-	}
-	return z, true
-}
-
-// gf2SolveLinear solves z^2 + z = a as a linear system (even m).
-func gf2SolveLinear(a, p *big.Int, m int) *big.Int {
-	// columns: image of basis x^i under z -> z^2 + z
-	cols := make([]*big.Int, m)
-	for i := 0; i < m; i++ {
-		e := new(big.Int).SetBit(new(big.Int), i, 1)
-		cols[i] = gf2Add(gf2MulMod(e, e, p), e)
-	}
-	// Gaussian elimination on rows of an m x (m+1) matrix.
-	rows := make([]*big.Int, m)
-	for r := 0; r < m; r++ {
-		row := new(big.Int)
-		for c := 0; c < m; c++ {
-			if cols[c].Bit(r) == 1 {
-				row.SetBit(row, c, 1)
-			}
-		}
-		if a.Bit(r) == 1 {
-			row.SetBit(row, m, 1)
-		}
-		rows[r] = row
-	}
-	pivotRow := make([]int, m)
-	for i := range pivotRow {
-		pivotRow[i] = -1
-	}
-	r := 0
-	for c := 0; c < m && r < m; c++ {
-		sel := -1
-		for k := r; k < m; k++ {
-			if rows[k].Bit(c) == 1 {
-				sel = k
-				break
-			}
-		}
-		if sel < 0 {
-			continue
-		}
-		rows[r], rows[sel] = rows[sel], rows[r]
-		for k := 0; k < m; k++ {
-			if k != r && rows[k].Bit(c) == 1 {
-				rows[k].Xor(rows[k], rows[r])
-			}
-		}
-		pivotRow[c] = r
-		r++
-	}
-	for k := r; k < m; k++ {
-		if rows[k].Bit(m) == 1 {
-			return nil
-		}
-	}
-	z := new(big.Int)
-	for c := 0; c < m; c++ {
-		if pr := pivotRow[c]; pr >= 0 && rows[pr].Bit(m) == 1 {
-			z.SetBit(z, c, 1)
-		}
-	}
-	return z
-}
-
 // --- EC private keys -------------------------------------------------------
 
 // d2iECPrivateKey ports d2i_ECPrivateKey into *g (the group the PKCS#8
@@ -871,14 +734,4 @@ func (e *osslEnv) d2iECPrivateKey(g **ecGroup, der []byte) bool {
 	}
 	// keygenpub: EC_POINT_mul(priv * G).
 	return e.ecKeygenPub(grp, priv)
-}
-
-// ecKeygenPub ports ossl_ec_key_simple_generate_public_key's EC_POINT_mul
-// failure modes for priv*G.
-//
-// A decoded group always has a generator: one at infinity fails
-// d2i_ECPKParameters (groupFromECParameters), so EC_R_UNDEFINED_GENERATOR
-// cannot come up and the multiplication cannot fail.
-func (e *osslEnv) ecKeygenPub(g *ecGroup, priv *big.Int) bool {
-	return true
 }
