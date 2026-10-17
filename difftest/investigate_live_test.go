@@ -209,6 +209,24 @@ func randomInvestigateCase(t *testing.T, r *rand.Rand, witnesses []jsjson.Value)
 // seededEpochMillis is the seeded clock's epoch (difftest/gen/seed.mjs).
 const seededEpochMillis = 1784203200000
 
+// unstableInvestigateCase investigates a repository with one state per
+// verdict (state.txt holds it) through the broken-state fake Docker, under
+// which "broken" fails like a witness that does not parse.
+func unstableInvestigateCase(t *testing.T, w jsjson.Value, verdicts ...string) investigateCase {
+	var commits []gitinv.RepoCommitForTest
+	for i, v := range verdicts {
+		commits = append(commits, gitinv.RepoCommitForTest{Files: map[string]string{"state.txt": v + "\n", "step.txt": strconv.Itoa(i) + "\n"}})
+	}
+	repo, ids := gitinv.BuildRepoForTest(t, "sha1", "", commits)
+	request := jsjson.NewObj()
+	request.Set("repository", jsjson.MakeString(repo))
+	request.Set("range", jsjson.MustObject("ancestor", jsjson.MakeString(ids[0]), "descendant", jsjson.MakeString(ids[len(ids)-1])))
+	request.Set("frozenWitness", w)
+	request.Set("expectedFrozenDigest", w.Get("frozenDigest"))
+	request.Set("sandbox", jsjson.MustObject("mode", jsjson.MakeString("DOCKER_ISOLATED"), "image", jsjson.MakeString(gitinv.PinnedImageForTest)))
+	return investigateCase{label: "sha1 n=" + strconv.Itoa(len(verdicts)) + " " + strings.Join(verdicts, ",") + " broken-state", request: jsjson.MakeObject(request), fake: "broken-state"}
+}
+
 func oracleCall(t *testing.T, c *oracle.Client, op, args string) string {
 	raw, err := c.Call(op, args)
 	if err != nil {
@@ -227,7 +245,8 @@ func indexOf(values []jsjson.Value, v jsjson.Value) int {
 }
 
 // TestLiveInvestigate runs investigateGitRange (native runner) and
-// InvestigateGitRange(NativeRunner()) on 40 generated repositories with
+// InvestigateGitRange(NativeRunner()) on 3 fixed repositories with an
+// unstable state and 40 generated ones with
 // the same seed and the same fake Docker behind the docker recorder, and
 // compares the whole results (executionNonce, timestamps and durations
 // included: both draw them from the seeded sequence) and the recorded
@@ -243,7 +262,15 @@ func TestLiveInvestigate(t *testing.T) {
 			[]string{"overlay notes\n", "叠加\n", "é\n"}),
 	}
 	r := rand.New(rand.NewPCG(13, 1))
-	var cases []investigateCase
+	// The fixed cases run first: a state the witness cannot run at (fake
+	// Docker broken-state) between a PASS and a FAIL state, so the stable
+	// states around it are not adjacent and no transition may be claimed
+	// (round 10, r10-3 G3); and the same unstable state at either end.
+	cases := []investigateCase{
+		unstableInvestigateCase(t, witnesses[0], "good", "broken", "bad"),
+		unstableInvestigateCase(t, witnesses[1], "good", "broken", "broken", "bad", "good"),
+		unstableInvestigateCase(t, witnesses[0], "broken", "good", "bad", "broken"),
+	}
 	for i := 0; i < 40; i++ {
 		cases = append(cases, randomInvestigateCase(t, r, witnesses))
 	}

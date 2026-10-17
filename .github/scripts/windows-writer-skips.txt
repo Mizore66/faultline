@@ -119,3 +119,8 @@ TestWriterReplay/posix/investigate-lost-blob
 TestWriterReplay/posix/minimize-git-lost-blob
 TestWriterReplay/posix/minimize-git-daemon-down-late
 TestWriterReplay/posix/commit-proof-preview-output-symlinked-dir
+TestWriterReplay/posix/investigate-descriptor-change
+TestWriterReplay/posix/minimize-git-many-files
+TestWriterReplay/posix/investigate-non-monotonic-pages
+TestWriterReplay/posix/investigate-ledger-then-inherited
+TestWriterReplay/posix/investigate-unstable-middle

@@ -589,11 +589,17 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 	return rel
 }
 
-// text masks the case paths, then every path-dependent digest by its name.
+// text masks the case paths, then every path-dependent digest by its name
+// (gen-writers.ts relocation).
 func (rel *relocated) text(s string) string {
 	out := normalizeWriter(s, rel.roots)
 	for _, d := range rel.sorted {
 		out = strings.ReplaceAll(out, d, "<PATHDIGEST:"+rel.names[d]+">")
+	}
+	// The proof page also prints a digest abbreviated (git-proof-view.ts
+	// shortDigest: its first and last 8 hex digits).
+	for _, d := range rel.sorted {
+		out = strings.ReplaceAll(out, d[:8]+"..."+d[len(d)-8:], "<PATHDIGEST:"+rel.names[d]+":short>")
 	}
 	return out
 }
@@ -714,7 +720,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
-			args[i] = strings.ReplaceAll(substituteRoots(a, r), busyPortMarker, busyPort)
+			args[i] = fileArgument(t, strings.ReplaceAll(substituteRoots(a, r), busyPortMarker, busyPort), r)
 		}
 		command := append([]string{flBinary}, args...)
 		if run.command != nil {
@@ -755,6 +761,23 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		out = append(out, res)
 	}
 	return out
+}
+
+// fileArgument replaces an argv string that is exactly <FILE:rel> with the
+// trimmed text of the workspace file rel when the invocation starts: a
+// bundle's ROOT.sha256 depends on the case directory, so a later
+// invocation that must pass --expect-root reads it (gen-writers.ts
+// fileArgument).
+func fileArgument(t *testing.T, arg string, r writerRoots) string {
+	rel, ok := strings.CutPrefix(arg, "<FILE:")
+	if !ok || !strings.HasSuffix(rel, ">") || strings.Contains(rel[:len(rel)-1], ">") {
+		return arg
+	}
+	b, err := os.ReadFile(filepath.Join(r.ws, filepath.FromSlash(rel[:len(rel)-1])))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jsstr.Trim(string(b))
 }
 
 // busyPortMarker in an argv string is the port of a listener the case holds

@@ -42,6 +42,9 @@ var writerScenarios = map[string]bool{
 	"git-all-fail":               true,
 	"git-short-timeout":          true,
 	"git-hostile-trees":          true,
+	"git-descriptor-change":      true,
+	"git-many-files":             true,
+	"git-unstable-middle":        true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is

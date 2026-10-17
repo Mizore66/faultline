@@ -410,6 +410,8 @@ function gitScenario(states: RepoState[], options: {
   };
 }
 const GOOD_BAD_REPAIRED = [state("good"), state("bad"), state("repaired")];
+const manyFiles = (value: string): RepoState =>
+  Object.fromEntries([["state.txt", "good\n"], ...Array.from({ length: 25 }, (_, i) => [`state${String(i + 1).padStart(2, "0")}.txt`, `${value}\n`])]);
 
 // hostileTrees adds branches whose trees break materialization, patch
 // derivation or ancestry in ways the filesystem and git porcelain cannot
@@ -483,6 +485,18 @@ export const SCENARIOS: Record<string, Scenario> = {
   // Docker outlives the default 120 s timeout once instead.
   "git-hostile-trees": gitScenario([state("good"), state("bad")], { hostile: hostileTrees }),
   "git-short-timeout": gitScenario([state("good"), state("bad")], { proposal: witnessInput({ timeoutSeconds: 1 }) }),
+  // Round 10 (r10-3 G1): the states differ only in uv.lock, an environment
+  // descriptor no other case changes, so a name missing from the
+  // descriptor list turns CONFIGURATION_ERROR into a proof.
+  "git-descriptor-change": gitScenario([state("good", { "uv.lock": "version = 1\n" }), state("bad", { "uv.lock": "version = 2\n" })]),
+  // Round 10 (r10-3 N1): 25 files that all turn bad, of which only the pair
+  // state13/state14 fails the witness (fake Docker pair-bad), so ddmin
+  // narrows a failing subset over several granularities.
+  "git-many-files": gitScenario([manyFiles("good"), manyFiles("bad")]),
+  // Round 10 (r10-3 G3): an unstable state (the witness does not parse,
+  // fake Docker broken-state) between the PASS and the FAIL state, so the
+  // two stable states are not adjacent and no transition may be claimed.
+  "git-unstable-middle": gitScenario([state("good"), state("broken"), state("bad")]),
   // judge-proof and commit-proof-preview read the committed COMMIT_PROOF
   // sample from the workspace by default.
   "commit-proof-sample": {

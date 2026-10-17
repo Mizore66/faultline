@@ -357,6 +357,11 @@ func TestLiveNativeRunner(t *testing.T) {
 		{"pass", "pass-fail", "good", 60_000, 1_048_576, "PREDICATE_PASS"},
 		{"fail", "pass-fail", "bad", 60_000, 1_048_576, "PREDICATE_FAIL"},
 		{"odd-bad", "odd-bad", "bad", 60_000, 1_048_576, "PREDICATE_FAIL"},
+		// Round 10: pair-bad reads state13/state14.txt, which this source
+		// lacks (a pass); broken-state's unparsable witness.
+		{"pair-bad", "pair-bad", "bad", 60_000, 1_048_576, "PREDICATE_PASS"},
+		{"broken-state", "broken-state", "broken", 60_000, 1_048_576, "INCOMPATIBLE_STATE"},
+		{"broken-state-bad", "broken-state", "bad", 60_000, 1_048_576, "PREDICATE_FAIL"},
 		{"timeout", "timeout", "", 1_500, 1_048_576, "TIMEOUT"},
 		// docker exits 0 while its child still holds the pipes: TIMEOUT with
 		// exit code 0, and only timedOut forces the cleanup (round 7 mutant S5).

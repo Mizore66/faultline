@@ -34,10 +34,12 @@ Protocol:
 | `flaky-daemon` | the first three runs play `odd-bad`, every later one is the `daemon-down` refusal; it counts runs in `$FAULTLINE_FAKE_DOCKER_STATE` (a writer case sets it to `<TMP>`) or else beside a private copy of the script. |
 | `timeout-once` | the first `run` of a case leaves a marker in `$TMPDIR`, prints `started` and then `exec sleep 300`, past the default 120 s sandbox timeout (`investigate git` passes no limits, so the witness's `timeoutSeconds` does not reach the sandbox); every later `run` plays back `pass-fail`. The runner's timeout kills it and force-removes the container (`docker rm --force`). |
 | `exact-limit` | `pass-fail`, but a passing `run` writes exactly 1,048,576 bytes (the default `maxOutputBytes`) to stdout, ending in the `PREDICATE_PASS` result line: output at the limit is not truncated. |
+| `pair-bad` | fails the predicate only when both `state13.txt` and `state14.txt` hold a line `bad`, otherwise passes; no `state=` line (a two-file interaction among the 25 files of `git-many-files`). |
+| `broken-state` | `pass-fail`, except that `state.txt` = `broken` plays `compile-error` (stderr `witness.mjs:3` and `SyntaxError: Unexpected token '}'`, exit 1): an unstable state between a PASS and a FAIL state. |
 | `slow` | `pass-fail` after `sleep 1` on `run`, for the release-build clock check (`difftest/release`). |
 | `tmpdir-swap` | moves `$TMPDIR` to `$TMPDIR.moved` and leaves an empty file in its place (once), then stdout a `PREDICATE_PASS` result line, exit 0: fl's cleanup of its temporary root then fails `lstat` with ENOTDIR. |
 
-None of them reads `state.txt` except `pass-fail`, `odd-bad` and the three that play it back. Long-running children are
+None of them reads `state.txt` except `pass-fail`, `odd-bad`, `pair-bad`, `broken-state` and the three that play `pass-fail` back. Long-running children are
 started with `exec`, so a SIGKILL to the pid the runner spawned (the
 recorder, which also execs) reaches the process holding the pipes. Keep the
 outputs fixed text: goldens compare them byte for byte.

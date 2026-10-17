@@ -112,7 +112,8 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 // previous pass (files sorted by code unit, JSON members in document order,
 // .git directories skipped); passes repeat until nothing new is found, and
 // the first name a digest gets is kept. text() masks the case paths
-// (normalizeWriter) and then each such digest as <PATHDIGEST:name>;
+// (normalizeWriter) and then each such digest as <PATHDIGEST:name> (its
+// abbreviated page form, <8 hex>...<8 hex>, as <PATHDIGEST:name:short>);
 // fileDigest() hashes a path-dependent file's masked text and any other
 // file's bytes. The derived digests are also checked directly: the
 // generator verifies every bundle TS wrote against the root it printed, the
@@ -207,6 +208,9 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
   const text = (s: string): string => {
     let out = normalizeWriter(s, roots);
     for (const d of sorted) out = out.split(d).join(`<PATHDIGEST:${names.get(d)}>`);
+    // The proof page also prints a digest abbreviated (git-proof-view.ts
+    // shortDigest: its first and last 8 hex digits).
+    for (const d of sorted) out = out.split(`${d.slice(0, 8)}...${d.slice(-8)}`).join(`<PATHDIGEST:${names.get(d)}:short>`);
     return out;
   };
   return {
@@ -257,6 +261,15 @@ async function crossVerify(id: string, inv: number, roots: CaseRoots, stdout: st
 // holdBusyPort in difftest/writer_test.go.
 export const BUSY_PORT = "<BUSYPORT>";
 
+// An argv string that is exactly <FILE:rel> becomes the trimmed text of the
+// workspace file rel when the invocation starts: a bundle's ROOT.sha256
+// depends on the case directory, so a later invocation that must pass
+// --expect-root reads it (the Go twin is fileArgument in writer_test.go).
+export function fileArgument(arg: string, roots: CaseRoots): string {
+  const m = /^<FILE:([^>]+)>$/.exec(arg);
+  return m ? readFileSync(join(roots.ws, m[1]!), "utf8").trim() : arg;
+}
+
 // HOLD_PORT in a template's env names a fixed port the case holds on
 // 127.0.0.1 while it runs (a command's default port: judge-proof's 4174);
 // if another process already holds it, it is busy all the same. The Go
@@ -304,7 +317,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     for (const [inv, argv] of t.argv.entries()) {
       const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
       rmSync(roots.argvLog, { force: true });
-      const r = await runCli(roots, argv.map((a) => substitute(a, roots).split(BUSY_PORT).join(busy.port)), writerEnv(roots, t.id, t.fakeDocker, env));
+      const r = await runCli(roots, argv.map((a) => fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots)), writerEnv(roots, t.id, t.fakeDocker, env));
       const invocationRecords = readArgvLog(roots.argvLog);
       records.push(...invocationRecords);
       const reloc = relocation(roots, records);
