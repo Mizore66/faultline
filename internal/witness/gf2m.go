@@ -3,7 +3,6 @@ package witness
 import (
 	"math/big"
 	"math/bits"
-	"math/rand/v2"
 )
 
 // Binary polynomial arithmetic as crypto/bn/bn_gf2m.c does it: elements of
@@ -13,17 +12,12 @@ import (
 // bn_gf2m.c's algorithm, not field identities, so it fails and succeeds
 // exactly where OpenSSL's does.
 //
-// Two of OpenSSL's functions draw random numbers:
-//   - BN_GF2m_mod_inv blinds its input with a random nonzero b (inverting
-//     a·b, then multiplying by b). Over a field every such b is a unit and
-//     the result does not depend on it; modulo a reducible polynomial a b
-//     sharing a factor with it makes the inversion fail. gf2Inv takes
-//     b = 1, the outcome for every unit b (KNOWN_DIFFERENCES).
-//   - BN_GF2m_mod_solve_quad_arr for even m tries random rho until its
-//     trace-like sum w is nonzero. Over a field every such rho gives a
-//     solution with the same parity behaviour; modulo a reducible
-//     polynomial the outcome can depend on rho. gf2SolveQuad draws rho from
-//     a fixed-seed generator (KNOWN_DIFFERENCES).
+// Two of these functions draw random numbers (bnrand.go): BN_GF2m_mod_inv
+// blinds its input with a random nonzero b (inverting a·b, then
+// multiplying by b), and BN_GF2m_mod_solve_quad_arr for even m tries
+// random rho. Over a field the outcome does not depend on them; modulo a
+// reducible polynomial it can (a b or rho sharing a factor with p), and
+// then Go's outcome is as random as OpenSSL's (KNOWN_DIFFERENCES).
 
 // gf2Field is a binary polynomial modulus: p and its nonzero exponents,
 // highest first (OpenSSL's group->poly; poly[0] = m).
@@ -121,14 +115,25 @@ func (f *gf2Field) mul(a, b *big.Int) *big.Int {
 
 func (f *gf2Field) sqr(a *big.Int) *big.Int { return f.mul(a, a) }
 
-// gf2Inv ports BN_GF2m_mod_inv with the blinding value b = 1, so
-// BN_GF2m_mod_inv_vartime (the Modified Almost Inverse Algorithm, the
-// word-level branch) on a mod p: false, with no error raised, when a has
-// no inverse ("poly was reducible", or a ≡ 0).
+// gf2Inv ports BN_GF2m_mod_inv: a random nonzero blinding value b of
+// BN_num_bits(p)-1 bits, then BN_GF2m_mod_inv_vartime (the Modified Almost
+// Inverse Algorithm, the word-level branch) on a·b mod p, times b. False,
+// with no error raised, when a·b has no inverse ("poly was reducible", or
+// a·b ≡ 0).
 func gf2Inv(a *big.Int, f *gf2Field) (*big.Int, bool) {
 	if f.p.BitLen() <= 1 {
 		return nil, false
 	}
+	b := bnPrivRandNonzero(f.p.BitLen() - 1)
+	r, ok := gf2InvVartime(f.mul(a, b), f)
+	if !ok {
+		return nil, false
+	}
+	return f.mul(r, b), true
+}
+
+// gf2InvVartime ports BN_GF2m_mod_inv_vartime.
+func gf2InvVartime(a *big.Int, f *gf2Field) (*big.Int, bool) {
 	u := f.mod(a)
 	if u.Sign() == 0 {
 		return nil, false
@@ -213,17 +218,9 @@ func gf2SolveQuad(a *big.Int, f *gf2Field) (*big.Int, string) {
 			z = gf2Add(z, a)
 		}
 	} else {
-		rng := gf2QuadRand()
 		w := new(big.Int)
 		for count := 0; ; {
-			// BN_priv_rand_ex(rho, m, BN_RAND_TOP_ONE, BN_RAND_BOTTOM_ANY)
-			rho := new(big.Int)
-			for i := 0; i < m-1; i++ {
-				if rng.Uint64()&1 == 1 {
-					rho.SetBit(rho, i, 1)
-				}
-			}
-			rho.SetBit(rho, m-1, 1)
+			rho := bnPrivRand(m, bnRandTopOne)
 			rho = f.mod(rho)
 			z = new(big.Int)
 			w.Set(rho)
@@ -246,11 +243,4 @@ func gf2SolveQuad(a *big.Int, f *gf2Field) (*big.Int, string) {
 		return nil, "BN_R_NO_SOLUTION"
 	}
 	return z, ""
-}
-
-// gf2QuadRand stands in for BN_priv_rand_ex in gf2SolveQuad: a fixed
-// sequence, so that a reducible even-degree polynomial, where OpenSSL's
-// outcome is random, gets one reproducible outcome.
-func gf2QuadRand() *rand.ChaCha8 {
-	return rand.NewChaCha8([32]byte{'f', 'a', 'u', 'l', 't', 'l', 'i', 'n', 'e', ' ', 's', 'o', 'l', 'v', 'e', '_', 'q', 'u', 'a', 'd'})
 }

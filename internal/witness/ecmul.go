@@ -16,11 +16,10 @@ import "math/big"
 //     divisions (nothing raised) and their on-curve checks.
 //
 // ladder_pre blinds the ladder's projective coordinates with two random
-// nonzero field elements. On a field, and with any blinding value that is
-// a unit modulo p, the outcome does not depend on them; with a non-unit it
-// can (OpenSSL's verdict then varies between runs). The port takes 1, the
-// outcome for every unit (KNOWN_DIFFERENCES). BN_GF2m_mod_inv's blinding
-// is handled the same way (gf2Inv).
+// nonzero field elements, and BN_GF2m_mod_inv blinds every inversion
+// (gf2Inv). On a field the outcome does not depend on them; with a value
+// that shares a factor with p it can, and Go draws them as OpenSSL does
+// (bnrand.go), so its outcome is as random as OpenSSL's (KNOWN_DIFFERENCES).
 
 // ecPoint is an EC_POINT: projective (X, Y, Z) for the GF(p) Jacobian and
 // ladder code, affine (Z = 1) for GF(2^m) outside the ladder; Z = 0 is the
@@ -107,7 +106,9 @@ func (e *osslEnv) ladderMul(g *ecGroup, scalar *big.Int, p *ecPoint) bool {
 }
 
 // gfpLadderPre ports ossl_ec_GFp_simple_ladder_pre: s := p, r := 2p, both
-// blinded (by 1, see above).
+// blinded by random nonzero values below p (BN_priv_rand_range_ex). The
+// Montgomery encoding of a blinding value is a bijection on [1, p), so the
+// standard-representation values here are distributed as OpenSSL's.
 func gfpLadderPre(g *ecGroup, r, s, p *ecPoint) {
 	m := g.modP()
 	t3 := m.mul(p.x, p.x)
@@ -120,8 +121,8 @@ func gfpLadderPre(g *ecGroup, r, s, p *ecPoint) {
 	t2 := m.mul(p.x, t1)
 	t2 = m.add(g.b, t2)
 	r.z = m.lsh(t2, 2)
-	r.y = big.NewInt(1) // lambda_r
-	s.z = big.NewInt(1) // lambda_s
+	r.y = bnPrivRandRangeNonzero(g.p) // lambda_r
+	s.z = bnPrivRandRangeNonzero(g.p) // lambda_s
 	r.z = m.mul(r.z, r.y)
 	r.x = m.mul(r.x, r.y)
 	s.x = m.mul(p.x, s.z)
@@ -198,12 +199,12 @@ func (e *osslEnv) gfpMontInv(g *ecGroup, a *big.Int) bool {
 }
 
 // gf2LadderPre ports ec_GF2m_simple_ladder_pre (Lopez-Dahab): s := p,
-// r := 2p, blinded (by 1).
+// r := 2p, blinded by random nonzero values of BN_num_bits(p)-1 bits.
 func gf2LadderPre(g *ecGroup, r, s, p *ecPoint) {
 	f := g.gf
-	s.z = big.NewInt(1) // lambda_s
+	s.z = bnPrivRandNonzero(g.p.BitLen() - 1) // lambda_s
 	s.x = f.mul(p.x, s.z)
-	r.y = big.NewInt(1) // lambda_r
+	r.y = bnPrivRandNonzero(g.p.BitLen() - 1) // lambda_r
 	r.z = f.sqr(p.x)
 	r.x = f.sqr(r.z)
 	r.x = gf2Add(r.x, g.b)

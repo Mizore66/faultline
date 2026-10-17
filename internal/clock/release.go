@@ -15,3 +15,7 @@ func NewUUID() string { return wallNewUUID() }
 
 // TempSuffix is the six random characters mkdtemp appends.
 func TempSuffix() string { return wallTempSuffix() }
+
+// RandRead fills b with random bytes: OpenSSL's RAND_priv_bytes_ex, which
+// the key-parsing port's blinding and random searches draw from.
+func RandRead(b []byte) { wallRandRead(b) }

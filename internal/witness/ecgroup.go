@@ -569,8 +569,7 @@ func (e *osslEnv) decompress(g *ecGroup, x *big.Int, ybit int) (*big.Int, bool) 
 // modSqrt ports bn_sqrt.c BN_mod_sqrt for an odd p > 1: the root, or the
 // BN reason it fails with. It runs OpenSSL's algorithm, which for a
 // composite p (explicit parameters) can find a "root" or fail in its own
-// ways. Only a composite p ≡ 1 mod 8 whose every number below 22 has
-// Jacobi symbol 1 reaches OpenSSL's random search with a random outcome.
+// ways, including its random search for a non-residue.
 func modSqrt(a, p *big.Int) (*big.Int, string) {
 	if p.Bit(0) == 0 || p.Cmp(big.NewInt(1)) == 0 {
 		if p.Cmp(big.NewInt(2)) == 0 {
@@ -609,24 +608,22 @@ func modSqrt(a, p *big.Int) (*big.Int, string) {
 		r := 1
 		i := 2
 		for {
-			if i >= 22 {
-				// BN_priv_rand_ex: OpenSSL tries up to 60 random
-				// candidates. For a prime p half of them are non-residues,
-				// and the root it ends with (either sign) gives the same
-				// point, so any non-residue does: take the smallest. For a
-				// composite p the outcome depends on the random candidates
-				// (KNOWN_DIFFERENCES); for p = q² with a large prime q,
-				// every candidate coprime to q has symbol 1 and OpenSSL
-				// gives up, as here.
-				if !p.ProbablyPrime(32) {
-					return nil, "BN_R_TOO_MANY_ITERATIONS"
+			if i < 22 {
+				y = big.NewInt(int64(i))
+			} else {
+				// BN_priv_rand_ex(y, BN_num_bits(p), 0, 0): a random
+				// candidate below 2^bits, reduced once below p (0 → i).
+				// For a prime p any non-residue gives the same point; for a
+				// composite p the outcome depends on the candidates, and
+				// Go's is as random as OpenSSL's (KNOWN_DIFFERENCES).
+				y = bnPrivRand(p.BitLen(), bnRandTopOne)
+				if y.Cmp(p) >= 0 {
+					y.Sub(y, p)
 				}
-				for y = big.NewInt(int64(i)); big.Jacobi(y, p) != -1; y.Add(y, big.NewInt(1)) {
+				if y.Sign() == 0 {
+					y.SetInt64(int64(i))
 				}
-				r = -1
-				break
 			}
-			y = big.NewInt(int64(i))
 			r = kronecker(y, q)
 			if r == 0 {
 				return nil, "BN_R_P_IS_NOT_PRIME"

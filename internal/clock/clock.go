@@ -1,5 +1,5 @@
-// Package clock is the one place the CLI reads wall time, UUIDs and temp-name
-// randomness, so writer goldens can run against a seeded sequence that the
+// Package clock is the one place the CLI reads wall time, UUIDs, temp-name
+// randomness and the random bytes OpenSSL's ports draw, so writer goldens can run against a seeded sequence that the
 // frozen TS side reproduces (difftest/gen/seed.mjs). Release builds never
 // consult FAULTLINE_TEST_SEED.
 package clock
@@ -37,6 +37,13 @@ func wallNewUUID() string {
 		panic(err)
 	}
 	return formatUUID(b)
+}
+
+// wallRandRead fills b from the system CSPRNG (OpenSSL's RAND_priv_bytes).
+func wallRandRead(b []byte) {
+	if _, err := crand.Read(b); err != nil {
+		panic(err)
+	}
 }
 
 func wallTempSuffix() string {

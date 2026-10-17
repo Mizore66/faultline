@@ -17,6 +17,7 @@ var state struct {
 	init            bool
 	seed            string
 	tick, uuid, tmp uint64
+	rand            uint64
 }
 
 func load() {
@@ -30,7 +31,7 @@ func reset(seed string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.seed, state.init = seed, true
-	state.tick, state.uuid, state.tmp = 0, 0, 0
+	state.tick, state.uuid, state.tmp, state.rand = 0, 0, 0, 0
 }
 
 // ResetForTest reseeds the sequence and zeroes every counter.
@@ -106,4 +107,22 @@ func TempSuffix() string {
 		b[i] = tempAlphabet[int(h[i])%len(tempAlphabet)]
 	}
 	return string(b)
+}
+
+// RandRead fills b with random bytes (OpenSSL's RAND_priv_bytes_ex): under
+// a seed, SHA-256 blocks of a counter, so a seeded run draws the same
+// bytes every time.
+func RandRead(b []byte) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	load()
+	if state.seed == "" {
+		wallRandRead(b)
+		return
+	}
+	for i := 0; i < len(b); i += 32 {
+		h := digest("rand", state.rand)
+		state.rand++
+		copy(b[i:], h[:])
+	}
 }

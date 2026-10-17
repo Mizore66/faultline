@@ -112,13 +112,18 @@ func TestGF2Arithmetic(t *testing.T) {
 		m := f.poly[0]
 		for v := int64(0); v < 1<<m; v++ {
 			a := big.NewInt(v)
-			inv, ok := gf2Inv(a, f)
+			inv, ok := gf2InvVartime(a, f)
 			coprime := v != 0 && gf2RefGCD(a, p).Cmp(one) == 0
 			if ok != coprime {
 				t.Fatalf("p=%b a=%b: inverse ok=%v, gcd=1 is %v", p, a, ok, coprime)
 			}
 			if ok && gf2RefMulMod(a, inv, p).Cmp(one) != 0 {
 				t.Fatalf("p=%b a=%b: a·inv = %b", p, a, gf2RefMulMod(a, inv, p))
+			}
+			// The blinded inverse: the same inverse when it succeeds,
+			// never a success without one.
+			if binv, bok := gf2Inv(a, f); bok && (!coprime || binv.Cmp(inv) != 0) {
+				t.Fatalf("p=%b a=%b: blinded inverse %b (ok %v), exact %b", p, a, binv, bok, inv)
 			}
 			if got := f.mul(a, big.NewInt(v^0x55)); got.Cmp(gf2RefMulMod(a, big.NewInt(v^0x55), p)) != 0 {
 				t.Fatalf("p=%b: mul(%b) = %b", p, a, got)
