@@ -10,9 +10,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"math"
 	"math/big"
 	"math/rand/v2"
 	"os"
@@ -433,27 +435,38 @@ func TestLivePEMKeyParsing(t *testing.T) {
 	results := runPEMOracle(t, cases)
 	accepted, fails := 0, 0
 	var messages strings.Builder
+	var redo []int
 	for i, c := range cases {
 		want := results[i]
 		got := witness.ParseKeyForTest(c.Text, c.Pub)
-		var problem string
-		switch {
-		case got.OK != want.OK:
-			problem = "accept/refuse"
-		case got.OK && (got.Type != want.Type || hex.EncodeToString(got.SPKI) != want.SPKI):
-			problem = "key"
-		case !got.OK && got.Message != want.Message:
-			problem = "message"
-		case !got.OK && strings.Join(got.Stack, "\n") != strings.Join(want.Stack, "\n"):
-			problem = "error stack"
-		}
 		if want.OK && want.Type == "ed25519" {
 			accepted++
 		}
 		messages.WriteString(want.Message + "\n" + strings.Join(want.Stack, "\n") + "\n")
-		if problem != "" {
-			if fails++; fails <= pemShowDiffs() {
-				t.Errorf("%s differs (pub=%v): %q\n  go:   %+v\n  node: %+v", problem, c.Pub, c.Text, got, want)
+		if pemOutcome(got) != pemResultOutcome(want) {
+			redo = append(redo, i)
+		}
+	}
+	// A disagreement is settled by running the case many times on both
+	// sides: over a reducible field or a composite modulus OpenSSL's
+	// blinding makes the result random, and Go draws it the same way
+	// (KNOWN_DIFFERENCES). Each outcome's share must agree; a case Node
+	// always parses one way must parse that way in Go too.
+	if len(redo) > 0 {
+		var again []pemCase
+		for _, i := range redo {
+			again = append(again, cases[i])
+		}
+		counts := runPEMOracleRepeat(t, again, pemRepeat)
+		for k, i := range redo {
+			goCounts := map[string]int{}
+			for range pemRepeat {
+				goCounts[pemOutcome(witness.ParseKeyForTest(cases[i].Text, cases[i].Pub))]++
+			}
+			if why := pemSharesDiffer(counts[k], goCounts); why != "" {
+				if fails++; fails <= pemShowDiffs() {
+					t.Errorf("result differs (pub=%v), %s: %q\n  go:   %v\n  node: %v", cases[i].Pub, why, cases[i].Text, goCounts, counts[k])
+				}
 			}
 		}
 	}
@@ -465,7 +478,119 @@ func TestLivePEMKeyParsing(t *testing.T) {
 	for _, f := range pemReaderFiles {
 		requireReachedReasons(t, f, messages.String())
 	}
-	liveSummary(t, "%d PEM cases (%d Ed25519 keys accepted)", len(cases), accepted)
+	liveSummary(t, "%d PEM cases (%d Ed25519 keys accepted; %d random ones compared over %d runs each)", len(cases), accepted, len(redo), pemRepeat)
+}
+
+// pemRepeat is how often a case whose single runs disagree is re-run on
+// each side.
+const pemRepeat = 400
+
+// pemOutcome is one Go parse as the oracle prints it (the JSON of a
+// pemResult), so outcomes of both sides compare as strings.
+func pemOutcome(r witness.KeyResult) string {
+	if r.OK {
+		return pemResultOutcome(pemResult{OK: true, Type: r.Type, SPKI: hex.EncodeToString(r.SPKI)})
+	}
+	return pemResultOutcome(pemResult{Message: r.Message, Stack: r.Stack})
+}
+
+func pemResultOutcome(r pemResult) string {
+	if r.OK {
+		b, _ := json.Marshal(struct {
+			OK   bool   `json:"ok"`
+			Type string `json:"type"`
+			SPKI string `json:"spki"`
+		}{true, r.Type, r.SPKI})
+		return string(b)
+	}
+	stack := r.Stack
+	if stack == nil {
+		stack = []string{}
+	}
+	b, _ := json.Marshal(struct {
+		OK      bool     `json:"ok"`
+		Message string   `json:"message"`
+		Stack   []string `json:"stack"`
+	}{false, r.Message, stack})
+	return string(b)
+}
+
+// pemSharesDiffer compares two samples of a random parse: "" when every
+// outcome's share agrees within sampling error (a two-proportion z below
+// 5, so a correct port fails about once in 3.5 million comparisons), else
+// why not. An outcome one side never gives fails once the other gives it
+// often enough to matter (z >= 5 already covers it: 0 of n against 25 of
+// n is z = 5.0).
+func pemSharesDiffer(node, goSide map[string]int) string {
+	nt, gt := 0, 0
+	for _, v := range node {
+		nt += v
+	}
+	for _, v := range goSide {
+		gt += v
+	}
+	keys := map[string]bool{}
+	for k := range node {
+		keys[k] = true
+	}
+	for k := range goSide {
+		keys[k] = true
+	}
+	for k := range keys {
+		pn, pg := float64(node[k])/float64(nt), float64(goSide[k])/float64(gt)
+		pool := float64(node[k]+goSide[k]) / float64(nt+gt)
+		se := math.Sqrt(pool * (1 - pool) * (1/float64(nt) + 1/float64(gt)))
+		if se == 0 {
+			continue
+		}
+		if z := math.Abs(pn-pg) / se; z >= 5 {
+			return fmt.Sprintf("share of %s: node %.3f, go %.3f (z %.1f)", k, pn, pg, z)
+		}
+	}
+	return ""
+}
+
+// runPEMOracleRepeat runs each case n times in Node (PEM_REPEAT) and
+// returns, per case, the count of each outcome.
+func runPEMOracleRepeat(t *testing.T, cases []pemCase, n int) []map[string]int {
+	t.Helper()
+	input := filepath.Join(t.TempDir(), "cases.json")
+	raw, err := json.Marshal(cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(input, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("node", filepath.Join(oracle.RepoRoot(t), "difftest", "gen", "pem-oracle.mjs"), input)
+	cmd.SysProcAttr = noTerminal()
+	cmd.Env = append(os.Environ(), "PEM_REPEAT="+strconv.Itoa(n))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, stderr.String())
+	}
+	var reply struct {
+		Results []map[string]int `json:"results"`
+	}
+	if err := json.Unmarshal(out, &reply); err != nil || len(reply.Results) != len(cases) {
+		t.Fatalf("oracle output: %v (%d results)", err, len(reply.Results))
+	}
+	// Re-encode the keys as pemResultOutcome does (Node's key order and
+	// an absent stack differ from Go's encoding).
+	for i, m := range reply.Results {
+		norm := map[string]int{}
+		for k, v := range m {
+			var r pemResult
+			if err := json.Unmarshal([]byte(k), &r); err != nil {
+				t.Fatal(err)
+			}
+			norm[pemResultOutcome(r)] += v
+		}
+		reply.Results[i] = norm
+	}
+	return reply.Results
 }
 
 // pemReaderFiles are the files of the OpenSSL port whose raised reasons

@@ -8,8 +8,11 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
+// With PEM_REPEAT=n each case runs n times and its result is the count of
+// each distinct outcome ({"<result JSON>": count}): OpenSSL's blinding
+// makes some explicit-curve keys parse differently from run to run.
 const cases = JSON.parse(readFileSync(process.argv[2], "utf8"));
-const results = cases.map(({ text, pub }) => {
+const parse = ({ text, pub }) => {
   try {
     const key = pub ? createPublicKey(text) : createPrivateKey(text);
     const type = key.asymmetricKeyType ?? "";
@@ -18,6 +21,16 @@ const results = cases.map(({ text, pub }) => {
   } catch (error) {
     return { ok: false, message: error.message, stack: error.opensslErrorStack ?? [] };
   }
+};
+const repeat = Number(process.env.PEM_REPEAT ?? 0);
+const results = cases.map((c) => {
+  if (!repeat) return parse(c);
+  const counts = {};
+  for (let i = 0; i < repeat; i++) {
+    const key = JSON.stringify(parse(c));
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
 });
 const out = `${JSON.stringify({ openssl: process.versions.openssl, results })}\n`;
 if (process.argv[3]) writeFileSync(process.argv[3], out);

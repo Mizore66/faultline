@@ -200,7 +200,179 @@ func genReducibleCases(m pemMaterial) []pemCase {
 			add("EC PRIVATE KEY", derSeq(derSmall(1), derTLV(4, fe(priv)), derTLV(0xa0, params(unc, cof))))
 		}
 	}
+	// Scalar sizes at every boundary of the multiplication (r9-3 E2):
+	// EC_window_bits_for_scalar_size's 20, 70, 300, 800 and 2000 bits on
+	// ossl_ec_wNAF_mul (cofactor 0), where the window decides how many
+	// points the precomputation doubles and adds, and so whether GF(p)
+	// points_make_affine inverts a non-unit (no blinding there: the
+	// outcome is fixed); and on the ladder, scalars around the
+	// cardinality's bit length (BN_nnmod when longer) and the order bit
+	// length at which ec_guess_cofactor stops guessing (ladder or wNAF).
+	// G's y is a multiple of q1, so a doubling's Z shares q1 with p.
+	for _, pc := range []*big.Int{new(big.Int).Mul(q1, q1), new(big.Int).Mul(q1, q2)} {
+		n := (pc.BitLen() + 7) / 8
+		fe := func(v *big.Int) []byte { return v.FillBytes(make([]byte, n)) }
+		a := big.NewInt(7)
+		gx, gy := big.NewInt(123456789), new(big.Int).Mul(q1, big.NewInt(3))
+		b := new(big.Int).Mul(gy, gy)
+		b.Sub(b, new(big.Int).Exp(gx, big.NewInt(3), nil)).Sub(b, new(big.Int).Mul(a, gx)).Mod(b, pc)
+		unc := append(append([]byte{4}, fe(gx)...), fe(gy)...)
+		params := func(order *big.Int, cof []byte) []byte {
+			return derSeq(derSmall(1), derSeq(derOID("2a8648ce3d0101"), derInt(pc)),
+				derSeq(derTLV(4, fe(a)), derTLV(4, fe(b))), derTLV(4, unc), derInt(order), cof)
+		}
+		privKey := func(priv *big.Int, prm []byte) []byte {
+			pb := priv.Bytes()
+			if len(pb) < n {
+				pb = priv.FillBytes(make([]byte, n))
+			}
+			return derSeq(derSmall(1), derTLV(4, pb), derTLV(0xa0, prm))
+		}
+		pow := func(bits int, plus int64) *big.Int {
+			v := new(big.Int).Lsh(big.NewInt(1), uint(bits-1))
+			return v.Add(v, big.NewInt(plus))
+		}
+		small := big.NewInt(1000003)
+		for _, bits := range []int{1, 2, 19, 20, 21, 69, 70, 71, 299, 300, 301, 799, 800, 801, 1999, 2000, 2001} {
+			for _, plus := range []int64{0, 5} {
+				add("EC PRIVATE KEY", privKey(pow(bits, plus), params(small, nil)))
+			}
+		}
+		// The ladder (cofactor 1), scalars around the cardinality's length.
+		order := new(big.Int).Add(pc, big.NewInt(12345))
+		cb := order.BitLen()
+		for _, bits := range []int{cb - 1, cb, cb + 1, cb + 8} {
+			add("EC PRIVATE KEY", privKey(pow(bits, 3), params(order, derSmall(1))))
+		}
+		// ec_guess_cofactor's limit: an order of (bits(p)+1)/2+3 bits or
+		// fewer gives cofactor 0 (wNAF), one bit more a guessed cofactor
+		// (ladder).
+		limit := (pc.BitLen()+1)/2 + 3
+		for _, ob := range []int{limit - 1, limit, limit + 1, limit + 2} {
+			ord := new(big.Int).Lsh(big.NewInt(1), uint(ob-1))
+			ord.Add(ord, big.NewInt(1))
+			add("EC PRIVATE KEY", privKey(pow(21, 5), params(ord, nil)))
+		}
+	}
+	// Each window size: p = q^k for a small prime q, and G a lift of a
+	// point of order r on the curve modulo q. The wNAF precomputation
+	// holds G, 2G and the odd multiples up to (2^w-1)G; when r <= 2^w-1
+	// one of them is at infinity modulo q (its Z a multiple of q), and
+	// points_make_affine's Fermat inverse of the Z product is 0 modulo
+	// q^k: "cannot invert". r = 3, 5, 9, 17, 33 fails from window 2, 3, 4,
+	// 5, 6 on, so a scalar on each side of EC_window_bits_for_scalar_size's
+	// 20, 70, 300, 800 and 2000 bits flips the verdict.
+	for _, wc := range []struct{ r, lo int }{{3, 20}, {5, 70}, {9, 300}, {17, 800}, {33, 2000}} {
+		q, a1, b1, x1, y1 := smallCurvePoint(wc.r)
+		p := big.NewInt(1)
+		for p.BitLen() < 100 {
+			p.Mul(p, q)
+		}
+		lift := func(v *big.Int) *big.Int { // v + q·random, below p
+			t := new(big.Int).Mul(q, new(big.Int).Mod(randBits(r, p.BitLen()), new(big.Int).Div(p, q)))
+			return t.Add(t, v).Mod(t, p)
+		}
+		a, gx, gy := lift(a1), lift(x1), lift(y1)
+		b := new(big.Int).Mul(gy, gy)
+		b.Sub(b, new(big.Int).Exp(gx, big.NewInt(3), nil)).Sub(b, new(big.Int).Mul(a, gx)).Mod(b, p)
+		_ = b1 // b ≡ b1 (mod q) by construction
+		n := (p.BitLen() + 7) / 8
+		fe := func(v *big.Int) []byte { return v.FillBytes(make([]byte, n)) }
+		prm := derSeq(derSmall(1), derSeq(derOID("2a8648ce3d0101"), derInt(p)),
+			derSeq(derTLV(4, fe(a)), derTLV(4, fe(b))), derTLV(4, append(append([]byte{4}, fe(gx)...), fe(gy)...)), derSmall(1000003))
+		for _, bits := range []int{wc.lo - 1, wc.lo, wc.lo + 1} {
+			priv := new(big.Int).Lsh(big.NewInt(1), uint(bits-1))
+			priv.Add(priv, big.NewInt(5))
+			add("EC PRIVATE KEY", derSeq(derSmall(1), derTLV(4, priv.Bytes()), derTLV(0xa0, prm)))
+		}
+	}
 	return cases
+}
+
+// smallCurvePoint finds, by brute force, a prime q, a curve y² = x³+ax+b
+// over GF(q) and a point on it of order exactly r (r odd).
+func smallCurvePoint(r int) (q, a, b, x, y *big.Int) {
+	type pt struct {
+		x, y int64
+		inf  bool
+	}
+	for qq := int64(r*r + 2); ; qq++ {
+		if !big.NewInt(qq).ProbablyPrime(20) {
+			continue
+		}
+		mod := func(v int64) int64 { return ((v % qq) + qq) % qq }
+		inv := func(v int64) int64 { return new(big.Int).ModInverse(big.NewInt(mod(v)), big.NewInt(qq)).Int64() }
+		for aa := int64(1); aa < 6; aa++ {
+			for bb := int64(1); bb < 40; bb++ {
+				if mod(4*aa*aa*aa+27*bb*bb) == 0 {
+					continue
+				}
+				add := func(p1, p2 pt) pt {
+					switch {
+					case p1.inf:
+						return p2
+					case p2.inf:
+						return p1
+					case p1.x == p2.x && mod(p1.y+p2.y) == 0:
+						return pt{inf: true}
+					}
+					var l int64
+					if p1.x == p2.x {
+						l = mod(mod(3*p1.x*p1.x+aa) * inv(2*p1.y))
+					} else {
+						l = mod(mod(p2.y-p1.y) * inv(p2.x-p1.x))
+					}
+					x3 := mod(l*l - p1.x - p2.x)
+					return pt{x: x3, y: mod(l*(p1.x-x3) - p1.y)}
+				}
+				mul := func(k int64, p0 pt) pt {
+					acc := pt{inf: true}
+					for ; k > 0; k-- {
+						acc = add(acc, p0)
+					}
+					return acc
+				}
+				// Count points, keep one to scale.
+				count := int64(1)
+				var first *pt
+				for xx := int64(0); xx < qq; xx++ {
+					rhs := mod(xx*xx%qq*xx + aa*xx + bb)
+					for yy := int64(0); yy < qq; yy++ {
+						if yy*yy%qq == rhs {
+							count++
+							if first == nil && yy != 0 {
+								first = &pt{x: xx, y: yy}
+							}
+						}
+					}
+				}
+				if first == nil || count%int64(r) != 0 {
+					continue
+				}
+				for xx := int64(0); xx < qq; xx++ {
+					rhs := mod(xx*xx%qq*xx + aa*xx + bb)
+					for yy := int64(1); yy < qq; yy++ {
+						if yy*yy%qq != rhs {
+							continue
+						}
+						g := mul(count/int64(r), pt{x: xx, y: yy})
+						if g.inf || g.y == 0 {
+							continue
+						}
+						ok := mul(int64(r), g).inf
+						for d := int64(1); d < int64(r) && ok; d++ {
+							if int64(r)%d == 0 && mul(d, g).inf {
+								ok = false
+							}
+						}
+						if ok {
+							return big.NewInt(qq), big.NewInt(aa), big.NewInt(bb), big.NewInt(g.x), big.NewInt(g.y)
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 // loadReducibleFixtures reads testdata/pemreducible.json: the round-9
