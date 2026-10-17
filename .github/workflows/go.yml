@@ -285,7 +285,8 @@ jobs:
     # or Linux devices skip; the group-signal, NOFILE and stderr tests run.
     # The slice 2 live tests that need no /proc run here too: the judge-proof
     # server, its signal stop and browser opener, the seed preload, async
-    # spawn and hardened git.
+    # spawn and hardened git, and materialization (on macOS a case-colliding
+    # tree takes the "Could not verify materialized Git tree" refusal).
     name: stack thresholds vs Node (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
@@ -309,7 +310,7 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit'
+          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
           if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode)$'; else allowed='^$'; fi

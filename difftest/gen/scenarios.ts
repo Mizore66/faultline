@@ -273,8 +273,9 @@ type RepoState = Record<string, string>;
 const state = (value: string, extra: RepoState = {}): RepoState => ({ "state.txt": `${value}\n`, ...extra });
 type BuiltRepo = { commits: string[]; trees: string[]; files: RepoState[] };
 
-function scratchGit(dir: string, args: string[], objectFormat: string): Buffer {
+function scratchGit(dir: string, args: string[], objectFormat: string, input?: Buffer): Buffer {
   return execFileSync("git", ["-C", dir, ...args], {
+    ...(input === undefined ? {} : { input }),
     env: {
       PATH: process.env.PATH ?? "", HOME: dir, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_DEFAULT_HASH: objectFormat,
       GIT_AUTHOR_NAME: "FaultLine Test", GIT_AUTHOR_EMAIL: "faultline@example.test", GIT_AUTHOR_DATE: "2026-07-16T10:00:00Z",
@@ -287,7 +288,11 @@ function scratchGit(dir: string, args: string[], objectFormat: string): Buffer {
 
 // buildRepo writes repo `rel` of the workspace: one commit per state (each
 // state is the whole tree), the last one checked out.
-function buildRepo(ws: string, rel: string, states: RepoState[], objectFormat: "sha1" | "sha256" = "sha1"): BuiltRepo {
+// hostile, when given, adds objects and refs git's porcelain cannot make
+// (git mktree names no filesystem holds) before the objects are copied:
+// it returns the extra branches and the objects to leave out.
+type Hostile = (git: (args: string[], input?: Buffer) => Buffer, built: BuiltRepo) => { refs: Record<string, string>; drop: string[] };
+function buildRepo(ws: string, rel: string, states: RepoState[], objectFormat: "sha1" | "sha256" = "sha1", hostile?: Hostile): BuiltRepo {
   const scratch = mkdtempSync(join(tmpdir(), "faultline-scenario-repo-"));
   try {
     scratchGit(scratch, ["init", "-q", `--object-format=${objectFormat}`, "--initial-branch=main"], objectFormat);
@@ -312,10 +317,13 @@ function buildRepo(ws: string, rel: string, states: RepoState[], objectFormat: "
       ? "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n"
       : "[core]\n\trepositoryformatversion = 1\n\tfilemode = true\n\tbare = false\n[extensions]\n\tobjectformat = sha256\n");
     writeFileSync(join(gitDir, "refs", "heads", "main"), `${built.commits.at(-1)}\n`);
+    const extra = hostile?.((args, input) => scratchGit(scratch, args, objectFormat, input), built) ?? { refs: {}, drop: [] };
+    for (const [name, commit] of Object.entries(extra.refs)) writeFileSync(join(gitDir, "refs", "heads", name), `${commit}\n`);
     const objects = scratchGit(scratch, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)"], objectFormat)
       .toString("utf8").split("\n").filter(Boolean);
     for (const line of objects) {
       const [oid, type] = line.split(" ") as [string, string];
+      if (extra.drop.includes(oid)) continue;
       const body = scratchGit(scratch, ["cat-file", type, oid], objectFormat);
       mkdirSync(join(gitDir, "objects", oid.slice(0, 2)), { recursive: true });
       writeFileSync(join(gitDir, "objects", oid.slice(0, 2), oid.slice(2)),
@@ -390,18 +398,49 @@ const witnessInput = (options: { overlays?: { path: string; text: string }[]; ti
 const FREEZE_IN_REPO = ["witness", "freeze", PROPOSAL_ID, "--repo", "repo"];
 const repeat = (value: string, n: number): RepoState[] => Array.from({ length: n }, () => state(value));
 function gitScenario(states: RepoState[], options: {
-  objectFormat?: "sha1" | "sha256"; proposal?: string; extra?: (repo: BuiltRepo) => Record<string, string>
+  objectFormat?: "sha1" | "sha256"; proposal?: string; extra?: (repo: BuiltRepo) => Record<string, string>; hostile?: Hostile
 } = {}): Scenario {
   return {
     files: { "proposal.json": options.proposal ?? witnessInput() },
     setup: (ws) => {
-      const repo = buildRepo(ws, "repo", states, options.objectFormat);
+      const repo = buildRepo(ws, "repo", states, options.objectFormat, options.hostile);
       for (const [path, text] of Object.entries(options.extra?.(repo) ?? {})) writeFileSync(join(ws, path), text);
     },
     argv: [PROPOSE, APPROVE, FREEZE_IN_REPO]
   };
 }
 const GOOD_BAD_REPAIRED = [state("good"), state("bad"), state("repaired")];
+
+// hostileTrees adds branches whose trees break materialization, patch
+// derivation or ancestry in ways the filesystem and git porcelain cannot
+// produce (round 8 review): each is a child of the good state (main~1)
+// whose tree also holds state.txt = bad.
+//   nonutf8      a blob named weird\377.txt (not UTF-8)
+//   long         a blob with a 304-byte name (past NAME_MAX)
+//   dotgit       a .GIT/config entry (git refuses the path)
+//   ob0, ob1     ob0 holds the file `a`; its child ob1 holds `a/b` instead
+//   lostblob     a blob whose object is left out of the repository
+const hostileTrees: Hostile = (git, built) => {
+  const blob = (text: string) => git(["hash-object", "-w", "--stdin"], Buffer.from(text)).toString("utf8").trim();
+  const tree = (entries: string) => git(["mktree"], Buffer.from(entries, "latin1")).toString("utf8").trim();
+  const commit = (t: string, parent: string | undefined, message: string) =>
+    git(["commit-tree", t, ...(parent === undefined ? [] : ["-p", parent]), "-m", message]).toString("utf8").trim();
+  const base = built.commits[0]!;
+  const good = blob("good\n"), bad = blob("bad\n"), x = blob("x\n"), lost = blob("lost blob\n");
+  const withBad = (entries: string) => tree(`100644 blob ${bad}\tstate.txt\n${entries}`);
+  const ob0 = commit(tree(`100644 blob ${x}\ta\n100644 blob ${good}\tstate.txt\n`), undefined, "ob0");
+  return {
+    refs: {
+      nonutf8: commit(withBad(`100644 blob ${x}\tweird\xff.txt\n`), base, "nonutf8"),
+      long: commit(withBad(`100644 blob ${x}\t${"n".repeat(304)}\n`), base, "long"),
+      dotgit: commit(withBad(`040000 tree ${tree(`100644 blob ${x}\tconfig\n`)}\t.GIT\n`), base, "dotgit"),
+      ob0,
+      ob1: commit(withBad(`040000 tree ${tree(`100644 blob ${x}\tb\n`)}\ta\n`), ob0, "ob1"),
+      lostblob: commit(withBad(`100644 blob ${lost}\tlost.txt\n`), base, "lostblob")
+    },
+    drop: [lost]
+  };
+};
 
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
@@ -442,6 +481,7 @@ export const SCENARIOS: Record<string, Scenario> = {
   // A one-second witness. The CLI passes no sandbox limits, so this does
   // not reach the sandbox (TS too): investigate-docker-timeout's fake
   // Docker outlives the default 120 s timeout once instead.
+  "git-hostile-trees": gitScenario([state("good"), state("bad")], { hostile: hostileTrees }),
   "git-short-timeout": gitScenario([state("good"), state("bad")], { proposal: witnessInput({ timeoutSeconds: 1 }) }),
   // judge-proof and commit-proof-preview read the committed COMMIT_PROOF
   // sample from the workspace by default.

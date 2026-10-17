@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -339,6 +340,26 @@ func TestLiveMaterialize(t *testing.T) {
 		"parent is a file":          liveOverlayWitness([3]string{"state.txt/x", "", bytesDigest("")}),
 		"backslash":                 liveOverlayWitness([3]string{`a\b`, "", bytesDigest("")}),
 	}
+	// A commit holding A.txt and a.txt (git mktree): on a case-insensitive
+	// filesystem (APFS's default, macOS) checkout-index writes one file over
+	// the other and update-index --refresh fails, so materialization
+	// refuses with "Could not verify materialized Git tree". On Linux both
+	// files check out.
+	collide := func() string {
+		gitIn := func(input string, args ...string) string {
+			cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+			cmd.Stdin = strings.NewReader(input)
+			cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("git %v: %v", args, err)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		upper, lower := gitIn("upper\n", "hash-object", "-w", "--stdin"), gitIn("lower\n", "hash-object", "-w", "--stdin")
+		tree := gitIn("100644 blob "+upper+"\tA.txt\n100644 blob "+lower+"\ta.txt\n", "mktree")
+		return gitIn("", "commit-tree", tree, "-p", commits[1], "-m", "case collision")
+	}()
 	type materializeCase struct {
 		name, repo, commit, overlays string
 		withIndex, existing          bool
@@ -352,6 +373,7 @@ func TestLiveMaterialize(t *testing.T) {
 		{name: "filter config", repo: filtered, commit: commits[1]},
 		{name: "attributes filter", repo: attrs, commit: strings.TrimSpace(string(attrsHead))},
 		{name: "existing worktree", repo: repo, commit: commits[1], existing: true},
+		{name: "case collision", repo: repo, commit: collide},
 	}
 	for name := range overlaySets {
 		cases = append(cases, materializeCase{name: "overlay " + name, repo: repo, commit: commits[1], overlays: name, withIndex: true})
@@ -431,6 +453,11 @@ func TestLiveMaterialize(t *testing.T) {
 	}
 	requireReached(t, "internal/gitinv/hardened.go", recordedOutputs(t))
 	requireReached(t, "internal/gitinv/overlay.go", recordedOutputs(t))
+	// Listed in unreachableLiterals for the platforms whose filesystem
+	// tells A.txt from a.txt; on macOS this test must reach it.
+	if runtime.GOOS == "darwin" && !strings.Contains(recordedOutputs(t), "Could not verify materialized Git tree") {
+		t.Error(`the case collision did not reach "Could not verify materialized Git tree" on macOS`)
+	}
 }
 
 // indexesLeft lists what cleanup left in <root>/indexes.
