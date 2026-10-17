@@ -1,0 +1,13 @@
+#!/bin/sh
+case "$1" in
+rm) exit 0 ;;
+run)
+  i=0
+  while [ $i -lt 6 ]; do
+    head -c 70000 /dev/zero | tr '\000' e >&2
+    head -c 70000 /dev/zero | tr '\000' o
+    i=$((i+1))
+  done
+  exit 0 ;;
+esac
+exit 125

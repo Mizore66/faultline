@@ -71,6 +71,16 @@ func TestLiveSpawn(t *testing.T) {
 		{name: "stdin closed early", file: "/bin/sh", args: []string{"-c", "exec 0<&-; sleep 0.2; printf x"}, stdin: &big, stdout: true},
 		{name: "kill SIGTERM", file: "/bin/sh", args: []string{"-c", "printf go; exec sleep 30"}, stdout: true, kill: "SIGTERM"},
 		{name: "kill SIGKILL", file: "/bin/sh", args: []string{"-c", "printf go; exec sleep 30"}, stdout: true, kill: "SIGKILL"},
+		// Round 9 (r9-2).
+		{name: "huge stderr then exit", file: "/bin/sh", args: []string{"-c", "head -c 3000000 /dev/zero | tr '\\000' e >&2; printf out"}, stdout: true},
+		{name: "grandchild holds pipes", file: "/bin/sh", args: []string{"-c", "(sleep 1; printf late; printf lateerr >&2) & printf early"}, stdout: true},
+		{name: "close stdout early", file: "/bin/sh", args: []string{"-c", "exec 1>&-; sleep 0.2; printf err >&2"}, stdout: true},
+		{name: "kill, grandchild holds pipes", file: "/bin/sh", args: []string{"-c", "(sleep 1; printf gc) & printf go; exec sleep 30"}, stdout: true, kill: "SIGKILL"},
+		{name: "huge both", file: "/bin/sh", args: []string{"-c", "head -c 2000000 /dev/zero | tr '\\000' o & head -c 2000000 /dev/zero | tr '\\000' e >&2; wait"}, stdout: true},
+		{name: "self SIGTERM after output", file: "/bin/sh", args: []string{"-c", "head -c 200000 /dev/zero | tr '\\000' o; kill -TERM $$"}, stdout: true},
+		{name: "fds", file: "/bin/sh", args: []string{"-c", "ls /dev/fd/ | sort -n | tr '\\n' ' '"}, stdout: true},
+		{name: "fds with stdin", file: "/bin/sh", args: []string{"-c", "ls /dev/fd/ | sort -n | tr '\\n' ' '"}, stdin: str("x"), stdout: true},
+		{name: "real-time signal", file: "/bin/sh", args: []string{"-c", "printf x; kill -40 $$"}, stdout: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

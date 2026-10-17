@@ -373,6 +373,20 @@ func TestLiveNativeRunner(t *testing.T) {
 		{"forged-pass", "forged-pass", "", 60_000, 1_048_576, "HARNESS_ERROR"},
 		{"compile-error", "compile-error", "", 60_000, 1_048_576, "INCOMPATIBLE_STATE"},
 		{"no-docker", "", "", 60_000, 1_048_576, "RUNNER_FAILURE"},
+		// Round 9 (r9-2): 70 KB blocks alternating between stderr and
+		// stdout, cut mid-chunk by the cap on either stream; a grandchild
+		// still writing after docker exits; 3 MB of stderr against a 1 MiB
+		// cap; a 2-byte interleave against a cap of 5. Each twice, as the
+		// split depends on how the reads interleave.
+		{"r9mix-a", "r9mix", "", 60_000, 150_000, "OUTPUT_LIMIT_EXCEEDED"},
+		{"r9mix-b", "r9mix", "", 60_000, 150_000, "OUTPUT_LIMIT_EXCEEDED"},
+		{"r9mix-c", "r9mix", "", 60_000, 300_001, "OUTPUT_LIMIT_EXCEEDED"},
+		{"r9mix-d", "r9mix", "", 60_000, 300_001, "OUTPUT_LIMIT_EXCEEDED"},
+		{"r9gc", "r9gc", "", 60_000, 1_048_576, "PREDICATE_PASS"},
+		{"r9huge", "r9huge", "", 60_000, 1_048_576, "OUTPUT_LIMIT_EXCEEDED"},
+		{"r9huge-b", "r9huge", "", 60_000, 1_048_576, "OUTPUT_LIMIT_EXCEEDED"},
+		{"r9tiny", "r9tiny", "", 60_000, 5, "OUTPUT_LIMIT_EXCEEDED"},
+		{"r9tiny-b", "r9tiny", "", 60_000, 5, "OUTPUT_LIMIT_EXCEEDED"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -440,7 +454,8 @@ func TestLiveNativeRunner(t *testing.T) {
 				t.Fatalf("docker argv differ:\ngo %q\nts %q", goRecords, tsRecords)
 			}
 			records := strings.Split(strings.TrimSuffix(string(goRecords), "\x1e"), "\x1e")
-			cleanup := slices.Contains([]string{"timeout", "timeout-detached", "rm-hang", "vanish", "flood", "crash"}, tc.name)
+			cleanup := slices.Contains([]string{"timeout", "timeout-detached", "rm-hang", "vanish", "flood", "crash"}, tc.name) ||
+				tc.reason == "OUTPUT_LIMIT_EXCEEDED"
 			if tc.fake != "" && (len(records) != 1+map[bool]int{true: 1}[cleanup] ||
 				cleanup && records[1] != "docker rm\x1f--force\x1f"+p.Value.Get("containerName").Str()) {
 				t.Fatalf("docker records %q", records)

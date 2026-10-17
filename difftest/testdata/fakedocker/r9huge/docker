@@ -1,0 +1,9 @@
+#!/bin/sh
+case "$1" in
+rm) exit 0 ;;
+run)
+  head -c 3000000 /dev/zero | tr '\000' e >&2
+  printf 'FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n'
+  exit 0 ;;
+esac
+exit 125

@@ -1,0 +1,9 @@
+#!/bin/sh
+case "$1" in
+rm) exit 0 ;;
+run)
+  printf 'ab' >&2; printf 'cd'; printf 'ef' >&2; printf 'gh'
+  printf '\nFAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n'
+  exit 0 ;;
+esac
+exit 125
