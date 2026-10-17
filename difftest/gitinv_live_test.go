@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -176,9 +177,29 @@ func TestLiveFingerprint(t *testing.T) {
 	c := oracle.Start(t)
 	defer c.Close()
 	r := rand.New(rand.NewPCG(10, 2))
+	// The directories are built from TS's ENVIRONMENT_DESCRIPTOR_FILES, not
+	// from the Go list under test: a name Go dropped (or renamed) would never
+	// be written if the test iterated gitinv.EnvironmentDescriptorFiles. The
+	// lists are also compared outright, order included (the fingerprint
+	// visits them in this order).
+	raw, err := c.Call("environmentDescriptorFiles", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := jsjson.Parse(raw)
+	if err != nil || list.Kind() != jsjson.Array {
+		t.Fatalf("environmentDescriptorFiles: %s", raw)
+	}
+	var names []string
+	for _, v := range list.Items() {
+		names = append(names, v.Str())
+	}
+	if !slices.Equal(names, gitinv.EnvironmentDescriptorFiles) {
+		t.Fatalf("EnvironmentDescriptorFiles:\ngo %q\nts %q", gitinv.EnvironmentDescriptorFiles, names)
+	}
 	for i := 0; i < 300; i++ {
 		dir := t.TempDir()
-		for _, name := range gitinv.EnvironmentDescriptorFiles {
+		for _, name := range names {
 			if r.IntN(3) != 0 {
 				continue
 			}
@@ -207,7 +228,7 @@ func TestLiveFingerprint(t *testing.T) {
 		}
 		fp, err := gitinv.ComputeFingerprint(dir)
 		liveCheck(t, c, "computeEnvironmentFingerprint", `{"dir":`+jsjson.Quote(dir)+"}", threwOr(fp, err))
-		for _, name := range gitinv.EnvironmentDescriptorFiles {
+		for _, name := range names {
 			os.Chmod(filepath.Join(dir, name), 0o644)
 		}
 	}

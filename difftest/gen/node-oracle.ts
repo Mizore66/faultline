@@ -17,7 +17,7 @@ import type { GitMinimizationRequest } from "../../src/git-minimization.js";
 import { GitProofBundleManifestSchema, GitProofSourceMetadataSchema, writeGitInvestigationProofBundle } from "../../src/git-proof-bundle.js";
 import type { GitProofBundleWriteOptions } from "../../src/git-proof-bundle.js";
 import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witness-lock.js";
-import { EnvironmentFingerprintSchema, computeEnvironmentFingerprint, resolveRuntimeImageForFingerprint } from "../../src/environment-fingerprint.js";
+import { ENVIRONMENT_DESCRIPTOR_FILES, EnvironmentFingerprintSchema, computeEnvironmentFingerprint, resolveRuntimeImageForFingerprint } from "../../src/environment-fingerprint.js";
 import { loadRuntimeMappingDocument } from "../../src/runtime-mapping-file.js";
 import { readFaultLineConfig } from "../../src/config.js";
 import { MaterializedOverlaySchema, materializeFrozenOverlays } from "../../src/safe-overlay.js";
@@ -159,6 +159,9 @@ export const handlers: Record<string, Handler> = {
       return `THREW:${(error as Error).message}`;
     }
   },
+  // The descriptor list itself, so the live test builds its directories
+  // from the TS names rather than from the Go list it checks.
+  environmentDescriptorFiles: () => [...ENVIRONMENT_DESCRIPTOR_FILES],
   computeEnvironmentFingerprint: ({ dir }: { dir: string }) => {
     try {
       return canonicalJson(computeEnvironmentFingerprint(dir));
