@@ -124,3 +124,7 @@ TestWriterReplay/posix/minimize-git-many-files
 TestWriterReplay/posix/investigate-non-monotonic-pages
 TestWriterReplay/posix/investigate-ledger-then-inherited
 TestWriterReplay/posix/investigate-unstable-middle
+TestWriterReplay/posix/minimize-git-many-files-02-15
+TestWriterReplay/posix/minimize-git-many-files-07-19
+TestWriterReplay/posix/minimize-git-many-files-01-25
+TestWriterReplay/posix/investigate-two-recoveries-page

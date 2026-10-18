@@ -45,6 +45,7 @@ var writerScenarios = map[string]bool{
 	"git-descriptor-change":      true,
 	"git-many-files":             true,
 	"git-unstable-middle":        true,
+	"git-two-recoveries":         true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is

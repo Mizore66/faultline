@@ -478,6 +478,9 @@ export const SCENARIOS: Record<string, Scenario> = {
   "git-sha256": gitScenario(GOOD_BAD_REPAIRED, { objectFormat: "sha256" }),
   "git-cjk-overlays": gitScenario([state("good"), state("bad")], { proposal: witnessInput({ overlays: CJK_OVERLAYS }) }),
   "git-non-monotonic": gitScenario([state("good"), state("bad"), state("good"), state("bad")]),
+  // Round 10 (r10-3 verify F4): two FAIL_TO_PASS transitions, both listed
+  // in the proof page's recovery panel.
+  "git-two-recoveries": gitScenario([state("good"), state("bad"), state("good"), state("bad"), state("good")]),
   "git-all-pass": gitScenario(repeat("good", 3)),
   "git-all-fail": gitScenario(repeat("bad", 3)),
   // A one-second witness. The CLI passes no sandbox limits, so this does

@@ -1,8 +1,10 @@
 #!/bin/sh
 # Fake Docker "pair-bad" (difftest/testdata/fakedocker/README.md): `run`
-# fails the predicate only when both state13.txt and state14.txt of the
-# bind-mounted source hold a line `bad` (a two-file interaction among many
-# changed files), otherwise passes. `rm` succeeds silently.
+# fails the predicate only when both files of a pair in the bind-mounted
+# source hold a line `bad` (a two-file interaction among many changed
+# files), otherwise passes. The pair is $FAULTLINE_FAKE_PAIR ("02 15": the
+# files state02.txt and state15.txt), 13 and 14 by default. `rm` succeeds
+# silently.
 case "$1" in
 rm) exit 0 ;;
 run)
@@ -14,7 +16,8 @@ run)
     fi
     prev=$arg
   done
-  if grep -q '^bad$' "$src/state13.txt" 2>/dev/null && grep -q '^bad$' "$src/state14.txt" 2>/dev/null; then
+  set -- ${FAULTLINE_FAKE_PAIR:-13 14}
+  if grep -q '^bad$' "$src/state$1.txt" 2>/dev/null && grep -q '^bad$' "$src/state$2.txt" 2>/dev/null; then
     printf 'FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_FAIL"}\n'
     printf 'witness failed' >&2
     exit 1
