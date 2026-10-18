@@ -5,6 +5,7 @@ package difftest
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -310,6 +311,7 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 				text   string
 				closed time.Duration // when the server closed the connection, after the first signal
 				exited time.Duration // when fl exited, after the first signal
+				bytes  int           // what the client could read
 			}
 			got := map[string]outcome{}
 			var mu sync.Mutex
@@ -385,25 +387,36 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 					}
 					head, _, _ := strings.Cut(received.String(), "\r\n")
 					text := loopbackPort.ReplaceAllString(out.String(), "127.0.0.1:<PORT>") + "--- stderr\n" + stderr.String() +
-						"--- " + cmd.ProcessState.String() + "\n--- client got " + head
+						"--- " + cmd.ProcessState.String()
+					// A slow reader's connection is destroyed with pipelined
+					// requests still unread, so the server's kernel resets it,
+					// and whether the client still reads the bytes already in
+					// its buffer depends on that reset's timing, run by run on
+					// either side (macOS often drops them). Only the timing is
+					// compared then.
+					if !tc.slowReader {
+						text += "\n--- client got " + head
+					}
 					mu.Lock()
-					got[side.name] = outcome{text, closed, exitedAfter}
+					got[side.name] = outcome{text, closed, exitedAfter, received.Len()}
 					mu.Unlock()
 				}()
 			}
 			wg.Wait()
+			// Every failure line carries the whole comparison: CI
+			// annotations show only the failure message.
+			summary := fmt.Sprintf("Go: closed %v, exited %v, client read %d bytes; TS: closed %v, exited %v, client read %d bytes (after the first signal)",
+				got["Go"].closed, got["Go"].exited, got["Go"].bytes, got["TS"].closed, got["TS"].exited, got["TS"].bytes)
 			if got["Go"].text != got["TS"].text {
-				t.Errorf("Go\n%s\nTS\n%s", got["Go"].text, got["TS"].text)
+				t.Errorf("%s: output differs; %s\n--- Go\n%s\n--- TS\n%s", tc.name, summary, got["Go"].text, got["TS"].text)
 			}
 			if d := got["Go"].closed - got["TS"].closed; d > 1500*time.Millisecond || d < -1500*time.Millisecond {
-				t.Errorf("server closed the connection %v after the signal in Go, %v in TS", got["Go"].closed, got["TS"].closed)
+				t.Errorf("%s: connection close time differs; %s", tc.name, summary)
 			}
 			if d := got["Go"].exited - got["TS"].exited; d > 1500*time.Millisecond || d < -1500*time.Millisecond {
-				t.Errorf("fl exited %v after the signal in Go, %v in TS", got["Go"].exited, got["TS"].exited)
+				t.Errorf("%s: exit time differs; %s", tc.name, summary)
 			}
-			t.Logf("connection closed %v (Go) / %v (TS), exit %v / %v after the first signal; %s", got["Go"].closed.Round(100*time.Millisecond),
-				got["TS"].closed.Round(100*time.Millisecond), got["Go"].exited.Round(100*time.Millisecond), got["TS"].exited.Round(100*time.Millisecond),
-				got["Go"].text[strings.LastIndex(got["Go"].text, "--- "):])
+			t.Logf("%s: %s", tc.name, summary)
 		})
 	}
 }
