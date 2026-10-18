@@ -430,6 +430,8 @@ func TestLivePEMKeyParsing(t *testing.T) {
 	cases = append(cases, genPQCases(m, 1200)...)
 	cases = append(cases, genReasonCases(m)...)
 	cases = append(cases, genMixedCases(m, 6000)...)
+	cases = append(cases, genLongOIDCases(m)...)
+	cases = append(cases, genUncoveredCases(m)...)
 	cases = append(cases, loadPEMCorpus(t)...)
 	explicitFrom := len(cases) // the explicit-curve sets: reducible fields, composite moduli
 	cases = append(cases, genReducibleCases(m)...)
@@ -1543,6 +1545,227 @@ func genMixedCases(m pemMaterial, n int) []pemCase {
 			text = "junk\n" + text
 		}
 		cases = append(cases, pemCase{Text: text, Pub: r.Float64() < 0.55})
+	}
+	return cases
+}
+
+// longOID is an OID of n content octets for genLongOIDCases: the Ed25519
+// arcs (1.3.101.112) padded with arcs of 1 ("ones"), with two-octet arcs
+// 0x81 0x01 ("wide"), or as one huge arc after 1.3 ("huge", the BIGNUM
+// path of OBJ_obj2txt). Shorter than the prefix, the prefix's first octets.
+func longOID(n int, kind string) []byte {
+	prefix := []byte{0x2b, 0x65, 0x70}
+	if n <= len(prefix) {
+		return append([]byte(nil), prefix[:n]...)
+	}
+	oid := append([]byte(nil), prefix...)
+	switch kind {
+	case "wide":
+		for len(oid) < n-1 {
+			oid = append(oid, 0x81, 0x01)
+		}
+		if len(oid) < n {
+			oid = append(oid, 0x01)
+		}
+	case "huge":
+		oid = oid[:1]
+		for len(oid) < n-1 {
+			oid = append(oid, 0xff)
+		}
+		oid = append(oid, 0x7f)
+	default:
+		for len(oid) < n {
+			oid = append(oid, 0x01)
+		}
+	}
+	return oid
+}
+
+// genLongOIDCases puts algorithm OIDs of 1 to 4000 content octets, dense
+// around OBJ_obj2txt's 586-octet limit (round 11: x509_pubkey_ex_d2i_ex
+// fails the whole X509_PUBKEY decode, with nothing queued, for an OID
+// OBJ_obj2txt refuses; epki2pki passes an empty key type), into every
+// algorithm field Node's readers parse: a SubjectPublicKeyInfo, a PKCS#8
+// PrivateKeyInfo, a certificate's SubjectPublicKeyInfo (CERTIFICATE and
+// X509 CERTIFICATE) and its two signature algorithms. Each block is read
+// alone and with an Ed25519 key (PKCS#8, SPKI or certificate) in every
+// position of two- and three-block texts, as createPublicKey and as
+// createPrivateKey.
+func genLongOIDCases(m pemMaterial) []pemCase {
+	edPub := m.otherSPKI[len(m.otherSPKI)-32:]
+	seed := bytes.Repeat([]byte{2}, 32)
+	alg := func(oid []byte) []byte { return derSeq(derTLV(6, oid)) }
+	spki := func(oid []byte) []byte { return derSeq(alg(oid), derTLV(3, append([]byte{0}, edPub...))) }
+	p8 := func(oid []byte) []byte { return derSeq(derSmall(0), alg(oid), derTLV(4, derTLV(4, seed))) }
+	name := derSeq(derTLV(0x31, derSeq(derOID("550403"), derTLV(0x13, []byte("r")))))
+	validity := derSeq(derTLV(0x17, []byte("200101000000Z")), derTLV(0x17, []byte("300101000000Z")))
+	ed := alg([]byte{0x2b, 0x65, 0x70})
+	cert := func(sigAlg, pub, outerAlg []byte) []byte {
+		tbs := derSeq(derTLV(0xa0, derSmall(2)), derSmall(1), sigAlg, name, validity, name, pub)
+		return derSeq(tbs, outerAlg, derTLV(3, make([]byte, 65)))
+	}
+	type block struct {
+		label string
+		der   []byte
+	}
+	fields := []func(oid []byte) block{
+		func(oid []byte) block { return block{"PUBLIC KEY", spki(oid)} },
+		func(oid []byte) block { return block{"PRIVATE KEY", p8(oid)} },
+		func(oid []byte) block { return block{"CERTIFICATE", cert(ed, spki(oid), ed)} },
+		func(oid []byte) block { return block{"X509 CERTIFICATE", cert(ed, spki(oid), ed)} },
+		func(oid []byte) block { return block{"CERTIFICATE", cert(alg(oid), m.spki, ed)} },
+		func(oid []byte) block { return block{"CERTIFICATE", cert(ed, m.spki, alg(oid))} },
+	}
+	eds := []block{{"PRIVATE KEY", m.pkcs8}, {"PUBLIC KEY", m.spki}, {"CERTIFICATE", m.cert}}
+	var cases []pemCase
+	add := func(blocks ...block) {
+		var sb strings.Builder
+		for _, b := range blocks {
+			sb.WriteString(pemWrap(b.label, b.der, 64))
+		}
+		cases = append(cases, pemCase{Text: sb.String(), Pub: true}, pemCase{Text: sb.String(), Pub: false})
+	}
+	lengths := []int{1, 2, 3, 4, 5, 10, 20, 47, 48, 49, 50, 100, 200, 290, 291, 292, 293, 300, 400, 500,
+		580, 583, 584, 585, 586, 587, 588, 589, 590, 600, 700, 800, 1000, 1023, 1024, 1500, 2000, 4000}
+	for _, n := range lengths {
+		for _, kind := range []string{"ones", "wide", "huge"} {
+			if kind != "ones" && (n <= 3 || (n > 10 && n < 580) || n > 600) {
+				continue
+			}
+			oid := longOID(n, kind)
+			for _, field := range fields {
+				long := field(oid)
+				add(long)
+				for _, e := range eds {
+					add(long, e)
+					add(e, long)
+					add(e, long, long)
+					add(long, e, long)
+					add(long, long, e)
+				}
+			}
+		}
+	}
+	return cases
+}
+
+// genUncoveredCases aims at the reader branches the other generators left
+// unrun (round 11, coverage of TestLivePEMKeyParsing): malformed UTF8String
+// name values (UTF8_getc's every refusal), a name value with a tag number
+// over 30, a Name past X509_NAME_MAX, PKCS#8 versions outside a long,
+// indefinite-length EXPLICIT tags and SET OFs and constructed OCTET STRINGs
+// without their end-of-contents, an RSA PKCS#8 under the 2.5.8.1.1 alias,
+// RSA keys whose CRT values outgrow n, RSA-PSS with MGF1 and an unknown
+// hash, and base64 padding edge cases. Each is read alone and followed by
+// an Ed25519 PKCS#8 key.
+func genUncoveredCases(m pemMaterial) []pemCase {
+	alg := derSeq(derOID("2b6570"))
+	name := func(v []byte) []byte { return derSeq(derTLV(0x31, derSeq(derOID("550403"), v))) }
+	utc := derSeq(derTLV(0x17, []byte("200101000000Z")), derTLV(0x17, []byte("300101000000Z")))
+	cert := func(version, subject []byte) []byte {
+		tbs := derSeq(append(version, derSmall(1)...), alg, name(derTLV(0x13, []byte("r"))), utc, subject, m.spki)
+		return derSeq(tbs, alg, derTLV(3, make([]byte, 65)))
+	}
+	v3 := derTLV(0xa0, derSmall(2))
+	seed := derTLV(4, derTLV(4, bytes.Repeat([]byte{3}, 32)))
+	raw := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+	type block struct {
+		label string
+		der   []byte
+	}
+	var blocks []block
+	for _, s := range []string{"\xc3", "\xc3\x28", "\xc0\x80", "\xc1\xbf", "\xe2\x82", "\xe2\x28\xa1", "\xe0\x80\x80",
+		"\xed\xa0\x80", "\xef\xbf\xbf", "\xf0\x90\x80", "\xf0\x90\x28\x80", "\xf0\x80\x80\x80", "\xf4\x90\x80\x80",
+		"\xf0\x90\x80\x80", "\xf8\x88\x80\x80\x80", "\xfc\x84\x80\x80\x80\x80", "\xff", "\x80", "ok\xc3\xa9"} {
+		blocks = append(blocks, block{"CERTIFICATE", cert(v3, name(derTLV(0x0c, []byte(s))))})
+	}
+	blocks = append(blocks,
+		block{"CERTIFICATE", cert(v3, name([]byte{0x1f, 0x1f, 0x01, 'x'}))},
+		block{"CERTIFICATE", cert(v3, name([]byte{0x1f, 0x81, 0x00, 0x01, 'x'}))},
+		block{"CERTIFICATE", cert(v3, name(derTLV(0x0c, bytes.Repeat([]byte("a"), 1<<20+100))))},
+		block{"CERTIFICATE", cert(raw([]byte{0xa0, 0x80}, derSmall(2)), name(derTLV(0x13, []byte("r"))))},
+		block{"CERTIFICATE", cert(raw([]byte{0xa0, 0x80}, derSmall(2), []byte{0, 0}), name(derTLV(0x13, []byte("r"))))},
+	)
+	for _, v := range [][]byte{
+		{1, 0, 0, 0, 0, 0, 0, 0, 0}, {0, 0x80, 0, 0, 0, 0, 0, 0, 0}, {0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+		{0xff, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, {0x80, 0, 0, 0, 0, 0, 0, 0}, {0xff, 0xff}, {0, 0x80, 0, 0, 0},
+		// pkey_cb's int keeps the low 32 bits: 2^32 and 2^32+1 read as
+		// versions 0 and 1, -2^32 as 0, 2^31 as negative.
+		{1, 0, 0, 0, 0}, {1, 0, 0, 0, 1}, {1, 0, 0, 0, 2}, {0xff, 0, 0, 0, 0}, {0, 0x80, 0, 0, 0, 0}, {0, 0x80, 0, 0, 0},
+		{0x7f, 0xff, 0xff, 0xff, 0, 0, 0, 1}, {0x80, 0, 0, 0, 0, 0, 0, 1},
+	} {
+		blocks = append(blocks, block{"PRIVATE KEY", derSeq(derTLV(2, v), alg, seed)})
+	}
+	attr := derSeq(derOID("2a864886f70d010914"), derTLV(0x31, derTLV(0x0c, []byte("x"))))
+	blocks = append(blocks,
+		block{"PRIVATE KEY", derSeq(derSmall(0), alg, seed, []byte{0xa0, 0x80}, attr)},
+		block{"PRIVATE KEY", derSeq(derSmall(0), alg, seed, []byte{0xa0, 0x80}, attr, []byte{0, 0})},
+		block{"PRIVATE KEY", derSeq(derSmall(0), alg, []byte{0x24, 0x80}, derTLV(4, derTLV(4, bytes.Repeat([]byte{3}, 32))))},
+		block{"PRIVATE KEY", derSeq(derSmall(0), alg, []byte{0x24, 0x80}, derTLV(4, derTLV(4, bytes.Repeat([]byte{3}, 32))), []byte{0, 0})},
+		block{"PRIVATE KEY", derSeq(derSmall(0), alg, derTLV(0x24, []byte{0, 0}, derTLV(4, derTLV(4, bytes.Repeat([]byte{3}, 32)))))},
+		block{"PRIVATE KEY", derSeq(derSmall(0), alg, derTLV(0x24, derTLV(4, []byte{4, 32}), derTLV(0x24, derTLV(4, bytes.Repeat([]byte{3}, 32)))))},
+		block{"EC PRIVATE KEY", derSeq(derSmall(1), derTLV(4, bytes.Repeat([]byte{5}, 32)), []byte{0xa0, 0x80}, derOID("2a8648ce3d030107"), []byte{1, 1, 0})},
+		block{"EC PRIVATE KEY", derSeq(derSmall(1), derTLV(4, bytes.Repeat([]byte{5}, 32)), []byte{0xa0, 0x80}, derOID("2a8648ce3d030107"), []byte{0, 0})},
+	)
+	// RSA: the fixture key under the 2.5.8.1.1 alias (the legacy reader's
+	// RSA method; the provider decoder refuses the type), and small keys
+	// whose d or CRT values have more bits than n.
+	krsa := m.otherDER["k_rsa.pem#0"].der
+	isRSA := func(n *tlv) bool { return n.tag[0] == 6 && hex.EncodeToString(n.val) == "2a864886f70d010101" }
+	blocks = append(blocks, block{"PRIVATE KEY", reTLV(krsa, isRSA, func(n *tlv) { n.val = []byte{0x55, 0x08, 0x01, 0x01} })})
+	rsaAlg := derSeq(derOID("2a864886f70d010101"), derTLV(5))
+	small := func(f ...int64) []byte {
+		parts := [][]byte{derSmall(0)}
+		for _, v := range f {
+			parts = append(parts, derSmall(v))
+		}
+		return derSeq(parts...)
+	}
+	big := new(big.Int).Lsh(big.NewInt(1), 40)
+	for _, k := range [][]byte{
+		small(3233, 17, 2753, 61, 53, 53, 49, 38),
+		small(3233, 17, 1<<40, 61, 53, 53, 49, 38),
+		small(3233, 17, 2753, 1<<20, 53, 53, 49, 38),
+		small(3233, 17, 2753, 61, 53, 53, 49, 1<<30),
+		derSeq(derSmall(0), derSmall(3233), derSmall(17), derSmall(2753), derSmall(61), derSmall(53), derInt(big), derSmall(49), derSmall(38)),
+	} {
+		blocks = append(blocks, block{"PRIVATE KEY", derSeq(derSmall(0), rsaAlg, derTLV(4, k))}, block{"RSA PRIVATE KEY", k})
+	}
+	pssKey := small(3233, 17, 2753, 61, 53, 53, 49, 38)
+	sha256 := derSeq(derOID("608648016503040201"))
+	unknown := derSeq(derOID("2a0304"))
+	mgf := func(h []byte) []byte { return derTLV(0xa1, derSeq(derOID("2a864886f70d010108"), h)) }
+	for _, params := range [][]byte{
+		derSeq(derTLV(0xa0, unknown), mgf(sha256)),
+		derSeq(derTLV(0xa0, sha256), mgf(unknown)),
+		derSeq(derTLV(0xa0, sha256), mgf(sha256)),
+		derSeq(derTLV(0xa0, sha256), derTLV(0xa1, derSeq(derOID("2a864886f70d010108"), derSmall(1)))),
+		derSeq(derTLV(0xa0, sha256), derTLV(0xa1, derSeq(derOID("2a864886f70d010108"), derSeq(derSmall(1))))),
+	} {
+		blocks = append(blocks, block{"PRIVATE KEY", derSeq(derSmall(0), derSeq(derOID("2a864886f70d01010a"), params), derTLV(4, pssKey))})
+	}
+	var cases []pemCase
+	add := func(text string) {
+		cases = append(cases, pemCase{Text: text, Pub: true}, pemCase{Text: text, Pub: false})
+	}
+	priv := pemWrap("PRIVATE KEY", m.pkcs8, 64)
+	for _, b := range blocks {
+		text := pemWrap(b.label, b.der, 64)
+		add(text)
+		if len(b.der) < 1<<20 {
+			add(text + priv)
+		}
+	}
+	// Base64 padding: three '=', data after '=', '=' alone, a 64-character
+	// group with padding, and a padded group at the end of a long body.
+	b64 := base64.StdEncoding.EncodeToString(m.spki)
+	for _, body := range []string{"A===", "AA===", "====", "=", "AA==AA==", "AAA=A", "AA==\n=", b64 + "=",
+		b64[:60] + "A===", strings.Repeat("A", 60) + "AA==", strings.Repeat("A", 64) + "\nAA==", strings.Repeat("A", 62) + "==\nAAAA"} {
+		for _, label := range []string{"PUBLIC KEY", "PRIVATE KEY"} {
+			text := "-----BEGIN " + label + "-----\n" + body + "\n-----END " + label + "-----\n"
+			add(text)
+			add(text + priv)
+		}
 	}
 	return cases
 }

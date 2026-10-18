@@ -236,12 +236,13 @@ func TestNestedRaiseData(t *testing.T) {
 	}
 }
 
-// shippedLength and shippedDHReason are the readers' settings as the
+// shippedLength, shippedDHReason and shippedSPKIReason are the readers' settings as the
 // package initialises them, before any test (TestPEMProbes,
 // TestLongFormLengthRule) assigns them.
 var (
-	shippedLength   = lengthNeedsContentByte
-	shippedDHReason = dhKeyDecodeReason
+	shippedLength     = lengthNeedsContentByte
+	shippedDHReason   = dhKeyDecodeReason
+	shippedSPKIReason = spkiTrailingReason
 )
 
 // TestShippedOpenSSLDefaults pins the OpenSSL version the shipped fl
@@ -256,10 +257,58 @@ func TestShippedOpenSSLDefaults(t *testing.T) {
 	if shippedDHReason != "EVP_R_DECODE_ERROR" {
 		t.Errorf("dhKeyDecodeReason starts as %q, want OpenSSL 3.5.5's EVP_R_DECODE_ERROR", shippedDHReason)
 	}
+	if shippedSPKIReason != "EVP_R_DECODE_ERROR" {
+		t.Errorf("spkiTrailingReason starts as %q, want OpenSSL 3.5.5's EVP_R_DECODE_ERROR", shippedSPKIReason)
+	}
 	// The same through a parse: a truncated long form (3.5.5: header too
 	// long; 3.6.5: field missing).
 	saved := lengthNeedsContentByte
 	defer func() { lengthNeedsContentByte = saved }()
 	lengthNeedsContentByte = shippedLength
 	check(t, "308100", derBlock("PUBLIC KEY", "308100"), true, "error:0680007B:asn1 encoding routines::header too long")
+}
+
+// TestLongAlgorithmOID pins round 11's reproduction (Node 22.22.2 /
+// OpenSSL 3.5.5 and Node 22.23.3 / OpenSSL 3.6.5, the same results): an
+// SPKI whose algorithm OID has more than 586 content octets, which
+// OBJ_obj2txt refuses. x509_pubkey_ex_d2i_ex then fails the whole
+// X509_PUBKEY decode and queues nothing, so the PUBLIC KEY pass leaves no
+// error behind and the Ed25519 private key after it is accepted; at 586
+// octets the decode succeeds without a key and X509_PUBKEY_get0's decode
+// error survives, wherever the SPKI sits. Inside a certificate the failed X509_PUBKEY adds the
+// template's nested asn1 errors.
+func TestLongAlgorithmOID(t *testing.T) {
+	_, priv, _, _ := probeKeys(t)
+	nested := "error:0688010A:asn1 encoding routines::nested asn1 error"
+	pub := strings.Repeat("aa", 32)
+	tlv := func(tag string, body string) string {
+		n := len(body) / 2
+		switch {
+		case n < 0x80:
+			return tag + hex.EncodeToString([]byte{byte(n)}) + body
+		case n < 0x100:
+			return tag + "81" + hex.EncodeToString([]byte{byte(n)}) + body
+		}
+		return tag + "82" + hex.EncodeToString([]byte{byte(n >> 8), byte(n)}) + body
+	}
+	for _, c := range []struct {
+		n                                    int
+		alone, withKey, certAlone, keyBefore string
+	}{
+		{586, errEVPDecode, errEVPDecode, errEVPDecode, errEVPDecode},
+		{587, unsup, okKey, nested, okKey},
+		{1000, unsup, okKey, nested, okKey},
+	} {
+		oid := "2b6570" + strings.Repeat("01", c.n-3)
+		spki := tlv("30", tlv("30", tlv("06", oid))+tlv("03", "00"+pub))
+		name := tlv("30", tlv("31", tlv("30", "0603550403"+"130172")))
+		ed := "300506032b6570"
+		tbs := tlv("30", "a003020102"+"020101"+ed+name+tlv("30", "170d3230303130313030303030305a"+"170d3330303130313030303030305a")+name+spki)
+		cert := tlv("30", tbs+ed+tlv("03", "00"+strings.Repeat("00", 64)))
+		name1 := "len" + itoa(c.n)
+		check(t, name1+" spki", derBlock("PUBLIC KEY", spki), true, c.alone)
+		check(t, name1+" spki+key", derBlock("PUBLIC KEY", spki)+priv, true, c.withKey)
+		check(t, name1+" cert", derBlock("CERTIFICATE", cert), true, c.certAlone)
+		check(t, name1+" key+spki", priv+derBlock("PUBLIC KEY", spki), true, c.keyBefore)
+	}
 }

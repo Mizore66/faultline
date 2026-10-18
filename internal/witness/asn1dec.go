@@ -945,7 +945,12 @@ func tag2bit(tag int) uint32 {
 
 // pubkeyD2I ports x509_pubkey_ex_d2i_ex: X509_PUBKEY_INTERNAL, then an
 // opportunistic key decode whose errors are popped (X509_PUBKEY_get0 later
-// reports EVP decode error when it found no key).
+// reports EVP decode error when it found no key). Two outcomes of the
+// decode fail the whole d2i instead (ret is still x509_pubkey_decode's 0
+// when they "goto end"): an algorithm OID OBJ_obj2txt refuses, which
+// leaves nothing queued, and a decoder that did not consume every byte,
+// which leaves its decode error queued. decodeSPKIKey clears the mark on
+// those paths, as OpenSSL's ERR_clear_last_mark does.
 func (d *asn1Dec) pubkeyD2I(in []byte, tag, aclass int, opt bool) (*asn1Value, int, int) {
 	v, n, ret := d.itemD2I(in, pubkeyInternalItem, tag, aclass, opt, 0)
 	if ret <= 0 {
@@ -956,8 +961,12 @@ func (d *asn1Dec) pubkeyD2I(in []byte, tag, aclass int, opt bool) (*asn1Value, i
 	if aclass != classUniversal {
 		der = append([]byte{0x30}, in[1:n]...)
 	}
-	v.pub = d.env.decodeSPKIKey(v, der)
+	pub, ok := d.env.decodeSPKIKey(v, der)
+	if !ok {
+		return nil, 0, 0
+	}
 	d.q.popToMark()
+	v.pub = pub
 	return v, n, 1
 }
 

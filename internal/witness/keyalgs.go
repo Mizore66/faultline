@@ -935,31 +935,48 @@ func nameHasAmeth(n string) bool {
 
 // --- the opportunistic X509_PUBKEY key decode -----------------------------
 
+// spkiTrailingReason is the reason x509_pubkey_ex_d2i_ex raises (under
+// ERR_LIB_ASN1) when the decoder succeeded without consuming every byte:
+// EVP_R_DECODE_ERROR in OpenSSL 3.5 and 3.6.0, ASN1_R_DECODE_ERROR in
+// 3.6.5 (openssl-3.5.5, 3.6.0 and 3.6.5 sources, crypto/x509/x_pubkey.c).
+var spkiTrailingReason = "EVP_R_DECODE_ERROR"
+
 // decodeSPKIKey ports the provider path of x509_pubkey_ex_d2i_ex (the
 // legacy path finds no ENGINE): a DER/SubjectPublicKeyInfo decoder context
 // for the algorithm's name, OSSL_DECODER_from_data, and the "must consume
-// all bytes" check. Errors are popped by the caller's mark.
-func (e *osslEnv) decodeSPKIKey(v *asn1Value, der []byte) *pubKeyData {
+// all bytes" check. On success (ok, with or without a key) the caller pops
+// the errors to its mark. ok is false where OpenSSL fails the whole d2i:
+// OBJ_obj2txt refusing the OID (more than 586 content octets; nothing is
+// raised) and a decode that left bytes over (its reason stays queued).
+// Both clear the caller's mark first, keeping what was raised since.
+func (e *osslEnv) decodeSPKIKey(v *asn1Value, der []byte) (*pubKeyData, bool) {
 	oid := v.fields[0].fields[0].data
 	name, ok := obj2txt(oid)
 	if !ok || name == "" {
-		return nil
+		e.q.clearLastMark()
+		return nil, false
 	}
 	ctx := publicKeyCtx(name)
 	ok, pos := e.fromBIO(ctx, der, 0)
 	if !ok || ctx.object == nil {
-		return nil
+		return nil, true
 	}
+	// Ported for exactness; Node cannot reach it. The decoders read der
+	// with asn1_d2i_read_bio, which returns a prefix of der, and the key
+	// decoder parses that prefix with the same templates that consumed
+	// all of der in the caller, so a key comes out only when the prefix
+	// is der itself (round 11, r11-fix-report.md).
 	if pos != len(der) {
-		e.q.raise(libASN1, "EVP_R_DECODE_ERROR")
-		return nil
+		e.q.clearLastMark()
+		e.q.raise(libASN1, spkiTrailingReason)
+		return nil, false
 	}
 	k := ctx.object
 	pd := &pubKeyData{typ: k.desc.evpType, name: k.desc.nodeName, alg: k.desc.name}
 	if k.desc == descED {
 		pd.ed25519 = k.edPub
 	}
-	return pd
+	return pd, true
 }
 
 // algorIsSM2 ports ec_backend.c ossl_x509_algor_is_sm2.

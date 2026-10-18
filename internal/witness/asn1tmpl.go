@@ -134,8 +134,10 @@ func init() {
 
 // pkcs8Version is p8_pkey.c pkey_cb's ASN1_OP_D2I_POST: the version must be
 // 0 or 1 (ASN1_INTEGER_get), and a version 0 key has no public key.
+// pkey_cb keeps ASN1_INTEGER_get's long in an int, so a 64-bit long is
+// cut to its low 32 bits there: -2^63 and 2^32 read as version 0.
 func pkcs8Version(d *asn1Dec, v *asn1Value) bool {
-	version := d.integerGet(v.fields[0])
+	version := int32(d.integerGet(v.fields[0]))
 	if version < 0 || version > 1 {
 		return false
 	}

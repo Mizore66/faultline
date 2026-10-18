@@ -242,6 +242,9 @@ func (e *osslEnv) decoderProcess(params *decodeData, data *procState, prev *deco
 	data.flagNextLevelCalled = true
 	newData := &procState{ctx: ctx}
 	var dataType, dataStructure string
+	// hasType/hasStructure: the previous decoder passed the parameter (a
+	// non-NULL pointer, possibly to ""), as distinct from dataType "".
+	var hasType, hasStructure bool
 	startInputType := ctx.startInputType
 	bio := data.bio
 	pos := data.pos
@@ -266,13 +269,13 @@ func (e *osslEnv) decoderProcess(params *decodeData, data *procState, prev *deco
 			q.setMark()
 			q.raise(libCRYPTO, "CRYPTO_R_PARAM_OF_INCOMPATIBLE_TYPE")
 			q.popToMark()
-			dataType = params.dataType
+			dataType, hasType = params.dataType, true
 		}
 		if params.hasStructure {
 			q.setMark()
 			q.raise(libCRYPTO, "CRYPTO_R_PARAM_OF_INCOMPATIBLE_TYPE")
 			q.popToMark()
-			dataStructure = params.structure
+			dataStructure, hasStructure = params.structure, true
 		}
 		if params.hasInput {
 			q.setMark()
@@ -284,8 +287,8 @@ func (e *osslEnv) decoderProcess(params *decodeData, data *procState, prev *deco
 				data.flagInputStructureChecked = true
 			}
 		}
-		if dataType != "" && dataStructure != "" && strings.EqualFold(dataStructure, "type-specific") {
-			dataStructure = ""
+		if hasType && hasStructure && strings.EqualFold(dataStructure, "type-specific") {
+			dataStructure, hasStructure = "", false
 		}
 	}
 	defer func() { ctx.startInputType = startInputType }()
@@ -305,10 +308,12 @@ func (e *osslEnv) decoderProcess(params *decodeData, data *procState, prev *deco
 		if prev != nil && !strings.EqualFold(prev.name, inputType) {
 			continue
 		}
-		if dataType != "" && !decoderIsA(inst, dataType) {
+		// OSSL_DECODER_is_a: no decoder has the name "" (the type
+		// epki2pki passes when OBJ_obj2txt refuses the OID).
+		if hasType && !decoderIsA(inst, dataType) {
 			continue
 		}
-		if dataStructure != "" && (inst.structure == "" || !strings.EqualFold(dataStructure, inst.structure)) {
+		if hasStructure && (inst.structure == "" || !strings.EqualFold(dataStructure, inst.structure)) {
 			continue
 		}
 		if !data.flagInputStructureChecked && ctx.inputStructure != "" && inst.structure != "" {
@@ -476,6 +481,8 @@ func (e *osslEnv) epki2pki(der []byte, selection int, cb func(*decodeData) bool)
 	p8, _, decoded := e.d2i(pkcs8Item, der)
 	q.popToMark()
 	if decoded {
+		// OBJ_obj2txt's result is not checked: an OID it refuses (more than
+		// 586 content octets) leaves keytype "", which names no decoder.
 		oid := p8.fields[1].fields[0].data
 		name, _ := obj2txt(oid)
 		ok = cb(&decodeData{dataType: name, hasType: true, inputType: "DER", hasInput: true,

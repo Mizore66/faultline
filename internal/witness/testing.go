@@ -36,13 +36,16 @@ func ParseKeyForTest(text string, public bool) KeyResult {
 
 // SetOpenSSLForTest makes the readers follow the given OpenSSL version
 // ("3.5.5", "3.6.5", ...) where 3.6.5 changed them: asn1_get_length's long
-// form needs a content byte after the length octets before 3.6.5, and
-// ossl_dh_key_from_pkcs8's decode error reason.
+// form needs a content byte after the length octets before 3.6.5,
+// ossl_dh_key_from_pkcs8's decode error reason, and the reason
+// x509_pubkey_ex_d2i_ex raises for a key decode that left bytes over.
 func SetOpenSSLForTest(version string) {
 	lengthNeedsContentByte = !versionAtLeast(version, 3, 6, 5)
 	dhKeyDecodeReason = "EVP_R_DECODE_ERROR"
+	spkiTrailingReason = "EVP_R_DECODE_ERROR"
 	if versionAtLeast(version, 3, 6, 5) {
 		dhKeyDecodeReason = "DH_R_DECODE_ERROR"
+		spkiTrailingReason = "ASN1_R_DECODE_ERROR"
 	}
 }
 
