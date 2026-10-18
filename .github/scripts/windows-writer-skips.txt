@@ -6,6 +6,8 @@ TestWriterReplay/posix/verify-git-bundle-records-git
 TestWriterReplay/posix/verify-receipt-symlink
 TestWriterReplay/posix/ledger-bind-output-is-dir
 TestWriterReplay/posix/investigate-two-states
+TestWriterReplay/posix/investigate-overlay-symlink-middle
+TestWriterReplay/posix/investigate-overlay-symlink-pair
 TestWriterReplay/posix/investigate-many-states
 TestWriterReplay/posix/investigate-max-states-overflow
 TestWriterReplay/posix/investigate-max-states-empty

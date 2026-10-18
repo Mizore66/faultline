@@ -74,6 +74,14 @@ func randomInvestigateCase(t *testing.T, r *rand.Rand, witnesses []jsjson.Value)
 	heterogeneous := n > 1 && r.IntN(3) == 0
 	changeAt := 1 + r.IntN(max(1, n-1))
 	symlinkTarget := r.IntN(20) == 0
+	// The overlay target witness.mjs as a symbolic link in one middle state
+	// only (round 11, r11-3 G10): the preflight loop passes, the execution
+	// loop fails there, and the error alone makes the status
+	// EXECUTION_ERROR. The fixed cases below always cover it.
+	overlaySymlinkAt := -1
+	if n >= 3 && r.IntN(6) == 0 {
+		overlaySymlinkAt = 1 + r.IntN(n-2)
+	}
 	filter := r.IntN(25) == 0
 	var commits []gitinv.RepoCommitForTest
 	for i := 0; i < prefix; i++ {
@@ -91,6 +99,13 @@ func randomInvestigateCase(t *testing.T, r *rand.Rand, witnesses []jsjson.Value)
 			"package.json": packageJSON(i),
 			"step.txt":     strconv.Itoa(i) + "\n",
 		}}
+		switch {
+		case overlaySymlinkAt < 0:
+		case i == overlaySymlinkAt:
+			c.Symlinks = map[string]string{"witness.mjs": "state.txt"}
+		case i == overlaySymlinkAt+1:
+			c.Remove = []string{"witness.mjs"}
+		}
 		if i == 0 {
 			c.Files["中文 目录/说明.txt"] = "tracked\n"
 			if symlinkTarget {
@@ -196,6 +211,9 @@ func randomInvestigateCase(t *testing.T, r *rand.Rand, witnesses []jsjson.Value)
 	if symlinkTarget {
 		label += " symlink"
 	}
+	if overlaySymlinkAt >= 0 {
+		label += " overlay-symlink@" + strconv.Itoa(overlaySymlinkAt)
+	}
 	if filter {
 		label += " filter"
 	}
@@ -227,6 +245,32 @@ func unstableInvestigateCase(t *testing.T, w jsjson.Value, verdicts ...string) i
 	return investigateCase{label: "sha1 n=" + strconv.Itoa(len(verdicts)) + " " + strings.Join(verdicts, ",") + " broken-state", request: jsjson.MakeObject(request), fake: "broken-state"}
 }
 
+// overlaySymlinkInvestigateCase investigates a repository with one state
+// per verdict whose state at index link tracks witness.mjs, the frozen
+// overlay's target, as a symbolic link (removed again in the next state).
+func overlaySymlinkInvestigateCase(t *testing.T, w jsjson.Value, link int, verdicts ...string) investigateCase {
+	var commits []gitinv.RepoCommitForTest
+	for i, v := range verdicts {
+		c := gitinv.RepoCommitForTest{Files: map[string]string{"state.txt": v + "\n", "step.txt": strconv.Itoa(i) + "\n"}}
+		switch i {
+		case link:
+			c.Symlinks = map[string]string{"witness.mjs": "state.txt"}
+		case link + 1:
+			c.Remove = []string{"witness.mjs"}
+		}
+		commits = append(commits, c)
+	}
+	repo, ids := gitinv.BuildRepoForTest(t, "sha1", "", commits)
+	request := jsjson.NewObj()
+	request.Set("repository", jsjson.MakeString(repo))
+	request.Set("range", jsjson.MustObject("ancestor", jsjson.MakeString(ids[0]), "descendant", jsjson.MakeString(ids[len(ids)-1])))
+	request.Set("frozenWitness", w)
+	request.Set("expectedFrozenDigest", w.Get("frozenDigest"))
+	request.Set("sandbox", jsjson.MustObject("mode", jsjson.MakeString("DOCKER_ISOLATED"), "image", jsjson.MakeString(gitinv.PinnedImageForTest)))
+	return investigateCase{label: "sha1 n=" + strconv.Itoa(len(verdicts)) + " " + strings.Join(verdicts, ",") + " overlay-symlink@" + strconv.Itoa(link) + " pass-fail",
+		request: jsjson.MakeObject(request), fake: "pass-fail"}
+}
+
 func oracleCall(t *testing.T, c *oracle.Client, op, args string) string {
 	raw, err := c.Call(op, args)
 	if err != nil {
@@ -246,7 +290,8 @@ func indexOf(values []jsjson.Value, v jsjson.Value) int {
 
 // TestLiveInvestigate runs investigateGitRange (native runner) and
 // InvestigateGitRange(NativeRunner()) on 3 fixed repositories with an
-// unstable state and 40 generated ones with
+// unstable state, 2 whose overlay target is a symbolic link in a middle
+// state, and 40 generated ones with
 // the same seed and the same fake Docker behind the docker recorder, and
 // compares the whole results (executionNonce, timestamps and durations
 // included: both draw them from the seeded sequence) and the recorded
@@ -270,6 +315,12 @@ func TestLiveInvestigate(t *testing.T) {
 		unstableInvestigateCase(t, witnesses[0], "good", "broken", "bad"),
 		unstableInvestigateCase(t, witnesses[1], "good", "broken", "broken", "bad", "good"),
 		unstableInvestigateCase(t, witnesses[0], "broken", "good", "bad", "broken"),
+		// The overlay target as a symbolic link in a middle state (round
+		// 11, r11-3 G10): between two PASS states, and beside an adjacent
+		// PASS/FAIL pair, where only the error keeps the transition from
+		// being claimed as proof.
+		overlaySymlinkInvestigateCase(t, witnesses[0], 1, "good", "good", "bad"),
+		overlaySymlinkInvestigateCase(t, witnesses[1], 2, "good", "bad", "bad", "bad"),
 	}
 	for i := 0; i < 40; i++ {
 		cases = append(cases, randomInvestigateCase(t, r, witnesses))

@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"flag"
 	"maps"
 	"net"
 	"os"
@@ -909,9 +910,16 @@ func TestWriterReplay(t *testing.T) {
 	goldens := loadWriterGoldens(t, repo)
 	checkScenarioDirs(t, repo)
 	seen := map[string]bool{}
-	ran := 0
+	ran, selected := 0, 0
 	defer func() {
 		liveSummary(t, "%d of %d writer cases run (%d golden invocations), %d Go bundles verified by TS", ran, len(templates), len(goldens), tsCrossVerified.Load())
+		// A -run pattern that names no writer case (posixOnly cases sit
+		// under posix/, so "TestWriterReplay/investigate-x" matches
+		// nothing) would otherwise pass having compared nothing (round 11,
+		// r11-3).
+		if selected == 0 && runFilter() != "" {
+			t.Errorf("-run %q selects none of the %d writer cases nor the recorder self-test (posixOnly cases are TestWriterReplay/posix/<id>)", runFilter(), len(templates))
+		}
 	}()
 	for _, tpl := range templates {
 		// Marked before running, so a case that stops early or skips does
@@ -926,6 +934,7 @@ func TestWriterReplay(t *testing.T) {
 			}
 		}
 		t.Run(writerSubtest(tpl), func(t *testing.T) {
+			selected++
 			if tpl.PosixOnly && windows {
 				t.Skip("POSIX fake git/docker recorders")
 			}
@@ -946,6 +955,7 @@ func TestWriterReplay(t *testing.T) {
 		}
 	}
 	t.Run("posix/recorder-fake-docker", func(t *testing.T) {
+		selected++
 		if windows {
 			t.Skip("POSIX fake git/docker recorders")
 		}
@@ -1179,4 +1189,13 @@ func asGolden(res writerResult) *jsjson.Obj {
 	o.Set("argv", jsjson.MakeArray(argv))
 	o.Set("inv", jsjson.MakeNumber(float64(res.Inv)))
 	return o
+}
+
+// runFilter is the -test.run pattern the test binary was started with, ""
+// when none was given.
+func runFilter() string {
+	if f := flag.Lookup("test.run"); f != nil {
+		return f.Value.String()
+	}
+	return ""
 }

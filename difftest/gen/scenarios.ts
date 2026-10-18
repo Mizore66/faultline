@@ -6,7 +6,7 @@
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -271,6 +271,10 @@ export const PINNED_IMAGE = `registry.example/faultline-node@sha256:${"b".repeat
 const OTHER_IMAGE = `registry.example/faultline-node@sha256:${"c".repeat(64)}`;
 type RepoState = Record<string, string>;
 const state = (value: string, extra: RepoState = {}): RepoState => ({ "state.txt": `${value}\n`, ...extra });
+// A RepoState entry whose text starts with SYMLINK is committed as a
+// symbolic link to the rest of the text (only in a state before the last:
+// the checked-out workspace holds regular files only).
+const SYMLINK = "\0symlink:";
 type BuiltRepo = { commits: string[]; trees: string[]; files: RepoState[] };
 
 function scratchGit(dir: string, args: string[], objectFormat: string, input?: Buffer): Buffer {
@@ -302,7 +306,8 @@ function buildRepo(ws: string, rel: string, states: RepoState[], objectFormat: "
       for (const name of Object.keys(previous)) rmSync(join(scratch, name), { force: true });
       for (const [name, text] of Object.entries(files)) {
         mkdirSync(dirname(join(scratch, name)), { recursive: true });
-        writeFileSync(join(scratch, name), text);
+        if (text.startsWith(SYMLINK)) symlinkSync(text.slice(SYMLINK.length), join(scratch, name));
+        else writeFileSync(join(scratch, name), text);
       }
       scratchGit(scratch, ["add", "-A"], objectFormat);
       scratchGit(scratch, ["commit", "-q", "--allow-empty", "-m", `state ${index}`], objectFormat);
@@ -500,6 +505,14 @@ export const SCENARIOS: Record<string, Scenario> = {
   // fake Docker broken-state) between the PASS and the FAIL state, so the
   // two stable states are not adjacent and no transition may be claimed.
   "git-unstable-middle": gitScenario([state("good"), state("broken"), state("bad")]),
+  // Round 11 (r11-3 G10): the frozen overlay's target witness.mjs is a
+  // symbolic link in one middle state only, so materializing that state
+  // fails in the execution loop and the error alone must make the status
+  // EXECUTION_ERROR (no transition: the stable states are not adjacent).
+  "git-overlay-symlink-middle": gitScenario([state("good"), state("good", { "witness.mjs": `${SYMLINK}state.txt` }), state("bad")]),
+  // The same symbolic link beside an adjacent PASS/FAIL pair: the pair is a
+  // transition, and only the error keeps it from being claimed as proof.
+  "git-overlay-symlink-pair": gitScenario([state("good"), state("bad"), state("bad", { "witness.mjs": `${SYMLINK}state.txt` }), state("bad")]),
   // judge-proof and commit-proof-preview read the committed COMMIT_PROOF
   // sample from the workspace by default.
   "commit-proof-sample": {
