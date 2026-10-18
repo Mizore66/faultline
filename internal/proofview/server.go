@@ -23,7 +23,8 @@ import (
 // defaults) rather than net/http's own lifecycle:
 //   - a connection is "idle" once its last request message is complete
 //     (body included) and no byte of the next has arrived (the parser's
-//     last_message_start_ is 0) and no response is in flight; a new
+//     last_message_start_ is 0; a response still being written to a slow
+//     reader does not count, as Node ends it at once); a new
 //     connection is not idle until it has sent a whole request;
 //   - after a keep-alive response, the socket gets an inactivity timeout of
 //     keepAliveTimeout + keepAliveTimeoutBuffer (6 s), refreshed by every
@@ -164,7 +165,6 @@ type nodeConn struct {
 	inMessage, begun bool
 	messageStart     time.Time
 	headersComplete  bool
-	responding       bool // a response is in flight (_httpMessage not finished)
 	keepAlive        bool // the keep-alive socket timeout is armed
 	lastActivity     time.Time
 	timer            *time.Timer
@@ -195,11 +195,16 @@ func (c *nodeConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// idle is closeIdleConnections' test.
+// idle is closeIdleConnections' test. Its other condition, a response
+// that is not finished (_httpMessage && !finished), never holds when Node
+// looks: the request listener ends its response synchronously, so by the
+// time a signal or timer runs every response has been ended, sent or not.
+// A connection whose slow reader holds queued responses is destroyed like
+// any idle one, so a response still being written does not count here.
 func (c *nodeConn) idle() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return !c.inMessage && !c.responding
+	return !c.inMessage
 }
 
 // expired is ConnectionsList::Expired's test for a connection.
@@ -213,27 +218,23 @@ func (c *nodeConn) expired(now time.Time) bool {
 	return (!c.headersComplete && age > headersTimeout) || age > requestTimeout
 }
 
-// requestTimedOut is onRequestTimeout: socketOnError writes the 408 unless
-// a response has started, then destroys the socket.
+// requestTimedOut is onRequestTimeout: socketOnError writes the 408 when
+// the socket has no response attached, which is always the case here (the
+// listener ends each response at once and resOnFinish detaches it), then
+// destroys the socket.
 func (c *nodeConn) requestTimedOut() {
-	c.mu.Lock()
-	responding := c.responding
-	c.mu.Unlock()
-	if !responding {
-		c.Conn.SetWriteDeadline(clock.Monotonic().Add(time.Second))
-		io.WriteString(c.Conn, requestTimeoutResponse)
-	}
+	c.Conn.SetWriteDeadline(clock.Monotonic().Add(time.Second))
+	io.WriteString(c.Conn, requestTimeoutResponse)
 	c.destroy()
 }
 
 // headersReceived is parserOnIncoming: the request's headers are complete
 // (resetSocketTimeout clears the keep-alive timeout), and a request without
-// a body is complete with them. The response counts as in flight until
-// net/http has flushed it and gone back to waiting (StateIdle).
+// a body is complete with them.
 func (c *nodeConn) headersReceived(bodyless bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.begun, c.inMessage, c.headersComplete, c.responding, c.keepAlive = true, true, true, true, false
+	c.begun, c.inMessage, c.headersComplete, c.keepAlive = true, true, true, false
 	if bodyless {
 		c.inMessage, c.begun = false, false
 	}
@@ -257,12 +258,11 @@ func (c *nodeConn) responseFinished(keepAlive bool) {
 }
 
 // messageComplete is on_message_complete (net/http has read the whole
-// request, body included, flushed the response and gone back to waiting:
-// StateIdle).
+// request, body included, and gone back to waiting: StateIdle).
 func (c *nodeConn) messageComplete() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.inMessage, c.begun, c.responding = false, false, false
+	c.inMessage, c.begun = false, false
 }
 
 // socketTimeout is socketOnTimeout with no listeners: destroy, unless

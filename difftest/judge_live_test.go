@@ -266,6 +266,9 @@ func TestLiveJudgeSignalStop(t *testing.T) {
 //   - a second identical signal ends the process by that signal (Node's
 //     process.once listener is gone); a different second signal is
 //     consumed, a third (repeating it) kills.
+//   - served-idle: a served keep-alive connection is idle and destroyed at
+//     once; mid-response: a slow reader's pipelined responses, still being
+//     written, do not keep it either.
 //
 // Each case compares the stopped line, the exit status, what the client
 // received and when the server closed the connection (within 1.5 s).
@@ -275,18 +278,30 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 		send     []string // written in turn, 0.5 s apart
 		signals  []syscall.Signal
 		clientMs int // the client closes after this long (0: never)
+		// slowReader: the client's receive buffer is 4 KiB and it reads
+		// nothing until the signals are sent, so the responses to its
+		// pipelined requests are still being written when they arrive.
+		slowReader bool
 	}
 	cases := []heldCase{
-		{"stall", []string{"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 1000\r\n\r\na=1"}, []syscall.Signal{syscall.SIGTERM}, 0},
-		{"stall-sigint", []string{"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 10\r\n\r\nab"}, []syscall.Signal{syscall.SIGINT}, 0},
-		{"served-partial", []string{"GET / HTTP/1.1\r\nHost: x\r\n\r\n", "GET / HT"}, []syscall.Signal{syscall.SIGTERM}, 0},
-		{"silent", nil, []syscall.Signal{syscall.SIGTERM}, 8000},
-		{"partial-headers", []string{"GET / HTTP/1.1\r\nHost:"}, []syscall.Signal{syscall.SIGINT}, 8000},
-		{"silent-sigint-twice", nil, []syscall.Signal{syscall.SIGINT, syscall.SIGINT}, 0},
-		{"silent-sigterm-twice", nil, []syscall.Signal{syscall.SIGTERM, syscall.SIGTERM}, 0},
-		{"silent-sigint-sigterm", nil, []syscall.Signal{syscall.SIGINT, syscall.SIGTERM}, 6000},
-		{"silent-int-term-term", nil, []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGTERM}, 0},
-		{"stall-sigterm-twice", []string{"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 10\r\n\r\nab"}, []syscall.Signal{syscall.SIGTERM, syscall.SIGTERM}, 0},
+		{"stall", []string{"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 1000\r\n\r\na=1"}, []syscall.Signal{syscall.SIGTERM}, 0, false},
+		{"stall-sigint", []string{"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 10\r\n\r\nab"}, []syscall.Signal{syscall.SIGINT}, 0, false},
+		{"served-partial", []string{"GET / HTTP/1.1\r\nHost: x\r\n\r\n", "GET / HT"}, []syscall.Signal{syscall.SIGTERM}, 0, false},
+		{"silent", nil, []syscall.Signal{syscall.SIGTERM}, 8000, false},
+		{"partial-headers", []string{"GET / HTTP/1.1\r\nHost:"}, []syscall.Signal{syscall.SIGINT}, 8000, false},
+		{"silent-sigint-twice", nil, []syscall.Signal{syscall.SIGINT, syscall.SIGINT}, 0, false},
+		{"silent-sigterm-twice", nil, []syscall.Signal{syscall.SIGTERM, syscall.SIGTERM}, 0, false},
+		{"silent-sigint-sigterm", nil, []syscall.Signal{syscall.SIGINT, syscall.SIGTERM}, 6000, false},
+		{"silent-int-term-term", nil, []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGTERM}, 0, false},
+		{"stall-sigterm-twice", []string{"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 10\r\n\r\nab"}, []syscall.Signal{syscall.SIGTERM, syscall.SIGTERM}, 0, false},
+		// A browser's connection after it loaded the page: served, kept
+		// alive, idle. close() destroys it at once (r10-3 verify F6).
+		{"served-idle", []string{"GET / HTTP/1.1\r\nHost: x\r\n\r\n"}, []syscall.Signal{syscall.SIGTERM}, 0, false},
+		{"served-idle-sigint", []string{"GET / HTTP/1.1\r\nHost: x\r\n\r\nGET /x HTTP/1.1\r\nHost: x\r\n\r\n"}, []syscall.Signal{syscall.SIGINT}, 0, false},
+		// Responses still being written at the signal (r10-3 verify F7):
+		// Node's handler has ended each response, so the connection counts
+		// as idle and is destroyed with its unsent bytes.
+		{"mid-response", []string{strings.Repeat("GET / HTTP/1.1\r\nHost: x\r\n\r\n", 40)}, []syscall.Signal{syscall.SIGTERM}, 0, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -294,6 +309,7 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 			type outcome struct {
 				text   string
 				closed time.Duration // when the server closed the connection, after the first signal
+				exited time.Duration // when fl exited, after the first signal
 			}
 			got := map[string]outcome{}
 			var mu sync.Mutex
@@ -307,7 +323,13 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 					out.WriteString(line)
 					line, _ = rest.ReadString('\n')
 					out.WriteString(line)
-					conn, err := net.Dial("tcp", strings.TrimPrefix(url, "http://"))
+					var dialer net.Dialer
+					if tc.slowReader {
+						dialer.Control = func(_, _ string, rc syscall.RawConn) error {
+							return rc.Control(func(fd uintptr) { syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, 4096) })
+						}
+					}
+					conn, err := dialer.Dial("tcp", strings.TrimPrefix(url, "http://"))
 					if err != nil {
 						t.Error(err)
 						return
@@ -315,10 +337,13 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 					defer conn.Close()
 					var received bytes.Buffer
 					closedAt := make(chan time.Time, 1)
-					go func() {
+					read := func() {
 						io.Copy(&received, conn)
 						closedAt <- time.Now()
-					}()
+					}
+					if !tc.slowReader {
+						go read()
+					}
 					for _, chunk := range tc.send {
 						io.WriteString(conn, chunk)
 						time.Sleep(500 * time.Millisecond)
@@ -329,14 +354,19 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 						cmd.Process.Signal(sig)
 						time.Sleep(300 * time.Millisecond)
 					}
+					if tc.slowReader {
+						go read()
+					}
 					if tc.clientMs > 0 {
 						time.AfterFunc(time.Duration(tc.clientMs)*time.Millisecond, func() { conn.Close() })
 					}
 					exited := make(chan struct{})
+					var exitedAfter time.Duration
 					go func() {
 						tail, _ := io.ReadAll(rest)
 						out.Write(tail)
 						cmd.Wait()
+						exitedAfter = time.Since(start)
 						close(exited)
 					}()
 					select {
@@ -357,7 +387,7 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 					text := loopbackPort.ReplaceAllString(out.String(), "127.0.0.1:<PORT>") + "--- stderr\n" + stderr.String() +
 						"--- " + cmd.ProcessState.String() + "\n--- client got " + head
 					mu.Lock()
-					got[side.name] = outcome{text, closed}
+					got[side.name] = outcome{text, closed, exitedAfter}
 					mu.Unlock()
 				}()
 			}
@@ -368,8 +398,12 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 			if d := got["Go"].closed - got["TS"].closed; d > 1500*time.Millisecond || d < -1500*time.Millisecond {
 				t.Errorf("server closed the connection %v after the signal in Go, %v in TS", got["Go"].closed, got["TS"].closed)
 			}
-			t.Logf("connection closed %v (Go) / %v (TS) after the first signal; %s", got["Go"].closed.Round(100*time.Millisecond),
-				got["TS"].closed.Round(100*time.Millisecond), got["Go"].text[strings.LastIndex(got["Go"].text, "--- "):])
+			if d := got["Go"].exited - got["TS"].exited; d > 1500*time.Millisecond || d < -1500*time.Millisecond {
+				t.Errorf("fl exited %v after the signal in Go, %v in TS", got["Go"].exited, got["TS"].exited)
+			}
+			t.Logf("connection closed %v (Go) / %v (TS), exit %v / %v after the first signal; %s", got["Go"].closed.Round(100*time.Millisecond),
+				got["TS"].closed.Round(100*time.Millisecond), got["Go"].exited.Round(100*time.Millisecond), got["TS"].exited.Round(100*time.Millisecond),
+				got["Go"].text[strings.LastIndex(got["Go"].text, "--- "):])
 		})
 	}
 }
