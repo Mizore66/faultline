@@ -50,10 +50,13 @@ Static HTML without CLI: open [`docs/self-incident-proof-preview.html`](self-inc
 git clone https://github.com/Mizore66/faultline.git
 cd faultline
 git checkout v0.1.10-buildweek
+corepack enable
 pnpm install --frozen-lockfile
 pnpm fl doctor --proof-ready
 pnpm fl judge-proof
 ```
+
+**Windows:** enable Corepack / install pnpm **before** any `npm install` in the repo. `prepare` runs `pnpm run build`; plain `npm install` fails with `'pnpm' is not recognized` if pnpm is missing (retained stranger friction: [samples/comprehension/2026-07-21-subject-b.md](samples/comprehension/2026-07-21-subject-b.md)). Prefer `pnpm.cmd` if ExecutionPolicy blocks `pnpm`.
 
 ## What each path is for
 
@@ -65,6 +68,6 @@ pnpm fl judge-proof
 
 ## Honesty
 
-- Codespaces is **scaffolding** until a stranger run is retained (note date/runner in [#148](https://github.com/Mizore66/faultline/issues/148)).  
+- Codespaces remains the preferred one-click judge path; a **local Windows** stranger setup + cold comprehension **PASS** is retained in [samples/comprehension/2026-07-21-subject-b.md](samples/comprehension/2026-07-21-subject-b.md) (DEMO-03). That sheet is **not** a Codespaces success claim.  
 - Do not invent a YouTube URL — video is [#162](https://github.com/Mizore66/faultline/issues/162).  
 - Related rehearsal: [demo-rehearsal.md](demo-rehearsal.md), Q&A [demo-qa.md](demo-qa.md), fallback [demo-fallback.md](demo-fallback.md), comprehension protocol [demo-comprehension-test.md](demo-comprehension-test.md).

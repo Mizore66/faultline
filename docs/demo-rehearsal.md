@@ -14,7 +14,7 @@ Run this before camera / judge sessions. Artifact-backed — see linked docs.
 - [ ] [Q&A](demo-qa.md) — answers point at artifacts only  
 - [ ] [Fallback](demo-fallback.md) — one-sentence switch rehearsed  
 - [ ] [Teleprompter](video-teleprompter.md) — hard rules; no fake `YOUTUBE_URL`  
-- [ ] [Comprehension protocol](demo-comprehension-test.md) — at least one real cold PASS retained (DEMO-03)
+- [x] [Comprehension protocol](demo-comprehension-test.md) — at least one real cold PASS retained (DEMO-03): [samples/comprehension/2026-07-21-subject-b.md](samples/comprehension/2026-07-21-subject-b.md)
 
 ## On-camera claims → on-screen artifact
 

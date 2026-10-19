@@ -30,7 +30,7 @@ people/calendar gates.
 | COH-11 | Publish `@mizore66/faultline` to npm | **done** — `@mizore66/faultline@0.1.1` via Trusted Publishing ([#166](https://github.com/Mizore66/faultline/issues/166)) |
 | SEC-08 | Signed release tag + cold verify transcript | **done** — SSH-signed `v0.1.8`/`v0.1.7` + macOS full-chain cold-reader in [security-chain.md](security-chain.md) ([#171](https://github.com/Mizore66/faultline/issues/171)); judging pin advancing to signed `v0.1.10-buildweek` |
 | DEMO-01 | Zero-install / rehearsal | **scaffolding done** — Codespaces + [demo-zero-install.md](demo-zero-install.md) + [demo-rehearsal.md](demo-rehearsal.md); stranger retention still open ([#148](https://github.com/Mizore66/faultline/issues/148)) |
-| DEMO-03 | 20-second comprehension test | **protocol ready** — [demo-comprehension-test.md](demo-comprehension-test.md); needs real cold PASS sheets ([#176](https://github.com/Mizore66/faultline/issues/176)) |
+| DEMO-03 | 20-second comprehension test | **PASS sheet retained** — [demo-comprehension-test.md](demo-comprehension-test.md); cold PASS [samples/comprehension/2026-07-21-subject-b.md](samples/comprehension/2026-07-21-subject-b.md) ([#176](https://github.com/Mizore66/faultline/issues/176) closed protocol; keep collecting) |
 | CDX-07 | Organic incident farming → PREVENTION_VERIFIED | **open** ([#173](https://github.com/Mizore66/faultline/issues/173)) |
 | CDX-09 | Codex thread bindings in proof-package provenance | **done** (`e35ab80`) — optional `codex.witnessDraftThreadId` / `codex.repairThreadId` on git/turn manifests |
 | C-1 | Submission freeze CI guard | **active** — `SUBMISSION_FROZEN` re-asserted after `v0.1.10-buildweek` pin cut; docs/tests/scripts-only until human lifts freeze |
@@ -60,7 +60,7 @@ people/calendar gates.
 | --- | --- | --- | --- |
 | [#171](https://github.com/Mizore66/faultline/issues/171) | SEC-08 | partner / cold machine | **done** — macOS full-chain cold-reader 2026-07-21 (see security-chain.md) |
 | [#148](https://github.com/Mizore66/faultline/issues/148) | DEMO-01 | people / demo | scaffolding landed; retain stranger Codespaces/npm run |
-| [#176](https://github.com/Mizore66/faultline/issues/176) | DEMO-03 | people / demo | protocol landed; need cold PASS sheet(s) |
+| [#176](https://github.com/Mizore66/faultline/issues/176) | DEMO-03 | people / demo | protocol landed; cold PASS retained 2026-07-21 (`subject-b`) |
 | [#149](https://github.com/Mizore66/faultline/issues/149) | EXT-01 | people | **done** — see [ext-01-security-review.md](ext-01-security-review.md) |
 | [#150](https://github.com/Mizore66/faultline/issues/150) | EXT-02 | people | 3–5 unassisted new-user runs |
 | [#151](https://github.com/Mizore66/faultline/issues/151) | EXT-03 | people | second external turn-path |
