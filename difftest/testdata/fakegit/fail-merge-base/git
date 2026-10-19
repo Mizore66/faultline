@@ -1,0 +1,15 @@
+#!/bin/sh
+# Fake git for difftest: `git merge-base --is-ancestor` fails with exit 128
+# and a fixed diagnostic (as a repository missing an object does, whose
+# exit status differs between git releases).
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+for a in "$@"; do
+  if [ "$a" = merge-base ]; then
+    printf 'error: planted merge-base failure\nfatal: could not parse commit\n' >&2
+    exit 128
+  fi
+done
+exec git "$@"

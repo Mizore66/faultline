@@ -1,0 +1,47 @@
+# Fake Docker
+
+Each directory here holds one `docker` (a POSIX `sh` script) that the writer
+replay (`difftest/writer_test.go`, `difftest/gen/gen-writers.ts`) puts on
+`PATH` after `difftest/testdata/recorder`, so no daemon is needed and both
+sides see the same results. A writer template selects one with
+`"fakeDocker": "<name>"`; the recorder logs every argv before execing it.
+
+Protocol:
+
+- `docker run ...`: the source directory is the `src=` of
+  `--mount type=bind,src=<dir>,...`; the script reads `<dir>/state.txt`
+  (trailing newlines dropped) and answers from its table.
+- `docker rm ...`: exit 0, no output.
+- anything else: exit 125 with `fake docker (<name>): unsupported command: <cmd>`
+  on stderr, so a new Docker call shows up in a golden instead of passing.
+
+| name | `run` behaviour |
+| --- | --- |
+| `pass-fail` | `state.txt` = `bad`: stdout `state=bad` and a `PREDICATE_FAIL` result line, stderr `witness failed`, exit 1. Otherwise stdout `state=<state>` and a `PREDICATE_PASS` result line, exit 0 (`difftest/gen/fixtures.ts` `deterministicDockerRunner`). |
+| `odd-bad` | fails the predicate when an odd number of the source's `state*.txt` files hold a line `bad` (a witness over several files, or over one hunk), otherwise passes; no `state=` line. |
+| `timeout` | stdout `started`, then `exec sleep 30` (the runner's timeout kills it). |
+| `flood` | `exec yes 'flood é'`: stdout without end (the output limit kills it). |
+| `daemon-down` | stderr `docker: Cannot connect to the Docker daemon ...`, exit 1. |
+| `missing-image` | stderr `docker: Error response from daemon: No such image: ...`, exit 125. |
+| `crash` | stdout `partial`, stderr `about to crash`, then dies of SIGTERM. Its `rm` fails: stderr `Error response from daemon: No such container: <name>`, exit 1. |
+| `setup-127` | stderr `/bin/sh: 1: node: not found`, exit 127. |
+| `forged-pass` | stdout a `PREDICATE_PASS` result line, exit 1. |
+| `compile-error` | stderr `witness.mjs:3` and `SyntaxError: Unexpected token '}'`, exit 1. |
+| `timeout-detached` | exits 0 at once, leaving a background `sleep 3` that holds stdout and stderr: the runner's timeout fires after docker exited 0 (TIMEOUT, exit code 0), and the container is force-removed because of the timeout alone. |
+| `rm-hang` | like `timeout`, but `rm` runs `exec sleep 30`: the runner kills it after its 5 s cleanup limit and reports `FaultLine timed out while force-removing its named container.` |
+| `vanish` | for a private copy only: `run` deletes the script, prints `started` and dies of SIGKILL, so `docker rm --force` cannot be spawned (`FaultLine could not force-remove its named container: spawn docker ENOENT`). |
+| `flaky-pass` | for a private copy only: `odd-bad`, except that every passing `run` after the first two dies of SIGTERM after printing `partial` (an unresolved run); it counts passes in a file beside the script. |
+| `flaky-daemon` | the first three runs play `odd-bad`, every later one is the `daemon-down` refusal; it counts runs in `$FAULTLINE_FAKE_DOCKER_STATE` (a writer case sets it to `<TMP>`) or else beside a private copy of the script. |
+| `timeout-once` | the first `run` of a case leaves a marker in `$TMPDIR`, prints `started` and then `exec sleep 300`, past the default 120 s sandbox timeout (`investigate git` passes no limits, so the witness's `timeoutSeconds` does not reach the sandbox); every later `run` plays back `pass-fail`. The runner's timeout kills it and force-removes the container (`docker rm --force`). |
+| `exact-limit` | `pass-fail`, but a passing `run` writes exactly 1,048,576 bytes (the default `maxOutputBytes`) to stdout, ending in the `PREDICATE_PASS` result line: output at the limit is not truncated. |
+| `pair-bad` | fails the predicate only when both files of a pair hold a line `bad`, otherwise passes; no `state=` line (a two-file interaction among the 25 files of `git-many-files`). The pair is `$FAULTLINE_FAKE_PAIR` (`"02 15"`: `state02.txt` and `state15.txt`), `13 14` by default; pairs that split the files differently take ddmin through its subset and its complement branch. |
+| `broken-state` | `pass-fail`, except that `state.txt` = `broken` plays `compile-error` (stderr `witness.mjs:3` and `SyntaxError: Unexpected token '}'`, exit 1): an unstable state between a PASS and a FAIL state. |
+| `slow` | `pass-fail` after `sleep 1` on `run`, for the release-build clock check (`difftest/release`). |
+| `tmpdir-swap` | moves `$TMPDIR` to `$TMPDIR.moved` and leaves an empty file in its place (once), then stdout a `PREDICATE_PASS` result line, exit 0: fl's cleanup of its temporary root then fails `lstat` with ENOTDIR. |
+
+None of them reads `state.txt` except `pass-fail`, `odd-bad`, `pair-bad`, `broken-state` and the three that play `pass-fail` back. Long-running children are
+started with `exec`, so a SIGKILL to the pid the runner spawned (the
+recorder, which also execs) reaches the process holding the pipes. Keep the
+outputs fixed text: goldens compare them byte for byte.
+`difftest/sandbox_live_test.go` runs each one through the native runner on
+both sides.

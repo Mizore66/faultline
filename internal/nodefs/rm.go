@@ -141,6 +141,135 @@ func (r remover) fixWinEPERM(raw, display string, original error, depth int) err
 	return unlinkFile(raw, display)
 }
 
+// RemoveAllAsync is fs/promises.rm(path, { recursive: true, force: true })
+// in Node 22. validateRmOptions lstat()s the path first: ENOENT resolves,
+// and any other failure rejects with that lstat error, where rimrafSync
+// would go on to unlink (round 7 #12). Then the callback rimraf runs, which
+// differs from rimrafSync in three ways: it starts on every child of a
+// directory at once, so the children after a failing one are still
+// removed (it keeps the first error here; Node reports whichever failure
+// completes first); a failed rmdir reports its own error rather than the
+// unlink error that led to it; and on Windows an lstat EPERM ends with
+// fixWinEPERM's result. It has no depth limit (no recursion on the JS
+// stack).
+// Port of node v22 lib/internal/fs/promises.js rm and lib/internal/fs/rimraf.js rimraf.
+func RemoveAllAsync(path string) error {
+	raw := sysPath(path)
+	if _, err := statRaw(raw, false); err != nil {
+		if codeOf(err) == "ENOENT" {
+			return nil
+		}
+		return wrap(err, "lstat", path)
+	}
+	return rimrafAsync(raw, path)
+}
+
+// rimrafAsync is rimraf: _rimraf, with ENOENT counting as success.
+func rimrafAsync(raw, display string) error {
+	err := rimrafAsyncOnce(raw, display)
+	if e, ok := err.(*Error); ok && e.Code == "ENOENT" {
+		return nil
+	}
+	return err
+}
+
+// rimrafAsyncOnce is _rimraf.
+func rimrafAsyncOnce(raw, display string) error {
+	info, err := statRaw(raw, false)
+	if err != nil {
+		switch codeOf(err) {
+		case "ENOENT":
+			return nil
+		case "EPERM":
+			if isWindows {
+				return fixWinEPERMAsync(raw, display, wrap(err, "lstat", display))
+			}
+		}
+	} else if info.IsDir() {
+		return rmdirAsync(raw, display, nil)
+	}
+	if err := unlinkRaw(raw); err != nil {
+		e := wrap(err, "unlink", display)
+		switch e.(*Error).Code {
+		case "ENOENT":
+			return nil
+		case "EISDIR":
+			return rmdirAsync(raw, display, e)
+		case "EPERM":
+			if isWindows {
+				return fixWinEPERMAsync(raw, display, e)
+			}
+			return rmdirAsync(raw, display, e)
+		}
+		return e
+	}
+	return nil
+}
+
+// rmdirAsync is _rmdir: ENOTDIR gives back original (nil when there was
+// none, which rimraf takes as success).
+func rmdirAsync(raw, display string, original error) error {
+	err := rmdirRaw(raw)
+	if err == nil {
+		return nil
+	}
+	e := wrap(err, "rmdir", display)
+	switch e.(*Error).Code {
+	case "ENOTEMPTY", "EEXIST", "EPERM":
+		return rmchildrenAsync(raw, display)
+	case "ENOTDIR":
+		return original
+	}
+	return e
+}
+
+// rmchildrenAsync is _rmchildren: every child is removed, then the
+// directory, unless a child failed.
+func rmchildrenAsync(raw, display string) error {
+	names, err := readRawNames(raw)
+	if err != nil {
+		return wrap(err, "scandir", display)
+	}
+	var first error
+	for _, name := range names {
+		child := raw + rmSep + name
+		if err := rimrafAsync(child, DecodeUTF8([]byte(child))); err != nil && first == nil {
+			first = err
+		}
+	}
+	if first != nil {
+		return first
+	}
+	if err := rmdirRaw(raw); err != nil {
+		return wrap(err, "rmdir", display)
+	}
+	return nil
+}
+
+// fixWinEPERMAsync is fixWinEPERM.
+func fixWinEPERMAsync(raw, display string, original error) error {
+	if err := os.Chmod(raw, 0o666); err != nil {
+		if codeOf(err) == "ENOENT" {
+			return nil
+		}
+		return original
+	}
+	info, err := statRaw(raw, true)
+	if err != nil {
+		if codeOf(err) == "ENOENT" {
+			return nil
+		}
+		return original
+	}
+	if info.IsDir() {
+		return rmdirAsync(raw, display, original)
+	}
+	if err := unlinkRaw(raw); err != nil {
+		return wrap(err, "unlink", display)
+	}
+	return nil
+}
+
 // readRawNames is readdirSync(path, "buffer"): libuv sorts names on Unix and
 // returns directory order on Windows.
 func readRawNames(raw string) ([]string, error) {

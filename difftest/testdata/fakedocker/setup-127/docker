@@ -1,0 +1,12 @@
+#!/bin/sh
+# Fake Docker "setup-127" (README.md): `run` fails as /bin/sh does when the
+# witness command is missing, exit 127. `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  printf '/bin/sh: 1: node: not found\n' >&2
+  exit 127
+  ;;
+esac
+printf 'fake docker (setup-127): unsupported command: %s\n' "$1" >&2
+exit 125

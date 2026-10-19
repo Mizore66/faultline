@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "faultline.standing-approval-policy.v1",
+  "policyId": "pt-count",
+  "frozenBy": "ops@example.test",
+  "frozenAt": "2026-07-16T11:00:00.000Z",
+  "allowedCommands": [
+    "node witness.mjs"
+  ],
+  "allowedOverlayTemplates": [
+    {
+      "path": "a.mjs",
+      "bytesBase64": ""
+    },
+    {
+      "path": "witness.mjs",
+      "bytesBase64": "ZXhwb3J0IGNvbnN0IGZhdWx0TGluZVdpdG5lc3MgPSAnYXBwcm92ZWQtZXhhY3QtYnl0ZXMnOwo="
+    }
+  ],
+  "maxTimeoutSeconds": 60,
+  "network": "disabled",
+  "credentials": "redacted",
+  "policyDigest": "sha256:8f0746929f30d370a8cc7072765eacd8e2f5b70d996303f14a5893628915d4c5"
+}

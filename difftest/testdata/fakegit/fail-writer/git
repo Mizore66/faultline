@@ -1,0 +1,23 @@
+#!/bin/sh
+# Fake git for difftest/write_live_test.go: the first git call whose
+# subcommand (after any -C <dir>) and first argument are those of the
+# directory's name suffix fails with exit 128. The suffix is chosen by
+# copying this script into a directory named fail-writer-<sub>[-<arg>]
+# (show-toplevel, show-object-format, rev-list, clone, update-ref,
+# bundle-create). Everything else runs the real git (PATH without this
+# directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+want=${here##*/fail-writer-}
+if [ "$1" = -C ]; then c1=$3; c2=$4; else c1=$1; c2=$2; fi
+case "$want" in
+show-toplevel) [ "$c1" = rev-parse ] && [ "$c2" = --show-toplevel ] && hit=1 ;;
+show-object-format) [ "$c1" = rev-parse ] && [ "$c2" = --show-object-format ] && hit=1 ;;
+rev-list) [ "$c1" = rev-list ] && hit=1 ;;
+clone) [ "$c1" = clone ] && hit=1 ;;
+update-ref) [ "$c1" = update-ref ] && hit=1 ;;
+bundle-create) [ "$c1" = bundle ] && [ "$c2" = create ] && hit=1 ;;
+esac
+if [ -n "$hit" ]; then echo "fatal: planted $want failure" >&2; exit 128; fi
+exec git "$@"

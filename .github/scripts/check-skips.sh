@@ -14,6 +14,9 @@ fail=0
 # Failed tests become annotations too: job logs need repository access,
 # annotations do not.
 grep -E -- '--- FAIL: ' "$log" | sed 's/^ *//' | head -20 | while read -r line; do echo "::error title=test failed::$line"; done
+# What the long live tests compared (liveSummary), so a check run shows
+# they ran in full.
+grep -oE 'LIVE-SUMMARY .*' "$log" | head -10 | while read -r line; do echo "::notice title=live summary::${line#LIVE-SUMMARY }"; done
 unexpected=$(grep -oE -- '--- SKIP: [^ ]+' "$log" | sed 's/^--- SKIP: //' | grep -vE "$allowed" || true)
 for name in $unexpected; do echo "::error title=unexpected skip::$name"; fail=1; done
 if grep -q 'no tests to run' "$log"; then

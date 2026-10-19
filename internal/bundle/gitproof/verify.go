@@ -243,7 +243,15 @@ func newStringSet(values ...string) *stringSet {
 }
 
 // Verify ports verifyGitInvestigationProofBundle (src/git-proof-bundle.ts:1142).
-func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Result) {
+func Verify(directory, expectedRoot string, rootProvided bool) bundle.Result {
+	result, _ := VerifyWithManifest(directory, expectedRoot, rootProvided)
+	return result
+}
+
+// VerifyWithManifest is Verify plus the result's `manifest` member: the
+// schema-parsed manifest, or an Undefined value when it did not parse (the
+// caught-exception path keeps a manifest parsed before the throw, as TS does).
+func VerifyWithManifest(directory, expectedRoot string, rootProvided bool) (result bundle.Result, parsedManifest jsjson.Value) {
 	defer jsjson.UseCallSite(jsjson.SiteGitProof)()
 	var errs []string
 	var rootDigest *string
@@ -258,7 +266,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 
 	root := nodefs.Resolve(directory)
 	if !nodefs.Exists(root) {
-		return bundle.Result{Errors: []string{"Git proof bundle directory does not exist"}, ExternalRootStatus: status}
+		return bundle.Result{Errors: []string{"Git proof bundle directory does not exist"}, ExternalRootStatus: status}, parsedManifest
 	}
 	assertNoLinksOrSpecialFiles(root)
 	hashesPath := nodefs.Join(root, "hashes.txt")
@@ -312,6 +320,8 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	manifest, manifestIssues, haveManifest := schema.Parse(GitProofBundleManifestSchema, manifestPayload)
 	if !haveManifest {
 		errs = append(errs, jsexc.Concat("manifest schema validation failed: ", schema.ErrorMessage(manifestIssues)))
+	} else {
+		parsedManifest = manifest
 	}
 	investigation, investigationIssues, haveResult := schema.Parse(GitInvestigationResultSchema, investigationPayload)
 	if !haveResult {
@@ -413,7 +423,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	}
 	checked := len(catalog.keys)
 	if !haveManifest {
-		return bundle.Result{CheckedFiles: checked, Errors: errs, RootDigest: rootDigest, ExternalRootStatus: status}
+		return bundle.Result{CheckedFiles: checked, Errors: errs, RootDigest: rootDigest, ExternalRootStatus: status}, parsedManifest
 	}
-	return bundle.Result{Valid: len(errs) == 0, CheckedFiles: checked, Errors: errs, RootDigest: rootDigest, ExternalRootStatus: status}
+	return bundle.Result{Valid: len(errs) == 0, CheckedFiles: checked, Errors: errs, RootDigest: rootDigest, ExternalRootStatus: status}, parsedManifest
 }

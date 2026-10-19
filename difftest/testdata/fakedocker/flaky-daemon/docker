@@ -1,0 +1,26 @@
+#!/bin/sh
+# Fake Docker "flaky-daemon" (README.md): odd-bad for the first three runs
+# (the minimization baseline, the full patch and one removal), then the
+# daemon is down (stderr `docker: Cannot connect to the Docker daemon ...`,
+# exit 1): certification ends SANDBOX_UNAVAILABLE. The count is kept in
+# $FAULTLINE_FAKE_DOCKER_STATE (a writer case sets it to <TMP>), or else in
+# a file beside the script, so each side runs a private copy
+# (difftest/minimize_live_test.go). `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  here=$(dirname "$0")
+  counter="${FAULTLINE_FAKE_DOCKER_STATE:-$here}/flaky-daemon-runs"
+  runs=$(cat "$counter" 2>/dev/null || echo 0)
+  runs=$((runs + 1))
+  printf '%s' "$runs" > "$counter"
+  if [ "$runs" -gt 3 ]; then
+    printf 'docker: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n' >&2
+    exit 1
+  fi
+  if [ -x "$here/odd-bad" ]; then exec "$here/odd-bad" "$@"; fi
+  exec "$here/../odd-bad/docker" "$@"
+  ;;
+esac
+printf 'fake docker (flaky-daemon): unsupported command: %s\n' "$1" >&2
+exit 125

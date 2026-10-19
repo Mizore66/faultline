@@ -1,0 +1,42 @@
+#!/bin/sh
+# Fake Docker "flaky-pass" (README.md): odd-bad, except that every passing
+# `run` after the first two (the minimization baseline and one more) is an
+# unresolved crash (stdout `partial`, death by SIGTERM): the search reaches
+# its certification or removal steps with UNRESOLVED outcomes. The count is
+# kept in a file beside the script, so each side runs a private copy
+# (difftest/minimize_live_test.go). `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  src=
+  prev=
+  for arg in "$@"; do
+    if [ "$prev" = "--mount" ]; then
+      case "$arg" in type=bind,src=*) src=${arg#type=bind,src=}; src=${src%%,*} ;; esac
+    fi
+    prev=$arg
+  done
+  count=0
+  for f in "$src"/state*.txt; do
+    [ -f "$f" ] || continue
+    if grep -q '^bad$' "$f"; then count=$((count + 1)); fi
+  done
+  if [ $((count % 2)) -eq 1 ]; then
+    printf 'FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_FAIL"}\n'
+    printf 'witness failed' >&2
+    exit 1
+  fi
+  counter="$(dirname "$0")/passes"
+  passes=$(cat "$counter" 2>/dev/null || echo 0)
+  passes=$((passes + 1))
+  printf '%s' "$passes" > "$counter"
+  if [ "$passes" -gt 2 ]; then
+    printf 'partial\n'
+    kill -TERM $$
+  fi
+  printf 'FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n'
+  exit 0
+  ;;
+esac
+printf 'fake docker (flaky-pass): unsupported command: %s\n' "$1" >&2
+exit 125

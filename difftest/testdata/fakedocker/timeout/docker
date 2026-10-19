@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fake Docker "timeout" (README.md): `run` prints one line and then never
+# finishes; exec keeps the pid, so the runner's SIGKILL reaches the process
+# holding the pipes. `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  printf 'started\n'
+  exec sleep 30
+  ;;
+esac
+printf 'fake docker (timeout): unsupported command: %s\n' "$1" >&2
+exit 125

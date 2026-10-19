@@ -1,0 +1,30 @@
+#!/bin/sh
+# Fake Docker "pair-bad" (difftest/testdata/fakedocker/README.md): `run`
+# fails the predicate only when both files of a pair in the bind-mounted
+# source hold a line `bad` (a two-file interaction among many changed
+# files), otherwise passes. The pair is $FAULTLINE_FAKE_PAIR ("02 15": the
+# files state02.txt and state15.txt), 13 and 14 by default. `rm` succeeds
+# silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  src=
+  prev=
+  for arg in "$@"; do
+    if [ "$prev" = "--mount" ]; then
+      case "$arg" in type=bind,src=*) src=${arg#type=bind,src=}; src=${src%%,*} ;; esac
+    fi
+    prev=$arg
+  done
+  set -- ${FAULTLINE_FAKE_PAIR:-13 14}
+  if grep -q '^bad$' "$src/state$1.txt" 2>/dev/null && grep -q '^bad$' "$src/state$2.txt" 2>/dev/null; then
+    printf 'FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_FAIL"}\n'
+    printf 'witness failed' >&2
+    exit 1
+  fi
+  printf 'FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n'
+  exit 0
+  ;;
+esac
+printf 'fake docker (pair-bad): unsupported command: %s\n' "$1" >&2
+exit 125

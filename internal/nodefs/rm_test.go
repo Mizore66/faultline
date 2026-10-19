@@ -5,6 +5,7 @@ package nodefs
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -71,5 +72,61 @@ func TestRemoveAllDepth(t *testing.T) {
 	}
 	if _, err := os.Lstat(root); !os.IsNotExist(err) {
 		t.Fatalf("root still exists: %v", err)
+	}
+}
+
+// Expectations were captured from Node 22's fs/promises.rm(dir, { recursive:
+// true, force: true }) as an unprivileged user on the same trees: it lstats
+// the path first (rmSync unlinks instead), and it goes on with the other
+// children after one fails (round 7 #12).
+func TestRemoveAllAsyncMatchesNodePromisesRm(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission errors need an unprivileged user")
+	}
+	dir := t.TempDir()
+	if err := RemoveAllAsync(filepath.Join(dir, "missing")); err != nil {
+		t.Fatalf("ENOENT must be ignored: %v", err)
+	}
+	// An unsearchable parent: lstat fails, nothing else is tried.
+	p := filepath.Join(dir, "p")
+	os.MkdirAll(filepath.Join(p, "x"), 0o755)
+	os.Chmod(p, 0)
+	err := RemoveAllAsync(filepath.Join(p, "x"))
+	if err == nil || err.Error() != "EACCES: permission denied, lstat '"+p+"/x'" {
+		t.Errorf("unsearchable parent: %v", err)
+	}
+	if err := RemoveAll(filepath.Join(p, "x")); err == nil || err.Error() != "EACCES: permission denied, unlink '"+p+"/x'" {
+		t.Errorf("rmSync form: %v", err)
+	}
+	os.Chmod(p, 0o755)
+	// A child that cannot be removed: its siblings still go.
+	q := filepath.Join(dir, "q")
+	for _, d := range []string{"q/a/locked", "q/b"} {
+		os.MkdirAll(filepath.Join(dir, d), 0o755)
+	}
+	for _, f := range []string{"q/a/locked/f", "q/b/y", "q/z"} {
+		os.WriteFile(filepath.Join(dir, f), nil, 0o644)
+	}
+	os.Chmod(filepath.Join(q, "a", "locked"), 0o500)
+	defer os.Chmod(filepath.Join(q, "a", "locked"), 0o700)
+	err = RemoveAllAsync(q)
+	if err == nil || err.Error() != "EACCES: permission denied, unlink '"+q+"/a/locked/f'" {
+		t.Errorf("locked child: %v", err)
+	}
+	var left []string
+	filepath.WalkDir(q, func(path string, _ os.DirEntry, _ error) error {
+		rel, _ := filepath.Rel(dir, path)
+		left = append(left, rel)
+		return nil
+	})
+	if strings.Join(left, " ") != "q q/a q/a/locked q/a/locked/f" {
+		t.Errorf("left behind: %v", left)
+	}
+	os.Chmod(filepath.Join(q, "a", "locked"), 0o700)
+	if err := RemoveAllAsync(q); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(q); !os.IsNotExist(err) {
+		t.Fatalf("tree left behind: %v", err)
 	}
 }

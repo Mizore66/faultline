@@ -1,3 +1,5 @@
+//go:build faultline_test
+
 package difftest
 
 import (
@@ -7,7 +9,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/gen"
@@ -15,7 +19,9 @@ import (
 	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/ledgerbind"
 	"github.com/Mizore66/faultline/internal/schema"
+	"github.com/Mizore66/faultline/internal/witnessresult"
 )
 
 // seedTexts reads files relative to difftest/testdata/bases.
@@ -76,12 +82,26 @@ func liveCompare(t *testing.T, op string, next func(c *oracle.Client, r *rand.Ra
 	return outputs.String()
 }
 
-// requireReached fails for each error literal in file (relative to
-// internal/bundle) that no TS result produced: the live test is the golden
-// gate for that file (liveGatedFiles in coverage_test.go).
+// requireReached fails for each error literal in file (relative to the
+// module root) that neither a TS result in outputs nor a committed golden
+// produced: the live test is the golden gate for that file (liveGatedFiles
+// in coverage_test.go).
 func requireReached(t *testing.T, file, outputs string) {
 	t.Helper()
-	for lit, pos := range errorLiterals(t, filepath.Join(oracle.RepoRoot(t), "internal", "bundle", filepath.FromSlash(file))) {
+	if liveGatedFiles[file] == "" {
+		t.Errorf("%s is not in liveGatedFiles", file)
+	}
+	repo := oracle.RepoRoot(t)
+	// FAULTLINE_DUMP_LIVE_OUTPUTS=<dir> keeps what the live test compared,
+	// to audit unreachableLiterals against it.
+	if dir := os.Getenv("FAULTLINE_DUMP_LIVE_OUTPUTS"); dir != "" {
+		name := strings.ReplaceAll(file, "/", "_") + ".txt"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(outputs), 0o644); err != nil {
+			t.Error(err)
+		}
+	}
+	outputs += goldenText(t, repo)
+	for lit, pos := range errorLiterals(t, filepath.Join(repo, filepath.FromSlash(file))) {
 		if _, ok := unreachableLiterals[lit]; ok {
 			continue
 		}
@@ -93,6 +113,46 @@ func requireReached(t *testing.T, file, outputs string) {
 			t.Errorf("%s: no generated input reached %q", pos, lit)
 		}
 	}
+}
+
+// liveSummary logs how much a long live test compared, marked so that CI
+// turns it into a check-run notice (proof that the test ran in full).
+func liveSummary(t *testing.T, format string, args ...any) {
+	t.Helper()
+	top, _, _ := strings.Cut(t.Name(), "/")
+	t.Logf("LIVE-SUMMARY %s: "+format, append([]any{top}, args...)...)
+}
+
+// liveOutputs collects, per top-level test, the TS results a live test
+// compared (recordOutput), for requireReached.
+var (
+	liveOutputsMu sync.Mutex
+	liveOutputs   = map[string]*strings.Builder{}
+)
+
+// recordOutput adds a compared TS result to t's top-level test's outputs.
+func recordOutput(t *testing.T, s string) {
+	top, _, _ := strings.Cut(t.Name(), "/")
+	liveOutputsMu.Lock()
+	defer liveOutputsMu.Unlock()
+	b := liveOutputs[top]
+	if b == nil {
+		b = &strings.Builder{}
+		liveOutputs[top] = b
+	}
+	b.WriteString(s)
+	b.WriteByte('\n')
+}
+
+// recordedOutputs is what recordOutput collected for t's top-level test.
+func recordedOutputs(t *testing.T) string {
+	top, _, _ := strings.Cut(t.Name(), "/")
+	liveOutputsMu.Lock()
+	defer liveOutputsMu.Unlock()
+	if b := liveOutputs[top]; b != nil {
+		return b.String()
+	}
+	return ""
 }
 
 // oracleText calls an oracle op that returns a string.
@@ -131,7 +191,7 @@ func TestLiveWitness(t *testing.T) {
 		}
 		return args + "}", canonicalOf(gitproof.VerifyFrozenWitnessRecord(value, expected, provided).JSON())
 	})
-	requireReached(t, "gitproof/witness.go", outputs+liveWitnessOverlays(t))
+	requireReached(t, "internal/bundle/gitproof/witness.go", outputs+liveWitnessOverlays(t))
 }
 
 // liveWitnessOverlays compares multi-overlay witnesses built by frozen TS
@@ -244,10 +304,95 @@ func TestLiveLedger(t *testing.T) {
 		value, _ := jsjson.Parse(text)
 		return `{"text":` + jsjson.Quote(text) + "}", canonicalOf(gitproof.VerifyCodexLifecycleLedger(value).JSON())
 	})
-	requireReached(t, "gitproof/ledger.go", outputs)
+	requireReached(t, "internal/bundle/gitproof/ledger.go", outputs)
 	if !strings.Contains(rich, "TURN_TREE_SNAPSHOT") || !strings.Contains(rich, "TOOL_USE_STARTED") || !strings.Contains(rich, "SESSION_BASELINE_SNAPSHOT") {
 		t.Fatalf("rich ledger seed lacks snapshot or tool-use events")
 	}
+}
+
+// Ledger-bound investigations: the record `fl ledger bind` wrote, then
+// deeply corrupted copies. Half are re-signed by TS (bindingDigest
+// recomputed) so the ledger, investigation and state-binding checks run
+// behind a matching digest. The expected digest is absent, the record's own,
+// malformed, or a well-formed digest of something else.
+func TestLiveLedgerBinding(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(oracle.RepoRoot(t), "difftest", "testdata", "scenarios", "ledger-bound", "tree", "bound.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := string(raw)
+	var extras []string
+	outputs := liveCompare(t, "verifyLedgerBoundInvestigation", func(c *oracle.Client, r *rand.Rand, i int) (string, string) {
+		text := seed
+		if extras == nil {
+			extras = ledgerBoundDuplicates(t, c, seed)
+		}
+		if i > 0 && i <= len(extras) {
+			text = extras[i-1]
+		} else if i > 0 {
+			text = gen.CorruptDeep(r, text)
+			if r.IntN(2) == 0 {
+				text = oracleText(t, c, "resignBound", `{"text":`+jsjson.Quote(text)+"}")
+			}
+		}
+		value, _ := jsjson.Parse(text)
+		expected, provided := "", false
+		switch r.IntN(4) {
+		case 1:
+			expected, provided = value.Get("bindingDigest").Str(), true
+		case 2:
+			expected, provided = "nope", true
+		case 3:
+			expected, provided = "sha256:"+strings.Repeat("0", 64), true
+		}
+		args := `{"text":` + jsjson.Quote(text)
+		if provided {
+			args += `,"expected":` + jsjson.Quote(expected)
+		}
+		return args + "}", canonicalOf(ledgerbind.Verify(value, expected, provided))
+	})
+	requireReached(t, "internal/ledgerbind/ledgerbind.go", outputs)
+}
+
+// ledgerBoundDuplicates are two re-signed variants random corruption does not
+// reach: the investigation's last state repeated (duplicate Git state, and a
+// checkpoint that matches two states), and a checkpoint event repeated in
+// the ledger (duplicate checkpoint facts).
+func ledgerBoundDuplicates(t *testing.T, c *oracle.Client, seed string) []string {
+	clone := func(v jsjson.Value) jsjson.Value {
+		out, err := jsjson.Parse(jsjson.Stringify(v))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	states := func() string {
+		v, _ := jsjson.Parse(seed)
+		list := v.Get("investigation", "states").Items()
+		dup := clone(list[len(list)-1])
+		dup.Obj().Set("index", jsjson.MakeNumber(float64(len(list))))
+		v.Get("investigation").Obj().Set("states", jsjson.MakeArray(append(slices.Clone(list), dup)))
+		return jsjson.Stringify(v)
+	}()
+	events := func() string {
+		v, _ := jsjson.Parse(seed)
+		list := v.Get("ledger", "events").Items()
+		for _, event := range list {
+			if event.Get("event", "type").Str() == "WORKTREE_CHECKPOINT" {
+				dup := clone(event)
+				dup.Obj().Set("sequence", jsjson.MakeNumber(float64(len(list)+1)))
+				dup.Obj().Set("eventId", jsjson.MakeString("duplicate-checkpoint"))
+				v.Get("ledger").Obj().Set("events", jsjson.MakeArray(append(slices.Clone(list), dup)))
+				break
+			}
+		}
+		return jsjson.Stringify(v)
+	}()
+	var out []string
+	for _, text := range []string{states, events} {
+		out = append(out, oracleText(t, c, "resignBound", `{"text":`+jsjson.Quote(text)+"}"))
+	}
+	return out
 }
 
 // Sandbox seeds: the committed Docker audits plus TS-signed legacy v1,
@@ -333,7 +478,7 @@ func TestLiveSandbox(t *testing.T) {
 		}
 		return `{"text":` + jsjson.Quote(text) + "}", canonicalOf(jsjson.MakeArray(items))
 	})
-	requireReached(t, "gitproof/sandbox.go", outputs)
+	requireReached(t, "internal/bundle/gitproof/sandbox.go", outputs)
 	t.Logf("accepted audits among generated inputs: %v", accepted)
 	for _, kind := range []string{"DOCKER_ISOLATED", "UNSAFE_LOCAL"} {
 		if accepted[kind] == 0 {
@@ -349,4 +494,120 @@ func envTag(text string) string {
 		return "+env"
 	}
 	return ""
+}
+
+// Witness-result stdouts: random mixes of marker and bare lines, valid and
+// broken JSON, extra keys, long details (counted in UTF-16 units), CRLF, and
+// duplicate or conflicting results. The three witness-result ops are compared.
+func TestLiveWitnessResult(t *testing.T) {
+	outcomes := []string{"PREDICATE_PASS", "PREDICATE_FAIL", "INCOMPATIBLE_STATE", "HARNESS_ERROR", "INFRASTRUCTURE_ERROR", "BOGUS", ""}
+	detailOf := func(r *rand.Rand) string {
+		switch r.IntN(6) {
+		case 0:
+			return `"detail":"` + strings.Repeat("a", 4094+r.IntN(5)) + `"`
+		case 1:
+			return `"detail":"` + strings.Repeat("\U0001F600", 2046+r.IntN(5)) + `"`
+		case 2:
+			return `"detail":"x\ud800y\n"`
+		case 3:
+			return `"detail":7`
+		case 4:
+			return `"detail":"` + string(rune('a'+r.IntN(3))) + `"`
+		}
+		return ""
+	}
+	lineOf := func(r *rand.Rand) string {
+		protocol := `"protocol":"faultline.witness-result.v1"`
+		if r.IntN(12) == 0 {
+			protocol = `"protocol":"faultline.witness-result.v2"`
+		}
+		parts := []string{protocol, `"outcome":"` + outcomes[r.IntN(len(outcomes))] + `"`}
+		if d := detailOf(r); d != "" {
+			parts = append(parts, d)
+		}
+		if r.IntN(10) == 0 {
+			parts = append(parts, `"extra":1`)
+		}
+		if r.IntN(15) == 0 {
+			parts = slices.Delete(parts, 0, 1)
+		}
+		r.Shuffle(len(parts), func(i, j int) { parts[i], parts[j] = parts[j], parts[i] })
+		body := "{" + strings.Join(parts, ",") + "}"
+		switch r.IntN(8) {
+		case 0:
+			body = body[:len(body)-1]
+		case 1:
+			body = "  " + body + "\t"
+		case 2:
+			body = "[" + body + "]"
+		}
+		switch r.IntN(4) {
+		case 0:
+			return "FAULTLINE_WITNESS_RESULT=" + body
+		case 1:
+			return "FAULTLINE_WITNESS_RESULT= " + body
+		case 2:
+			return "x " + body
+		}
+		return body
+	}
+	toValue := func(p witnessresult.Parsed) jsjson.Value {
+		o := jsjson.NewObj()
+		o.Set("ok", jsjson.MakeBool(p.Ok))
+		switch {
+		case !p.Ok:
+			o.Set("reason", jsjson.MakeString(p.Reason))
+		case p.Result == nil:
+			o.Set("result", jsjson.MakeNull())
+		default:
+			r := jsjson.NewObj()
+			r.Set("protocol", jsjson.MakeString(witnessresult.Protocol))
+			r.Set("outcome", jsjson.MakeString(p.Result.Outcome))
+			if p.Result.HasDetail {
+				r.Set("detail", jsjson.MakeString(p.Result.Detail))
+			}
+			o.Set("result", jsjson.MakeObject(r))
+		}
+		return jsjson.MakeObject(o)
+	}
+	liveCompare(t, "resolveWitnessResultFromStdout", func(c *oracle.Client, r *rand.Rand, i int) (string, string) {
+		var lines []string
+		for n := r.IntN(4); n >= 0; n-- {
+			switch r.IntN(5) {
+			case 0:
+				lines = append(lines, "state=bad")
+			case 1:
+				lines = append(lines, "")
+			default:
+				line := lineOf(r)
+				lines = append(lines, line)
+				if r.IntN(4) == 0 {
+					lines = append(lines, line)
+				}
+			}
+		}
+		stdout := strings.Join(lines, []string{"\n", "\r\n"}[r.IntN(2)])
+		if r.IntN(2) == 0 {
+			stdout += "\n"
+		}
+		args := `{"stdout":` + jsjson.Quote(stdout) + "}"
+		p := witnessresult.Resolve(stdout)
+		if p.Ok && p.Result != nil {
+			exit := r.IntN(3)
+			got := canonicalOf(jsjson.MakeBool(witnessresult.ConsistentWithExitCode(*p.Result, exit)))
+			want := oracleText(t, c, "witnessResultConsistentWithExitCode", `{"outcome":"`+p.Result.Outcome+`","exitCode":`+strconv.Itoa(exit)+"}")
+			if got != want {
+				t.Fatalf("consistent(%s,%d): got %s want %s", p.Result.Outcome, exit, got, want)
+			}
+			cl := witnessresult.Classify(p.Result.Outcome)
+			o := jsjson.NewObj()
+			o.Set("verdict", jsjson.MakeString(cl.Verdict))
+			o.Set("reason", jsjson.MakeString(cl.Reason))
+			want = oracleText(t, c, "classifyFromWitnessResult", `{"outcome":"`+p.Result.Outcome+`"}`)
+			if got := canonicalOf(jsjson.MakeObject(o)); got != want {
+				t.Fatalf("classify(%s): got %s want %s", p.Result.Outcome, got, want)
+			}
+		}
+		return args, canonicalOf(toValue(p))
+	})
 }

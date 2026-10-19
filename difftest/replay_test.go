@@ -1,3 +1,5 @@
+//go:build faultline_test
+
 package difftest
 
 import (
@@ -61,7 +63,7 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS == "windows" {
 		flBinary += ".exe"
 	}
-	buildArgs := []string{"build", "-o", flBinary}
+	buildArgs := []string{"build", "-tags", "faultline_test", "-o", flBinary}
 	coverDir := ""
 	if os.Getenv("FAULTLINE_COVERAGE_GATE") == "1" {
 		coverDir, _ = os.MkdirTemp("", "faultline-cover-")
@@ -109,9 +111,10 @@ func runFl(t *testing.T, repo string, env map[string]string, args ...string) (st
 	}
 }
 
-func runFlOnce(t *testing.T, repo string, env map[string]string, args ...string) (string, string, int) {
+// runFlOnce runs fl once in dir with env added to the test's environment.
+func runFlOnce(t *testing.T, dir string, env map[string]string, args ...string) (string, string, int) {
 	cmd := exec.Command(flBinary, args...)
-	cmd.Dir = repo
+	cmd.Dir = dir
 	cmd.Env = os.Environ()
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -203,7 +206,11 @@ func TestGoldenReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range goldenEntries {
-		goldens = append(goldens, strings.TrimSuffix(e.Name(), ".jsonl"))
+		// writers.jsonl holds the writer replay's goldens (writer_test.go).
+		// secret-corpus.jsonl is the secret-scanner corpus golden (corpus_test.go).
+		if e.Name() != writerGoldenFile && e.Name() != corpusGoldenFile {
+			goldens = append(goldens, strings.TrimSuffix(e.Name(), ".jsonl"))
+		}
 	}
 	// gen-goldens.ts writes one golden per base directory; a base without a
 	// golden (or the reverse) would otherwise never be compared.

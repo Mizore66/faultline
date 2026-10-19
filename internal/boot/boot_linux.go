@@ -4,8 +4,9 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
-	"unsafe" // go:linkname
+	_ "unsafe" // go:linkname
 
 	"github.com/Mizore66/faultline/internal/sigexit"
 )
@@ -19,8 +20,10 @@ var terminating = []os.Signal{syscall.SIGSEGV, syscall.SIGBUS, syscall.SIGFPE, s
 // kernelDefault are the other Linux signals whose default action ends the
 // process: all of 1 to 31 except KILL, STOP, the ignored-by-default CHLD,
 // URG and WINCH, the stop signals, PIPE and XFSZ (ignored by Node), USR1
-// and PROF; plus the real-time signals from 35 (32 to 34 are left to the C
-// library). Their kernel disposition is set straight to SIG_DFL, as Node's
+// and PROF; plus the real-time signals from 35 to the architecture's last
+// (64; 128 on MIPS), 32 to 34 being left to the C library. Which numbers
+// those are is per architecture (archDefault: STKFLT on most, EMT on MIPS,
+// whose numbering differs). Their kernel disposition is set straight to SIG_DFL, as Node's
 // is: the runtime has already installed its handler and does not install it
 // again for os/signal, and this takes microseconds where each os/signal
 // registration takes a round trip to the runtime's signal thread.
@@ -31,10 +34,11 @@ const ignoredEnv = "FAULTLINE_BOOT_IGNORED"
 var kernelDefault = func() []syscall.Signal {
 	s := []syscall.Signal{
 		syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGABRT, syscall.SIGUSR2,
-		syscall.SIGALRM, syscall.SIGTERM, syscall.SIGSTKFLT, syscall.SIGXCPU, syscall.SIGVTALRM,
+		syscall.SIGALRM, syscall.SIGTERM, syscall.SIGXCPU, syscall.SIGVTALRM,
 		syscall.SIGIO, syscall.SIGPWR, syscall.SIGSYS,
 	}
-	for sig := 35; sig <= 64; sig++ {
+	s = append(s, archDefault...)
+	for sig := 35; sig <= sigexit.MaxSignal; sig++ {
 		s = append(s, syscall.Signal(sig))
 	}
 	return s
@@ -78,23 +82,20 @@ func resetInherited() {
 	// it. Where the record is known (built with cgo), the ignored ones are
 	// set back to SIG_IGN until the mask is clear.
 	for _, sig := range kernelDefault {
-		if known && ignored&(1<<(sig-1)) != 0 {
+		if known && ignored.Has(sig) {
 			sigexit.SetIgnored(sig)
 		} else {
 			sigexit.SetDefault(sig)
 		}
 	}
-	var mask uint64
-	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 0, 0, uintptr(unsafe.Pointer(&mask)), 8, 0, 0)
-	if mask != 0 {
-		var empty uint64
-		syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2 /* SIG_SETMASK */, uintptr(unsafe.Pointer(&empty)), 0, 8, 0, 0)
+	if mask := sigexit.Mask(); !mask.Empty() {
+		sigexit.SetMask(sigexit.Set{})
 		if known {
-			os.Setenv(ignoredEnv, strconv.FormatUint(ignored, 16))
+			os.Setenv(ignoredEnv, formatIgnored(ignored))
 		}
 		syscall.Exec("/proc/self/exe", os.Args, os.Environ())
 		os.Unsetenv(ignoredEnv)
-		syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2, uintptr(unsafe.Pointer(&mask)), 0, 8, 0, 0)
+		sigexit.SetMask(mask)
 	}
 	// Node then resets signals 1 to 31 to SIG_DFL and leaves the real-time
 	// ones as inherited, and libuv resets only 1 to 31 in git, so an ignored
@@ -102,7 +103,7 @@ func resetInherited() {
 	// raw SIG_IGN above, also tells the runtime, whose fork would otherwise
 	// reset the signal to SIG_DFL in the child.
 	for _, sig := range kernelDefault {
-		if known && ignored&(1<<(sig-1)) != 0 {
+		if known && ignored.Has(sig) {
 			if sig <= 31 {
 				sigexit.SetDefault(sig)
 			} else {
@@ -117,6 +118,16 @@ func resetInherited() {
 	}
 }
 
+// formatIgnored is the FAULTLINE_BOOT_IGNORED value the C constructor
+// parses: the set's words in hex, separated by commas.
+func formatIgnored(s sigexit.Set) string {
+	words := make([]string, len(s))
+	for i, w := range s {
+		words[i] = strconv.FormatUint(uint64(w), 16)
+	}
+	return strings.Join(words, ",")
+}
+
 // dieOfPending runs before os/signal sees PIPE and XFSZ: registering them
 // unblocks them on the runtime's signal thread, where a pending one would be
 // caught and dropped. Node meets such a signal with its inherited
@@ -126,33 +137,29 @@ func resetInherited() {
 // stop signals) and the mask is cleared on this thread: the kernel then
 // delivers the pending signals in its own order, as it does to Node.
 func dieOfPending() {
-	var mask, pending uint64
-	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 0, 0, uintptr(unsafe.Pointer(&mask)), 8, 0, 0)
-	syscall.RawSyscall(syscall.SYS_RT_SIGPENDING, uintptr(unsafe.Pointer(&pending)), 8, 0)
-	fatal := pending & mask & (1<<(syscall.SIGPIPE-1) | 1<<(syscall.SIGXFSZ-1))
-	if ignored, known := inheritedIgnored(); known {
-		// The parent ignored it: Node's unmasking discards it, and so does
-		// setting SIG_IGN (Node ignores PIPE and XFSZ from then on).
-		for _, sig := range []syscall.Signal{syscall.SIGPIPE, syscall.SIGXFSZ} {
-			if fatal&ignored&(1<<(sig-1)) != 0 {
-				sigexit.SetIgnored(sig)
-				fatal &^= 1 << (sig - 1)
-			}
+	mask, pending := sigexit.Mask(), sigexit.Pending()
+	var fatal []syscall.Signal
+	ignored, known := inheritedIgnored()
+	for _, sig := range []syscall.Signal{syscall.SIGPIPE, syscall.SIGXFSZ} {
+		if !pending.Has(sig) || !mask.Has(sig) {
+			continue
 		}
+		if known && ignored.Has(sig) {
+			// The parent ignored it: Node's unmasking discards it, and so
+			// does setting SIG_IGN (Node ignores PIPE and XFSZ from then on).
+			sigexit.SetIgnored(sig)
+			continue
+		}
+		fatal = append(fatal, sig)
 	}
-	if fatal == 0 {
+	if len(fatal) == 0 {
 		return
 	}
 	for _, sig := range append(kernelDefault, syscall.SIGPIPE, syscall.SIGXFSZ) {
 		sigexit.SetDefault(sig)
 	}
-	var empty uint64
-	syscall.RawSyscall6(syscall.SYS_RT_SIGPROCMASK, 2 /* SIG_SETMASK */, uintptr(unsafe.Pointer(&empty)), 0, 8, 0, 0)
-	sig := syscall.SIGPIPE
-	if fatal&(1<<(syscall.SIGPIPE-1)) == 0 {
-		sig = syscall.SIGXFSZ
-	}
-	sigexit.Die(sig) // not reached: the pending signal has ended fl
+	sigexit.SetMask(sigexit.Set{})
+	sigexit.Die(fatal[0]) // not reached: the pending signal has ended fl
 }
 
 // setCloexec is uv__cloexec: FD_CLOEXEC on fd, false if fd is not open.

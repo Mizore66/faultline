@@ -12,30 +12,34 @@ import (
 
 // Port of src/sandbox.ts:14-55.
 const (
-	sandboxPolicyVersion       = "faultline.sandbox.v2"
+	SandboxPolicyVersion       = "faultline.sandbox.v2"
 	legacySandboxPolicyVersion = "faultline.sandbox.v1"
-	sandboxSourceTarget        = "/workspace/src"
+	SandboxSourceTarget        = "/workspace/src"
 	legacySandboxSourceTarget  = "/workspace"
-	environmentPolicyVersion   = "faultline.sandbox-environment.v1"
+	EnvironmentPolicyVersion   = "faultline.sandbox-environment.v1"
 )
 
-type namedLimit struct {
-	name    string
-	maximum float64
+// NamedLimit is one MAX_SANDBOX_LIMITS entry.
+type NamedLimit struct {
+	Name    string
+	Maximum float64
 }
 
-// maxSandboxLimits keeps Object.entries(MAX_SANDBOX_LIMITS) order.
-var maxSandboxLimits = []namedLimit{
-	{"timeoutMs", 300_000},
-	{"maxOutputBytes", 8_388_608},
-	{"cpuCount", 4},
-	{"memoryBytes", 2_147_483_648},
-	{"pidsLimit", 512},
-	{"tmpfsBytes", 536_870_912},
+// MaxSandboxLimits is MAX_SANDBOX_LIMITS in Object.entries order. Each call
+// returns a fresh copy, so no caller can loosen the security maxima.
+func MaxSandboxLimits() []NamedLimit {
+	return []NamedLimit{
+		{"timeoutMs", 300_000},
+		{"maxOutputBytes", 8_388_608},
+		{"cpuCount", 4},
+		{"memoryBytes", 2_147_483_648},
+		{"pidsLimit", 512},
+		{"tmpfsBytes", 536_870_912},
+	}
 }
 
-// deterministicEnvironment is DETERMINISTIC_ENVIRONMENT in literal order.
-func deterministicEnvironment() jsjson.Value {
+// DeterministicEnvironment is DETERMINISTIC_ENVIRONMENT in literal order.
+func DeterministicEnvironment() jsjson.Value {
 	o := jsjson.NewObj()
 	for _, kv := range [][2]string{{"CI", "1"}, {"HOME", "/tmp"}, {"LANG", "C.UTF-8"}, {"LC_ALL", "C.UTF-8"}, {"SOURCE_DATE_EPOCH", "0"}, {"TZ", "UTC"}} {
 		o.Set(kv[0], jsjson.MakeString(kv[1]))
@@ -55,8 +59,8 @@ func testString(re *regexp.Regexp, v jsjson.Value) bool {
 	return v.Kind() == jsjson.String && re.MatchString(v.Str())
 }
 
-// dockerPolicyPayload ports src/sandbox.ts:387.
-func dockerPolicyPayload(image, witnessDigest string, limits jsjson.Value, environmentPolicyDigest jsjson.Value, schemaVersion, sourceTarget string) jsjson.Value {
+// DockerPolicyPayload ports src/sandbox.ts:391 dockerPolicyPayload.
+func DockerPolicyPayload(image, witnessDigest string, limits jsjson.Value, environmentPolicyDigest jsjson.Value, schemaVersion, sourceTarget string) jsjson.Value {
 	source := jsjson.NewObj()
 	source.Set("target", jsjson.MakeString(sourceTarget))
 	source.Set("readOnly", jsjson.MakeBool(true))
@@ -78,8 +82,8 @@ func dockerPolicyPayload(image, witnessDigest string, limits jsjson.Value, envir
 	return jsjson.MakeObject(o)
 }
 
-// unsafeLocalPolicyPayload ports src/sandbox.ts:426.
-func unsafeLocalPolicyPayload(witnessDigest string, limits jsjson.Value, environmentPolicyDigest jsjson.Value, schemaVersion string) jsjson.Value {
+// UnsafeLocalPolicyPayload ports src/sandbox.ts:426 unsafeLocalPolicyPayload.
+func UnsafeLocalPolicyPayload(witnessDigest string, limits jsjson.Value, environmentPolicyDigest jsjson.Value, schemaVersion string) jsjson.Value {
 	o := jsjson.NewObj()
 	o.Set("schemaVersion", jsjson.MakeString(schemaVersion))
 	o.Set("kind", jsjson.MakeString("UNSAFE_LOCAL"))
@@ -153,8 +157,8 @@ func ValidateSandboxPlanAudit(audit jsjson.Value) []string {
 		}
 	}
 	policy := jsjson.NewObj()
-	policy.Set("schemaVersion", jsjson.MakeString(environmentPolicyVersion))
-	policy.Set("fixed", deterministicEnvironment())
+	policy.Set("schemaVersion", jsjson.MakeString(EnvironmentPolicyVersion))
+	policy.Set("fixed", DeterministicEnvironment())
 	policy.Set("allowedKeys", env.Get("allowedKeys"))
 	policy.Set("passed", env.Get("passed"))
 	environmentPolicyDigest := audit.Get("environmentPolicyDigest")
@@ -163,10 +167,10 @@ func ValidateSandboxPlanAudit(audit jsjson.Value) []string {
 	}
 	runtime := audit.Get("runtime")
 	limits := runtime.Get("limits")
-	for _, limit := range maxSandboxLimits {
-		value := limits.Get(limit.name)
-		if !isInteger(value) || value.Num() <= 0 || value.Num() > limit.maximum {
-			add(jsexc.Concat("sandbox limit ", limit.name, " is outside the allowed policy range"))
+	for _, limit := range MaxSandboxLimits() {
+		value := limits.Get(limit.Name)
+		if !isInteger(value) || value.Num() <= 0 || value.Num() > limit.Maximum {
+			add(jsexc.Concat("sandbox limit ", limit.Name, " is outside the allowed policy range"))
 		}
 	}
 	witnessDigest := audit.Get("witnessDigest").Str()
@@ -185,8 +189,8 @@ func ValidateSandboxPlanAudit(audit jsjson.Value) []string {
 			add("Docker runtime policy is not locked down")
 		}
 		imageText := image.Str() // runtime.image ?? "" (null gives "")
-		current := dockerPolicyPayload(imageText, witnessDigest, limits, environmentPolicyDigest, sandboxPolicyVersion, sandboxSourceTarget)
-		legacy := dockerPolicyPayload(imageText, witnessDigest, limits, environmentPolicyDigest, legacySandboxPolicyVersion, legacySandboxSourceTarget)
+		current := DockerPolicyPayload(imageText, witnessDigest, limits, environmentPolicyDigest, SandboxPolicyVersion, SandboxSourceTarget)
+		legacy := DockerPolicyPayload(imageText, witnessDigest, limits, environmentPolicyDigest, legacySandboxPolicyVersion, legacySandboxSourceTarget)
 		if policyDigest != digestOf(current) && policyDigest != digestOf(legacy) {
 			add("Docker policy digest does not match the serializable audit facts")
 		}
@@ -195,8 +199,8 @@ func ValidateSandboxPlanAudit(audit jsjson.Value) []string {
 		runtime.Get("noNewPrivileges").Bool() || runtime.Get("pull").Kind() != jsjson.Null {
 		add("unsafe-local runtime audit contradicts its declared mode")
 	} else {
-		current := unsafeLocalPolicyPayload(witnessDigest, limits, environmentPolicyDigest, sandboxPolicyVersion)
-		legacy := unsafeLocalPolicyPayload(witnessDigest, limits, environmentPolicyDigest, legacySandboxPolicyVersion)
+		current := UnsafeLocalPolicyPayload(witnessDigest, limits, environmentPolicyDigest, SandboxPolicyVersion)
+		legacy := UnsafeLocalPolicyPayload(witnessDigest, limits, environmentPolicyDigest, legacySandboxPolicyVersion)
 		if policyDigest != digestOf(current) && policyDigest != digestOf(legacy) {
 			add("unsafe-local policy digest does not match the serializable audit facts")
 		}

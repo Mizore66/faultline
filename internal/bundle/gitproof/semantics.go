@@ -15,8 +15,8 @@ import (
 	"github.com/Mizore66/faultline/internal/schema"
 )
 
-// expectedExecutionId ports git-proof-bundle.ts:502.
-func expectedExecutionID(run jsjson.Value) string {
+// ExpectedExecutionID ports git-proof-bundle.ts:502.
+func ExpectedExecutionID(run jsjson.Value) string {
 	o := jsjson.NewObj()
 	o.Set("schemaVersion", jsjson.MakeString(GitInvestigationSchemaVersion))
 	for _, k := range []string{"executionNonce", "stateIndex", "commit", "tree", "frozenDigest", "executionAttempt"} {
@@ -25,8 +25,8 @@ func expectedExecutionID(run jsjson.Value) string {
 	return bundle.Must(canonical.DigestJSON(jsjson.MakeObject(o)))
 }
 
-// expectedRunId ports git-proof-bundle.ts:514.
-func expectedRunID(run jsjson.Value) string {
+// ExpectedRunID ports git-proof-bundle.ts:514.
+func ExpectedRunID(run jsjson.Value) string {
 	return bundle.Must(canonical.DigestJSON(bundle.Without(run, "runId")))
 }
 
@@ -121,8 +121,16 @@ func reconstructTransitions(states []jsjson.Value) []jsjson.Value {
 // hasLifecycleLedger ports git-proof-bundle.ts:565.
 func hasLifecycleLedger(binding jsjson.Value) bool { return binding.Get("status").Str() != "UNBOUND" }
 
-// bindLifecycleLedger ports git-proof-bundle.ts:581 for a supplied ledger.
+// bindLifecycleLedger ports git-proof-bundle.ts:581 for a supplied ledger;
+// it returns the binding.
 func bindLifecycleLedger(ledgerInput, result jsjson.Value) jsjson.Value {
+	binding, _ := bindParsedLifecycleLedger(ledgerInput, result)
+	return binding
+}
+
+// bindParsedLifecycleLedger ports git-proof-bundle.ts:581 for a supplied
+// ledger: it returns { binding, ledger }, the ledger as parsed.
+func bindParsedLifecycleLedger(ledgerInput, result jsjson.Value) (jsjson.Value, jsjson.Value) {
 	ledger := bundle.Must(bundle.ParseValue(ledgerInput, CodexLifecycleLedgerSchema))
 	verification := VerifyCodexLifecycleLedger(ledger)
 	if !verification.Valid || verification.HeadHash == nil {
@@ -181,7 +189,7 @@ func bindLifecycleLedger(ledgerInput, result jsjson.Value) jsjson.Value {
 	binding.Set("headHash", jsjson.MakeString(*verification.HeadHash))
 	binding.Set("transport", sessionStarted.Get("event", "payload", "transport"))
 	binding.Set("checkpointBindings", jsjson.MakeArray(bindings))
-	return bundle.Must(bundle.ParseValue(jsjson.MakeObject(binding), target))
+	return bundle.Must(bundle.ParseValue(jsjson.MakeObject(binding), target)), ledger
 }
 
 // verifyLifecycleBinding ports git-proof-bundle.ts:984.
@@ -345,13 +353,13 @@ func validateGitInvestigationProofSemantics(result, frozen jsjson.Value) []strin
 
 	runIDs, executionIDs, nonces := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	attemptsByState := map[float64]map[float64]bool{}
-	commandDigestValue := commandDigest(frozen.Get("proposal", "witness", "command").Str())
+	commandDigestValue := CommandDigest(frozen.Get("proposal", "witness", "command").Str())
 	for _, run := range runs {
 		runID := run.Get("runId").Str()
-		if runID != expectedRunID(run) {
+		if runID != ExpectedRunID(run) {
 			add(jsexc.Concat("runId does not match the canonical run fact: ", runID))
 		}
-		if run.Get("executionId").Str() != expectedExecutionID(run) {
+		if run.Get("executionId").Str() != ExpectedExecutionID(run) {
 			add(jsexc.Concat("executionId does not match its state and attempt: ", runID))
 		}
 		if runIDs[runID] {

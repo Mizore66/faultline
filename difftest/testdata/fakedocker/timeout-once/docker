@@ -1,0 +1,20 @@
+#!/bin/sh
+# Fake Docker "timeout-once" (README.md): the first `run` of a case prints
+# one line and then outlives the sandbox's default 120 s timeout (exec keeps
+# the pid, so the runner's SIGKILL reaches the process holding the pipes);
+# it leaves a marker in $TMPDIR, so every later `run` plays back pass-fail.
+# `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  marker="${TMPDIR:-/tmp}/fake-docker-timeout-once"
+  if [ ! -e "$marker" ]; then
+    : > "$marker"
+    printf 'started\n'
+    exec sleep 300
+  fi
+  exec "$(dirname "$0")/../pass-fail/docker" "$@"
+  ;;
+esac
+printf 'fake docker (timeout-once): unsupported command: %s\n' "$1" >&2
+exit 125

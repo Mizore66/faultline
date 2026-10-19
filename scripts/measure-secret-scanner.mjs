@@ -153,7 +153,7 @@ const efficacyMd = [
   `| FP rate on benign | ${report.rates.falsePositiveRateOnBenign?.toFixed(4) ?? "n/a"} | [${report.confidenceIntervals95.falsePositiveRateOnBenign.low}, ${report.confidenceIntervals95.falsePositiveRateOnBenign.high}] | ${benign} |`,
   "",
   "Machine twin: `benchmarks/secret-scanner-efficacy.json`.",
-  "Regenerate: `node scripts/expand-secret-scanner-corpus.mjs && pnpm measure:secret-scanner`.",
+  "Regenerate: `pnpm build && node scripts/expand-secret-scanner-corpus.mjs && pnpm measure:secret-scanner`.",
   ""
 ].join("\n");
 writeFileSync(join(root, "docs", "secret-scanner-efficacy.md"), efficacyMd, "utf8");

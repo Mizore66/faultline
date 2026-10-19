@@ -1,0 +1,18 @@
+#!/bin/sh
+# Fake Docker "crash" (README.md): `run` prints partial output and dies of
+# SIGTERM (exit code null), so the runner force-removes the container; that
+# `rm` fails with exit 1, and its stderr is appended to the result.
+case "$1" in
+rm)
+  printf 'Error response from daemon: No such container: %s\n' "$3" >&2
+  exit 1
+  ;;
+run)
+  printf 'partial'
+  printf 'about to crash\n' >&2
+  kill -TERM $$
+  exit 3
+  ;;
+esac
+printf 'fake docker (crash): unsupported command: %s\n' "$1" >&2
+exit 125

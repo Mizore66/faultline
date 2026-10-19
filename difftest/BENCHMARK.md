@@ -19,3 +19,18 @@ Both implementations make the same 18 `git` calls for a Git base (init, bundle l
 ## Large JSON inputs
 
 Parsing is no longer the bottleneck it was in round 3: ASCII fast paths in `jsjson.Parse` (UTF-16 conversion, escape-free strings, whitespace) bring a 200 MB whitespace document from 2.7 s to 0.44 s (Node `JSON.parse` 0.27 s) and a 72 MB string from 4.5 s to 0.41 s (Node 0.12 s) on this machine. Memory is still higher than Node's: Go holds the input as UTF-16 while parsing and builds one `Obj` per object, so on large JSON inputs Go needs 4 to 6 times Node's memory: the reviewers' 40 MB document of 5M small objects peaks at about 1.9 GB in Go against 0.5 GB in Node. This matters for correctness under a memory limit: the demo verifier reads `analysis.json` with no size cap, and at about 80 bytes of peak memory per input byte a demo bundle whose `analysis.json` is 80 MB gets Go killed by the OOM killer (exit 137, no output) in a 4 GB container where TS verifies it (KNOWN_DIFFERENCES.md). The git verifier's read limits (128 MiB per artifact) do not prevent it either.
+
+## `fl investigate git` (slice 2)
+
+`BenchmarkInvestigateGit` (`difftest/benchmark_test.go`) times the writer case `investigate-many-states`: `fl investigate git` over the 12 states of the `git-many-states` scenario (36 witness runs, three per state) with the `pass-fail` fake Docker on `PATH` behind the recorders, seeded like the writer replay. Building each workspace is not timed. Run with `go test -tags faultline_test ./difftest/ -run '^$' -bench BenchmarkInvestigateGit -benchtime 10x`; besides ns/op it reports the median, fastest and slowest of the 10 runs.
+
+- **Date:** 2026-10-15 (Task 19 head)
+- **Machine:** Apple M2 Pro host, podman VM (libkrun), Debian bookworm linux/arm64 container limited to 2 CPUs (`--cpus 2`), the worktree copied into the container's own filesystem
+- **Versions:** Go 1.27.2, Node v22.22.2 (frozen TS, `node --import difftest/gen/seed.mjs dist/cli.js`), git 2.39.5
+- **Method:** three benchmark runs of 10 iterations each.
+
+| Command | TS | Go | Speedup |
+| --- | --- | --- | --- |
+| `investigate git` on `git-many-states` (12 states, 36 runs) | median 2,093–2,107 ms (runs 2,054–2,172 ms) | median 1,945–1,953 ms (runs 1,917–2,011 ms) | about 1.07× |
+
+The command is dominated by its children, which are the same on both sides: 320 `git` calls (the writer golden records them: materializing 12 worktrees, fingerprints, the bundle and its verification) and 36 fake-Docker shell scripts behind the recorder. Go saves Node's start-up and module loading (about 100 ms here) and little else, so the ratio is close to 1 and would fall further with a real Docker daemon, whose container start-up takes hundreds of milliseconds per run. On the macOS host itself (not in the VM) both sides take about 52 s per run (Go 50.8–51.9 s over 10 runs, TS 51.8–52.2 s over 3): there process creation for the git and shell children dominates completely, as for `verify` above.

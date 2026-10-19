@@ -2,6 +2,7 @@ package nodeproc
 
 import (
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -42,39 +43,64 @@ func pipe64k() (*os.File, *os.File, error) {
 }
 
 // start is libuv's uv_spawn (src/win/process.c, 1.51): file is resolved
-// with search_path; the process is created hidden (windowsHide: true, so
-// SW_HIDE and, since no stdio slot is inherited, CREATE_NO_WINDOW), with a
+// with search_path against the cwd (dir when it is not "") and the PATH in
+// env; the process is created hidden (windowsHide: true, so SW_HIDE and,
+// since no stdio slot is inherited, CREATE_NO_WINDOW), with an inherited
 // cwd of MAX_PATH or more shortened to its 8.3 form, and put in libuv's
 // kill-on-close job object. CreateProcess errors go through libuv's
 // uv_translate_sys_error table.
-func start(file string, argv, env []string, files []*os.File) (*os.Process, string) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, nodefs.ErrnoCode(err)
-	}
-	// GetCurrentDirectoryW(0, NULL) counts the terminating NUL, so libuv
-	// shortens a cwd of MAX_PATH-1 units or more, before the search runs
-	// on it.
-	dir := ""
-	if len(syscall.StringToUTF16(cwd)) >= syscall.MAX_PATH {
-		short, err := shortPath(cwd)
-		if err != nil {
+func start(file string, argv, env []string, files []*os.File, dir string, o startOptions) (*os.Process, string) {
+	cwd := dir
+	if dir == "" {
+		var err error
+		if cwd, err = os.Getwd(); err != nil {
 			return nil, nodefs.ErrnoCode(err)
 		}
-		cwd, dir = short, short
+		// GetCurrentDirectoryW(0, NULL) counts the terminating NUL, so
+		// libuv shortens a cwd of MAX_PATH-1 units or more, before the
+		// search runs on it.
+		if len(syscall.StringToUTF16(cwd)) >= syscall.MAX_PATH {
+			short, err := shortPath(cwd)
+			if err != nil {
+				return nil, nodefs.ErrnoCode(err)
+			}
+			cwd, dir = short, short
+		}
 	}
-	path, ok := searchPath(file, cwd, os.Getenv("PATH"), searchCwd(), fileExists)
+	path, ok := searchPath(file, cwd, findPath(env), searchCwd(), fileExists)
 	if !ok {
 		return nil, "ENOENT"
 	}
 	const createNoWindow = 0x08000000
-	p, err := os.StartProcess(path, argv, &os.ProcAttr{Dir: dir, Env: env, Files: files,
-		Sys: &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}})
+	sys := &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	if o.show {
+		// windowsHide: false: libuv passes SW_SHOWDEFAULT, which is what
+		// leaving STARTF_USESHOWWINDOW unset means.
+		sys = &syscall.SysProcAttr{}
+	}
+	if o.verbatim {
+		// libuv's make_program_args with verbatim_arguments: every
+		// argument, the program name included, copied as is and joined
+		// with spaces.
+		sys.CmdLine = strings.Join(argv, " ")
+	}
+	p, err := os.StartProcess(path, argv, &os.ProcAttr{Dir: dir, Env: env, Files: files, Sys: sys})
 	if err != nil {
 		return nil, nodefs.ErrnoCode(err)
 	}
 	assignToJob(p)
 	return p, ""
+}
+
+// findPath is libuv's find_path: the value of the first entry of the
+// child's environment whose name is PATH in any case.
+func findPath(env []string) string {
+	for _, entry := range env {
+		if len(entry) >= 5 && strings.EqualFold(entry[:5], "PATH=") {
+			return entry[5:]
+		}
+	}
+	return ""
 }
 
 // shortPath is libuv's in-place GetShortPathNameW(cwd, cwd, cwd_len), whose

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fake Docker "slow" (README.md): pass-fail after a one-second sleep, so a
+# release build's run timestamps and durations show when the clock is read
+# (difftest/release/clock_test.go). `rm` succeeds silently.
+case "$1" in
+run) sleep 1 ;;
+esac
+exec "$(dirname "$0")/../pass-fail/docker" "$@"

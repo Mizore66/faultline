@@ -8,6 +8,7 @@ jobs:
   go:
     name: go test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -22,32 +23,57 @@ jobs:
           go-version: "1.27"
       - run: go mod tidy -diff
       - run: go vet ./...
-      # Golden replay runs the fl binary once per invocation and git ~20k times;
-      # Windows needs well over the 10m default. -count=1: replay builds
-      # cmd/fl in a subprocess, which Go's test cache cannot see, so a cached
-      # PASS could hide a change to main.
-      # On ubuntu-24.04 the replay also builds fl with coverage and fails
-      # if a verifier error site is never reached (difftest/covergate_test.go).
-      # Only oracle tests (no Node here) and per-platform cases may skip.
+      - run: go vet -tags faultline_test ./...
+      # Untagged first: that is what release builds see, and difftest builds
+      # only with the faultline_test tag (seeded clock), so it is an empty
+      # package there. Then everything tagged: the internal tests that need
+      # the seeded clock, golden replay and writer replay. Golden replay runs
+      # the fl binary once per invocation and git ~20k times, writer replay
+      # every writer case against its golden; Windows needs well over the 10m
+      # default. -count=1: replay builds cmd/fl in a subprocess, which Go's
+      # test cache cannot see, so a cached PASS could hide a change to main.
+      # On ubuntu-24.04 the replays also build fl with coverage and fail if
+      # an error site in a gated package is never reached
+      # (difftest/covergate_test.go). Only oracle tests (no Node here) and
+      # per-platform cases may skip; on Windows, the writer cases marked
+      # posixOnly (sh recorders, fake Docker), listed by name in
+      # .github/scripts/windows-writer-skips.txt.
+      # TestMkdirAllFollowsSymlinks skips on Windows only where the runner
+      # may not create symlinks (no administrator, no Developer Mode).
+      # TestRemoveAllUnlinkEPERM sets the immutable flag with sudo -n chattr
+      # on Linux (the runners' passwordless sudo) and must not skip.
+      # TestErrorPathReplacesLoneSurrogate pins the Unix error text (the JS
+      # path string through UTF-8, as given); on Windows Node prints the
+      # resolved path with backslashes (errorPath's Windows branch), which its
+      # expected texts do not model.
       - name: go test
         shell: bash
         run: |
           set -o pipefail
           status=0
-          go test -count=1 -timeout 60m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
-          allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestEchoRoundTripsLoneSurrogate'
+          go test -count=1 -timeout 30m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
+          go test -tags faultline_test -count=1 -timeout 120m -v ./... | tee -a "$RUNNER_TEMP/go.log" || status=$?
+          allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestWriterSameDirectory'
           case "$RUNNER_OS" in
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
-            Windows) allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestGoldenReplay/.+" ;;
+            Windows)
+              posix=$(tr -d '\r' < .github/scripts/windows-writer-skips.txt | grep -v '^#' | paste -sd '|' -)
+              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestGoldenReplay/.+|$posix" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status
         env:
           FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-24.04' && '1' || '' }}
 
-  difftest-live:
-    name: difftest live (frozen TS oracle)
+  # The frozen TS oracle jobs (ubuntu-24.04, Node 22.22.2). The slow slice 2
+  # tests run in jobs of their own, each naming its tests: check-skips.sh
+  # fails a job when a named test did not report a result, so a renamed test
+  # cannot drop out. difftest-live runs every other TestLive* (it lists them
+  # with go test -list and leaves out the ones named here).
+  difftest-goldens:
+    name: difftest goldens (frozen TS oracle)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
       LC_ALL: C.UTF-8
     steps:
@@ -55,8 +81,9 @@ jobs:
       - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
-          # Pinned: the collation data (ICU 78) and the stack calibration
-          # (internal/jsjson/stack.go) follow this Node release.
+          # Pinned: the collation data (ICU 78), the stack calibration
+          # (internal/jsjson/stack.go) and the writer goldens follow this
+          # Node release.
           node-version: "22.22.2"
           cache: pnpm
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
@@ -65,22 +92,54 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Regenerate goldens and require no drift
-        # porcelain also catches untracked files (a new base's golden).
+        # porcelain also catches untracked files (a new base's golden). The
+        # writer scenarios and goldens come from this pinned Node under the
+        # seed preload (difftest/gen/seed.mjs); the corpus goldens from
+        # redactText on every benchmarks/secret-scanner-corpus case.
         run: |
           pnpm exec tsx difftest/gen/gen-goldens.ts
+          pnpm exec tsx difftest/gen/scenarios.ts
+          pnpm exec tsx difftest/gen/gen-writers.ts
+          pnpm exec tsx difftest/gen/gen-corpus.ts
           git status --porcelain difftest/testdata
+          git diff --stat difftest/testdata
           test -z "$(git status --porcelain difftest/testdata)"
+
+  difftest-live:
+    name: difftest live (frozen TS oracle)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          # Pinned: the collation data (ICU 78), the stack calibration
+          # (internal/jsjson/stack.go) and the writer goldens follow this
+          # Node release.
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
       - name: Install strace
         # TestLiveFaultInjectionMatchesNode fails single syscalls with
         # strace -e inject; it fails rather than skips without strace in CI.
         run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
       - name: Live property tests
-        # Only the cases that need root may skip here; they run below.
+        # Every TestLive* but the ones the jobs below run. Only the cases
+        # that need root may skip here; they run below.
         run: |
           set -o pipefail
           status=0
-          go test -list 'TestLive' ./difftest/ > "$RUNNER_TEMP/live.list"
-          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run TestLive -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
+          elsewhere='TestLiveInvestigate TestLiveMinimize TestLiveMinimizationVerify TestLiveProofWriter TestLiveWriterFaults TestLiveRealDocker'
+          go test -tags faultline_test -list 'TestLive' ./difftest/ | grep -E '^Test' | grep -vxF -f <(printf '%s\n' $elsewhere) > "$RUNNER_TEMP/live.list"
+          tests=$(paste -sd '|' "$RUNNER_TEMP/live.list")
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($tests)\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^(TestLiveCwdErrorsMatchNode/(chroot|self0600|parent0311|locked[0-9]+)|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode)$' "$RUNNER_TEMP/live.list" || status=1
           exit $status
       - name: Install FUSE
@@ -91,7 +150,7 @@ jobs:
         # A test binary built as the runner user, run as root with its own
         # Go cache, so the runner's cache stays writable.
         run: |
-          go test -c -o "$RUNNER_TEMP/difftest.test" ./difftest/
+          go test -tags faultline_test -c -o "$RUNNER_TEMP/difftest.test" ./difftest/
           # The setuid-nobody cases run node dist/cli.js as nobody: every
           # directory above the checkout must be searchable (the runner's
           # home is 0750).
@@ -106,13 +165,119 @@ jobs:
             "$RUNNER_TEMP/difftest.test" -test.run 'TestLiveCwdErrorsMatchNode|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode' -test.count=1 -test.v) | tee "$RUNNER_TEMP/root.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/root.log" '^TestLiveFuseMatchesNode/zero-declared-demo$' "$RUNNER_TEMP/root.list" || status=1
           exit $status
-      - name: TimSort against V8
+      - name: Internal and oracle-client tests against Node
+        # TestLiveReleaseClock (difftest/release, untagged: a release build
+        # with the wall clock) also runs in the go job, Go side only.
         run: |
           set -o pipefail
           status=0
-          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ -run TestSortMatchesV8 -v | tee "$RUNNER_TEMP/v8sort.log" || status=$?
-          echo TestSortMatchesV8 > "$RUNNER_TEMP/v8sort.list"
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/v8sort.log" '^$' "$RUNNER_TEMP/v8sort.list" || status=1
+          printf '%s\n' TestSortMatchesV8 TestToNumberMatchesNode TestEchoRoundTripsLoneSurrogate TestLiveReleaseClock > "$RUNNER_TEMP/internal.list"
+          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./internal/v8sort/ ./internal/jsjson/ ./difftest/oracle/ ./difftest/release/ -run '^(TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestLiveReleaseClock)$' -v | tee "$RUNNER_TEMP/internal.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/internal.log" '^$' "$RUNNER_TEMP/internal.list" || status=1
+          exit $status
+
+  difftest-live-investigate:
+    name: difftest live investigate (frozen TS oracle)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          # Pinned: the collation data (ICU 78), the stack calibration
+          # (internal/jsjson/stack.go) and the writer goldens follow this
+          # Node release.
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: TestLiveInvestigate
+        # 40 generated repositories, both sides, up to 20 states each with fake Dockers (~30 min).
+        run: |
+          set -o pipefail
+          status=0
+          tests='TestLiveInvestigate'
+          printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
+          exit $status
+
+  difftest-live-writers:
+    name: difftest live writers (frozen TS oracle)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          # Pinned: the collation data (ICU 78), the stack calibration
+          # (internal/jsjson/stack.go) and the writer goldens follow this
+          # Node release.
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Minimization and proof writer
+        # minimizeGitDiff, verifyGitMinimizationResult and writeGitInvestigationProofBundle against TS (~25 min).
+        run: |
+          set -o pipefail
+          status=0
+          tests='TestLiveMinimize TestLiveMinimizationVerify TestLiveProofWriter'
+          printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
+          exit $status
+
+  difftest-live-replay:
+    name: difftest live writer replay (frozen TS oracle)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          # Pinned: the collation data (ICU 78), the stack calibration
+          # (internal/jsjson/stack.go) and the writer goldens follow this
+          # Node release.
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install strace
+        # TestLiveWriterFaults fails single syscalls on the writer paths with
+        # strace -e inject; it fails rather than skips without strace in CI.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
+      - name: Pull the pinned image
+        # TestLiveRealDocker runs investigate against the real daemon with
+        # --pull never.
+        run: docker pull node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+      - name: Writer replay with TS cross-verification, faults, same directory, real Docker
+        # With the oracle on, every bundle Go writes is also verified by frozen TS (spec 2.4).
+        run: |
+          set -o pipefail
+          status=0
+          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestWriterSameDirectory TestLiveWriterFaults TestLiveRealDocker'
+          printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
+          FAULTLINE_REAL_DOCKER=1 FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 75m | tee "$RUNNER_TEMP/live.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
           exit $status
 
   stack-live:
@@ -122,8 +287,13 @@ jobs:
     # RLIMIT_NOFILE emulation. On macOS the rimraf chain cannot reach V8's
     # depth (PATH_MAX), and the signal and stdout scenarios that read /proc
     # or Linux devices skip; the group-signal, NOFILE and stderr tests run.
+    # The slice 2 live tests that need no /proc run here too: the judge-proof
+    # server, its signal stop and browser opener, the seed preload, async
+    # spawn and hardened git, and materialization (on macOS a case-colliding
+    # tree takes the "Could not verify materialized Git tree" refusal).
     name: stack thresholds vs Node (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -144,12 +314,26 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode'
+          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
-          FAULTLINE_NODE_ORACLE=1 go test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
           if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode)$'; else allowed='^$'; fi
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" "$allowed" "$RUNNER_TEMP/live.list" || status=1
           exit $status
+      - name: Measured stack depths
+        # The CLI site's darwin/arm64 offset (jsjson.SiteCLI) was fitted from
+        # an estimate: annotate what TS and Go reached at every site, so a
+        # failing row can be refitted from the check run alone. One notice
+        # per site (its four shapes on one line): GitHub keeps only ten
+        # notices per step. The test measures the cli site first and also
+        # logs an unexpected output there before failing.
+        if: always()
+        run: |
+          grep -E '^ *stack_live_test\.go:[0-9]+: [a-z0-9]+/[a-z0-9_]+ ' "$RUNNER_TEMP/live.log" | sed 's/^ *stack_live_test\.go:[0-9]*: //' |
+            awk '{ key = $1 " " $2; $1 = ""; $2 = ""; sub(/^ +/, ""); rows[key] = rows[key] (rows[key] == "" ? "" : "; ") $0; if (!(key in seen)) { seen[key] = 1; order[++n] = key } }
+                 END { for (i = 1; i <= n; i++) print order[i] " " rows[order[i]] }' |
+            while read -r line; do echo "::notice title=stack depth::$line"; done
+          grep -E 'stack_live_test\.go:[0-9]+: .*(unexpected output|lacks)' "$RUNNER_TEMP/live.log" | head -5 | while read -r line; do echo "::warning title=stack site::$line"; done
       - name: TimSort against V8
         run: |
           set -o pipefail

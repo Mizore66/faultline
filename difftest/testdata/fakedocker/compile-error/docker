@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fake Docker "compile-error" (README.md): `run` fails like a witness that
+# does not parse at this state, exit 1, no result line. `rm` succeeds
+# silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  printf "witness.mjs:3\nSyntaxError: Unexpected token '}'\n" >&2
+  exit 1
+  ;;
+esac
+printf 'fake docker (compile-error): unsupported command: %s\n' "$1" >&2
+exit 125

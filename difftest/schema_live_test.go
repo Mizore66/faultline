@@ -1,3 +1,5 @@
+//go:build faultline_test
+
 package difftest
 
 import (

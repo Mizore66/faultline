@@ -1,0 +1,12 @@
+#!/bin/sh
+# Fake Docker "missing-image" (README.md): `run` fails as --pull=never does
+# for an image that is not present, exit 125. `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  printf 'docker: Error response from daemon: No such image: node@sha256:0000000000000000000000000000000000000000000000000000000000000000.\n' >&2
+  exit 125
+  ;;
+esac
+printf 'fake docker (missing-image): unsupported command: %s\n' "$1" >&2
+exit 125

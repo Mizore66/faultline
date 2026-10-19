@@ -96,7 +96,7 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 	if err != nil {
 		return Result{Err: spawnError(file, nodefs.SystemErrorName(err))}
 	}
-	proc, code := start(jsstr.ToUTF8(file), argv, nodeEnv(), io.child)
+	proc, code := start(jsstr.ToUTF8(file), argv, nodeEnv(), io.child, "", startOptions{})
 	io.closeChild()
 	if code != "" {
 		io.closeParent()
@@ -275,12 +275,35 @@ func isArrayIndex(key string) bool {
 	if key == "" || len(key) > 10 || key[0] == '0' && len(key) > 1 {
 		return false
 	}
-	n := 0
+	var n uint64 // ten digits overflow a 32-bit int
 	for i := 0; i < len(key); i++ {
 		if key[i] < '0' || key[i] > '9' {
 			return false
 		}
-		n = n*10 + int(key[i]-'0')
+		n = n*10 + uint64(key[i]-'0')
 	}
 	return n < 1<<32-1
 }
+
+// Getenv is process.env[name] for one name: on Windows GetEnvironmentVariableW
+// (case-insensitive) decoded as decodeEnvValue does, elsewhere getenv(3)
+// (the first entry) decoded from UTF-8 with replacement. ok is false when
+// the value is undefined.
+func Getenv(name string) (value string, ok bool) {
+	if runtime.GOOS == "windows" {
+		units, ok := getenvUTF16(name)
+		if !ok {
+			return "", false
+		}
+		return decodeEnvValue(units), true
+	}
+	raw, ok := syscall.Getenv(name)
+	if !ok {
+		return "", false
+	}
+	return nodefs.DecodeUTF8([]byte(raw)), true
+}
+
+// startOptions are the Windows-only spawn options (windowsVerbatimArguments,
+// windowsHide: false); POSIX ignores them.
+type startOptions struct{ verbatim, show bool }

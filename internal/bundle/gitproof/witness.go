@@ -66,14 +66,14 @@ func (w WitnessVerification) JSON() jsjson.Value {
 	return jsjson.MakeObject(o)
 }
 
-// byteDigest ports src/witness-lock.ts:143 for Buffer input.
-func byteDigest(b []byte) string { return "sha256:" + canonical.SHA256HexBytes(b) }
+// ByteDigest ports src/witness-lock.ts:143 for Buffer input.
+func ByteDigest(b []byte) string { return "sha256:" + canonical.SHA256HexBytes(b) }
 
-// commandDigest ports src/witness-lock.ts:147: Buffer.from(command, "utf8").
-func commandDigest(command string) string { return "sha256:" + canonical.SHA256Hex(command) }
+// CommandDigest ports src/witness-lock.ts:147: Buffer.from(command, "utf8").
+func CommandDigest(command string) string { return "sha256:" + canonical.SHA256Hex(command) }
 
-// overlayDigest ports src/witness-lock.ts:151.
-func overlayDigest(overlays []jsjson.Value) string {
+// OverlayDigest ports src/witness-lock.ts:151.
+func OverlayDigest(overlays []jsjson.Value) string {
 	items := make([]jsjson.Value, len(overlays))
 	for i, overlay := range overlays {
 		o := jsjson.NewObj()
@@ -84,8 +84,8 @@ func overlayDigest(overlays []jsjson.Value) string {
 	return bundle.Must(canonical.DigestJSON(jsjson.MakeArray(items)))
 }
 
-// witnessPayload ports src/witness-lock.ts:170.
-func witnessPayload(proposal jsjson.Value) jsjson.Value {
+// WitnessPayload ports src/witness-lock.ts:170.
+func WitnessPayload(proposal jsjson.Value) jsjson.Value {
 	o := jsjson.NewObj()
 	o.Set("schemaVersion", jsjson.MakeString("faultline.locked-witness.v1"))
 	o.Set("proposalId", proposal.Get("proposalId"))
@@ -126,23 +126,23 @@ func assertSortedOverlayPaths(overlays []jsjson.Value, errs *[]string) {
 	}
 }
 
-// verifyProposal ports src/witness-lock.ts:317.
-func verifyProposal(proposal jsjson.Value, errs *[]string) {
+// VerifyProposal ports src/witness-lock.ts:317.
+func VerifyProposal(proposal jsjson.Value, errs *[]string) {
 	if proposal.Get("incidentPacketDigest").Str() != bundle.Must(canonical.DigestJSON(proposal.Get("incidentPacket"))) {
 		*errs = append(*errs, "incident packet digest does not match the persisted packet")
 	}
-	if proposal.Get("witness", "commandDigest").Str() != commandDigest(proposal.Get("witness", "command").Str()) {
+	if proposal.Get("witness", "commandDigest").Str() != CommandDigest(proposal.Get("witness", "command").Str()) {
 		*errs = append(*errs, "command digest does not match the exact UTF-8 command bytes")
 	}
 	overlays := proposal.Get("witness", "overlays").Items()
 	assertSortedOverlayPaths(overlays, errs)
 	for _, overlay := range overlays {
 		decoded, _ := base64.StdEncoding.DecodeString(overlay.Get("bytesBase64").Str())
-		if overlay.Get("bytesDigest").Str() != byteDigest(decoded) {
+		if overlay.Get("bytesDigest").Str() != ByteDigest(decoded) {
 			*errs = append(*errs, jsexc.Concat("overlay byte digest does not match: ", overlay.Get("path").Str()))
 		}
 	}
-	if proposal.Get("witness", "overlayDigest").Str() != overlayDigest(overlays) {
+	if proposal.Get("witness", "overlayDigest").Str() != OverlayDigest(overlays) {
 		*errs = append(*errs, "overlay digest does not match the ordered overlay byte digests")
 	}
 	if proposal.Get("proposalDigest").Str() != bundle.Must(canonical.DigestJSON(bundle.Without(proposal, "proposalDigest"))) {
@@ -150,8 +150,8 @@ func verifyProposal(proposal jsjson.Value, errs *[]string) {
 	}
 }
 
-// verifyApproval ports src/witness-lock.ts:339.
-func verifyApproval(approval, proposal jsjson.Value, errs *[]string) {
+// VerifyApproval ports src/witness-lock.ts:339.
+func VerifyApproval(approval, proposal jsjson.Value, errs *[]string) {
 	add := func(s string) { *errs = append(*errs, s) }
 	if approval.Get("proposalId").Str() != proposal.Get("proposalId").Str() {
 		add("approval proposalId does not match proposal")
@@ -175,12 +175,12 @@ func verifyApproval(approval, proposal jsjson.Value, errs *[]string) {
 
 var sha256DigestPattern = regexp.MustCompile(sha256DigestSource)
 
-// verifyFrozenRecord ports src/witness-lock.ts:350.
-func verifyFrozenRecord(frozen jsjson.Value, expected string, expectedProvided bool) WitnessVerification {
+// VerifyFrozenRecord ports src/witness-lock.ts:350.
+func VerifyFrozenRecord(frozen jsjson.Value, expected string, expectedProvided bool) WitnessVerification {
 	var errs []string
-	verifyProposal(frozen.Get("proposal"), &errs)
-	verifyApproval(frozen.Get("approval"), frozen.Get("proposal"), &errs)
-	if frozen.Get("witnessDigest").Str() != bundle.Must(canonical.DigestJSON(witnessPayload(frozen.Get("proposal")))) {
+	VerifyProposal(frozen.Get("proposal"), &errs)
+	VerifyApproval(frozen.Get("approval"), frozen.Get("proposal"), &errs)
+	if frozen.Get("witnessDigest").Str() != bundle.Must(canonical.DigestJSON(WitnessPayload(frozen.Get("proposal")))) {
 		errs = append(errs, "frozen witness digest does not match the reviewed command and overlay bytes")
 	}
 	if frozen.Get("frozenDigest").Str() != bundle.Must(canonical.DigestJSON(bundle.Without(frozen, "frozenDigest"))) {
@@ -224,5 +224,5 @@ func VerifyFrozenWitnessRecord(input jsjson.Value, expected string, expectedProv
 			ExternalDigestStatus: status,
 		}
 	}
-	return verifyFrozenRecord(parsed, expected, expectedProvided)
+	return VerifyFrozenRecord(parsed, expected, expectedProvided)
 }

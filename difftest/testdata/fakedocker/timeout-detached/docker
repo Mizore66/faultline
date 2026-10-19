@@ -1,0 +1,15 @@
+#!/bin/sh
+# Fake Docker "timeout-detached" (README.md): `run` exits 0 at once but
+# leaves a background child holding stdout and stderr for 3 s, so the
+# runner's timeout fires while the docker CLI has already exited 0: the run
+# is TIMEOUT with exit code 0, and the container must still be force-removed
+# (the timedOut term of the cleanup condition). `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  (sleep 3) &
+  exit 0
+  ;;
+esac
+printf 'fake docker (timeout-detached): unsupported command: %s\n' "$1" >&2
+exit 125

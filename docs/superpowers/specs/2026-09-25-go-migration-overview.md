@@ -42,12 +42,12 @@
 | # | Slice | Contents (exact command list is fixed in each slice's spec) |
 | --- | --- | --- |
 | 1 | Foundation + harness + verify | Canonical JSON, schema library, safe paths, differential harness, `fl verify` for `faultline.proof-bundle.v2`, `faultline.git-proof-bundle.v1`, and prevention proofs. |
-| 2 | Git path | `investigate git`, `minimize`, `judge-proof`, witness freeze/approve, and Git proof bundle writing (byte-identical). |
-| 3 | Runtime | `runtime`, `doctor`, Docker and sandbox execution, project init. |
-| 4 | Turns and Codex | `codex`, `record`, the sidecar, ledger, turn snapshots, `investigate turns`, and turn-bundle verify. |
-| 5 | Surfaces, packaging, deletion | `serve`, `ui`, `judge-demo`, the witness review server and TTY, every remaining command, release builds, npm wrapper, Action, Codex plugin, then deletion of TS. |
+| 2 | Git path | `investigate git`, `minimize git` and `minimize verify`, `judge-proof`, `commit-proof-preview`, the offline `witness` subcommands, `ledger bind` and `ledger verify`, and Git proof bundle writing (byte-identical). Pulled forward from slice 3 because these commands cannot produce a proof without them: the Docker sandbox (`sandbox`), `git-materialization`, `safe-overlay`, `environment-fingerprint`, `redaction`, the read side of `config` and the load side of `runtime-mapping-file`, `incident-binding`, `evidence-grade` and `turn-proof-promotion`. |
+| 3 | Runtime | `runtime`, `doctor`, `init`, `incident`, `prevention` (proof creation and its own `verify` subcommand), and the write side of `config` and `runtime-mapping-file`. |
+| 4 | Turns and Codex | `codex`, `record`, the sidecar, turn snapshots, `investigate turns`, `prove transition`, `witness implement`, turn-bundle verify, `attest`, `provenance` and `repair`. Also `secret-allowlist` and `captureAllowlistedEvent` (reachable only from `turn-snapshot`), PR #195's batch turn-snapshot staging (`git update-index --stdin-paths --no-filters`, with the per-path fallback for paths containing TAB, LF or CR, gated on identical tree digests), and hostile-verifier corpus parity for turn bundles. |
+| 5 | Surfaces, packaging, deletion | `serve`, `ui`, `judge-demo`, `judge-preview`, `demo` (including `demo live-git`), `tutorial`, `help` and its aliases, `quickstart`, `advanced`, `--version`, `witness review` (server and TTY), `witness propose --live`, guided `investigate --ci-log` / `--resume`, release builds, npm wrapper, Action, Codex plugin, then deletion of TS. |
 
-Every one of the ~40 subcommands dispatched in `src/cli-app.ts` must be assigned to a slice spec before slice 5 closes.
+Every one of the ~40 subcommands dispatched in `src/cli-app.ts` must be assigned to a slice spec before slice 5 closes. As of slice 2 every top-level command and subcommand there has a slice in the table above; `verify` (proof bundles) shipped in slice 1.
 
 ## Slice 5 decisions (recorded 2026-10-14)
 

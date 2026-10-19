@@ -1,0 +1,10 @@
+#!/bin/sh
+# Fake browser opener for TestLiveBrowserOpen (difftest/judge_live_test.go): it
+# appends its name and arguments (separated by \037, ended by \n) to
+# $FAULTLINE_BROWSER_LOG and exits with $FAULTLINE_BROWSER_EXIT (default 0).
+{
+  printf '%s' "${0##*/}"
+  for arg in "$@"; do printf '\037%s' "$arg"; done
+  printf '\n'
+} >> "$FAULTLINE_BROWSER_LOG"
+exit "${FAULTLINE_BROWSER_EXIT:-0}"

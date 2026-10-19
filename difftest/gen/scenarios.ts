@@ -1,0 +1,636 @@
+// Writer replay scenarios (slice 2 spec 2.4): the workspace a writer case
+// starts from. Each scenario is a pure function of its name, built once by
+// running frozen TS under the seed preload and committed under
+// difftest/testdata/scenarios/<name>/, so the Go replay copies the exact
+// files fl would have written instead of rebuilding them.
+//   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts
+import { execFileSync, spawn } from "node:child_process";
+import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { deflateSync } from "node:zlib";
+import { canonicalJson, digestJson } from "../../src/canonical.js";
+import { computeEnvironmentFingerprint } from "../../src/environment-fingerprint.js";
+import { appendLifecycleEvent, createCodexLifecycleLedger, GIT_CHECKPOINT_VERSION, signGitCheckpoint, type CodexLifecycleLedger } from "../../src/ledger.js";
+
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const cli = join(repo, "dist", "cli.js");
+const seedPreload = join(repo, "difftest", "gen", "seed.mjs");
+export const scenariosDir = join(repo, "difftest", "testdata", "scenarios");
+const recorderDir = join(repo, "difftest", "testdata", "recorder");
+const fakeDockerDir = join(repo, "difftest", "testdata", "fakedocker");
+
+// The pinned oracle release: CI regenerates on it and fails on drift.
+export function requireOracleNode(): void {
+  if (process.version !== "v22.22.2" && process.env.FAULTLINE_ALLOW_NODE_MISMATCH !== "1") {
+    console.error(`writer goldens come from Node v22.22.2, not ${process.version} (FAULTLINE_ALLOW_NODE_MISMATCH=1 for local experiments only)`);
+    process.exit(1);
+  }
+}
+
+// Goldens must come from a build of the current src/.
+function newestMtime(dir: string): number {
+  let newest = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    newest = Math.max(newest, entry.isDirectory() ? newestMtime(path) : statSync(path).mtimeMs);
+  }
+  return newest;
+}
+export function requireFreshBuild(): void {
+  if (!existsSync(cli) || statSync(cli).mtimeMs < newestMtime(join(repo, "src"))) {
+    console.error("dist/cli.js is missing or older than src/: run `pnpm build` first");
+    process.exit(1);
+  }
+}
+
+// CaseRoots are the directories one case owns: the workspace (the command's
+// cwd), HOME and TMPDIR, all under one physical mkdtemp directory so the
+// paths fl prints are the ones the harness masks.
+export type CaseRoots = { root: string; ws: string; home: string; tmp: string; argvLog: string; recorder: string };
+
+export function makeCaseRoots(): CaseRoots {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "faultline-writer-")));
+  const roots = { root, ws: join(root, "ws"), home: join(root, "home"), tmp: join(root, "tmp"), argvLog: join(root, "argv.log"), recorder: join(root, "recorder") };
+  for (const dir of [roots.ws, roots.home, roots.tmp, roots.recorder]) mkdirSync(dir, { mode: 0o755 });
+  writeFileSync(join(roots.home, "empty.gitconfig"), "");
+  writeRecorders(roots);
+  return roots;
+}
+
+// writeRecorders copies the recorder templates into the case's own recorder
+// directory with the argv log path written into the script: hardened git
+// runs with PATH as its only environment variable, so a recorder that read
+// FAULTLINE_ARGV_LOG would miss every git call fl hardens (the Go twin is
+// writeRecorders in difftest/writer_test.go).
+export function writeRecorders(roots: CaseRoots): void {
+  for (const name of ["git", "docker"]) {
+    const template = readFileSync(join(recorderDir, name), "utf8");
+    const line = "log=$FAULTLINE_ARGV_LOG\n";
+    if (!template.includes(line) || roots.argvLog.includes("'")) throw new Error(`recorder template ${name} cannot take ${roots.argvLog}`);
+    writeFileSync(join(roots.recorder, name), template.replace(line, `log='${roots.argvLog}'\n`), { mode: 0o755 });
+    chmodSync(join(roots.recorder, name), 0o755);
+  }
+}
+
+// inheritedOut names the variables a writer case never inherits: git's own,
+// FaultLine's, and those src/ reads to detect CI or a live model.
+export function inheritedOut(name: string): boolean {
+  return name.startsWith("GIT_") || name.startsWith("FAULTLINE_") || ["CI", "GITHUB_ACTIONS", "OPENAI_API_KEY"].includes(name);
+}
+
+// The environment every writer invocation runs with; extra is the
+// template's env (after placeholder substitution).
+export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | undefined, extra: Record<string, string>): NodeJS.ProcessEnv {
+  const path = [roots.recorder, ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), process.env.PATH ?? ""].join(":");
+  return {
+    ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !inheritedOut(name))),
+    HOME: roots.home, USERPROFILE: roots.home, TMPDIR: roots.tmp, TEMP: roots.tmp, TMP: roots.tmp,
+    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(roots.home, "empty.gitconfig"), LC_ALL: "C.UTF-8", LANGUAGE: "", GIT_DEFAULT_HASH: "sha1",
+    FAULTLINE_TEST_SEED: seed, FAULTLINE_NO_BROWSER: "1", FAULTLINE_ARGV_LOG: roots.argvLog, PATH: path,
+    ...extra
+  };
+}
+
+export type RunResult = { stdout: string; stderr: string; exit: number };
+
+// runCli runs frozen TS under the seed preload with cwd = the workspace.
+export function runCli(roots: CaseRoots, argv: string[], env: NodeJS.ProcessEnv): Promise<RunResult> {
+  return new Promise((done) => {
+    const child = spawn(process.execPath, ["--import", pathToFileURL(seedPreload).href, cli, ...argv], { env, cwd: roots.ws });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on("data", (b) => out.push(b));
+    child.stderr.on("data", (b) => err.push(b));
+    child.on("close", (code) => done({ stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8"), exit: code ?? -1 }));
+  });
+}
+
+export const PROPOSAL_ID = "demo-1";
+
+// PROPOSAL_INPUT is the `witness propose --input` file the witness scenarios
+// start from; it stays in the workspace as proposal.json.
+export const PROPOSAL_INPUT = {
+  proposalId: PROPOSAL_ID,
+  incidentPacket: {
+    symptom: "The repository state must not be bad.",
+    ciLog: "state.txt became bad",
+    repositoryLanguage: "Text",
+    repositorySummary: "Temporary repository for the writer replay."
+  },
+  witness: {
+    behavior: "state.txt must not be bad",
+    command: "node witness.mjs",
+    overlays: [{ path: "witness.mjs", bytesBase64: Buffer.from("export const faultLineWitness = 'approved-exact-bytes';\n", "utf8").toString("base64") }],
+    policy: { network: "disabled", credentials: "redacted", timeoutSeconds: 30 }
+  }
+};
+
+const PROPOSE = ["witness", "propose", "--input", "proposal.json"];
+const APPROVE = ["witness", "approve", PROPOSAL_ID, "--approved-by", "reviewer@example.test"];
+const FREEZE = ["witness", "freeze", PROPOSAL_ID];
+
+// Reviewer key material for the authenticated approval cases. The Ed25519
+// keys come from fixed 32-byte seeds (PKCS#8 = this prefix + the seed), so
+// the committed PEM files, keyrings and (Ed25519 being deterministic) the
+// signatures never change. EC_PUBLIC_PEM is a P-256 public key generated
+// once: a well-formed key that is not Ed25519.
+const PKCS8_ED25519_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
+const EC_PUBLIC_PEM = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEU2XZiU7j36AfpHTmuOZEZ2mFYM+I\nZTCOIJ2bfqCoMGaDZCGDX78GItE2wsgVj+xSpCzpOJ/9EwO81d3+N1OiDA==\n-----END PUBLIC KEY-----\n";
+// Well-formed keys that are not Ed25519 (generated once; Ed448/secp256k1 and
+// the encrypted key are not reproducible from a seed).
+const ED448_PRIVATE_PEM = "-----BEGIN PRIVATE KEY-----\nMEcCAQAwBQYDK2VxBDsEOdqvXW7sO1iXB6BRc4sn+F/f0jMqrH6lGHY+Oy03FHKu\nqZ2KYhuuf16t1NvHuCZG3Hi6+H6DqLYapA==\n-----END PRIVATE KEY-----\n";
+const ED448_PUBLIC_PEM = "-----BEGIN PUBLIC KEY-----\nMEMwBQYDK2VxAzoAOj/Ms7xqdC1QlHezuPgrgdUyvK7uYmT4vkmVrRtDGaVn2TWQ\nawWjXb5D0TGKIzuUeUZf0pptOtoA\n-----END PUBLIC KEY-----\n";
+const SECP256K1_PRIVATE_PEM = "-----BEGIN EC PRIVATE KEY-----\nMHQCAQEEIDSHyk7wRzw0YflBhDutD562C5xXxxbstdZfiip/QlncoAcGBSuBBAAK\noUQDQgAEUp5H3ToOAUymGbgmlDpwHeWE9ArepYvcrSfjhvTtjfM8Yi0WopHoLU5u\n7qqxBe7j1HjnB7paWOwQwI60+l4dhQ==\n-----END EC PRIVATE KEY-----\n";
+const ENCRYPTED_PRIVATE_PEM = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIGjMF8GCSqGSIb3DQEFDTBSMDEGCSqGSIb3DQEFDDAkBBAVpSZOUbkT/x3QSiHy\nue+pAgIIADAMBggqhkiG9w0CCQUAMB0GCWCGSAFlAwQBKgQQLOooz/ez8eiHfX+2\nLk8lugRAj0sFD8p9nJ0j5ztbsKwOL/kG0bGjbnVE7Lao3p/qEOk6IZAxm6pEVR/5\n+3ajc+6Z0dCzY7XmRqjz3tqpQgOfJA==\n-----END ENCRYPTED PRIVATE KEY-----\n";
+function reviewerKey(seedByte: number) {
+  const privateKey = createPrivateKey({ key: Buffer.concat([PKCS8_ED25519_PREFIX, Buffer.alloc(32, seedByte)]), format: "der", type: "pkcs8" });
+  const publicKey = createPublicKey(privateKey);
+  const der = publicKey.export({ type: "spki", format: "der" });
+  return {
+    privatePem: privateKey.export({ type: "pkcs8", format: "pem" }) as string,
+    publicPem: publicKey.export({ type: "spki", format: "pem" }) as string,
+    keyId: `sha256:${createHash("sha256").update(der).digest("hex")}`
+  };
+}
+const KEY1 = reviewerKey(1);
+const KEY2 = reviewerKey(2);
+const reviewerEntry = (approvedBy: string, k: { publicPem: string; keyId: string }) => ({ approvedBy, keyId: k.keyId, algorithm: "ED25519", publicKeyPem: k.publicPem });
+const keyring = (...reviewers: object[]) => `${JSON.stringify({ schemaVersion: "faultline.reviewer-keyring.v1", reviewers }, null, 2)}\n`;
+const REVIEWER = "reviewer@example.test";
+const KEY_FILES: Record<string, string> = {
+  "keys/reviewer.pem": KEY1.privatePem,
+  "keys/other.pem": KEY2.privatePem,
+  "keys/garbage.pem": "this is not a key\n",
+  "keys/keyring.json": keyring(reviewerEntry(REVIEWER, KEY1)),
+  "keys/keyring-other-key.json": keyring(reviewerEntry(REVIEWER, KEY2)),
+  "keys/keyring-other-identity.json": keyring(reviewerEntry("someone-else@example.test", KEY1)),
+  "keys/keyring-duplicate.json": keyring(reviewerEntry(REVIEWER, KEY1), reviewerEntry(REVIEWER, KEY1)),
+  "keys/keyring-ec.json": keyring({ approvedBy: REVIEWER, keyId: KEY1.keyId, algorithm: "ED25519", publicKeyPem: EC_PUBLIC_PEM }),
+  "keys/keyring-bad-pem.json": keyring({ approvedBy: REVIEWER, keyId: KEY1.keyId, algorithm: "ED25519", publicKeyPem: "not a pem" }),
+  "keys/keyring-wrong-keyid.json": keyring({ approvedBy: REVIEWER, keyId: KEY2.keyId, algorithm: "ED25519", publicKeyPem: KEY1.publicPem }),
+  "keys/keyring-empty.json": keyring(),
+  "keys/ed448.pem": ED448_PRIVATE_PEM,
+  "keys/secp256k1.pem": SECP256K1_PRIVATE_PEM,
+  "keys/encrypted.pem": ENCRYPTED_PRIVATE_PEM,
+  "keys/keyring-ed448.json": keyring({ approvedBy: REVIEWER, keyId: KEY1.keyId, algorithm: "ED25519", publicKeyPem: ED448_PUBLIC_PEM }),
+  // OpenSSL reads the PUBLIC KEY block first whatever the order of the blocks.
+  "keys/keyring-mixed-pub-priv.json": keyring({ ...reviewerEntry(REVIEWER, KEY1), publicKeyPem: KEY1.publicPem + KEY2.privatePem }),
+  "keys/keyring-mixed-priv-pub.json": keyring({ ...reviewerEntry(REVIEWER, KEY1), publicKeyPem: KEY2.privatePem + KEY1.publicPem }),
+  "keys/keyring-mixed-mismatch.json": keyring({ ...reviewerEntry(REVIEWER, KEY2), publicKeyPem: KEY1.publicPem + KEY2.privatePem }),
+  "keys/keyring-two-reviewers.json": keyring(reviewerEntry(REVIEWER, KEY2), reviewerEntry("someone-else@example.test", KEY1))
+};
+const SIGN = ["witness", "sign", PROPOSAL_ID, "--private-key", "keys/reviewer.pem", "--keyring", "keys/keyring.json"];
+const PROPOSAL_FILES = { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` };
+
+// forgeSignature flips one signature byte of the receipt and recomputes
+// receiptDigest, so only the Ed25519 check can fail.
+function forgeSignature(ws: string): void {
+  const path = join(ws, ".faultline", "witnesses", "authenticated-approvals", `${PROPOSAL_ID}.json`);
+  const receipt = JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
+  const signature = Buffer.from(receipt.signatureBase64!, "base64");
+  signature[0]! ^= 0x01;
+  receipt.signatureBase64 = signature.toString("base64");
+  delete receipt.receiptDigest;
+  receipt.receiptDigest = digestJson(receipt);
+  writeFileSync(path, `${canonicalJson(receipt)}\n`);
+}
+
+
+// Standing-policy scenarios (Task 8). policyFile hand-writes a policy the
+// CLI cannot (overlay templates, a tampered digest); the others are frozen
+// through `fl witness policy freeze`, whose policies never carry templates.
+const NO_OVERLAY_INPUT = { ...PROPOSAL_INPUT, witness: { ...PROPOSAL_INPUT.witness, overlays: [] } };
+const WITNESS_BYTES = PROPOSAL_INPUT.witness.overlays[0]!.bytesBase64;
+const policyFreeze = (id: string, command: string, maxTimeout: string): string[] =>
+  ["witness", "policy", "freeze", "--policy-id", id, "--frozen-by", "ops@example.test", "--command", command, "--max-timeout", maxTimeout];
+const POLICY_DIR = ".faultline/witnesses/standing-policies";
+function policyFile(policyId: string, templates: object[], maxTimeoutSeconds: number, digestOf = maxTimeoutSeconds): string {
+  const body = (timeout: number) => ({
+    schemaVersion: "faultline.standing-approval-policy.v1", policyId, frozenBy: "ops@example.test", frozenAt: "2026-07-16T11:00:00.000Z",
+    allowedCommands: ["node witness.mjs"], allowedOverlayTemplates: templates, maxTimeoutSeconds: timeout, network: "disabled", credentials: "redacted"
+  });
+  return `${JSON.stringify({ ...body(maxTimeoutSeconds), policyDigest: digestJson(body(digestOf)) }, null, 2)}\n`;
+}
+const POLICY_FILES: Record<string, string> = {
+  [`${POLICY_DIR}/pt-match.json`]: policyFile("pt-match", [{ path: "witness.mjs", bytesBase64: WITNESS_BYTES }], 60),
+  [`${POLICY_DIR}/pt-bytes.json`]: policyFile("pt-bytes", [{ path: "witness.mjs", bytesBase64: "b3RoZXI=" }], 60),
+  [`${POLICY_DIR}/pt-count.json`]: policyFile("pt-count", [{ path: "a.mjs", bytesBase64: "" }, { path: "witness.mjs", bytesBase64: WITNESS_BYTES }], 60),
+  [`${POLICY_DIR}/pt-tamper.json`]: policyFile("pt-tamper", [{ path: "witness.mjs", bytesBase64: WITNESS_BYTES }], 61, 60),
+  [`${POLICY_DIR}/pt-badschema.json`]: `${JSON.stringify({ schemaVersion: "faultline.standing-approval-policy.v1", policyId: "pt-badschema" }, null, 2)}\n`,
+  [`${POLICY_DIR}/pt-badjson.json`]: "{\n"
+};
+const POLICY_FREEZES = [policyFreeze("p-ok", "node witness.mjs", "60"), policyFreeze("p-cmd", "node other.mjs", "60"), policyFreeze("p-timeout", "node witness.mjs", "10")];
+
+// Ledger-binding scenario (Task 9): the committed fully bound ledger and Git
+// investigation, a partially bound ledger (valid, but without a checkpoint
+// for every state), investigations that break the binding, and a bound
+// record `fl ledger bind` writes; `after` derives tampered copies of it.
+const baseText = (rel: string): string => readFileSync(join(repo, "difftest", "testdata", "bases", rel), "utf8");
+const flipLast = (hex: string): string => `${hex.slice(0, -1)}${hex.endsWith("0") ? "1" : "0"}`;
+const jsonText = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
+const editedJson = (rel: string, edit: (v: any) => void): string => {
+  const value = JSON.parse(baseText(rel));
+  edit(value);
+  return jsonText(value);
+};
+const LEDGER_BOUND_FILES: Record<string, string> = {
+  "ledger.json": baseText("git-fully-bound/lifecycle/ledger.json"),
+  "ledger-partial.json": baseText("git-partially-bound/lifecycle/ledger.json"),
+  "ledger-tampered.json": editedJson("git-fully-bound/lifecycle/ledger.json", (v) => { v.events[0].hash = flipLast(v.events[0].hash); }),
+  "ledger-invalid.json": editedJson("git-fully-bound/lifecycle/ledger.json", (v) => { delete v.ledgerId; }),
+  "investigation.json": baseText("git-fully-bound/investigation.json"),
+  "investigation-tree-mismatch.json": editedJson("git-fully-bound/investigation.json", (v) => { v.states[0].tree = flipLast(v.states[0].tree); }),
+  "investigation-invalid.json": editedJson("git-fully-bound/investigation.json", (v) => { delete v.schemaVersion; }),
+  "not-json.txt": "{\n",
+  "out.json/keep": "occupied\n"
+};
+const LEDGER_BIND = ["ledger", "bind", "--ledger", "ledger.json", "--investigation", "investigation.json", "--output", "bound.json"];
+function tamperBound(ws: string): void {
+  const bound = JSON.parse(readFileSync(join(ws, "bound.json"), "utf8"));
+  const write = (name: string, edit: (v: any) => void): void => {
+    const copy = JSON.parse(JSON.stringify(bound));
+    edit(copy);
+    writeFileSync(join(ws, name), `${canonicalJson(copy)}\n`);
+  };
+  write("bound-digest-tampered.json", (v) => { v.bindingDigest = `sha256:${flipLast(v.bindingDigest.slice(7))}`; });
+  write("bound-schema-tampered.json", (v) => { v.nativeCodexInterception = true; });
+  write("bound-binding-tampered.json", (v) => { v.stateBindings[0].checkpointEventSequence += 1; });
+}
+
+// Git investigation scenarios (Task 15). A scenario repository is built with
+// git in a scratch directory, then written into the workspace as loose
+// objects deflated at level 0 (stored blocks: the same bytes from any zlib)
+// with a minimal HEAD/config/ref and the descendant's files, and no index,
+// logs or hooks, so its bytes depend on nothing but the commits. Each
+// scenario also holds a frozen witness (proposal.json, propose, approve,
+// freeze --repo repo: the session binding lands in repo/.faultline/incidents).
+export const PINNED_IMAGE = `registry.example/faultline-node@sha256:${"b".repeat(64)}`;
+const OTHER_IMAGE = `registry.example/faultline-node@sha256:${"c".repeat(64)}`;
+type RepoState = Record<string, string>;
+const state = (value: string, extra: RepoState = {}): RepoState => ({ "state.txt": `${value}\n`, ...extra });
+// A RepoState entry whose text starts with SYMLINK is committed as a
+// symbolic link to the rest of the text (only in a state before the last:
+// the checked-out workspace holds regular files only).
+const SYMLINK = "\0symlink:";
+type BuiltRepo = { commits: string[]; trees: string[]; files: RepoState[] };
+
+function scratchGit(dir: string, args: string[], objectFormat: string, input?: Buffer): Buffer {
+  return execFileSync("git", ["-C", dir, ...args], {
+    ...(input === undefined ? {} : { input }),
+    env: {
+      PATH: process.env.PATH ?? "", HOME: dir, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_DEFAULT_HASH: objectFormat,
+      GIT_AUTHOR_NAME: "FaultLine Test", GIT_AUTHOR_EMAIL: "faultline@example.test", GIT_AUTHOR_DATE: "2026-07-16T10:00:00Z",
+      GIT_COMMITTER_NAME: "FaultLine Test", GIT_COMMITTER_EMAIL: "faultline@example.test", GIT_COMMITTER_DATE: "2026-07-16T10:00:00Z",
+      LC_ALL: "C"
+    },
+    maxBuffer: 1 << 26
+  });
+}
+
+// buildRepo writes repo `rel` of the workspace: one commit per state (each
+// state is the whole tree), the last one checked out.
+// hostile, when given, adds objects and refs git's porcelain cannot make
+// (git mktree names no filesystem holds) before the objects are copied:
+// it returns the extra branches and the objects to leave out.
+type Hostile = (git: (args: string[], input?: Buffer) => Buffer, built: BuiltRepo) => { refs: Record<string, string>; drop: string[] };
+function buildRepo(ws: string, rel: string, states: RepoState[], objectFormat: "sha1" | "sha256" = "sha1", hostile?: Hostile): BuiltRepo {
+  const scratch = mkdtempSync(join(tmpdir(), "faultline-scenario-repo-"));
+  try {
+    scratchGit(scratch, ["init", "-q", `--object-format=${objectFormat}`, "--initial-branch=main"], objectFormat);
+    const built: BuiltRepo = { commits: [], trees: [], files: states };
+    let previous: RepoState = {};
+    for (const [index, files] of states.entries()) {
+      for (const name of Object.keys(previous)) rmSync(join(scratch, name), { force: true });
+      for (const [name, text] of Object.entries(files)) {
+        mkdirSync(dirname(join(scratch, name)), { recursive: true });
+        if (text.startsWith(SYMLINK)) symlinkSync(text.slice(SYMLINK.length), join(scratch, name));
+        else writeFileSync(join(scratch, name), text);
+      }
+      scratchGit(scratch, ["add", "-A"], objectFormat);
+      scratchGit(scratch, ["commit", "-q", "--allow-empty", "-m", `state ${index}`], objectFormat);
+      built.commits.push(scratchGit(scratch, ["rev-parse", "HEAD"], objectFormat).toString("utf8").trim());
+      built.trees.push(scratchGit(scratch, ["rev-parse", "HEAD^{tree}"], objectFormat).toString("utf8").trim());
+      previous = files;
+    }
+    const gitDir = join(ws, rel, ".git");
+    for (const dir of ["objects", "refs/heads", "refs/tags"]) mkdirSync(join(gitDir, dir), { recursive: true });
+    writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(join(gitDir, "config"), objectFormat === "sha1"
+      ? "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n"
+      : "[core]\n\trepositoryformatversion = 1\n\tfilemode = true\n\tbare = false\n[extensions]\n\tobjectformat = sha256\n");
+    writeFileSync(join(gitDir, "refs", "heads", "main"), `${built.commits.at(-1)}\n`);
+    const extra = hostile?.((args, input) => scratchGit(scratch, args, objectFormat, input), built) ?? { refs: {}, drop: [] };
+    for (const [name, commit] of Object.entries(extra.refs)) writeFileSync(join(gitDir, "refs", "heads", name), `${commit}\n`);
+    const objects = scratchGit(scratch, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)"], objectFormat)
+      .toString("utf8").split("\n").filter(Boolean);
+    for (const line of objects) {
+      const [oid, type] = line.split(" ") as [string, string];
+      if (extra.drop.includes(oid)) continue;
+      const body = scratchGit(scratch, ["cat-file", type, oid], objectFormat);
+      mkdirSync(join(gitDir, "objects", oid.slice(0, 2)), { recursive: true });
+      writeFileSync(join(gitDir, "objects", oid.slice(0, 2), oid.slice(2)),
+        deflateSync(Buffer.concat([Buffer.from(`${type} ${body.length}\0`), body]), { level: 0 }));
+    }
+    for (const [name, text] of Object.entries(states.at(-1)!)) {
+      mkdirSync(dirname(join(ws, rel, name)), { recursive: true });
+      writeFileSync(join(ws, rel, name), text);
+    }
+    return built;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+// lifecycleLedger is a deterministic SIDE_CAR ledger with one clean
+// checkpoint per listed state (fixtures.ts lifecycleBoundToDescendant and
+// lifecycleBoundToEveryInvestigatedState, with fixed times and ids).
+function lifecycleLedger(repo: BuiltRepo, indices: number[]): string {
+  const at = (second: number) => new Date(Date.UTC(2026, 6, 16, 10, 0, second)).toISOString();
+  let second = 0;
+  let ledger: CodexLifecycleLedger = createCodexLifecycleLedger({ ledgerId: "ledger-scenario", sessionId: "scenario-session", createdAt: at(0) });
+  const add = (input: Parameters<typeof appendLifecycleEvent>[1]) => {
+    second += 1;
+    ledger = appendLifecycleEvent(ledger, input, { occurredAt: at(second), eventId: `event-${second}` });
+  };
+  add({ type: "SESSION_STARTED", payload: { transport: "SIDE_CAR", workingDirectory: "/work/repository", model: "gpt-5.6" } });
+  for (const [offset, index] of indices.entries()) {
+    const turnOrdinal = offset + 1;
+    add({ type: "TURN_STARTED", payload: { turnId: `turn-${turnOrdinal}`, turnOrdinal, promptDigest: `sha256:${"c".repeat(64)}` } });
+    add({ type: "TURN_COMPLETED", payload: { turnId: `turn-${turnOrdinal}`, turnOrdinal, outcome: "COMPLETED", outputDigest: `sha256:${"d".repeat(64)}` } });
+    const checkpoint = signGitCheckpoint({
+      schemaVersion: GIT_CHECKPOINT_VERSION, repositoryRoot: "/work/repository", headCommit: repo.commits[index]!, treeDigest: repo.trees[index]!,
+      capturedAt: at(second), clean: true
+    });
+    add({ type: "WORKTREE_CHECKPOINT", payload: { checkpoint, afterTurnOrdinal: turnOrdinal } });
+  }
+  add({ type: "SESSION_ENDED", payload: { reason: "COMPLETED", completedTurns: indices.length } });
+  return jsonText(ledger);
+}
+
+// runtimeMapping maps the environment fingerprint of every state to an image.
+function runtimeMapping(repo: BuiltRepo, images: string[]): string {
+  const mapping: Record<string, string> = {};
+  for (const [index, files] of repo.files.entries()) {
+    const dir = mkdtempSync(join(tmpdir(), "faultline-scenario-fingerprint-"));
+    try {
+      for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+      mapping[computeEnvironmentFingerprint(dir).digest] = images[index % images.length]!;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  return jsonText({ schemaVersion: "faultline.runtime-mapping.v1", mapping });
+}
+
+const CJK_OVERLAYS = [
+  { path: "说明/视图.md", text: "view\n" },
+  { path: "说明/神经.md", text: "nerve\n" },
+  { path: "🤔.md", text: "thinking\n" },
+  { path: "𠀀.txt", text: "ext-b\n" },
+  { path: "中.txt", text: "middle\n" }
+];
+const witnessInput = (options: { overlays?: { path: string; text: string }[]; timeoutSeconds?: number } = {}): string => jsonText({
+  ...PROPOSAL_INPUT,
+  witness: {
+    ...PROPOSAL_INPUT.witness,
+    overlays: [...PROPOSAL_INPUT.witness.overlays, ...(options.overlays ?? []).map((o) => ({ path: o.path, bytesBase64: Buffer.from(o.text, "utf8").toString("base64") }))],
+    policy: { ...PROPOSAL_INPUT.witness.policy, timeoutSeconds: options.timeoutSeconds ?? 30 }
+  }
+});
+const FREEZE_IN_REPO = ["witness", "freeze", PROPOSAL_ID, "--repo", "repo"];
+const repeat = (value: string, n: number): RepoState[] => Array.from({ length: n }, () => state(value));
+function gitScenario(states: RepoState[], options: {
+  objectFormat?: "sha1" | "sha256"; proposal?: string; extra?: (repo: BuiltRepo) => Record<string, string>; hostile?: Hostile
+} = {}): Scenario {
+  return {
+    files: { "proposal.json": options.proposal ?? witnessInput() },
+    setup: (ws) => {
+      const repo = buildRepo(ws, "repo", states, options.objectFormat, options.hostile);
+      for (const [path, text] of Object.entries(options.extra?.(repo) ?? {})) writeFileSync(join(ws, path), text);
+    },
+    argv: [PROPOSE, APPROVE, FREEZE_IN_REPO]
+  };
+}
+const GOOD_BAD_REPAIRED = [state("good"), state("bad"), state("repaired")];
+const manyFiles = (value: string): RepoState =>
+  Object.fromEntries([["state.txt", "good\n"], ...Array.from({ length: 25 }, (_, i) => [`state${String(i + 1).padStart(2, "0")}.txt`, `${value}\n`])]);
+
+// hostileTrees adds branches whose trees break materialization, patch
+// derivation or ancestry in ways the filesystem and git porcelain cannot
+// produce (round 8 review): each is a child of the good state (main~1)
+// whose tree also holds state.txt = bad.
+//   nonutf8      a blob named weird\377.txt (not UTF-8)
+//   long         a blob with a 304-byte name (past NAME_MAX)
+//   dotgit       a .GIT/config entry (git refuses the path)
+//   ob0, ob1     ob0 holds the file `a`; its child ob1 holds `a/b` instead
+//   lostblob     a blob whose object is left out of the repository
+const hostileTrees: Hostile = (git, built) => {
+  const blob = (text: string) => git(["hash-object", "-w", "--stdin"], Buffer.from(text)).toString("utf8").trim();
+  const tree = (entries: string) => git(["mktree"], Buffer.from(entries, "latin1")).toString("utf8").trim();
+  const commit = (t: string, parent: string | undefined, message: string) =>
+    git(["commit-tree", t, ...(parent === undefined ? [] : ["-p", parent]), "-m", message]).toString("utf8").trim();
+  const base = built.commits[0]!;
+  const good = blob("good\n"), bad = blob("bad\n"), x = blob("x\n"), lost = blob("lost blob\n");
+  const withBad = (entries: string) => tree(`100644 blob ${bad}\tstate.txt\n${entries}`);
+  const ob0 = commit(tree(`100644 blob ${x}\ta\n100644 blob ${good}\tstate.txt\n`), undefined, "ob0");
+  return {
+    refs: {
+      nonutf8: commit(withBad(`100644 blob ${x}\tweird\xff.txt\n`), base, "nonutf8"),
+      long: commit(withBad(`100644 blob ${x}\t${"n".repeat(304)}\n`), base, "long"),
+      dotgit: commit(withBad(`040000 tree ${tree(`100644 blob ${x}\tconfig\n`)}\t.GIT\n`), base, "dotgit"),
+      ob0,
+      ob1: commit(withBad(`040000 tree ${tree(`100644 blob ${x}\tb\n`)}\ta\n`), ob0, "ob1"),
+      lostblob: commit(withBad(`100644 blob ${lost}\tlost.txt\n`), base, "lostblob")
+    },
+    drop: [lost]
+  };
+};
+
+// SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
+// keyed by workspace path), the files it writes, then the fl invocations that
+// build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
+type Scenario = {
+  bases?: Record<string, string>; files: Record<string, string>; setup?: (ws: string) => void; argv: string[][]; after?: (ws: string) => void;
+};
+export const SCENARIOS: Record<string, Scenario> = {
+  "empty": { files: {}, argv: [] },
+  "witness-proposed": { files: { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` }, argv: [PROPOSE] },
+  "witness-approved": { files: { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` }, argv: [PROPOSE, APPROVE] },
+  "witness-frozen": { files: { "proposal.json": `${JSON.stringify(PROPOSAL_INPUT, null, 2)}\n` }, argv: [PROPOSE, APPROVE, FREEZE] },
+  "witness-approved-keys": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE] },
+  "witness-frozen-keys": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE] },
+  "witness-signed": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE, SIGN] },
+  "witness-signed-forged": { files: { ...PROPOSAL_FILES, ...KEY_FILES }, argv: [PROPOSE, APPROVE, FREEZE, SIGN], after: forgeSignature },
+  "witness-overlay-policies": { files: { ...PROPOSAL_FILES, ...POLICY_FILES }, argv: [PROPOSE, ...POLICY_FREEZES] },
+  "witness-nooverlay-policies": { files: { "proposal.json": `${JSON.stringify(NO_OVERLAY_INPUT, null, 2)}\n`, ...POLICY_FILES }, argv: [PROPOSE, ...POLICY_FREEZES] },
+  // A Git proof bundle: `fl verify bundle` runs git, so it checks the
+  // recorders and the argv normalization.
+  "git-two-states-bundle": { bases: { bundle: "git-two-states" }, files: {}, argv: [] },
+  "ledger-bound": { files: LEDGER_BOUND_FILES, argv: [LEDGER_BIND], after: tamperBound },
+  "git-two-states": gitScenario([state("good"), state("bad")]),
+  "git-many-states": gitScenario([...repeat("good", 6), ...repeat("bad", 6)]),
+  "git-max-states-overflow": gitScenario([...repeat("good", 4), ...repeat("bad", 4)]),
+  "git-heterogeneous": gitScenario([state("good", { "package.json": "{\"name\":\"demo\",\"version\":\"1.0.0\"}\n" }),
+    state("bad", { "package.json": "{\"name\":\"demo\",\"version\":\"2.0.0\"}\n" })], {
+    extra: (repo) => ({ "runtime-mapping.json": runtimeMapping(repo, [PINNED_IMAGE, OTHER_IMAGE]) })
+  }),
+  "git-ledger-partial": gitScenario(GOOD_BAD_REPAIRED, { extra: (repo) => ({ "ledger.json": lifecycleLedger(repo, [2]) }) }),
+  "git-ledger-full": gitScenario(GOOD_BAD_REPAIRED, { extra: (repo) => ({ "ledger.json": lifecycleLedger(repo, [0, 1, 2]) }) }),
+  "git-unbound": gitScenario(GOOD_BAD_REPAIRED),
+  "git-sha256": gitScenario(GOOD_BAD_REPAIRED, { objectFormat: "sha256" }),
+  "git-cjk-overlays": gitScenario([state("good"), state("bad")], { proposal: witnessInput({ overlays: CJK_OVERLAYS }) }),
+  "git-non-monotonic": gitScenario([state("good"), state("bad"), state("good"), state("bad")]),
+  // Round 10 (r10-3 verify F4): two FAIL_TO_PASS transitions, both listed
+  // in the proof page's recovery panel.
+  "git-two-recoveries": gitScenario([state("good"), state("bad"), state("good"), state("bad"), state("good")]),
+  "git-all-pass": gitScenario(repeat("good", 3)),
+  "git-all-fail": gitScenario(repeat("bad", 3)),
+  // A one-second witness. The CLI passes no sandbox limits, so this does
+  // not reach the sandbox (TS too): investigate-docker-timeout's fake
+  // Docker outlives the default 120 s timeout once instead.
+  "git-hostile-trees": gitScenario([state("good"), state("bad")], { hostile: hostileTrees }),
+  "git-short-timeout": gitScenario([state("good"), state("bad")], { proposal: witnessInput({ timeoutSeconds: 1 }) }),
+  // Round 10 (r10-3 G1): the states differ only in uv.lock, an environment
+  // descriptor no other case changes, so a name missing from the
+  // descriptor list turns CONFIGURATION_ERROR into a proof.
+  "git-descriptor-change": gitScenario([state("good", { "uv.lock": "version = 1\n" }), state("bad", { "uv.lock": "version = 2\n" })]),
+  // Round 10 (r10-3 N1): 25 files that all turn bad, of which only the pair
+  // state13/state14 fails the witness (fake Docker pair-bad), so ddmin
+  // narrows a failing subset over several granularities.
+  "git-many-files": gitScenario([manyFiles("good"), manyFiles("bad")]),
+  // Round 10 (r10-3 G3): an unstable state (the witness does not parse,
+  // fake Docker broken-state) between the PASS and the FAIL state, so the
+  // two stable states are not adjacent and no transition may be claimed.
+  "git-unstable-middle": gitScenario([state("good"), state("broken"), state("bad")]),
+  // Round 11 (r11-3 G10): the frozen overlay's target witness.mjs is a
+  // symbolic link in one middle state only, so materializing that state
+  // fails in the execution loop and the error alone must make the status
+  // EXECUTION_ERROR (no transition: the stable states are not adjacent).
+  "git-overlay-symlink-middle": gitScenario([state("good"), state("good", { "witness.mjs": `${SYMLINK}state.txt` }), state("bad")]),
+  // The same symbolic link beside an adjacent PASS/FAIL pair: the pair is a
+  // transition, and only the error keeps it from being claimed as proof.
+  "git-overlay-symlink-pair": gitScenario([state("good"), state("bad"), state("bad", { "witness.mjs": `${SYMLINK}state.txt` }), state("bad")]),
+  // judge-proof and commit-proof-preview read the committed COMMIT_PROOF
+  // sample from the workspace by default.
+  "commit-proof-sample": {
+    files: {}, argv: [],
+    setup: (ws) => cpSync(join(repo, "docs", "samples", "self-incident-commit-proof"), join(ws, "docs", "samples", "self-incident-commit-proof"), { recursive: true })
+  },
+  // Git proof bundles whose pages take the lifecycle-bound, recovery and
+  // unstable-state branches (and one the loader refuses).
+  "proof-bases": {
+    bases: Object.fromEntries(["git-fully-bound", "git-partially-bound", "git-shape-mixed-history", "git-sha256"].map((b) => [`bases/${b}`, b])),
+    files: {}, argv: []
+  }
+};
+
+// A scenario is committed as <name>/dirs.txt, every directory of the
+// workspace one per line (git keeps no empty directories, and the witness
+// store makes some), and <name>/tree/, its files.
+// copyScenario fills the workspace from the committed scenario.
+export function copyScenario(name: string, ws: string): void {
+  if (!Object.hasOwn(SCENARIOS, name)) throw new Error(`unknown scenario ${name}`);
+  const dir = join(scenariosDir, name);
+  for (const rel of readFileSync(join(dir, "dirs.txt"), "utf8").split("\n").filter(Boolean)) mkdirSync(join(ws, rel), { recursive: true });
+  if (existsSync(join(dir, "tree"))) copyMapped(join(dir, "tree"), ws, (entry) => (entry === COMMITTED_GIT_DIR ? ".git" : entry));
+}
+
+// Git refuses to commit a path with a .git component, so a scenario
+// repository's .git directory is committed as COMMITTED_GIT_DIR (dirs.txt
+// keeps the real names); the Go twin is copyScenario in scenarios_test.go.
+export const COMMITTED_GIT_DIR = "dot-git";
+
+// copyMapped copies the files under from into to, renaming each path
+// component with rename; directories are created as needed.
+function copyMapped(from: string, to: string, rename: (entry: string) => string): void {
+  for (const entry of readdirSync(from)) {
+    const source = join(from, entry);
+    const target = join(to, rename(entry));
+    if (lstatSync(source).isDirectory()) {
+      mkdirSync(target, { recursive: true });
+      copyMapped(source, target, rename);
+    } else {
+      cpSync(source, target);
+    }
+  }
+}
+
+// resetModes sets directories to 0755 and files to 0644 under root. A case
+// calls it once its scenario and mutations are in place, so the workspace
+// fl starts from never depends on the checkout or on how the harness wrote
+// it (Node's 0o666/0o777 defaults vs Go's 0o644/0o755 under umask 0); the Go
+// twin is resetModes in difftest/scenarios_test.go.
+export function resetModes(root: string, rel = ""): void {
+  for (const name of readdirSync(join(root, rel))) {
+    const r = rel ? `${rel}/${name}` : name;
+    const stat = lstatSync(join(root, r));
+    if (stat.isDirectory()) {
+      chmodSync(join(root, r), 0o755);
+      resetModes(root, r);
+    } else if (stat.isFile()) chmodSync(join(root, r), 0o644);
+  }
+}
+
+// listDirs returns every directory under root, sorted; it refuses anything
+// but directories and regular files.
+function listDirs(root: string, rel = ""): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(join(root, rel)).sort()) {
+    const r = rel ? `${rel}/${name}` : name;
+    const stat = lstatSync(join(root, r));
+    if (stat.isDirectory()) out.push(r, ...listDirs(root, r));
+    else if (!stat.isFile()) throw new Error(`scenario entry ${r} is not a regular file`);
+  }
+  return out;
+}
+
+async function buildScenario(name: string): Promise<void> {
+  const scenario = SCENARIOS[name]!;
+  const roots = makeCaseRoots();
+  try {
+    for (const [path, base] of Object.entries(scenario.bases ?? {})) {
+      cpSync(join(repo, "difftest", "testdata", "bases", base), join(roots.ws, path), { recursive: true });
+    }
+    for (const [path, text] of Object.entries(scenario.files)) {
+      mkdirSync(dirname(join(roots.ws, path)), { recursive: true });
+      writeFileSync(join(roots.ws, path), text);
+    }
+    scenario.setup?.(roots.ws);
+    for (const argv of scenario.argv) {
+      const r = await runCli(roots, argv, writerEnv(roots, `scenario:${name}`, "pass-fail", {}));
+      if (r.exit !== 0) throw new Error(`scenario ${name}: fl ${argv.join(" ")} exited ${r.exit}\n${r.stdout}${r.stderr}`);
+    }
+    scenario.after?.(roots.ws);
+    const dirs = listDirs(roots.ws);
+    const out = join(scenariosDir, name);
+    rmSync(out, { recursive: true, force: true });
+    mkdirSync(out, { recursive: true });
+    writeFileSync(join(out, "dirs.txt"), dirs.map((d) => `${d}\n`).join(""));
+    if (readdirSync(roots.ws).length > 0) {
+      mkdirSync(join(out, "tree"));
+      copyMapped(roots.ws, join(out, "tree"), (entry) => {
+        if (entry === COMMITTED_GIT_DIR) throw new Error(`scenario ${name} has a ${COMMITTED_GIT_DIR} entry`);
+        return entry === ".git" ? COMMITTED_GIT_DIR : entry;
+      });
+    }
+  } finally {
+    rmSync(roots.root, { recursive: true, force: true });
+  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  // Umask 0, like gen-writers.ts: fl's modes reach the files as requested.
+  process.umask(0);
+  requireOracleNode();
+  requireFreshBuild();
+  for (const entry of existsSync(scenariosDir) ? readdirSync(scenariosDir) : []) {
+    if (!Object.hasOwn(SCENARIOS, entry)) rmSync(join(scenariosDir, entry), { recursive: true, force: true });
+  }
+  for (const name of Object.keys(SCENARIOS).sort()) {
+    await buildScenario(name);
+    console.log(`scenario ${name}`);
+  }
+}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -226,5 +227,118 @@ func TestDirentTypeKnown(t *testing.T) {
 		if got := direntTypeKnown(uint8(d)); got != known[uint8(d)] {
 			t.Errorf("direntTypeKnown(%d) = %v", d, got)
 		}
+	}
+}
+
+// TestErrorPathReplacesLoneSurrogate pins Node 22's text: fs errors print
+// the path through UTF-8, so a lone surrogate shows as U+FFFD.
+func TestErrorPathReplacesLoneSurrogate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows prints the namespaced path (errorPath's Windows branch)")
+	}
+	dir := filepath.Join(t.TempDir(), "missing")
+	path, shown := dir+"/\xed\xb0\x80", dir+"/�"
+	if _, err := ReadText(path); err == nil || err.Error() != "ENOENT: no such file or directory, open '"+shown+"'" {
+		t.Errorf("ReadText error = %v", err)
+	}
+	if err := WriteFileUTF8(path, "x", 0o600, false); err == nil || err.Error() != "ENOENT: no such file or directory, open '"+shown+"'" {
+		t.Errorf("WriteFileUTF8 error = %v", err)
+	}
+	if err := Rename(path, path+"b"); err == nil || err.Error() != "ENOENT: no such file or directory, rename '"+shown+"' -> '"+shown+"b'" {
+		t.Errorf("Rename error = %v", err)
+	}
+	if err := Mkdir(path, 0o700); err == nil || err.Error() != "ENOENT: no such file or directory, mkdir '"+shown+"'" {
+		t.Errorf("Mkdir error = %v", err)
+	}
+}
+
+// mkdtempSync names the template in its error, fs/promises.mkdtemp the path
+// it tried (req->path after the C library's mkdtemp filled it in); Windows
+// libuv prints the template for both (round 7 #3).
+func TestMkdtempErrorPath(t *testing.T) {
+	prefix := filepath.Join(t.TempDir(), "missing", "faultline-x-")
+	_, err := Mkdtemp(prefix)
+	if want := "ENOENT: no such file or directory, mkdtemp '" + errorPath(prefix) + "XXXXXX'"; err == nil || err.Error() != want {
+		t.Errorf("Mkdtemp: %v, want %s", err, want)
+	}
+	_, err = MkdtempAsync(prefix)
+	e, ok := err.(*Error)
+	if !ok {
+		t.Fatalf("MkdtempAsync: %v", err)
+	}
+	suffix, found := strings.CutPrefix(e.Path, errorPath(prefix))
+	if isWindows {
+		if suffix != "XXXXXX" {
+			t.Errorf("MkdtempAsync on Windows: %v", err)
+		}
+		return
+	}
+	if !found || len(suffix) != 6 || suffix == "XXXXXX" || strings.Trim(suffix, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") != "" || e.Code != "ENOENT" {
+		t.Errorf("MkdtempAsync: %v", err)
+	}
+}
+
+// TestMkdirAllFollowsSymlinks pins MKDirpSync's uv_fs_stat (not lstat) of
+// an existing path: a symlink to a directory counts as the directory
+// (r9-3 F2). Expected results from Node 22's mkdirSync({recursive: true}).
+func TestMkdirAllFollowsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	for _, p := range []string{"real", "file", "link", "flink", "dangle", "link2"} {
+		var err error
+		switch p {
+		case "real":
+			err = os.Mkdir(filepath.Join(dir, p), 0o755)
+		case "file":
+			err = os.WriteFile(filepath.Join(dir, p), nil, 0o644)
+		case "link":
+			err = os.Symlink("real", filepath.Join(dir, p))
+		case "flink":
+			err = os.Symlink("file", filepath.Join(dir, p))
+		case "dangle":
+			err = os.Symlink("nowhere", filepath.Join(dir, p))
+		case "link2":
+			err = os.Symlink("link", filepath.Join(dir, p))
+		}
+		if err != nil {
+			if runtime.GOOS == "windows" {
+				// CI's Windows runners are administrators, who may create
+				// symlinks; elsewhere that needs Developer Mode.
+				t.Skip("creating a symlink: " + err.Error())
+			}
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct{ path, want string }{
+		{"link", ""},
+		{"link/sub", ""},
+		{"link2", ""},
+		{"link2/a/b", ""},
+		{"flink", "EEXIST: file already exists, mkdir '%s'"},
+		{"flink/x", "ENOTDIR: not a directory, mkdir '%s'"},
+		{"dangle", "ENOENT: no such file or directory, mkdir '%s'"},
+		{"dangle/x", "ENOENT: no such file or directory, mkdir '%s'"},
+	} {
+		if runtime.GOOS == "windows" && c.want != "" {
+			// The error texts were measured on Unix only; on Windows
+			// (CI's runners can create symlinks) only the links to
+			// directories, which F2 is about, are checked.
+			continue
+		}
+		p := filepath.Join(dir, filepath.FromSlash(c.path))
+		err := MkdirAll(p, 0o755)
+		got := ""
+		if err != nil {
+			got = err.Error()
+		}
+		want := c.want
+		if want != "" {
+			want = strings.Replace(want, "%s", p, 1)
+		}
+		if got != want {
+			t.Errorf("MkdirAll(%s) = %q, want %q", c.path, got, want)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(dir, "real", "a", "b")); err != nil || !info.IsDir() {
+		t.Errorf("link2/a/b was not created through the links: %v", err)
 	}
 }

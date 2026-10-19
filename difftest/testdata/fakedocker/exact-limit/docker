@@ -1,0 +1,27 @@
+#!/bin/sh
+# Fake Docker "exact-limit" (README.md): pass-fail, except that a passing
+# `run` writes exactly 1,048,576 bytes to stdout (the default maxOutputBytes):
+# filler, a newline and the PREDICATE_PASS result line, without a trailing
+# newline. `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  src=
+  prev=
+  for arg in "$@"; do
+    if [ "$prev" = "--mount" ]; then
+      case "$arg" in type=bind,src=*) src=${arg#type=bind,src=}; src=${src%%,*} ;; esac
+    fi
+    prev=$arg
+  done
+  if [ "$(cat "$src/state.txt" 2>/dev/null)" = bad ]; then
+    exec "$(dirname "$0")/../pass-fail/docker" "$@"
+  fi
+  line='FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}'
+  head -c $((1048576 - ${#line} - 1)) /dev/zero | tr '\0' 'a'
+  printf '\n%s' "$line"
+  exit 0
+  ;;
+esac
+printf 'fake docker (exact-limit): unsupported command: %s\n' "$1" >&2
+exit 125

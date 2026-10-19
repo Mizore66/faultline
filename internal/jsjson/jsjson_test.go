@@ -216,6 +216,7 @@ func TestStringifyStackOverflow(t *testing.T) {
 			{SiteGitProof, "arr", 2232}, {SiteGitProof, "obj", 4165}, {SiteGitProof, "idx", 2231}, {SiteGitProof, "alt", 2906},
 			{SiteGitLedger, "arr", 2232}, {SiteGitLedger, "obj", 4165}, {SiteGitLedger, "idx", 2231}, {SiteGitLedger, "alt", 2905},
 			{SiteDemoWitness, "arr", 2232}, {SiteDemoWitness, "obj", 4164}, {SiteDemoWitness, "idx", 2231}, {SiteDemoWitness, "alt", 2905},
+			{SiteCLI, "arr", 2235}, {SiteCLI, "obj", 4170}, {SiteCLI, "idx", 2234}, {SiteCLI, "alt", 2909},
 		}},
 		{"darwin", "arm64", []row{
 			{SiteDemo, "arr", 2610}, {SiteDemo, "arr0", 2609}, {SiteDemo, "obj", 6089}, {SiteDemo, "idx", 2491}, {SiteDemo, "alt", 3653}, {SiteDemo, "dup", 2491},
@@ -223,6 +224,8 @@ func TestStringifyStackOverflow(t *testing.T) {
 			{SiteGitProof, "arr", 2610}, {SiteGitProof, "obj", 6088}, {SiteGitProof, "idx", 2490}, {SiteGitProof, "alt", 3652},
 			{SiteGitLedger, "arr", 2609}, {SiteGitLedger, "obj", 6087}, {SiteGitLedger, "idx", 2490}, {SiteGitLedger, "alt", 3652},
 			{SiteDemoWitness, "arr", 2609}, {SiteDemoWitness, "obj", 6086}, {SiteDemoWitness, "idx", 2490}, {SiteDemoWitness, "alt", 3652},
+			// Measured on Node 22.22.2 (stack-live, macos-latest CI).
+			{SiteCLI, "arr", 2613}, {SiteCLI, "obj", 6096}, {SiteCLI, "idx", 2494}, {SiteCLI, "alt", 3658},
 		}},
 		{"linux", "arm64", []row{
 			{SiteDemo, "arr", 1827}, {SiteDemo, "arr0", 1826}, {SiteDemo, "obj", 3653}, {SiteDemo, "idx", 1956}, {SiteDemo, "alt", 2434}, {SiteDemo, "dup", 1956},
@@ -230,6 +233,7 @@ func TestStringifyStackOverflow(t *testing.T) {
 			{SiteGitProof, "arr", 1827}, {SiteGitProof, "obj", 3652}, {SiteGitProof, "idx", 1956}, {SiteGitProof, "alt", 2434},
 			{SiteGitLedger, "arr", 1826}, {SiteGitLedger, "obj", 3651}, {SiteGitLedger, "idx", 1956}, {SiteGitLedger, "alt", 2434},
 			{SiteDemoWitness, "arr", 1826}, {SiteDemoWitness, "obj", 3651}, {SiteDemoWitness, "idx", 1955}, {SiteDemoWitness, "alt", 2434},
+			{SiteCLI, "arr", 1829}, {SiteCLI, "obj", 3657}, {SiteCLI, "idx", 1959}, {SiteCLI, "alt", 2438},
 		}},
 	}
 	saved := v8Stack

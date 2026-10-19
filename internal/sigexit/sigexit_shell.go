@@ -71,3 +71,7 @@ func RecordIgnored() {
 		}
 	}
 }
+
+// restoreRuntimeHandler is a no-op here: boot leaves the runtime's handlers
+// in place, so signal.Notify alone delivers an intercepted signal.
+func restoreRuntimeHandler(syscall.Signal) {}

@@ -132,7 +132,7 @@ function matches(pattern: string, file: string): boolean {
 }
 
 // Ops whose target is a path in the bundle (or the bundle itself), not an existing file.
-const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "fifo", "sparse-file", "many-files", "fake-git", "pad-total"]);
+export const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "fifo", "sparse-file", "many-files", "fake-git", "pad-total"]);
 
 export function expandCases(base: string, root: string, templates: Template[]): Case[] {
   const files = listFiles(root);
@@ -438,7 +438,7 @@ export function caseEnv(c: Case, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...env, PATH: `${dir}:${env.PATH ?? ""}` };
 }
 
-export function treeDigest(root: string): string {
+export function treeDigest(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes)): string {
   const lines: string[] = [];
   if (!existsSync(root)) return sha256(""); // remove-root; Go lists nothing either
   const walk = (rel: string) => {
@@ -449,7 +449,7 @@ export function treeDigest(root: string): string {
       if (stat.isSymbolicLink()) lines.push(`L ${r} ${readlinkSync(path)}`);
       else if (stat.isDirectory()) { lines.push(`D ${r}`); walk(r); }
       else if (!stat.isFile()) lines.push(`S ${r}`); // a FIFO: reading it would block
-      else lines.push(`F ${r} ${sha256(readFileSync(path))}`);
+      else lines.push(`F ${r} ${fileDigest(r, readFileSync(path))}`);
     }
   };
   walk("");
@@ -491,9 +491,30 @@ export function maskGitDetail(detail: string): string {
 }
 
 export function normalize(text: string, bundle: string, maskGit = true): string {
-  let out = text;
   // Only the path passed to fl is masked (goldens are generated on Linux).
-  out = out.split(bundle).join("<BUNDLE>");
+  return maskGitOutput(text.split(bundle).join("<BUNDLE>"), maskGit);
+}
+
+// normalizeWriter masks a writer case's own directories (slice 2 spec 2.3):
+// the workspace, its TMPDIR and HOME, a judge-proof server port, then the
+// git masks verify uses. Digests are never masked.
+export function normalizeWriter(text: string, roots: { ws: string; tmp: string; home: string }): string {
+  let out = text;
+  for (const [path, mask] of [[roots.ws, "<WS>"], [roots.tmp, "<TMP>"], [roots.home, "<HOME>"]] as const) {
+    out = out.split(path).join(mask);
+  }
+  // A random port; judge-proof's fixed default 4174 stays (the Go twin is
+  // loopbackPort).
+  out = out.replace(/127\.0\.0\.1:([0-9]+)/g, (whole, port: string) => (port === "4174" ? whole : "127.0.0.1:<PORT>"));
+  // The process id in an atomic write's staged name (.<name>.<pid>.<uuid>.tmp).
+  out = out.replace(/\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp/g, ".<pid>.$1.tmp");
+  return maskGitOutput(out, true);
+}
+
+// maskGitOutput replaces git's temporary verifier directories with <GITTMP>
+// and, with maskGit, git's own diagnostics after each GIT_LABELS failure.
+export function maskGitOutput(text: string, maskGit: boolean): string {
+  let out = text;
   const marker = "faultline-git-proof-verify-";
   for (let i = out.indexOf(marker); i >= 0; i = out.indexOf(marker, i)) {
     let start = i;

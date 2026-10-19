@@ -3,10 +3,10 @@ package nodefs
 import (
 	"errors"
 	"fmt"
+	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"io/fs"
-	"math/rand/v2"
 	"os"
 	"sort"
 	"strconv"
@@ -18,6 +18,8 @@ import (
 type Error struct {
 	Code, Syscall, Path string
 	NoPath              bool
+	// Dest is the second path of a two-path call (rename 'a' -> 'b').
+	Dest string
 }
 
 // descriptions is uv_strerror: libuv 1.51 include/uv.h UV_ERRNO_MAP.
@@ -112,6 +114,9 @@ var descriptions = map[string]string{
 func (e *Error) Error() string {
 	if e.NoPath {
 		return e.Code + ": " + Describe(e.Code) + ", " + e.Syscall
+	}
+	if e.Dest != "" {
+		return e.Code + ": " + Describe(e.Code) + ", " + e.Syscall + " '" + e.Path + "' -> '" + e.Dest + "'"
 	}
 	return e.Code + ": " + Describe(e.Code) + ", " + e.Syscall + " '" + e.Path + "'"
 }
@@ -270,7 +275,7 @@ func ReadBytes(path string) (data []byte, err error) {
 		return nil, err
 	}
 	var info fs.FileInfo
-	err = retryEINTR(func() (e error) { info, e = f.Stat(); return })
+	err = retryEINTR(func() (e error) { info, e = fstatFile(f); return })
 	if err != nil {
 		// The throw leaves tryStatSync before its closeSync, so Node never
 		// closes the descriptor; on a filesystem that fails getattr while
@@ -477,21 +482,26 @@ func Tmpdir() string {
 	return "/tmp"
 }
 
-const tempChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
 // Mkdtemp is mkdtempSync(prefix): uv_fs_mkdtemp on prefix + "XXXXXX", with
 // Node's error text naming the template. Node does not namespace the
 // template on Windows.
-func Mkdtemp(prefix string) (string, error) {
+func Mkdtemp(prefix string) (string, error) { return mkdtemp(prefix, false) }
+
+// MkdtempAsync is fs/promises.mkdtemp(prefix). The async request reports
+// the error with req->path, which the C library's mkdtemp has overwritten
+// with the name it last tried, so the message names that path rather than
+// the template (round 7 #3). On Windows libuv copies the name into the
+// narrow path only on success, so the template is printed there as in the
+// sync form.
+func MkdtempAsync(prefix string) (string, error) { return mkdtemp(prefix, true) }
+
+func mkdtemp(prefix string, async bool) (string, error) {
 	var err error
+	var tried string
 	for range 100 {
-		b := make([]byte, 6)
-		for i := range b {
-			b[i] = tempChars[rand.IntN(len(tempChars))]
-		}
-		path := prefix + string(b)
-		if err = os.Mkdir(jsstr.ToUTF8(path), 0o700); err == nil {
-			return path, nil
+		tried = prefix + clock.TempSuffix()
+		if err = os.Mkdir(jsstr.ToUTF8(tried), 0o700); err == nil {
+			return tried, nil
 		}
 		if !errors.Is(err, fs.ErrExist) {
 			break
@@ -503,8 +513,11 @@ func Mkdtemp(prefix string) (string, error) {
 		code = "ENOTDIR"
 	}
 	display := tmpl
-	if isWindows {
+	switch {
+	case isWindows:
 		display = DecodeUTF8([]byte(stringFromPath(jsstr.ToUTF8(tmpl))))
+	case async:
+		display = DecodeUTF8([]byte(jsstr.ToUTF8(tried)))
 	}
 	return "", &Error{Code: code, Syscall: "mkdtemp", Path: display}
 }

@@ -1,3 +1,5 @@
+//go:build faultline_test
+
 package difftest
 
 import (
@@ -669,6 +671,13 @@ func firstKey(o *jsjson.Obj) string {
 }
 
 func treeDigest(root string) string {
+	return treeDigestWith(root, func(_ string, b []byte) string { return canonical.SHA256HexBytes(b) })
+}
+
+// treeDigestWith is treeDigest with each regular file described by
+// fileDigest (the writer replay's relocated digest; cases.ts treeDigest's
+// second argument).
+func treeDigestWith(root string, fileDigest func(rel string, b []byte) string) string {
 	var lines []string
 	var walk func(rel string)
 	walk = func(rel string) {
@@ -693,7 +702,7 @@ func treeDigest(root string) string {
 				lines = append(lines, "S "+r)
 			default:
 				b, _ := os.ReadFile(path)
-				lines = append(lines, "F "+r+" "+canonical.SHA256HexBytes(b))
+				lines = append(lines, "F "+r+" "+fileDigest(r, b))
 			}
 		}
 	}
@@ -770,15 +779,81 @@ func normalizeChecked(text, bundle string, maskGit bool) (string, bool) {
 	// Only the path passed to fl is masked, so output that names a resolved
 	// (physical) path instead still differs. Windows temp directories can be
 	// 8.3 short names that git expands, so there the long form is masked too.
-	paths := []string{bundle}
+	for _, p := range maskedForms(bundle, false) {
+		out = strings.ReplaceAll(out, p, "<BUNDLE>")
+	}
+	out = maskGitOutput(out, maskGit)
+	forwardSlash := false
 	if runtime.GOOS == "windows" {
-		if real, err := filepath.EvalSymlinks(bundle); err == nil && real != bundle {
+		out, forwardSlash = slashesAfter(out, "<BUNDLE>", false)
+	}
+	return out, forwardSlash
+}
+
+// maskedForms are the spellings of path that output can carry: the path
+// itself and, on Windows, its long (symlink-free) form; with jsonEscaped,
+// also each one as JSON.stringify escapes it (a Windows "\" doubles).
+func maskedForms(path string, jsonEscaped bool) []string {
+	paths := []string{path}
+	if runtime.GOOS == "windows" {
+		if real, err := filepath.EvalSymlinks(path); err == nil && real != path {
 			paths = append(paths, real)
 		}
 	}
-	for _, p := range paths {
-		out = strings.ReplaceAll(out, p, "<BUNDLE>")
+	if jsonEscaped {
+		for _, p := range paths {
+			if escaped := strings.ReplaceAll(p, `\`, `\\`); escaped != p {
+				paths = append(paths, escaped)
+			}
+		}
 	}
+	return paths
+}
+
+// writerRoots are the directories a writer case owns (makeWriterRoots in
+// writer_test.go); normalizeWriter masks them.
+type writerRoots struct{ root, ws, home, tmp, argvLog, recorder string }
+
+// normalizeWriter masks a writer case's own directories (slice 2 spec 2.3):
+// the workspace, its TMPDIR and HOME, a judge-proof server port, then the
+// git masks verify uses. Digests are never masked. On Windows the
+// separators after each mask become "/" (JSON-escaped ones included), to
+// compare with goldens generated on Linux.
+func normalizeWriter(text string, roots writerRoots) string {
+	out := text
+	masks := [][2]string{{roots.ws, "<WS>"}, {roots.tmp, "<TMP>"}, {roots.home, "<HOME>"}}
+	for _, m := range masks {
+		for _, p := range maskedForms(m[0], true) {
+			out = strings.ReplaceAll(out, p, m[1])
+		}
+	}
+	// A random port; judge-proof's fixed default 4174 stays (gen/cases.ts).
+	out = loopbackPort.ReplaceAllStringFunc(out, func(s string) string {
+		if s == "127.0.0.1:4174" {
+			return s
+		}
+		return "127.0.0.1:<PORT>"
+	})
+	out = stagedPID.ReplaceAllString(out, ".<pid>.$1.tmp")
+	out = maskGitOutput(out, true)
+	if runtime.GOOS == "windows" {
+		for _, m := range masks {
+			out, _ = slashesAfter(out, m[1], true)
+		}
+	}
+	return out
+}
+
+var loopbackPort = regexp.MustCompile(`127\.0\.0\.1:[0-9]+`)
+
+// stagedPID masks the process id in an atomic write's staged name
+// (.<name>.<pid>.<uuid>.tmp), which a failed rename prints.
+var stagedPID = regexp.MustCompile(`\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp`)
+
+// maskGitOutput replaces git's temporary verifier directories with <GITTMP>
+// and, with maskGit, git's own diagnostics after each gitLabels failure.
+func maskGitOutput(text string, maskGit bool) string {
+	out := text
 	const marker = "faultline-git-proof-verify-"
 	for i := strings.Index(out, marker); i >= 0; {
 		start := i
@@ -821,28 +896,37 @@ func normalizeChecked(text, bundle string, maskGit bool) (string, bool) {
 			i = from + len(detail) + next
 		}
 	}
+	return out
+}
+
+// slashesAfter rewrites the Windows separators in the path that follows each
+// mask, up to a boundary, to "/"; with jsonEscaped, a "\\" (an escaped
+// separator) counts as one. It reports whether a "/" was already there.
+func slashesAfter(text, mask string, jsonEscaped bool) (string, bool) {
+	var b strings.Builder
 	forwardSlash := false
-	if runtime.GOOS == "windows" {
-		var b strings.Builder
-		for {
-			i := strings.Index(out, "<BUNDLE>")
-			if i < 0 {
-				b.WriteString(out)
-				break
-			}
-			b.WriteString(out[:i+len("<BUNDLE>")])
-			rest := out[i+len("<BUNDLE>"):]
-			end := 0
-			for end < len(rest) && !isBoundary(rest[end]) {
-				end++
-			}
-			forwardSlash = forwardSlash || strings.Contains(rest[:end], "/")
-			b.WriteString(strings.ReplaceAll(rest[:end], `\`, "/"))
-			out = rest[end:]
+	out := text
+	for {
+		i := strings.Index(out, mask)
+		if i < 0 {
+			b.WriteString(out)
+			break
 		}
-		out = b.String()
+		b.WriteString(out[:i+len(mask)])
+		rest := out[i+len(mask):]
+		end := 0
+		for end < len(rest) && !isBoundary(rest[end]) {
+			end++
+		}
+		path := rest[:end]
+		forwardSlash = forwardSlash || strings.Contains(path, "/")
+		if jsonEscaped {
+			path = strings.ReplaceAll(path, `\\`, "/")
+		}
+		b.WriteString(strings.ReplaceAll(path, `\`, "/"))
+		out = rest[end:]
 	}
-	return out, forwardSlash
+	return b.String(), forwardSlash
 }
 
 func baseRoot(root, base string) string {

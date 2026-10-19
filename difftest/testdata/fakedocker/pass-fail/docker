@@ -1,0 +1,28 @@
+#!/bin/sh
+# Fake Docker "pass-fail" (difftest/testdata/fakedocker/README.md): `run`
+# reads state.txt in the bind-mounted source and plays back
+# difftest/gen/fixtures.ts deterministicDockerRunner: "bad" fails the
+# predicate, anything else passes. `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  src=
+  prev=
+  for arg in "$@"; do
+    if [ "$prev" = "--mount" ]; then
+      case "$arg" in type=bind,src=*) src=${arg#type=bind,src=}; src=${src%%,*} ;; esac
+    fi
+    prev=$arg
+  done
+  state=$(cat "$src/state.txt" 2>/dev/null)
+  if [ "$state" = bad ]; then
+    printf 'state=%s\nFAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_FAIL"}\n' "$state"
+    printf 'witness failed' >&2
+    exit 1
+  fi
+  printf 'state=%s\nFAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n' "$state"
+  exit 0
+  ;;
+esac
+printf 'fake docker (pass-fail): unsupported command: %s\n' "$1" >&2
+exit 125

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fake Docker "rm-hang" (README.md): `run` prints one line and is killed by
+# the runner's timeout like "timeout"; `rm` then outlives the runner's 5 s
+# cleanup limit, so the run reports that the force-removal timed out.
+case "$1" in
+rm) exec sleep 30 ;;
+run)
+  printf 'started\n'
+  exec sleep 30
+  ;;
+esac
+printf 'fake docker (rm-hang): unsupported command: %s\n' "$1" >&2
+exit 125

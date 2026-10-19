@@ -40,15 +40,41 @@ func RepoRoot(t testing.TB) string {
 	}
 }
 
-// Start launches the oracle; the test is skipped unless FAULTLINE_NODE_ORACLE=1.
-func Start(t testing.TB) *Client {
+// Skip skips the test unless FAULTLINE_NODE_ORACLE=1.
+func Skip(t testing.TB) {
 	t.Helper()
 	if os.Getenv("FAULTLINE_NODE_ORACLE") != "1" {
 		t.Skip("set FAULTLINE_NODE_ORACLE=1 to run live oracle tests")
 	}
-	cmd := exec.Command("pnpm", "exec", "tsx", "difftest/gen/node-oracle.ts")
+}
+
+// Start launches the oracle; the test is skipped unless FAULTLINE_NODE_ORACLE=1.
+func Start(t testing.TB) *Client {
+	t.Helper()
+	return start(t, "")
+}
+
+// StartSeeded launches the oracle under difftest/gen/seed.mjs with
+// FAULTLINE_TEST_SEED=seed, so its randomUUID, Date and mkdtemp follow the
+// same sequence as Go's clock after clock.ResetForTest(seed). The oracle's
+// counters only advance, so a test must use one oracle per seed.
+func StartSeeded(t testing.TB, seed string) *Client {
+	t.Helper()
+	return start(t, seed)
+}
+
+func start(t testing.TB, seed string) *Client {
+	t.Helper()
+	Skip(t)
+	args := []string{"exec", "tsx"}
+	env := append(os.Environ(), "LC_ALL=C.UTF-8")
+	if seed != "" {
+		args = append(args, "--import", "./difftest/gen/seed.mjs")
+		env = append(env, "FAULTLINE_TEST_SEED="+seed)
+	}
+	cmd := exec.Command("pnpm", append(args, "difftest/gen/node-oracle.ts")...)
 	cmd.Dir = RepoRoot(t)
-	cmd.Env = append(os.Environ(), "LC_ALL=C.UTF-8")
+	cmd.Env = env
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

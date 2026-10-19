@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fake git for difftest: 65 MiB of output, past FaultLine's 64 MiB bound
+# (exec, so SIGTERM reaches the writer itself).
+exec head -c 68157440 /dev/zero

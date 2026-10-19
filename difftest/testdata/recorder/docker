@@ -1,0 +1,33 @@
+#!/bin/sh
+# Writer replay recorder template: appends one record to $log (when set)
+# and execs the next docker on PATH after this directory. A record is
+# "docker " + the arguments joined by \037 (unit separator), terminated by
+# \036 (record separator), so arguments may hold newlines. Each case runs a
+# copy in its own directory whose `log=` line names the case's argv.log
+# (difftest/gen/scenarios.ts makeCaseRoots, difftest/writer_test.go
+# makeWriterRoots): hardened git keeps only PATH from the environment, so
+# FAULTLINE_ARGV_LOG alone would not reach it.
+self=$(cd "$(dirname "$0")" && pwd -P)
+log=$FAULTLINE_ARGV_LOG
+if [ -n "$log" ]; then
+  {
+    printf '%s ' docker
+    sep=
+    for arg in "$@"; do printf '%s%s' "$sep" "$arg"; sep=$(printf '\037'); done
+    printf '\036'
+  } >> "$log"
+fi
+found=
+rest=$PATH
+while [ -n "$rest" ]; do
+  dir=${rest%%:*}
+  case "$rest" in *:*) rest=${rest#*:} ;; *) rest= ;; esac
+  [ -n "$dir" ] || continue
+  if [ -z "$found" ]; then
+    [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$self" ] && found=1
+    continue
+  fi
+  if [ -f "$dir/docker" ] && [ -x "$dir/docker" ]; then exec "$dir/docker" "$@"; fi
+done
+echo "recorder: no docker after $self on PATH" >&2
+exit 127

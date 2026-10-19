@@ -1,0 +1,10 @@
+#!/bin/sh
+# Fake Docker "flood" (README.md): `run` writes "flood é" lines to stdout
+# until it is killed (exec keeps the pid for the runner's SIGKILL). `rm`
+# succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run) exec yes 'flood é' ;;
+esac
+printf 'fake docker (flood): unsupported command: %s\n' "$1" >&2
+exit 125

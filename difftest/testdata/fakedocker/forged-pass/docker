@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fake Docker "forged-pass" (README.md): `run` prints a PREDICATE_PASS
+# result line but exits 1, a result the classifier must not trust. `rm`
+# succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  printf 'FAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n'
+  exit 1
+  ;;
+esac
+printf 'fake docker (forged-pass): unsupported command: %s\n' "$1" >&2
+exit 125

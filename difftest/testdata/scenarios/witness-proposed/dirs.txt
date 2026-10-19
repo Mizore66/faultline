@@ -1,0 +1,5 @@
+.faultline
+.faultline/witnesses
+.faultline/witnesses/approvals
+.faultline/witnesses/frozen
+.faultline/witnesses/proposals

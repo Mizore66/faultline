@@ -124,3 +124,80 @@ func CorruptLeaf(r *rand.Rand, text string) string {
 	}
 	return jsjson.Stringify(root)
 }
+
+// SwapLeaf replaces one node with another node of the same JSON kind taken
+// from elsewhere in the document, or duplicates, drops or swaps elements of
+// one array. The result usually still matches the schema, so it reaches the
+// cross-field checks (ids, digests, roles, counts) behind it.
+func SwapLeaf(r *rand.Rand, text string) string {
+	root, err := jsjson.Parse(text)
+	if err != nil {
+		return text
+	}
+	type node struct {
+		key string // the member name, "" for an array element
+		get func() jsjson.Value
+		set func(jsjson.Value)
+	}
+	var nodes []node
+	var walk func(v jsjson.Value)
+	walk = func(v jsjson.Value) {
+		switch v.Kind() {
+		case jsjson.Object:
+			o := v.Obj()
+			for _, k := range o.Keys() {
+				nodes = append(nodes, node{k, func() jsjson.Value { return o.Field(k) }, func(x jsjson.Value) { o.Set(k, x) }})
+				walk(o.Field(k))
+			}
+		case jsjson.Array:
+			items := v.Items()
+			for i, child := range items {
+				nodes = append(nodes, node{"", func() jsjson.Value { return items[i] }, func(x jsjson.Value) { items[i] = x }})
+				walk(child)
+			}
+		}
+	}
+	walk(root)
+	if len(nodes) == 0 {
+		return text
+	}
+	n := nodes[r.IntN(len(nodes))]
+	v := n.get()
+	if v.Kind() == jsjson.Array && len(v.Items()) > 0 && r.IntN(2) == 0 {
+		items := slices.Clone(v.Items())
+		i := r.IntN(len(items))
+		switch r.IntN(3) {
+		case 0:
+			items = slices.Insert(items, r.IntN(len(items)+1), items[i])
+		case 1:
+			items = slices.Delete(items, i, i+1)
+		default:
+			j := r.IntN(len(items))
+			items[i], items[j] = items[j], items[i]
+		}
+		n.set(jsjson.MakeArray(items))
+		return jsjson.Stringify(root)
+	}
+	// Mostly a value of a member with the same name (another run's role,
+	// another certificate's direction), which keeps enums valid.
+	text0 := jsjson.Stringify(v)
+	var same, sameKey []jsjson.Value
+	for _, other := range nodes {
+		if w := other.get(); w.Kind() == v.Kind() && jsjson.Stringify(w) != text0 {
+			same = append(same, w)
+			if n.key != "" && other.key == n.key {
+				sameKey = append(sameKey, w)
+			}
+		}
+	}
+	if len(sameKey) > 0 && r.IntN(4) != 0 {
+		same = sameKey
+	}
+	if len(same) == 0 {
+		return CorruptLeaf(r, text)
+	}
+	// Reparsed, so the copy does not share storage with its source.
+	replacement, _ := jsjson.Parse(jsjson.Stringify(same[r.IntN(len(same))]))
+	n.set(replacement)
+	return jsjson.Stringify(root)
+}

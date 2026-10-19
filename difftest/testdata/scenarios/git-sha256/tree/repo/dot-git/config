@@ -1,0 +1,6 @@
+[core]
+	repositoryformatversion = 1
+	filemode = true
+	bare = false
+[extensions]
+	objectformat = sha256
