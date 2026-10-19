@@ -38,9 +38,10 @@ import (
 //     listener, and completes once every other connection has closed, by
 //     its timeout or by the client, however long that takes.
 //
-// The response is written before the request body is read (Node calls the
+// The response is written as soon as the headers are in (Node calls the
 // listener once the headers are parsed, and dumps an unread body after the
-// response), so net/http runs in full-duplex mode.
+// response): the request framing in framing.go reads the bodies itself and
+// hands net/http only the heads.
 type Server struct {
 	url      string
 	srv      *http.Server
@@ -145,6 +146,8 @@ func (l nodeListener) Accept() (net.Conn, error) {
 	}
 	now := clock.Monotonic()
 	c := &nodeConn{Conn: conn, s: l.s, inMessage: true, messageStart: now, lastActivity: now}
+	c.cond = sync.NewCond(&c.mu)
+	c.buf = make([]byte, 64<<10)
 	l.s.mu.Lock()
 	l.s.conns[c] = struct{}{}
 	l.s.mu.Unlock()
@@ -157,32 +160,19 @@ type nodeConn struct {
 	net.Conn
 	s *Server
 
-	mu sync.Mutex
+	mu   sync.Mutex
+	cond *sync.Cond // signalled on idled, destroy and SetReadDeadline
+	framer
 	// inMessage is last_message_start_ != 0: true from the connection (the
 	// parser is initialized with the time) and from the first byte of each
-	// message until the message is complete. begun is on_message_begin
-	// having run for the current message.
-	inMessage, begun bool
-	messageStart     time.Time
-	headersComplete  bool
-	keepAlive        bool // the keep-alive socket timeout is armed
-	lastActivity     time.Time
-	timer            *time.Timer
-	destroyed        bool
-}
-
-func (c *nodeConn) Read(b []byte) (int, error) {
-	n, err := c.Conn.Read(b)
-	if n > 0 {
-		c.mu.Lock()
-		c.lastActivity = clock.Monotonic()
-		if !c.begun {
-			// on_message_begin: the message starts at its first byte.
-			c.begun, c.inMessage, c.headersComplete, c.messageStart = true, true, false, c.lastActivity
-		}
-		c.mu.Unlock()
-	}
-	return n, err
+	// message until the message is complete (the framing sets it).
+	inMessage       bool
+	messageStart    time.Time
+	headersComplete bool
+	keepAlive       bool // the keep-alive socket timeout is armed
+	lastActivity    time.Time
+	timer           *time.Timer
+	destroyed       bool
 }
 
 func (c *nodeConn) Write(b []byte) (int, error) {
@@ -228,18 +218,6 @@ func (c *nodeConn) requestTimedOut() {
 	c.destroy()
 }
 
-// headersReceived is parserOnIncoming: the request's headers are complete
-// (resetSocketTimeout clears the keep-alive timeout), and a request without
-// a body is complete with them.
-func (c *nodeConn) headersReceived(bodyless bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.begun, c.inMessage, c.headersComplete, c.keepAlive = true, true, true, false
-	if bodyless {
-		c.inMessage, c.begun = false, false
-	}
-}
-
 // responseFinished is resOnFinish: a keep-alive response arms the socket
 // timeout.
 func (c *nodeConn) responseFinished(keepAlive bool) {
@@ -255,14 +233,6 @@ func (c *nodeConn) responseFinished(keepAlive bool) {
 	} else {
 		c.timer.Reset(keepAliveSocketTimeout)
 	}
-}
-
-// messageComplete is on_message_complete (net/http has read the whole
-// request, body included, and gone back to waiting: StateIdle).
-func (c *nodeConn) messageComplete() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.inMessage, c.begun = false, false
 }
 
 // socketTimeout is socketOnTimeout with no listeners: destroy, unless
@@ -296,6 +266,7 @@ func (c *nodeConn) destroy() {
 	if c.timer != nil {
 		c.timer.Stop()
 	}
+	c.cond.Broadcast()
 	c.mu.Unlock()
 	c.Conn.Close()
 	c.s.untrack(c)
@@ -397,12 +368,18 @@ func StartGitProofServer(v View, port float64) (*Server, error) {
 	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c := r.Context().Value(connKey{}).(*nodeConn)
-		c.headersReceived(r.Body == http.NoBody)
-		// Respond before the body is read, as Node does; net/http drains it
-		// afterwards (finishRequest).
-		http.NewResponseController(w).EnableFullDuplex()
 		defer func() { c.responseFinished(w.Header().Get("Connection") == "keep-alive") }()
 		h := w.Header()
+		// parserOnIncoming's expectation check (HTTP/1.1 only): a value
+		// matching continueExpression gets `100 Continue` before the
+		// response, any other the empty 417 (no checkContinue or
+		// checkExpectation listener).
+		switch r.Header.Get(expectMarker) {
+		case "fail":
+			nodeHeaders(h, r)
+			writeNodeBody(w, r, http.StatusExpectationFailed, "")
+			return
+		}
 		if r.Method == "GET" && requestPathname(r.RequestURI) == "/" {
 			h.Set("Content-Type", "text/html; charset=utf-8")
 			h.Set("Cache-Control", "no-store")
@@ -429,10 +406,14 @@ func StartGitProofServer(v View, port float64) (*Server, error) {
 	// Node passes `OPTIONS *` to the handler like any other request (a 404
 	// here); net/http would answer it with 200 itself. Timeouts are the
 	// nodeConn's (no IdleTimeout: the keep-alive socket timeout closes an
-	// idle connection after 6 s, as Node does).
+	// idle connection after 6 s, as Node does). The head's size is limited
+	// by the framing, Node's way, and Node 22.22.2 has no limit on the
+	// number of header lines.
 	s.srv = &http.Server{
 		Handler:                      handler,
 		DisableGeneralOptionsHandler: true,
+		MaxHeaderBytes:               maxHeadBytes + 4096,
+		MaxHeaderValueCount:          maxHeadBytes,
 		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
 			return context.WithValue(ctx, connKey{}, conn)
 		},
@@ -440,7 +421,7 @@ func StartGitProofServer(v View, port float64) (*Server, error) {
 			c := conn.(*nodeConn)
 			switch state {
 			case http.StateIdle:
-				c.messageComplete()
+				c.idled()
 			case http.StateClosed, http.StateHijacked:
 				c.destroy()
 			}

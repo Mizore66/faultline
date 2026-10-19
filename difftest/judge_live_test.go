@@ -5,6 +5,7 @@ package difftest
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -158,10 +161,11 @@ func startJudge(t *testing.T, repo string, side judgeSide, env []string, args ..
 // HEAD /, query, dot-segment (every percent-encoded spelling) and
 // scheme-relative forms of /, `OPTIONS *`
 // (which net/http would answer itself), HTTP/1.0 requests and a
-// `Connection: close` request.
+// `Connection: close` request. The raw subtest compares whole exchanges.
 func TestLiveJudgeServer(t *testing.T) {
 	oracle.Skip(t)
 	repo := repoRoot(t)
+	t.Run("raw", func(t *testing.T) { testJudgeRawExchanges(t, repo) })
 	requests := []judgeRequest{
 		{"GET", "/", "HTTP/1.1", ""}, {"GET", "/x", "HTTP/1.1", ""}, {"POST", "/api/rerun", "HTTP/1.1", "Content-Length: 0"},
 		{"HEAD", "/", "HTTP/1.1", ""}, {"GET", "/?a=1", "HTTP/1.1", ""}, {"GET", "/x/..", "HTTP/1.1", ""}, {"GET", "/%2e", "HTTP/1.1", ""},
@@ -201,6 +205,114 @@ func TestLiveJudgeServer(t *testing.T) {
 				t.Errorf("%v: %s: Go %q, TS %q", r, name, got.headers[name], want.headers[name])
 			}
 		}
+	}
+}
+
+// testJudgeRawExchanges (TestLiveJudgeServer/raw) sends each request as raw
+// bytes on a fresh connection to a TS and a Go judge-proof and compares
+// every byte the client receives (Date masked, each response's header
+// lines sorted: their order differs, KNOWN_DIFFERENCES.md), how the server
+// ends the connection and when (within 1.5 s). These are the requests whose
+// framing net/http would handle itself (round 11, r11-2):
+//   - `Expect`: any value but 100-continue gets Node's empty 417 through
+//     the normal keep-alive response (net/http answers it with its own 417
+//     and closes);
+func testJudgeRawExchanges(t *testing.T, repo string) {
+	post := "POST /x HTTP/1.1\r\nHost: x\r\n"
+	get := "GET /x HTTP/1.1\r\nHost: x\r\n\r\n"
+	cases := []struct{ name, send string }{
+		{"expect-other", "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: foo\r\n\r\n"},
+		{"expect-other-get", "GET / HTTP/1.1\r\nHost: x\r\nExpect: foo\r\n\r\n"},
+		{"expect-other-body", post + "Content-Length: 5\r\nExpect: foo\r\n\r\nabcde" + get},
+		{"expect-other-close", "GET /x HTTP/1.1\r\nHost: x\r\nConnection: close\r\nExpect: foo\r\n\r\n"},
+		{"expect-other-head", "HEAD / HTTP/1.1\r\nHost: x\r\nExpect: foo\r\n\r\n"},
+		{"expect-empty", "GET /x HTTP/1.1\r\nHost: x\r\nExpect: \r\n\r\n"},
+		{"expect-word", "GET /x HTTP/1.1\r\nHost: x\r\nExpect: x100-continue\r\n\r\n"},
+	}
+	type exchange struct {
+		received string
+		end      string // how the server ended the connection
+		after    time.Duration
+	}
+	got := map[string][]exchange{}
+	for _, side := range judgeSides(repo) {
+		cmd, url, out, rest, stderr := startJudge(t, repo, side, judgeEnv("FAULTLINE_NO_BROWSER=1"), "--port", "0")
+		go io.Copy(out, rest)
+		results := make([]exchange, len(cases))
+		var wg sync.WaitGroup
+		for i, tc := range cases {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				conn, err := net.Dial("tcp", strings.TrimPrefix(url, "http://"))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer conn.Close()
+				start := time.Now()
+				go io.WriteString(conn, tc.send)
+				conn.SetReadDeadline(start.Add(9 * time.Second))
+				var received bytes.Buffer
+				_, err = io.Copy(&received, conn)
+				end := "closed"
+				switch {
+				case errors.Is(err, os.ErrDeadlineExceeded):
+					end = "open after 9 s"
+				case err != nil:
+					end = "reset"
+				}
+				results[i] = exchange{received.String(), end, time.Since(start)}
+			}()
+		}
+		wg.Wait()
+		cmd.Process.Signal(syscall.SIGTERM)
+		if err := cmd.Wait(); err != nil {
+			t.Errorf("%s: %v\n%s", side.name, err, stderr.String())
+		}
+		got[side.name] = results
+	}
+	for i, tc := range cases {
+		g, w := got["Go"][i], got["TS"][i]
+		gotText, wantText := normalizeExchange(g.received), normalizeExchange(w.received)
+		summary := fmt.Sprintf("Go: %s after %v; TS: %s after %v", g.end, g.after.Round(time.Millisecond), w.end, w.after.Round(time.Millisecond))
+		if gotText != wantText || g.end != w.end {
+			t.Errorf("%s: %s\n--- Go\n%q\n--- TS\n%q", tc.name, summary, gotText, wantText)
+		}
+		if d := g.after - w.after; d > 1500*time.Millisecond || d < -1500*time.Millisecond {
+			t.Errorf("%s: close time differs; %s", tc.name, summary)
+		}
+	}
+}
+
+var responseStart = regexp.MustCompile(`HTTP/1\.1 \d{3} `)
+
+// normalizeExchange masks each response's Date and sorts its header lines.
+func normalizeExchange(received string) string {
+	var out strings.Builder
+	rest := received
+	for {
+		loc := responseStart.FindStringIndex(rest)
+		if loc == nil {
+			out.WriteString(rest)
+			return out.String()
+		}
+		out.WriteString(rest[:loc[0]])
+		rest = rest[loc[0]:]
+		end := strings.Index(rest, "\r\n\r\n")
+		if end < 0 {
+			out.WriteString(rest)
+			return out.String()
+		}
+		lines := strings.Split(rest[:end], "\r\n")
+		for j, line := range lines {
+			if strings.HasPrefix(line, "Date: ") {
+				lines[j] = "Date: <DATE>"
+			}
+		}
+		sort.Strings(lines[1:])
+		out.WriteString(strings.Join(lines, "\r\n") + "\r\n\r\n")
+		rest = rest[end+4:]
 	}
 }
 
@@ -270,6 +382,8 @@ func TestLiveJudgeSignalStop(t *testing.T) {
 //   - served-idle: a served keep-alive connection is idle and destroyed at
 //     once; mid-response: a slow reader's pipelined responses, still being
 //     written, do not keep it either.
+//   - expect-other*: an Expect other than 100-continue, answered 417 by
+//     Node's normal response path (round 11, r11-2).
 //
 // Each case compares the stopped line, the exit status, what the client
 // received and when the server closed the connection (within 1.5 s).
@@ -303,6 +417,13 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 		// Node's handler has ended each response, so the connection counts
 		// as idle and is destroyed with its unsent bytes.
 		{"mid-response", []string{strings.Repeat("GET / HTTP/1.1\r\nHost: x\r\n\r\n", 40)}, []syscall.Signal{syscall.SIGTERM}, 0, true},
+		// An Expect other than 100-continue (round 11, r11-2 P2): Node's
+		// 417 is a normal keep-alive response and the body that never
+		// comes ends with the 6 s timeout. net/http answered it itself, so
+		// the connection never went idle and fl never exited.
+		{"expect-other", []string{"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: foo\r\n\r\n"}, []syscall.Signal{syscall.SIGTERM}, 0, false},
+		{"expect-other-sigint", []string{"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: foo\r\n\r\n"}, []syscall.Signal{syscall.SIGINT}, 0, false},
+		{"expect-other-served", []string{"GET /x HTTP/1.1\r\nHost: x\r\nExpect: foo\r\n\r\n"}, []syscall.Signal{syscall.SIGTERM}, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
