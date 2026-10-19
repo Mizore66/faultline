@@ -361,7 +361,9 @@ func (c *nodeConn) scanHeaderByte(b byte) (end bool) {
 		}
 	}
 	if count {
-		c.counted++
+		if c.counted++; c.counted >= maxHeaderSize {
+			c.fail(headerFieldsTooLargeResponse)
+		}
 	}
 	return false
 }

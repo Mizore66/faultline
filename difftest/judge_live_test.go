@@ -219,9 +219,14 @@ func TestLiveJudgeServer(t *testing.T) {
 //     `HTTP/1.1 100 Continue` before the response (net/http answers the
 //     first with its own 417 and closes, and never writes the second for a
 //     handler that does not read the body);
+//   - a head over Node's 16 KiB (URL, field names and values, a value's
+//     leading whitespace excluded; trailers counted afresh) gets Node's 431
+//     and is closed (net/http allows 1 MiB);
 func testJudgeRawExchanges(t *testing.T, repo string) {
 	post := "POST /x HTTP/1.1\r\nHost: x\r\n"
 	get := "GET /x HTTP/1.1\r\nHost: x\r\n\r\n"
+	chunked := post + "Transfer-Encoding: chunked\r\n\r\n"
+	value := func(n int) string { return strings.Repeat("a", n) }
 	cases := []struct{ name, send string }{
 		{"expect-other", "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: foo\r\n\r\n"},
 		{"expect-other-get", "GET / HTTP/1.1\r\nHost: x\r\nExpect: foo\r\n\r\n"},
@@ -236,6 +241,15 @@ func testJudgeRawExchanges(t *testing.T, repo string) {
 		{"expect-continue-list", "GET /x HTTP/1.1\r\nHost: x\r\nExpect: foo\r\nExpect:\t100-continue;q\t\r\n\r\n"},
 		{"expect-continue-close", "GET /x HTTP/1.1\r\nHost: x\r\nConnection: close\r\nExpect: 100-continue\r\n\r\n"},
 		{"expect-continue-head", "HEAD / HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\n\r\n"},
+		{"header-16383", "GET /x HTTP/1.1\r\nHost: x\r\nX: " + value(16375) + "\r\n\r\n"},
+		{"header-16384", "GET /x HTTP/1.1\r\nHost: x\r\nX: " + value(16376) + "\r\n\r\n"},
+		{"header-leading-ws", "GET /x HTTP/1.1\r\nHost: x\r\nX:" + strings.Repeat(" ", 100) + value(16375) + "\r\n\r\n"},
+		{"header-trailing-ws", "GET /x HTTP/1.1\r\nHost: x\r\nX: " + value(16370) + "      \r\n\r\n"},
+		{"url-16384", "GET /" + value(16378) + " HTTP/1.1\r\nHost: x\r\n\r\n"},
+		{"cookie-20k", "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: a=" + value(20000) + "\r\n\r\n"},
+		{"trailer-16k", chunked + "2\r\nab\r\n0\r\nT: " + value(16390) + "\r\n\r\n"},
+		{"trailer-ok", chunked + "2\r\nab\r\n0\r\nT: b\r\n\r\n" + get},
+		{"chunk-extensions-16k", chunked + "2\r\nab\r\n2;" + value(16400) + "\r\nab\r\n0\r\n\r\n"},
 	}
 	type exchange struct {
 		received string
