@@ -232,6 +232,7 @@ func testJudgeRawExchanges(t *testing.T, repo string) {
 	big := strings.Repeat("x", 300000)
 	post := "POST /x HTTP/1.1\r\nHost: x\r\n"
 	get := "GET /x HTTP/1.1\r\nHost: x\r\n\r\n"
+	getClose := "GET /x HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
 	chunked := post + "Transfer-Encoding: chunked\r\n\r\n"
 	value := func(n int) string { return strings.Repeat("a", n) }
 	cases := []struct{ name, send string }{
@@ -257,6 +258,11 @@ func testJudgeRawExchanges(t *testing.T, repo string) {
 		{"trailer-16k", chunked + "2\r\nab\r\n0\r\nT: " + value(16390) + "\r\n\r\n"},
 		{"trailer-ok", chunked + "2\r\nab\r\n0\r\nT: b\r\n\r\n" + get},
 		{"chunk-extensions-16k", chunked + "2\r\nab\r\n2;" + value(16400) + "\r\nab\r\n0\r\n\r\n"},
+		{"expect-continue-word", "GET /x HTTP/1.1\r\nHost: x\r\nExpect: 100-continuex\r\n\r\n"},
+		{"chunk-extension-16384", chunked + "1;" + value(16384) + "\r\nz\r\n0\r\n\r\n" + getClose},
+		{"chunk-extension-16385", chunked + "1;" + value(16385) + "\r\nz\r\n0\r\n\r\n" + getClose},
+		{"content-length-trailing-space", post + "Content-Length: 5 \r\n\r\nabcde" + getClose},
+		{"transfer-encoding-chunked-twice", post + "Transfer-Encoding: chunked, chunked\r\n\r\n0\r\n\r\n" + getClose},
 		{"unread-300k", post + "Content-Length: 300000\r\n\r\n" + big},
 		{"unread-300k-pipelined", post + "Content-Length: 300000\r\n\r\n" + big + get},
 		{"unread-chunked-300k", chunked + strconv.FormatInt(int64(len(big)), 16) + "\r\n" + big + "\r\n0\r\n\r\n" + get},
