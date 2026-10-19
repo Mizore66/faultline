@@ -375,6 +375,8 @@ func StartGitProofServer(v View, port float64) (*Server, error) {
 		// response, any other the empty 417 (no checkContinue or
 		// checkExpectation listener).
 		switch r.Header.Get(expectMarker) {
+		case "continue":
+			w.WriteHeader(http.StatusContinue)
 		case "fail":
 			nodeHeaders(h, r)
 			writeNodeBody(w, r, http.StatusExpectationFailed, "")

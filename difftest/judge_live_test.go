@@ -215,8 +215,10 @@ func TestLiveJudgeServer(t *testing.T) {
 // ends the connection and when (within 1.5 s). These are the requests whose
 // framing net/http would handle itself (round 11, r11-2):
 //   - `Expect`: any value but 100-continue gets Node's empty 417 through
-//     the normal keep-alive response (net/http answers it with its own 417
-//     and closes);
+//     the normal keep-alive response, and 100-continue gets
+//     `HTTP/1.1 100 Continue` before the response (net/http answers the
+//     first with its own 417 and closes, and never writes the second for a
+//     handler that does not read the body);
 func testJudgeRawExchanges(t *testing.T, repo string) {
 	post := "POST /x HTTP/1.1\r\nHost: x\r\n"
 	get := "GET /x HTTP/1.1\r\nHost: x\r\n\r\n"
@@ -228,6 +230,12 @@ func testJudgeRawExchanges(t *testing.T, repo string) {
 		{"expect-other-head", "HEAD / HTTP/1.1\r\nHost: x\r\nExpect: foo\r\n\r\n"},
 		{"expect-empty", "GET /x HTTP/1.1\r\nHost: x\r\nExpect: \r\n\r\n"},
 		{"expect-word", "GET /x HTTP/1.1\r\nHost: x\r\nExpect: x100-continue\r\n\r\n"},
+		{"expect-continue", post + "Content-Length: 5\r\nExpect: 100-continue\r\n\r\n"},
+		{"expect-continue-body", post + "Content-Length: 5\r\nExpect: 100-continue\r\n\r\nabcde" + get},
+		{"expect-continue-get", "GET /x HTTP/1.1\r\nHost: x\r\nExpect: 100-Continue\r\n\r\n"},
+		{"expect-continue-list", "GET /x HTTP/1.1\r\nHost: x\r\nExpect: foo\r\nExpect:\t100-continue;q\t\r\n\r\n"},
+		{"expect-continue-close", "GET /x HTTP/1.1\r\nHost: x\r\nConnection: close\r\nExpect: 100-continue\r\n\r\n"},
+		{"expect-continue-head", "HEAD / HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\n\r\n"},
 	}
 	type exchange struct {
 		received string
@@ -382,8 +390,8 @@ func TestLiveJudgeSignalStop(t *testing.T) {
 //   - served-idle: a served keep-alive connection is idle and destroyed at
 //     once; mid-response: a slow reader's pipelined responses, still being
 //     written, do not keep it either.
-//   - expect-other*: an Expect other than 100-continue, answered 417 by
-//     Node's normal response path (round 11, r11-2).
+//   - expect-*: an Expect header, answered 417 or 100 Continue by Node's
+//     normal response path (round 11, r11-2).
 //
 // Each case compares the stopped line, the exit status, what the client
 // received and when the server closed the connection (within 1.5 s).
@@ -424,6 +432,7 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 		{"expect-other", []string{"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: foo\r\n\r\n"}, []syscall.Signal{syscall.SIGTERM}, 0, false},
 		{"expect-other-sigint", []string{"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: foo\r\n\r\n"}, []syscall.Signal{syscall.SIGINT}, 0, false},
 		{"expect-other-served", []string{"GET /x HTTP/1.1\r\nHost: x\r\nExpect: foo\r\n\r\n"}, []syscall.Signal{syscall.SIGTERM}, 0, false},
+		{"expect-continue", []string{"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n"}, []syscall.Signal{syscall.SIGTERM}, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
