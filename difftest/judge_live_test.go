@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -222,7 +223,13 @@ func TestLiveJudgeServer(t *testing.T) {
 //   - a head over Node's 16 KiB (URL, field names and values, a value's
 //     leading whitespace excluded; trailers counted afresh) gets Node's 431
 //     and is closed (net/http allows 1 MiB);
+//   - an unread body of any size is consumed and the connection kept alive
+//     until the 6 s timeout (net/http resets it 0.5 s after the response
+//     past 256 KiB), also chunked and pipelined;
+//   - Content-Length and Transfer-Encoding errors get Node's 400, after the
+//     response when they follow a body in the same read.
 func testJudgeRawExchanges(t *testing.T, repo string) {
+	big := strings.Repeat("x", 300000)
 	post := "POST /x HTTP/1.1\r\nHost: x\r\n"
 	get := "GET /x HTTP/1.1\r\nHost: x\r\n\r\n"
 	chunked := post + "Transfer-Encoding: chunked\r\n\r\n"
@@ -250,6 +257,14 @@ func testJudgeRawExchanges(t *testing.T, repo string) {
 		{"trailer-16k", chunked + "2\r\nab\r\n0\r\nT: " + value(16390) + "\r\n\r\n"},
 		{"trailer-ok", chunked + "2\r\nab\r\n0\r\nT: b\r\n\r\n" + get},
 		{"chunk-extensions-16k", chunked + "2\r\nab\r\n2;" + value(16400) + "\r\nab\r\n0\r\n\r\n"},
+		{"unread-300k", post + "Content-Length: 300000\r\n\r\n" + big},
+		{"unread-300k-pipelined", post + "Content-Length: 300000\r\n\r\n" + big + get},
+		{"unread-chunked-300k", chunked + strconv.FormatInt(int64(len(big)), 16) + "\r\n" + big + "\r\n0\r\n\r\n" + get},
+		{"content-length-twice", post + "Content-Length: 1\r\nContent-Length: 1\r\n\r\na"},
+		{"content-length-and-chunked", post + "Content-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"},
+		{"transfer-encoding-gzip", post + "Transfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n"},
+		{"bad-chunk-after-body", chunked + "2\r\nab\r\nzz\r\n"},
+		{"crlf-between", get + "\r\n\r\n" + get},
 	}
 	type exchange struct {
 		received string
@@ -405,7 +420,8 @@ func TestLiveJudgeSignalStop(t *testing.T) {
 //     once; mid-response: a slow reader's pipelined responses, still being
 //     written, do not keep it either.
 //   - expect-*: an Expect header, answered 417 or 100 Continue by Node's
-//     normal response path (round 11, r11-2).
+//     normal response path; unread-body: a body past 256 KiB still
+//     arriving (round 11, r11-2).
 //
 // Each case compares the stopped line, the exit status, what the client
 // received and when the server closed the connection (within 1.5 s).
@@ -447,6 +463,9 @@ func testJudgeHeldConnection(t *testing.T, repo string) {
 		{"expect-other-sigint", []string{"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: foo\r\n\r\n"}, []syscall.Signal{syscall.SIGINT}, 0, false},
 		{"expect-other-served", []string{"GET /x HTTP/1.1\r\nHost: x\r\nExpect: foo\r\n\r\n"}, []syscall.Signal{syscall.SIGTERM}, 0, false},
 		{"expect-continue", []string{"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n"}, []syscall.Signal{syscall.SIGTERM}, 0, false},
+		// An unread body past net/http's 256 KiB discard limit, then a stop
+		// before the body is complete.
+		{"unread-body", []string{"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 400000\r\n\r\n" + strings.Repeat("x", 300000)}, []syscall.Signal{syscall.SIGTERM}, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
