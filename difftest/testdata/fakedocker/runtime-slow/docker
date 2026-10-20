@@ -1,0 +1,22 @@
+#!/bin/sh
+# Fake Docker "runtime-slow" (README.md): inspect sleeps 6 s, past the 5 s inspect timeout (exec, so the
+# runner's SIGKILL reaches the sleeping process); `pull` and `build` print
+# progress lines and exit 0.
+# Anything else is refused.
+case "$1" in
+image)
+  if [ "$2" = inspect ]; then
+  exec sleep 6
+  fi
+  ;;
+pull)
+  printf '%s: Pulling from fake/registry\nDigest: fake\nStatus: Image is up to date for %s\n' "$2" "$2"
+  exit 0
+  ;;
+build)
+  printf '#0 building with "fake" instance\n#1 [internal] load build definition\n#2 DONE 0.0s\n'
+  exit 0
+  ;;
+esac
+printf 'fake docker (runtime-slow): unsupported command: %s\n' "$1" >&2
+exit 125

@@ -75,6 +75,7 @@ var unreachableLiterals = map[string]string{
 	"Frozen overlay path escaped its worktree:":                                "safeOverlayParts refuses empty, '.' and '..' segments and backslashes first, so the target stays inside the worktree",
 	"Minimization output root is not a real directory:":                        "the CLI's safeManagedFileOutput refuses the same output first",
 	"Minimization output parent is not a real directory:":                      "race only: the directory was just created by mkdir",
+	"FaultLine config path escaped .faultline":                                 "the config path is <dir>/config.json and resolveTrustedSystemPath rewrites the same /var or /tmp alias prefix of both, so the relative path is always config.json",
 	"Minimization output cannot traverse a symbolic link or non-directory:":    "the CLI's safeManagedFileOutput refuses the same output first",
 	"minimization result verification failed safely:":                          "a throw inside the checks of a record that passed the schema: only a V8 limit (string length, stack depth) gets there",
 	// Races: the file or directory changes between two steps of fl.
