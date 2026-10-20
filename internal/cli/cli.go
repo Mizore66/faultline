@@ -76,6 +76,8 @@ func dispatch(e *env, args []string) error {
 		return doctorCommand(e, rest)
 	case command == "runtime":
 		return runtimeCommand(e, rest)
+	case command == "init":
+		return initCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:
