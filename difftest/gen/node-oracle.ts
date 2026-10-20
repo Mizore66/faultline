@@ -19,7 +19,9 @@ import type { GitProofBundleWriteOptions } from "../../src/git-proof-bundle.js";
 import { FrozenWitnessSchema, verifyFrozenWitnessRecord } from "../../src/witness-lock.js";
 import { ENVIRONMENT_DESCRIPTOR_FILES, EnvironmentFingerprintSchema, computeEnvironmentFingerprint, resolveRuntimeImageForFingerprint } from "../../src/environment-fingerprint.js";
 import { loadRuntimeMappingDocument } from "../../src/runtime-mapping-file.js";
-import { readFaultLineConfig } from "../../src/config.js";
+import { readFaultLineConfig, ensureFaultLineConfig, updateFaultLineConfigImage } from "../../src/config.js";
+import { writeRuntimeMappingFile } from "../../src/runtime-mapping-file.js";
+import { readFileSync as cwReadFile, statSync as cwStat } from "node:fs";
 import { MaterializedOverlaySchema, materializeFrozenOverlays } from "../../src/safe-overlay.js";
 import { materializeGitTree, runHardenedGit } from "../../src/git-materialization.js";
 import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../src/ledger.js";
@@ -185,6 +187,42 @@ export const handlers: Record<string, Handler> = {
     try {
       const config = readFaultLineConfig(dir);
       return config === null ? "NULL" : canonicalJson(config);
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  // configWriters runs ensure/update steps in dir and reports, per step, the
+  // outcome, file mode and file bytes (base64) with dir replaced by <D>.
+  configWriters: ({ dir, steps }: { dir: string; steps: { kind: "ensure" | "update"; alias?: string; image?: string }[] }) => {
+    const mask = (text: string) => text.split(dir).join("<D>");
+    const lines: string[] = [];
+    for (const step of steps) {
+      let head: string;
+      try {
+        if (step.kind === "ensure") {
+          head = ensureFaultLineConfig({ repository: dir, ...(step.alias === undefined ? {} : { runtimeAlias: step.alias as "node" }), ...(step.image === undefined ? {} : { image: step.image }) }).status;
+        } else {
+          updateFaultLineConfigImage({ repository: dir, image: step.image!, ...(step.alias === undefined ? {} : { runtimeAlias: step.alias as "node" }) });
+          head = "OK";
+        }
+      } catch (error) {
+        head = `THREW:${mask((error as Error).message)}`;
+      }
+      const file = `${dir}/.faultline/config.json`;
+      let tail = "nofile";
+      try {
+        tail = `${(cwStat(file).mode & 0o777).toString(8)}:${Buffer.from(mask(cwReadFile(file, "utf8")), "utf8").toString("base64")}`;
+      } catch { /* absent */ }
+      lines.push(`${head}|${tail}`);
+    }
+    return lines.join("\n");
+  },
+  // runtimeMappingWriter writes a mapping file under dir and reports its bytes.
+  runtimeMappingWriter: ({ dir, pairs, generatedAt, source }: { dir: string; pairs: { fingerprintDigest: string; image: string }[]; generatedAt: string; source?: string }) => {
+    try {
+      const out = `${dir}/sub/m.json`;
+      writeRuntimeMappingFile({ pairs, outputPath: out, generatedAt, ...(source === undefined ? {} : { source }) });
+      return `${(cwStat(out).mode & 0o777).toString(8)}:${cwReadFile(out, "utf8")}`;
     } catch (error) {
       return `THREW:${(error as Error).message}`;
     }
