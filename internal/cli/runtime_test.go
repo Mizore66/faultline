@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Mizore66/faultline/internal/gitinv"
+	"github.com/Mizore66/faultline/internal/hostcmd"
+	"github.com/Mizore66/faultline/internal/runtimeimage"
 )
 
 const pairError = "Each --fingerprint must be followed by --image <digest-pinned-image>."
@@ -40,7 +44,7 @@ func TestMappingPairScan(t *testing.T) {
 			t.Errorf("%s: err %v", c.args, err)
 			continue
 		}
-		if !c.err && (len(pairs) != len(c.pairs) || (len(pairs) > 0 && pairs[len(pairs)-1] != c.pairs[len(c.pairs)-1])) {
+		if !c.err && !slices.Equal(pairs, c.pairs) {
 			t.Errorf("%s: pairs %v", c.args, pairs)
 		}
 	}
@@ -91,5 +95,49 @@ func TestRuntimePrepareWithoutYes(t *testing.T) {
 		"  \"next\": \"fl runtime prepare go --yes\"\n}\n"
 	if code != 1 || stderr != "" || stdout != want {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+// fakeRuntimeRunner answers every Docker call with stdout, exit 0, and
+// records the argv.
+func fakeRuntimeRunner(t *testing.T, stdout string) *[][]string {
+	var calls [][]string
+	saved := runtimeRunner
+	runtimeRunner = func() runtimeimage.Runner {
+		return func(args []string, _ time.Duration, _ int) hostcmd.Result {
+			calls = append(calls, args)
+			zero := 0
+			return hostcmd.Result{ExitCode: &zero, Stdout: stdout}
+		}
+	}
+	t.Cleanup(func() { runtimeRunner = saved })
+	return &calls
+}
+
+func TestRuntimeResolveWritesConfigAfterDocker(t *testing.T) {
+	repo := t.TempDir()
+	image := "node@sha256:" + strings.Repeat("e", 64)
+	calls := fakeRuntimeRunner(t, `["`+image+`"]`)
+	stdout, stderr, code := run("runtime", "resolve", "node", "--repo", repo)
+	if code != 0 || stderr != "" || !strings.Contains(stdout, `"image": "`+image+`"`) {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if want := [][]string{{"image", "inspect", "--format", "{{json .RepoDigests}}", "node:22-alpine"}}; !slices.EqualFunc(*calls, want, slices.Equal) {
+		t.Fatalf("docker calls %q", *calls)
+	}
+	config, ok, err := gitinv.ReadConfig(repo)
+	if err != nil || !ok || config.Get("image").Str() != image || config.Get("runtime", "alias").Str() != "node" {
+		t.Fatalf("config %v %v %v", config, ok, err)
+	}
+}
+
+func TestRuntimeResolveWithoutDigestWritesNoConfig(t *testing.T) {
+	repo := t.TempDir()
+	fakeRuntimeRunner(t, "[]")
+	if _, stderr, code := run("runtime", "resolve", "node", "--repo", repo); code != 1 || !strings.Contains(stderr, "Docker did not return a digest-pinned RepoDigest for node:22-alpine.") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if _, ok, err := gitinv.ReadConfig(repo); ok || err != nil {
+		t.Fatalf("a config was written: %v %v", ok, err)
 	}
 }

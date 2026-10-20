@@ -10,7 +10,8 @@ import (
 	"github.com/Mizore66/faultline/internal/runtimeimage"
 )
 
-// runtimeRunner is the Docker runner `fl runtime` uses; tests replace it.
+// runtimeRunner is the Docker runner `fl runtime` uses; runtime_test.go
+// replaces it.
 var runtimeRunner = runtimeimage.NodeRunner
 
 const (

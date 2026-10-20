@@ -169,6 +169,7 @@ TestWriterReplay/posix/runtime-prepare-unknown
 TestWriterReplay/posix/runtime-prepare-go-yes
 TestWriterReplay/posix/runtime-prepare-pull-fail
 TestWriterReplay/posix/runtime-prepare-pull-flag-with-yes
+TestWriterReplay/posix/runtime-mapping-output-is-dir
 TestWriterReplay/posix/runtime-project-plan
 TestWriterReplay/posix/runtime-project-plan-network-default
 TestWriterReplay/posix/runtime-project-plan-bad-network
