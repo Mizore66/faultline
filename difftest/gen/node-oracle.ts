@@ -32,6 +32,8 @@ import { makeWitness, resignWitness } from "./witness-seed.js";
 import { lifecycleBoundToDescendant, lifecycleBoundToEveryInvestigatedState } from "./fixtures.js";
 import { redactText, redactValue } from "../../src/redaction.js";
 import { classifyFromWitnessResult, resolveWitnessResultFromStdout, witnessResultConsistentWithExitCode } from "../../src/witness-result.js";
+import { allowlistConfigDigest, filterAllowlistedHighOccurrences, isEntropyTokenAllowlisted, loadSecretAllowlist } from "../../src/secret-allowlist.js";
+import { planTurnSnapshotPaths } from "../../src/turn-snapshot.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -412,6 +414,31 @@ export const handlers: Record<string, Handler> = {
   redactValue: ({ text }: { text: string }) => {
     const result = redactValue(JSON.parse(text));
     return { value: JSON.stringify(result.value), report: canonicalJson(result.report) };
+  },
+  // Secret allowlist and turn-snapshot path policy (slice 3a, Task 7). The
+  // ignore rules and the secret scan are private to turn-snapshot.ts, so they
+  // run through planTurnSnapshotPaths with a stub Git runner that lists
+  // `paths` as the tracked files; it returns the kept paths and warnings.
+  loadSecretAllowlist: ({ dir }: { dir: string }) => {
+    try {
+      const allowlist = loadSecretAllowlist(dir);
+      return `${allowlistConfigDigest(allowlist)} ${JSON.stringify(allowlist)}`;
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  filterAllowlistedHighOccurrences: ({ allowlist, path, occurrences, fileDigest }: { allowlist: any; path: string; occurrences: any[]; fileDigest: string }) =>
+    canonicalJson(filterAllowlistedHighOccurrences(allowlist, path, { occurrences } as any, fileDigest)),
+  isEntropyTokenAllowlisted: ({ allowlist, path, token, fileDigest }: { allowlist: any; path: string; token: string; fileDigest: string }) =>
+    String(isEntropyTokenAllowlisted(allowlist, path, token, fileDigest)),
+  planTurnSnapshotPaths: ({ root, paths, skipSecretScan }: { root: string; paths: string[]; skipSecretScan: boolean }) => {
+    try {
+      const runGit = (_root: string, args: readonly string[]) => (args.includes("--others") ? "" : paths.join("\0"));
+      const { paths: kept, warnings } = planTurnSnapshotPaths(root, runGit, { trackedFilesOnly: true, skipSecretScan });
+      return canonicalJson({ paths: kept, warnings });
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
   },
   sortCodePoints: () => {
     const all: string[] = [];
