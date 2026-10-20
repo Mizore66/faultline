@@ -39,9 +39,9 @@ type StandingPolicyInput struct {
 // Options are planProjectInit's options (src/project-init.ts:77). An empty
 // Runtime or CliPath is TS undefined.
 type Options struct {
-	Repository, Runtime, CliPath                          string
+	Repository, Runtime, CliPath                            string
 	WriteIgnoreIfMissing, WriteConfig, MarkSidecarInstalled bool
-	StandingPolicy                                        *StandingPolicyInput
+	StandingPolicy                                          *StandingPolicyInput
 }
 
 // limitations ports the limitations list of src/project-init.ts:217.
