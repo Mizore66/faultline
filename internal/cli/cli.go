@@ -72,6 +72,8 @@ func dispatch(e *env, args []string) error {
 		return judgeProofCommand(e, rest)
 	case command == "commit-proof-preview":
 		return commitProofPreviewCommand(e, rest)
+	case command == "doctor":
+		return doctorCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:

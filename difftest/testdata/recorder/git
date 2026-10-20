@@ -10,12 +10,12 @@
 self=$(cd "$(dirname "$0")" && pwd -P)
 log=$FAULTLINE_ARGV_LOG
 if [ -n "$log" ]; then
-  {
-    printf '%s ' git
-    sep=
-    for arg in "$@"; do printf '%s%s' "$sep" "$arg"; sep=$(printf '\037'); done
-    printf '\036'
-  } >> "$log"
+  # One write per record: doctor runs git and docker concurrently, and
+  # appends made of several writes could interleave.
+  record="git "
+  sep=
+  for arg in "$@"; do record="$record$sep$arg"; sep=$(printf '\037'); done
+  printf '%s\036' "$record" >> "$log"
 fi
 found=
 rest=$PATH

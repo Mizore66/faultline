@@ -10,12 +10,18 @@
 self=$(cd "$(dirname "$0")" && pwd -P)
 log=$FAULTLINE_ARGV_LOG
 if [ -n "$log" ]; then
-  {
-    printf '%s ' docker
-    sep=
-    for arg in "$@"; do printf '%s%s' "$sep" "$arg"; sep=$(printf '\037'); done
-    printf '\036'
-  } >> "$log"
+  # One write per record: doctor runs git and docker concurrently, and
+  # appends made of several writes could interleave.
+  record="docker "
+  sep=
+  for arg in "$@"; do record="$record$sep$arg"; sep=$(printf '\037'); done
+  printf '%s\036' "$record" >> "$log"
+fi
+# FAULTLINE_HIDE_DOCKER=1 (a writer case's env) plays a missing docker
+# command: logged, then exit 127, whatever docker the machine has.
+if [ "$FAULTLINE_HIDE_DOCKER" = 1 ]; then
+  echo "recorder: docker hidden (FAULTLINE_HIDE_DOCKER)" >&2
+  exit 127
 fi
 found=
 rest=$PATH
