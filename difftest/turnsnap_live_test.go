@@ -24,83 +24,21 @@ import (
 // The ignore rules and the secret scan are private in turn-snapshot.ts, so
 // both live tests go through its exported planTurnSnapshotPaths with a stub
 // Git runner that lists the given paths as tracked (trackedFilesOnly), and
-// goPlan below is the same walk over the Go pieces: ignore rules, then the
-// allowlist, then per path the rules, protection and lstat, the caps, the
-// content digests and the scan. Task 8's planner (internal/turnsnap) can
-// replace goPlan.
+// goPlan runs the Go planner (turnsnap.PlanForTest) with the same stub.
 func goPlan(root string, paths []string, skipScan bool) string {
-	threw := func(err error) string { return "THREW:" + jsexc.Message(err) }
-	rules, err := turnsnap.LoadIgnoreRules(root)
+	kept, warnings, err := turnsnap.PlanForTest(root, paths, true, skipScan)
 	if err != nil {
-		return threw(err)
+		return "THREW:" + jsexc.Message(err)
 	}
-	a, err := allowlist.Load(root)
-	if err != nil {
-		return "THREW:Could not load secret allowlist: " + jsexc.Message(err)
+	return canonicalOf(jsjson.MustObject("paths", stringValues(kept), "warnings", stringValues(warnings)))
+}
+
+func stringValues(items []string) jsjson.Value {
+	out := make([]jsjson.Value, len(items))
+	for i, s := range items {
+		out[i] = jsjson.MakeString(s)
 	}
-	var tracked []string
-	seen := map[string]bool{}
-	for _, p := range strings.Split(strings.Join(paths, "\x00"), "\x00") {
-		if p = turnsnap.NormalizePath(p); p != "" && !seen[p] {
-			seen[p] = true
-			tracked = append(tracked, p)
-		}
-	}
-	type candidate struct {
-		rel, abs string
-		exists   bool
-		size     int
-	}
-	var candidates []candidate
-	warnings := []jsjson.Value{}
-	for _, rel := range tracked {
-		ignored, protected := turnsnap.IsIgnored(rel, rules), turnsnap.IsProtectedDescriptor(rel)
-		if ignored && !protected {
-			continue
-		}
-		if ignored {
-			warnings = append(warnings, jsjson.MakeString("Protected environment descriptor remains snapshot-eligible despite .faultlineignore: "+rel))
-		}
-		abs := nodefs.Join(append([]string{root}, strings.Split(rel, "/")...)...)
-		c := candidate{rel: rel, abs: abs}
-		if st, err := nodefs.Lstat(abs); err == nil {
-			switch {
-			case st.Mode()&os.ModeSymlink != 0:
-				return "THREW:Refusing turn-tree snapshot: symbolic link is not snapshot-eligible: " + rel
-			case st.Mode().IsRegular():
-				c.exists, c.size = true, int(st.Size())
-			case st.IsDir():
-				continue
-			}
-		}
-		candidates = append(candidates, c)
-	}
-	// The caps are never reached here (small files, few paths).
-	for _, c := range candidates {
-		if c.exists {
-			if _, err := allowlist.FileContentDigest(c.abs, turnsnap.SecretScanBytes); err != nil {
-				return threw(err)
-			}
-		}
-	}
-	if !skipScan {
-		for _, c := range candidates {
-			if c.exists {
-				if err := turnsnap.AssertNoSnapshotSecrets(c.rel, c.abs, c.size, a); err != nil {
-					return threw(err)
-				}
-			}
-		}
-	}
-	rels := make([]string, len(candidates))
-	for i, c := range candidates {
-		rels[i] = c.rel
-	}
-	kept := []jsjson.Value{}
-	for _, rel := range canonical.SortLocale(rels) {
-		kept = append(kept, jsjson.MakeString(rel))
-	}
-	return canonicalOf(jsjson.MustObject("paths", jsjson.MakeArray(kept), "warnings", jsjson.MakeArray(warnings)))
+	return jsjson.MakeArray(out)
 }
 
 func planArgs(root string, paths []string, skipScan bool) string {

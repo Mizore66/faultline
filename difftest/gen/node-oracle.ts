@@ -44,7 +44,9 @@ import { lstatSync as cwLstat, readdirSync as cwReaddir } from "node:fs";
 import { sha256 as cwSha256 } from "../../src/canonical.js";
 import type { DockerImageInspectResult } from "../../src/runtime.js";
 import { allowlistConfigDigest, filterAllowlistedHighOccurrences, isEntropyTokenAllowlisted, loadSecretAllowlist } from "../../src/secret-allowlist.js";
-import { planTurnSnapshotPaths } from "../../src/turn-snapshot.js";
+import { captureTurnTreeSnapshot, defaultTurnSnapshotGitRunner, planTurnSnapshotPaths, turnSnapshotRepoCachePath } from "../../src/turn-snapshot.js";
+import type { TurnSnapshotGitRunner } from "../../src/turn-snapshot.js";
+import { existsSync as tsExists } from "node:fs";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -597,6 +599,43 @@ export const handlers: Record<string, Handler> = {
       return `THREW:${(error as Error).message}`;
     }
   },
+  // Turn-snapshot capture (slice 3a, Task 8): captureTurnTreeSnapshot on
+  // `repository` with a no-op sleep, PATH replaced, and runGit the default
+  // runner wrapped to record each call as [root, args, env additions as
+  // KEY=value, sha256 of the input or null]. sessionCachePath "" is none and
+  // "repo" is turnSnapshotRepoCachePath(repository), resolved first as
+  // `fl init` does. It returns JSON.stringify of { cachePath, outcome:
+  // { snapshot, warnings } or { threw }, onWarning, cache (the cache file's
+  // text afterwards when it is a file, or null), calls }. Start the oracle seeded to compare
+  // capturedAt and the temporary index names.
+  captureTurnTreeSnapshot: ({ repository, sessionCachePath, trackedFilesOnly, path }: {
+    repository: string; sessionCachePath: string; trackedFilesOnly: boolean; path: string;
+  }) => withPath(path, async () => {
+    const onWarning: string[] = [];
+    const calls: unknown[] = [];
+    const runGit: TurnSnapshotGitRunner = (root, args, env, options) => {
+      calls.push([root, [...args], Object.entries(env ?? {}).map(([key, value]) => `${key}=${value}`),
+        options?.input === undefined ? null : createHash("sha256").update(options.input).digest("hex")]);
+      return defaultTurnSnapshotGitRunner(root, args, env, options);
+    };
+    let cachePath: string | null = null;
+    let outcome: unknown;
+    try {
+      cachePath = sessionCachePath === "repo" ? turnSnapshotRepoCachePath(repository) : sessionCachePath;
+      const { snapshot, warnings } = captureTurnTreeSnapshot(repository, {
+        sleep: () => {},
+        runGit,
+        trackedFilesOnly,
+        ...(cachePath === "" ? {} : { sessionCachePath: cachePath }),
+        onWarning: (warning) => { onWarning.push(warning); }
+      });
+      outcome = { snapshot, warnings };
+    } catch (error) {
+      outcome = { threw: (error as Error).message };
+    }
+    const cache = cachePath && tsExists(cachePath) && cwStat(cachePath).isFile() ? cwReadFile(cachePath, "utf8") : null;
+    return JSON.stringify({ cachePath, outcome, onWarning, cache, calls });
+  }),
   sortCodePoints: () => {
     const all: string[] = [];
     for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));
