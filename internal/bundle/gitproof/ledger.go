@@ -100,23 +100,24 @@ var (
 	ledgerGitObjectID      = s.String(s.Regex(s.Pattern(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`), "Expected a Git object id"))
 
 	// CanonicalTimestampSchema ports src/ledger.ts:40 (and src/turn-snapshot.ts:58).
-	canonicalTimestampSchema = s.Refine(s.String(), canonicalTimestampValue, "Expected a canonical ISO-8601 UTC timestamp")
+	CanonicalTimestampSchema = s.Refine(s.String(), canonicalTimestampValue, "Expected a canonical ISO-8601 UTC timestamp")
 
 	codexTransportSchema  = s.Enum("CODEX_CLI", "CODEX_APP", "SIDE_CAR", "OBSERVED_EXTERNAL_TRANSPORT")
 	turnOutcomeSchema     = s.Enum("COMPLETED", "FAILED", "INTERRUPTED")
 	sessionEndReasonSchem = s.Enum("COMPLETED", "FAILED", "INTERRUPTED", "ABANDONED")
 
-	// src/turn-snapshot.ts:66-78.
-	unsignedTurnTreeSnapshotSchema = s.Object(
+	// UnsignedTurnTreeSnapshotSchema and TurnTreeSnapshotSchema port
+	// src/turn-snapshot.ts:66-78 (turnsnap's signer parses with them).
+	UnsignedTurnTreeSnapshotSchema = s.Object(
 		s.F("schemaVersion", s.LiteralString(turnTreeSnapshotVersion)),
 		s.F("repositoryRoot", s.String(s.MinLength(1))),
 		s.F("headCommit", ledgerGitObjectID),
 		s.F("treeDigest", ledgerGitObjectID),
-		s.F("capturedAt", canonicalTimestampSchema),
+		s.F("capturedAt", CanonicalTimestampSchema),
 		s.F("dirty", s.Boolean()),
 		s.F("statusDigest", ledgerHashSchema),
 	).Strict()
-	turnTreeSnapshotSchema = unsignedTurnTreeSnapshotSchema.Extend(s.F("digest", ledgerHashSchema)).Strict()
+	TurnTreeSnapshotSchema = UnsignedTurnTreeSnapshotSchema.Extend(s.F("digest", ledgerHashSchema)).Strict()
 
 	// src/ledger.ts:59-155.
 	sessionStartedPayloadSchema = s.Object(
@@ -146,7 +147,7 @@ var (
 		s.F("repositoryRoot", s.String(s.MinLength(1))),
 		s.F("headCommit", ledgerGitObjectID),
 		s.F("treeDigest", ledgerGitObjectID),
-		s.F("capturedAt", canonicalTimestampSchema),
+		s.F("capturedAt", CanonicalTimestampSchema),
 		s.F("clean", s.Literal(jsjson.MakeBool(true))),
 	).Strict()
 
@@ -160,11 +161,11 @@ var (
 	turnTreeSnapshotPayloadSchema = s.Object(
 		s.F("turnId", ledgerIdentifierSchema),
 		s.F("turnOrdinal", positiveInt()),
-		s.F("snapshot", turnTreeSnapshotSchema),
+		s.F("snapshot", TurnTreeSnapshotSchema),
 	).Strict()
 
 	sessionBaselineSnapshotPayloadSchema = s.Object(
-		s.F("snapshot", turnTreeSnapshotSchema),
+		s.F("snapshot", TurnTreeSnapshotSchema),
 	).Strict()
 
 	sessionEndedPayloadSchema = s.Object(
@@ -199,7 +200,7 @@ var (
 		s.F("sessionId", ledgerIdentifierSchema),
 		s.F("sequence", positiveInt()),
 		s.F("eventId", ledgerIdentifierSchema),
-		s.F("occurredAt", canonicalTimestampSchema),
+		s.F("occurredAt", CanonicalTimestampSchema),
 		s.F("event", lifecycleEventInputSchema),
 		s.F("previousHash", ledgerHashSchema),
 	).Strict()
@@ -211,7 +212,7 @@ var (
 		s.F("schemaVersion", s.LiteralString(codexLifecycleLedgerVersion)),
 		s.F("ledgerId", ledgerIdentifierSchema),
 		s.F("sessionId", ledgerIdentifierSchema),
-		s.F("createdAt", canonicalTimestampSchema),
+		s.F("createdAt", CanonicalTimestampSchema),
 		s.F("events", s.Array(codexLifecycleEventSchema)),
 	).Strict()
 )
@@ -292,7 +293,7 @@ func verifyGitCheckpoint(value jsjson.Value) []string {
 
 // verifyTurnTreeSnapshot ports src/turn-snapshot.ts:295.
 func verifyTurnTreeSnapshot(value jsjson.Value) []string {
-	parsed, issues, ok := s.Parse(turnTreeSnapshotSchema, value)
+	parsed, issues, ok := s.Parse(TurnTreeSnapshotSchema, value)
 	if !ok {
 		return issueLines("Invalid turn tree snapshot at ", issues)
 	}
