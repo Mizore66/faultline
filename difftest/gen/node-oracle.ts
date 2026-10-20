@@ -32,6 +32,7 @@ import { makeWitness, resignWitness } from "./witness-seed.js";
 import { lifecycleBoundToDescendant, lifecycleBoundToEveryInvestigatedState } from "./fixtures.js";
 import { redactText, redactValue } from "../../src/redaction.js";
 import { classifyFromWitnessResult, resolveWitnessResultFromStdout, witnessResultConsistentWithExitCode } from "../../src/witness-result.js";
+import { DOCTOR_SAFE_GIT_CONFIG, HOST_COMMAND_SAFE_GIT_CONFIG } from "../../src/doctor.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -413,6 +414,8 @@ export const handlers: Record<string, Handler> = {
     const result = redactValue(JSON.parse(text));
     return { value: JSON.stringify(result.value), report: canonicalJson(result.report) };
   },
+  // The safe Git -c lists (internal/safegit).
+  safeGitLists: () => ({ hostCommand: [...HOST_COMMAND_SAFE_GIT_CONFIG], doctor: [...DOCTOR_SAFE_GIT_CONFIG] }),
   sortCodePoints: () => {
     const all: string[] = [];
     for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));
