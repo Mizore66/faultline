@@ -181,6 +181,7 @@ type contextFingerprint struct {
 	contextDigest, dockerfileDigest string
 	fileCount                       int
 	totalBytes                      int64
+	files                           []jsjson.Value // for FingerprintForTest
 }
 
 // Port of src/runtime.ts:409 fingerprintProjectBuildContext: a depth-first,
@@ -272,6 +273,7 @@ func fingerprintProjectBuildContext(n normalizedBuild) (contextFingerprint, erro
 		dockerfileDigest: "sha256:" + canonical.SHA256HexBytes(dockerfileBytes),
 		fileCount:        len(files),
 		totalBytes:       totalBytes,
+		files:            files,
 	}, nil
 }
 
