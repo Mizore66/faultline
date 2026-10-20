@@ -97,7 +97,6 @@ var unreachableLiterals = map[string]string{
 	// golden can compare them; internal/cli's unit tests pin the texts.
 	"not yet ported: help":                           "fl with no command prints TS's help, which slice 2 does not port; TestRunVerifyUsageAndUnported pins the text",
 	"not yet ported: %s":                             "every unported top-level command (doctor, init, …) runs for real in TS; TestRunVerifyUsageAndUnported pins the text",
-	"not yet ported: doctor --security":              "the --security branch is Task 9's; TS runs the self-test, so no golden can hold Go's refusal",
 	"not yet ported: investigate --ci-log/--resume":  "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: investigate turns":              "investigate turns runs in TS; TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: turn proof bundle verification": "a turn proof bundle verifies in TS; slice 2 does not port the turn verifier",

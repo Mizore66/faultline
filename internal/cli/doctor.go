@@ -78,8 +78,7 @@ func doctorSummary(report jsjson.Value) string {
 	return jsexc.Join(lines, "\n")
 }
 
-// doctorCommand ports src/cli-app.ts:331 doctorCommand (the --security
-// branch is Task 9's).
+// doctorCommand ports src/cli-app.ts:331 doctorCommand.
 func doctorCommand(e *env, args []string) error {
 	securityOnly := hasFlag(args, "--security")
 	proofReadyOnly := hasFlag(args, "--proof-ready")
@@ -87,7 +86,7 @@ func doctorCommand(e *env, args []string) error {
 		return fail("Usage: fl doctor [--repo <directory>] [--json] [--proof-ready | --security]")
 	}
 	if securityOnly {
-		return fail("not yet ported: doctor --security") // Task 9
+		return doctorSecurity(e, args)
 	}
 
 	repo, ok := option(args, "--repo")
@@ -131,5 +130,31 @@ func doctorCommand(e *env, args []string) error {
 	default:
 		e.exitCode = 1
 	}
+	return nil
+}
+
+// doctorSecurity is the --security branch of src/cli-app.ts:331
+// doctorCommand.
+func doctorSecurity(e *env, args []string) error {
+	security, err := doctor.RunSecurity()
+	if err != nil {
+		return err
+	}
+	if hasFlag(args, "--json") {
+		o := jsjson.NewObj()
+		for _, k := range security.Obj().Keys() {
+			o.Set(k, security.Obj().Field(k))
+		}
+		o.Set("cliExitCode", jsjson.MakeNumber(float64(doctor.SecurityExitCode(security))))
+		e.printJSON(jsjson.MakeObject(o))
+	} else {
+		lines := []string{"FaultLine doctor --security", "Status: " + security.Get("status").Str()}
+		for _, check := range security.Get("checks").Items() {
+			lines = append(lines, jsexc.Concat("- ", check.Get("id").Str(), ": ", check.Get("status").Str(), " \u2014 ", check.Get("summary").Str()))
+		}
+		lines = append(lines, "Next: "+security.Get("next").Str())
+		e.out(jsexc.Concat(jsexc.Join(lines, "\n"), "\n"))
+	}
+	e.exitCode = doctor.SecurityExitCode(security)
 	return nil
 }
