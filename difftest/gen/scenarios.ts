@@ -21,6 +21,7 @@ const seedPreload = join(repo, "difftest", "gen", "seed.mjs");
 export const scenariosDir = join(repo, "difftest", "testdata", "scenarios");
 const recorderDir = join(repo, "difftest", "testdata", "recorder");
 const fakeDockerDir = join(repo, "difftest", "testdata", "fakedocker");
+const fakeToolsDir = join(repo, "difftest", "testdata", "faketools");
 
 // The pinned oracle release: CI regenerates on it and fails on drift.
 export function requireOracleNode(): void {
@@ -82,9 +83,11 @@ export function inheritedOut(name: string): boolean {
 }
 
 // The environment every writer invocation runs with; extra is the
-// template's env (after placeholder substitution).
-export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | undefined, extra: Record<string, string>): NodeJS.ProcessEnv {
-  const path = [roots.recorder, ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), process.env.PATH ?? ""].join(":");
+// template's env (after placeholder substitution). PATH is the recorders,
+// then the template's fake toolchain (difftest/testdata/faketools/<name>),
+// then its fake Docker, then the inherited PATH.
+export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | undefined, extra: Record<string, string>, fakeTools?: string): NodeJS.ProcessEnv {
+  const path = [roots.recorder, ...(fakeTools ? [join(fakeToolsDir, fakeTools)] : []), ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), process.env.PATH ?? ""].join(":");
   return {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !inheritedOut(name))),
     HOME: roots.home, USERPROFILE: roots.home, TMPDIR: roots.tmp, TEMP: roots.tmp, TMP: roots.tmp,
@@ -449,6 +452,49 @@ const hostileTrees: Hostile = (git, built) => {
   };
 };
 
+// Doctor scenarios (slice 3a Task 6). A doctor repository is buildRepo's
+// repository at the workspace root plus an index: `git status` needs one
+// (without it every tracked file is staged as deleted and untracked).
+// writeIndex writes a version 2 index with no extensions whose entries
+// carry only mode, size, object id and path (every other stat field zero),
+// so its bytes depend on nothing but the entries; git refreshes the stat
+// data on its first status, which the writer replay's .git/index rule
+// (gen-writers.ts gitIndexDigest) leaves out of the comparison.
+type IndexEntry = { path: string; content: string };
+function writeIndex(gitDir: string, entries: IndexEntry[]): void {
+  const sha1 = (bytes: Buffer) => createHash("sha1").update(bytes).digest();
+  const parts: Buffer[] = [Buffer.from("DIRC"), Buffer.from([0, 0, 0, 2]), Buffer.alloc(4)];
+  parts[2]!.writeUInt32BE(entries.length);
+  for (const entry of [...entries].sort((a, b) => Buffer.compare(Buffer.from(a.path), Buffer.from(b.path)))) {
+    const content = Buffer.from(entry.content, "utf8");
+    const path = Buffer.from(entry.path, "utf8");
+    const head = Buffer.alloc(62);
+    head.writeUInt32BE(0o100644, 24);
+    head.writeUInt32BE(content.length, 36);
+    sha1(Buffer.concat([Buffer.from(`blob ${content.length}\0`), content])).copy(head, 40);
+    head.writeUInt16BE(Math.min(path.length, 0xfff), 60);
+    const length = 62 + path.length;
+    parts.push(head, path, Buffer.alloc(8 - (length % 8)));
+  }
+  const body = Buffer.concat(parts);
+  writeFileSync(join(gitDir, "index"), Buffer.concat([body, sha1(body)]));
+}
+// doctorRepo builds a one-commit repository of files at the workspace root
+// with a matching index; edit then changes the workspace (and index).
+function doctorRepo(files: RepoState, edit?: (ws: string) => void, config = ""): Scenario {
+  return {
+    files: {},
+    setup: (ws) => {
+      buildRepo(ws, ".", [files]);
+      writeIndex(join(ws, ".git"), Object.entries(files).map(([path, content]) => ({ path, content })));
+      if (config !== "") writeFileSync(join(ws, ".git", "config"), readFileSync(join(ws, ".git", "config"), "utf8") + config);
+      edit?.(ws);
+    },
+    argv: []
+  };
+}
+const DOCTOR_FILES: RepoState = { "state.txt": "good\n", "src/main.txt": "main\n" };
+
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
@@ -521,6 +567,26 @@ export const SCENARIOS: Record<string, Scenario> = {
   },
   // Git proof bundles whose pages take the lifecycle-bound, recovery and
   // unstable-state branches (and one the loader refuses).
+  // Doctor (slice 3a Task 6): a clean repository; a modified file and an
+  // untracked one (2 changed paths); a staged rename (git status -z lists
+  // a rename as two NUL-separated paths, so doctor counts 2); no
+  // repository; runtime markers; and a repository-local fsmonitor command
+  // that the hardened doctor git calls must never run (tests/cli.test.ts:664:
+  // it would leave fsmonitor-ran in the repository).
+  "repo-clean": doctorRepo(DOCTOR_FILES),
+  "repo-dirty": doctorRepo(DOCTOR_FILES, (ws) => {
+    writeFileSync(join(ws, "state.txt"), "bad\n");
+    writeFileSync(join(ws, "notes.txt"), "untracked\n");
+  }),
+  "repo-rename": doctorRepo(DOCTOR_FILES, (ws) => {
+    rmSync(join(ws, "state.txt"));
+    writeFileSync(join(ws, "renamed.txt"), "good\n");
+    writeIndex(join(ws, ".git"), [{ path: "renamed.txt", content: "good\n" }, { path: "src/main.txt", content: "main\n" }]);
+  }),
+  "not-a-repo": { files: { "notes.txt": "not a repository\n" }, argv: [] },
+  "runtime-markers-multiple": doctorRepo({ ...DOCTOR_FILES, "package.json": "{\"name\":\"demo\"}\n", "pyproject.toml": "[project]\nname = \"demo\"\n", "go.mod": "module example.test/demo\n" }),
+  "runtime-markers-go": doctorRepo({ ...DOCTOR_FILES, "go.mod": "module example.test/demo\n" }),
+  "hostile-fsmonitor": doctorRepo(DOCTOR_FILES, undefined, "\tfsmonitor = \"printf invoked > fsmonitor-ran #\"\n"),
   "proof-bases": {
     bases: Object.fromEntries(["git-fully-bound", "git-partially-bound", "git-shape-mixed-history", "git-sha256"].map((b) => [`bases/${b}`, b])),
     files: {}, argv: []
