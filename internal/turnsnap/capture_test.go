@@ -24,14 +24,22 @@ func gitRepo(t *testing.T) string {
 	}
 	dir := t.TempDir()
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@example.test"}, {"config", "user.name", "t"}} {
-		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+		if out, err := gitCmd(dir, args...).CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v", out, err)
 		}
 	}
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a\n"), 0o644)
-	exec.Command("git", "-C", dir, "add", ".").Run()
-	exec.Command("git", "-C", dir, "commit", "-qm", "init").Run()
+	gitCmd(dir, "add", ".").Run()
+	gitCmd(dir, "commit", "-qm", "init").Run()
 	return dir
+}
+
+// gitCmd is the test's own git, without the developer's global or system
+// configuration (signing, hooks, templates).
+func gitCmd(dir string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+	return cmd
 }
 
 func noSleep(time.Duration) {}
@@ -85,7 +93,7 @@ func repositoryFixture(t *testing.T) string {
 
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	out, err := gitCmd(dir, args...).Output()
 	if err != nil {
 		t.Fatalf("git %v: %v", args, err)
 	}
@@ -549,9 +557,9 @@ func TestCaptureRemovesNewlyIgnoredTracked(t *testing.T) { // :702
 	}
 }
 
-func TestCaptureRestoredClean(t *testing.T) { // :725-863
+func TestCaptureRestoredClean(t *testing.T) { // :725-889
 	t.Parallel()
-	t.Run("mode only", func(t *testing.T) {
+	t.Run("mode only", func(t *testing.T) { // :725
 		dir, cache := repositoryFixture(t), cachePath(t)
 		git(t, dir, "config", "core.filemode", "true")
 		write(t, dir, "second.txt", "edited-1\n")
@@ -564,7 +572,7 @@ func TestCaptureRestoredClean(t *testing.T) { // :725-863
 			t.Fatal("mode change reused a tree")
 		}
 	})
-	t.Run("restore one of two", func(t *testing.T) {
+	t.Run("restore one of two", func(t *testing.T) { // :751
 		dir, cache := repositoryFixture(t), cachePath(t)
 		write(t, dir, "tracked.txt", "dirty at turn N\n")
 		write(t, dir, "other.txt", "other dirty\n")
@@ -576,7 +584,26 @@ func TestCaptureRestoredClean(t *testing.T) { // :725-863
 			t.Fatal("restored file kept stale bytes")
 		}
 	})
-	t.Run("restore exec bit", func(t *testing.T) {
+	t.Run("restore A while B stays dirty", func(t *testing.T) { // :774
+		dir, cache := repositoryFixture(t), cachePath(t)
+		write(t, dir, "a.txt", "a-head\n")
+		write(t, dir, "b.txt", "b-head\n")
+		git(t, dir, "add", "a.txt", "b.txt")
+		git(t, dir, "commit", "-qm", "a and b")
+		write(t, dir, "a.txt", "a-dirty\n")
+		write(t, dir, "b.txt", "b-dirty\n")
+		turnN := snap(t, dir, CaptureOptions{SessionCachePath: cache})
+		if git(t, dir, "show", tree(turnN)+":a.txt") != "a-dirty" || git(t, dir, "show", tree(turnN)+":b.txt") != "b-dirty" {
+			t.Fatal("turn N tree wrong")
+		}
+		write(t, dir, "a.txt", "a-head\n")
+		write(t, dir, "b.txt", "b-still-dirty\n")
+		turnN1 := snap(t, dir, CaptureOptions{SessionCachePath: cache})
+		if git(t, dir, "show", tree(turnN1)+":a.txt") != "a-head" || git(t, dir, "show", tree(turnN1)+":b.txt") != "b-still-dirty" {
+			t.Fatal("restored a.txt kept stale bytes")
+		}
+	})
+	t.Run("restore exec bit", func(t *testing.T) { // :800
 		dir, cache := repositoryFixture(t), cachePath(t)
 		write(t, dir, "script.sh", "#!/bin/sh\necho ok\n")
 		git(t, dir, "add", "script.sh")
@@ -593,7 +620,7 @@ func TestCaptureRestoredClean(t *testing.T) { // :725-863
 			t.Fatal("restored mode kept")
 		}
 	})
-	t.Run("pass fail pass", func(t *testing.T) {
+	t.Run("pass fail pass", func(t *testing.T) { // :831
 		dir, cache := repositoryFixture(t), cachePath(t)
 		write(t, dir, "noise.tmp", "noise\n")
 		git(t, dir, "add", "noise.tmp")
@@ -611,6 +638,33 @@ func TestCaptureRestoredClean(t *testing.T) { // :725-863
 		}
 		if slices.Contains(lsTree(t, dir, tree(pass)), "noise.tmp") {
 			t.Fatal("ignored noise.tmp in the tree")
+		}
+	})
+	t.Run("clean porcelain, ignored tracked path forces the slow path", func(t *testing.T) { // :863
+		dir, cache := repositoryFixture(t), cachePath(t)
+		write(t, dir, "noise.tmp", "noise\n")
+		git(t, dir, "add", "noise.tmp")
+		git(t, dir, "commit", "-qm", "noise")
+		write(t, dir, ".faultlineignore", "noise.tmp\n")
+		git(t, dir, "add", ".faultlineignore")
+		git(t, dir, "commit", "-qm", "ignore noise")
+		write(t, dir, "tracked.txt", "dirty turn N\n")
+		turnN := snap(t, dir, CaptureOptions{SessionCachePath: cache})
+		if git(t, dir, "show", tree(turnN)+":tracked.txt") != "dirty turn N" || slices.Contains(lsTree(t, dir, tree(turnN)), "noise.tmp") {
+			t.Fatal("turn N tree wrong")
+		}
+		write(t, dir, "tracked.txt", "stable\n")
+		// Porcelain is fully clean; the ignored tracked noise.tmp forces staging.
+		if git(t, dir, "status", "--porcelain") != "" {
+			t.Fatal("porcelain not clean")
+		}
+		counts := map[string]int{}
+		turnN1 := snap(t, dir, CaptureOptions{SessionCachePath: cache, runGit: countingRunner(counts)})
+		if git(t, dir, "show", tree(turnN1)+":tracked.txt") != "stable" || tree(turnN1) == tree(turnN) {
+			t.Fatal("restored bytes not captured")
+		}
+		if counts["write-tree"] == 0 || counts["read-tree"] == 0 {
+			t.Fatalf("clean porcelain took the fast path: %v", counts)
 		}
 	})
 }

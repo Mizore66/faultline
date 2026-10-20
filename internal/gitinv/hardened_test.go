@@ -131,18 +131,18 @@ func overlayWitness(path string, bytes []byte, b64 string) jsjson.Value {
 
 func TestRemoveStagedForce(t *testing.T) {
 	dir := t.TempDir()
-	if err := removeForce(filepath.Join(dir, "missing")); err != nil {
+	if err := RemoveForce(filepath.Join(dir, "missing")); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(dir, "f")
 	os.WriteFile(file, nil, 0o644)
-	if err := removeForce(file); err != nil {
+	if err := RemoveForce(file); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(file); !os.IsNotExist(err) {
 		t.Fatal("file survived")
 	}
-	if err := removeForce(dir); err == nil || err.Error() != "Path is a directory: rm returned EISDIR (is a directory) "+dir {
+	if err := RemoveForce(dir); err == nil || err.Error() != "Path is a directory: rm returned EISDIR (is a directory) "+dir {
 		t.Fatal(err)
 	}
 }

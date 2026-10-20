@@ -9,6 +9,7 @@ import (
 	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/clock"
+	"github.com/Mizore66/faultline/internal/gitinv"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
@@ -17,7 +18,7 @@ import (
 )
 
 // CaptureOptions are the CaptureTurnTreeSnapshotOptions FaultLine's call
-// sites pass (src/turn-snapshot.ts:305).
+// sites pass (src/turn-snapshot.ts:304).
 type CaptureOptions struct {
 	// SessionCachePath is sessionCachePath; "" is undefined (no cache).
 	SessionCachePath string
@@ -36,7 +37,7 @@ type CaptureOptions struct {
 	caps        caps
 }
 
-// RepoCachePath ports src/turn-snapshot.ts:802 turnSnapshotRepoCachePath:
+// RepoCachePath ports src/turn-snapshot.ts:798 turnSnapshotRepoCachePath:
 // the repository-level cache under Git's common directory, which `fl init`
 // pre-warms and the Codex sidecar reuses.
 func RepoCachePath(repositoryRoot string) (path string, err error) {
@@ -49,7 +50,7 @@ func RepoCachePath(repositoryRoot string) (path string, err error) {
 	return nodefs.Join(nodefs.Resolve(root, jsstr.Trim(reported)), "faultline", "turn-snapshot-cache.json"), nil
 }
 
-// blockingSleep ports src/turn-snapshot.ts:288.
+// blockingSleep ports src/turn-snapshot.ts:284.
 func blockingSleep(d time.Duration) {
 	if d <= 0 {
 		return
@@ -150,7 +151,7 @@ func trimmed(runGit gitRunner, root string, args ...string) (string, error) {
 	return jsstr.Trim(out), err
 }
 
-// writeThrowaway ports src/turn-snapshot.ts:992 writeThrowawayTreeDigest:
+// writeThrowaway ports src/turn-snapshot.ts:984 writeThrowawayTreeDigest:
 // a clean worktree with no ignore-filtered tracked path reuses
 // HEAD^{tree}; otherwise the plan's paths are staged incrementally into a
 // temporary index seeded from HEAD^{tree}, with objects quarantined.
@@ -175,7 +176,7 @@ func writeThrowaway(runGit gitRunner, root string, o *CaptureOptions, c caps, sc
 			if err != nil {
 				return throwaway{}, err
 			}
-			if !gitObjectID.MatchString(headTree) {
+			if !gitObjectID.Test(headTree) {
 				return throwaway{}, &Error{Message: "Git did not return a valid HEAD tree object id for the clean worktree fast path."}
 			}
 			warning := "Reused HEAD^{tree} for clean worktree with no ignore-filtered tracked paths."
@@ -212,7 +213,7 @@ func writeThrowaway(runGit gitRunner, root string, o *CaptureOptions, c caps, sc
 	if err != nil {
 		return throwaway{}, err
 	}
-	if !gitObjectID.MatchString(baseTree) {
+	if !gitObjectID.Test(baseTree) {
 		return throwaway{}, &Error{Message: "Git did not return a valid HEAD tree object id for incremental turn staging."}
 	}
 	basePaths, err := listTreePaths(runGit, root, baseTree)
@@ -228,8 +229,9 @@ func writeThrowaway(runGit gitRunner, root string, o *CaptureOptions, c caps, sc
 	}
 	objectEnv = append(objectEnv, "GIT_INDEX_FILE="+temporaryIndexPath)
 	result, err := stageAndWrite(runGit, root, delta, objectEnv, c.fileBytes)
-	// finally: rmSync(temporaryIndexPath, { force: true }); its failure wins.
-	if rmErr := nodefs.RemoveAll(temporaryIndexPath); rmErr != nil {
+	// finally: rmSync(temporaryIndexPath, { force: true }) (not recursive);
+	// its failure wins.
+	if rmErr := gitinv.RemoveForce(temporaryIndexPath); rmErr != nil {
 		return throwaway{}, rmErr
 	}
 	if err != nil {
@@ -238,7 +240,7 @@ func writeThrowaway(runGit gitRunner, root string, o *CaptureOptions, c caps, sc
 	return throwaway{treeDigest: result, warnings: p.warnings, pathDigests: p.pathDigests}, nil
 }
 
-// stageAndWrite is the try block of src/turn-snapshot.ts:1067-1114.
+// stageAndWrite is the try block of src/turn-snapshot.ts:1069-1115.
 func stageAndWrite(runGit gitRunner, root string, delta indexDelta, objectEnv []string, maxFileBytes int) (string, error) {
 	env := runOpts{env: objectEnv}
 	if _, err := runGit(root, []string{"read-tree", delta.baseTree}, env); err != nil {
@@ -272,7 +274,7 @@ func stageAndWrite(runGit gitRunner, root string, delta indexDelta, objectEnv []
 			return "", err
 		}
 		blob = jsstr.Trim(blob)
-		if !gitObjectID.MatchString(blob) {
+		if !gitObjectID.Test(blob) {
 			return "", &Error{Message: jsexc.Concat("git hash-object --stdin did not return a blob id for ", rel)}
 		}
 		if _, err := runGit(root, []string{"update-index", "--add", "--cacheinfo", jsexc.Concat(mode, ",", blob, ",", rel)}, env); err != nil {
@@ -284,7 +286,7 @@ func stageAndWrite(runGit gitRunner, root string, delta indexDelta, objectEnv []
 		return "", err
 	}
 	treeDigest = jsstr.Trim(treeDigest)
-	if !gitObjectID.MatchString(treeDigest) {
+	if !gitObjectID.Test(treeDigest) {
 		return "", &Error{Message: "Git did not return a valid tree object id for this turn tree snapshot."}
 	}
 	return treeDigest, nil
@@ -363,7 +365,7 @@ func capture(repository string, o CaptureOptions) (jsjson.Value, []string, error
 		if err != nil {
 			return jsjson.Value{}, nil, err
 		}
-		if !gitObjectID.MatchString(headBefore) {
+		if !gitObjectID.Test(headBefore) {
 			return jsjson.Value{}, nil, &Error{Message: "Git did not return a resolvable HEAD commit for this turn tree snapshot."}
 		}
 		statusBeforeA, err := sampleStatus()

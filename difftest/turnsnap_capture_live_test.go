@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -196,6 +197,30 @@ func workManifest(t *testing.T, dir string) string {
 	})
 	sort.Strings(lines)
 	return strings.Join(lines, "\n")
+}
+
+// integerCacheKey finds a paths or pathDigests key that is an array index
+// in a written cache (JS puts those first).
+var integerCacheKey = regexp.MustCompile(`(?m)^    "(0|[1-9][0-9]{0,9})": `)
+
+// leftoverIndexes fails when a temporary index a step named (its
+// GIT_INDEX_FILE) is still there afterwards: the finally must remove it.
+func leftoverIndexes(t *testing.T, side, result string) {
+	t.Helper()
+	v, err := jsjson.Parse(result)
+	if err != nil {
+		t.Errorf("%s result: %v", side, err)
+		return
+	}
+	for _, call := range v.Get("calls").Items() {
+		for _, kv := range call.Items()[2].Items() {
+			if index, ok := strings.CutPrefix(kv.Str(), "GIT_INDEX_FILE="); ok {
+				if _, err := os.Lstat(index); err == nil {
+					t.Errorf("%s left its temporary index %s behind", side, index)
+				}
+			}
+		}
+	}
 }
 
 // captureArgs are the oracle op's arguments for one step.
@@ -465,9 +490,13 @@ func TestLiveTurnSnapshotCapture(t *testing.T) {
 	// local runs in pieces; CI runs all 150.
 	n, first := 150, 0
 	if window := os.Getenv("FAULTLINE_TURNSNAP_CASES"); window != "" {
-		a, b, _ := strings.Cut(window, ":")
-		first, _ = strconv.Atoi(a)
-		n, _ = strconv.Atoi(b)
+		a, b, ok := strings.Cut(window, ":")
+		var errA, errB error
+		first, errA = strconv.Atoi(a)
+		n, errB = strconv.Atoi(b)
+		if !ok || errA != nil || errB != nil || first < 0 || first >= n {
+			t.Fatalf("FAULTLINE_TURNSNAP_CASES=%q: want first:end with 0 <= first < end", window)
+		}
 	}
 	type prepared struct {
 		c    captureCase
@@ -532,6 +561,7 @@ func TestLiveTurnSnapshotCapture(t *testing.T) {
 			} else {
 				result = goCapture(repository, cachePath, s)
 			}
+			leftoverIndexes(t, side, result)
 			out = append(out, sideResult{result, workManifest(t, work)})
 		}
 		if err := os.Rename(work, filepath.Join(root, side+"-"+strconv.Itoa(i))); err != nil {
@@ -580,6 +610,9 @@ func TestLiveTurnSnapshotCapture(t *testing.T) {
 				kind = "accepted dirty"
 			}
 			outcomes[kind]++
+			if integerCacheKey.MatchString(v.Get("cache").Str()) {
+				outcomes["cache with an integer-like key"]++
+			}
 			recordOutput(t, ts[si].result)
 		}
 		os.RemoveAll(filepath.Join(root, "ts-"+strconv.Itoa(i)))
@@ -616,6 +649,9 @@ func TestLiveTurnSnapshotCapture(t *testing.T) {
 		if reached[marker] == 0 && first == 0 && n == 150 { // checked over the full run only
 			t.Errorf("no generated step reached %q", marker)
 		}
+	}
+	if outcomes["cache with an integer-like key"] == 0 && first == 0 && n == 150 {
+		t.Error("no written cache had an integer-like key")
 	}
 	liveSummary(t, "%d repositories, %d steps compared; outcomes %v; markers %v", n-first, steps, outcomes, reached)
 }

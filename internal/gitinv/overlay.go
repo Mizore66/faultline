@@ -156,17 +156,18 @@ func writeStagedOverlay(staged, target string, data []byte) error {
 	if err == nil {
 		err = nodefs.Rename(staged, target)
 	}
-	if rmErr := removeForce(staged); rmErr != nil {
+	if rmErr := RemoveForce(staged); rmErr != nil {
 		return rmErr
 	}
 	return err
 }
 
-// removeForce is fs.promises.rm(path, { force: true }) in Node 22:
+// RemoveForce is fs.promises.rm(path, { force: true }) in Node 22, and
+// rmSync(path, { force: true }) alike (same validation and message):
 // validateRmOptions lstat()s the path (ENOENT resolves, any other failure
 // rejects with the lstat error, a directory rejects with ERR_FS_EISDIR),
 // then rimraf removes what is there, which for a non-directory is unlink.
-func removeForce(path string) error {
+func RemoveForce(path string) error {
 	info, err := nodefs.Lstat(path)
 	if err != nil {
 		var e *nodefs.Error

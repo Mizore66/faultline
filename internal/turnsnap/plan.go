@@ -2,7 +2,6 @@ package turnsnap
 
 import (
 	"os"
-	"regexp"
 	"runtime"
 	"strings"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/Mizore66/faultline/internal/gitinv"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/jsre"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
 	"github.com/Mizore66/faultline/internal/nodeproc"
@@ -18,7 +18,7 @@ import (
 )
 
 // gitObjectID is src/turn-snapshot.ts:57 GitObjectIdSchema's pattern.
-var gitObjectID = regexp.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`)
+var gitObjectID = jsre.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`, "")
 
 // runOpts are a Git call's env additions (KEY=value pairs spread after the
 // hardened environment) and its optional stdin.
@@ -76,19 +76,19 @@ func absolutePath(root, relativePath string) string {
 	return nodefs.Join(append([]string{root}, strings.Split(relativePath, "/")...)...)
 }
 
-// ObjectDirectory ports src/turn-snapshot.ts:195
+// ObjectDirectory ports src/turn-snapshot.ts:194
 // faultlineSnapshotObjectDirectory.
 func ObjectDirectory(root string) string {
 	return nodefs.Join(nodefs.Resolve(root), ".git", "faultline", "objects")
 }
 
-// PrimaryObjectDirectory ports src/turn-snapshot.ts:199
+// PrimaryObjectDirectory ports src/turn-snapshot.ts:198
 // primaryGitObjectDirectory.
 func PrimaryObjectDirectory(root string) string {
 	return nodefs.Join(nodefs.Resolve(root), ".git", "objects")
 }
 
-// ensureObjectStore ports src/turn-snapshot.ts:208
+// ensureObjectStore ports src/turn-snapshot.ts:207
 // ensureFaultlineSnapshotObjectStore.
 func ensureObjectStore(repositoryRoot string) (string, error) {
 	root := nodefs.Resolve(repositoryRoot)
@@ -188,7 +188,7 @@ func stringArray(items []string) jsjson.Value {
 	return jsjson.MakeArray(out)
 }
 
-// ignorePolicyDigest ports src/turn-snapshot.ts:483. A .faultlineignore
+// ignorePolicyDigest ports src/turn-snapshot.ts:482. A .faultlineignore
 // that cannot be read fails with Node's error.
 func ignorePolicyDigest(root string) (string, error) {
 	ignorePath := nodefs.Join(root, ".faultlineignore")
@@ -222,7 +222,7 @@ func (c caps) withDefaults() caps {
 	return c
 }
 
-// policyDigest ports src/turn-snapshot.ts:493 snapshotPolicyDigest.
+// policyDigest ports src/turn-snapshot.ts:492 snapshotPolicyDigest.
 func policyDigest(root, allowlistDigest string, trackedFilesOnly bool, c caps) (string, error) {
 	ignore, err := ignorePolicyDigest(root)
 	if err != nil {
@@ -239,7 +239,7 @@ func policyDigest(root, allowlistDigest string, trackedFilesOnly bool, c caps) (
 
 type porcelainPath struct{ status, path string }
 
-// parsePorcelainStatusZ ports src/turn-snapshot.ts:514 (lengths and
+// parsePorcelainStatusZ ports src/turn-snapshot.ts:513 (lengths and
 // slices in UTF-16 units).
 func parsePorcelainStatusZ(status string) []porcelainPath {
 	var parts []string
@@ -285,7 +285,7 @@ func modeOf(info os.FileInfo) string {
 	return "100644"
 }
 
-// computeDirtyFingerprint ports src/turn-snapshot.ts:539
+// computeDirtyFingerprint ports src/turn-snapshot.ts:537
 // computeDirtyContentFingerprint with its options given.
 func computeDirtyFingerprint(root, statusPorcelain string, trackedFilesOnly bool, rules []Rule, maxFileBytes int) (dirtyFingerprint, error) {
 	paths := jsjson.NewObj()
@@ -336,7 +336,7 @@ func computeDirtyFingerprint(root, statusPorcelain string, trackedFilesOnly bool
 	return d, nil
 }
 
-// treeObjectExists ports src/turn-snapshot.ts:595 gitTreeObjectExists:
+// treeObjectExists ports src/turn-snapshot.ts:588 gitTreeObjectExists:
 // any failure, the object store's included, is false.
 func treeObjectExists(runGit gitRunner, root, treeDigest string) bool {
 	env, err := objectWriteEnv(root)
@@ -347,7 +347,7 @@ func treeObjectExists(runGit gitRunner, root, treeDigest string) bool {
 	return err == nil
 }
 
-// listTreePaths ports src/turn-snapshot.ts:610; the set keeps first-seen
+// listTreePaths ports src/turn-snapshot.ts:603; the set keeps first-seen
 // order.
 func listTreePaths(runGit gitRunner, root, treeDigest string) ([]string, error) {
 	env, err := objectWriteEnv(root)
@@ -378,7 +378,7 @@ type indexDelta struct {
 	updatePaths, removePaths []string
 }
 
-// computeIndexDelta ports src/turn-snapshot.ts:633
+// computeIndexDelta ports src/turn-snapshot.ts:626
 // computeTurnSnapshotIndexDelta.
 func computeIndexDelta(baseTree string, basePaths, planPaths []string, root string, dirtyPaths map[string]bool) indexDelta {
 	var desiredExisting []string
@@ -434,7 +434,7 @@ type plan struct {
 	secretScanPathCount int
 }
 
-// computePathDigests ports src/turn-snapshot.ts:810. "__proto__" is
+// computePathDigests ports src/turn-snapshot.ts:804. "__proto__" is
 // dropped: assigning it sets the record's prototype.
 func computePathDigests(root string, candidates []candidate) (*jsjson.Obj, error) {
 	out := jsjson.NewObj()
@@ -453,7 +453,7 @@ func computePathDigests(root string, candidates []candidate) (*jsjson.Obj, error
 	return out, nil
 }
 
-// pathsNeedingSecretScan ports src/turn-snapshot.ts:823; nil is "all".
+// pathsNeedingSecretScan ports src/turn-snapshot.ts:817; nil is "all".
 func pathsNeedingSecretScan(pathDigests, previous *jsjson.Obj, previousAllowlistDigest *string, allowlistDigest string) map[string]bool {
 	if previous == nil || previousAllowlistDigest == nil || *previousAllowlistDigest != allowlistDigest {
 		return nil
@@ -468,7 +468,7 @@ func pathsNeedingSecretScan(pathDigests, previous *jsjson.Obj, previousAllowlist
 	return needing
 }
 
-// planPaths ports src/turn-snapshot.ts:841 planTurnSnapshotPaths: mode,
+// planPaths ports src/turn-snapshot.ts:837 planTurnSnapshotPaths: mode,
 // then path, then caps, then the secret scan, before any object write.
 func planPaths(root string, runGit gitRunner, o planOptions) (plan, error) {
 	c := o.caps.withDefaults()
