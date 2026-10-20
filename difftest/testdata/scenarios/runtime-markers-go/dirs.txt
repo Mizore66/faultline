@@ -1,0 +1,12 @@
+.git
+.git/objects
+.git/objects/12
+.git/objects/7d
+.git/objects/82
+.git/objects/98
+.git/objects/ba
+.git/objects/e9
+.git/refs
+.git/refs/heads
+.git/refs/tags
+src

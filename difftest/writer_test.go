@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
 	"github.com/Mizore66/faultline/internal/canonical"
@@ -39,11 +40,11 @@ func repoRoot(t *testing.T) string { return oracle.RepoRoot(t) }
 // writerTemplate is one entry of difftest/testdata/writers.json: argv runs
 // in order in one workspace built from Scenario and then Mutations.
 type writerTemplate struct {
-	ID, Scenario, FakeDocker string
-	Argv                     [][]string
-	Env                      [][2]string
-	PosixOnly                bool
-	Mutations                []template
+	ID, Scenario, FakeDocker, FakeTools string
+	Argv                                [][]string
+	Env                                 [][2]string
+	PosixOnly                           bool
+	Mutations                           []template
 }
 
 // writerResult is one invocation, normalized like its golden line.
@@ -59,7 +60,7 @@ type writerResult struct {
 }
 
 var (
-	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "env", "posixOnly", "mutations"}
+	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "fakeTools", "env", "posixOnly", "mutations"}
 	writerIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	// fileEntry is a regular file's tree entry: its SHA-256, then its mode
 	// except on Windows.
@@ -85,7 +86,7 @@ func loadWriterTemplates(t testing.TB, repo string) []writerTemplate {
 			}
 		}
 		tpl := writerTemplate{ID: o.Field("id").Str(), Scenario: o.Field("scenario").Str(), FakeDocker: o.Field("fakeDocker").Str(),
-			PosixOnly: o.Field("posixOnly").Bool()}
+			FakeTools: o.Field("fakeTools").Str(), PosixOnly: o.Field("posixOnly").Bool()}
 		if ids[tpl.ID] || !writerIDPattern.MatchString(tpl.ID) {
 			t.Fatalf("writer template id %q is duplicated or not lowercase kebab-case", tpl.ID)
 		}
@@ -260,7 +261,12 @@ func writerEnv(repo string, r writerRoots, seed string, tpl writerTemplate) []st
 			set(k, v)
 		}
 	}
+	// The recorders, the fake toolchain (difftest/testdata/faketools), the
+	// fake Docker, then the inherited PATH (scenarios.ts writerEnv).
 	path := []string{r.recorder}
+	if tpl.FakeTools != "" {
+		path = append(path, filepath.Join(repo, "difftest", "testdata", "faketools", tpl.FakeTools))
+	}
 	if tpl.FakeDocker != "" {
 		path = append(path, filepath.Join(repo, "difftest", "testdata", "fakedocker", tpl.FakeDocker))
 	}
@@ -605,8 +611,12 @@ func (rel *relocated) text(s string) string {
 	return out
 }
 
-// fileDigest hashes a path-dependent file's masked text, any other file's bytes.
-func (rel *relocated) fileDigest(_ string, b []byte) string {
+// fileDigest hashes a Git index by what it records (gitIndexDigest), a
+// path-dependent file's masked text, and any other file's bytes.
+func (rel *relocated) fileDigest(path string, b []byte) string {
+	if isGitIndex(path) {
+		return gitIndexDigest(filepath.Dir(filepath.Join(rel.roots.ws, filepath.FromSlash(path))), b)
+	}
 	d := canonical.SHA256HexBytes(b)
 	if _, ok := rel.names[d]; !ok {
 		return d
@@ -664,6 +674,47 @@ func jsonField(text string, path ...string) string {
 	return ""
 }
 
+// isGitIndex is gen-writers.ts isGitIndex: .git/index at any depth.
+func isGitIndex(rel string) bool { return rel == ".git/index" || strings.HasSuffix(rel, "/.git/index") }
+
+// gitIndexDigest ports gen-writers.ts gitIndexDigest: a Git index holds
+// stat data (times, inode, device) that differs between the TS and the Go
+// copy of a scenario, and git rewrites it on a plain `git status`, so it is
+// compared by the SHA-256 of `git ls-files --stage -z` read from it (the
+// raw bytes' SHA-256 when git cannot read it).
+func gitIndexDigest(gitDir string, b []byte) string {
+	cmd := exec.Command("git", "-c", "core.fsmonitor=false", "--git-dir="+gitDir, "ls-files", "--stage", "-z")
+	cmd.Dir = gitDir
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull}
+	listing, err := cmd.Output()
+	if err != nil {
+		return canonical.SHA256HexBytes(b)
+	}
+	return canonical.SHA256HexBytes(append([]byte("git-index:"), listing...))
+}
+
+// isVersionRecord is gen-writers.ts isVersionRecord: a record whose last
+// argument is --version.
+func isVersionRecord(record string) bool {
+	args := strings.Split(record[strings.Index(record, " ")+1:], "\x1f")
+	return args[len(args)-1] == "--version"
+}
+
+// sortLeadingVersionRecords is gen-writers.ts sortLeadingVersionRecords:
+// doctor starts git, node and docker --version together (Promise.all), so
+// the order the recorders append them in is racy on both sides; the
+// leading run of --version records is sorted by code unit, and nothing
+// else is reordered.
+func sortLeadingVersionRecords(records []string) []string {
+	n := 0
+	for n < len(records) && isVersionRecord(records[n]) {
+		n++
+	}
+	out := slices.Clone(records)
+	slices.SortFunc(out[:n], jsstr.CompareUTF16)
+	return out
+}
+
 // readArgvLog splits the recorders' log into records ("git a\x1fb").
 func readArgvLog(path string) []string {
 	b, err := os.ReadFile(path)
@@ -715,13 +766,13 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 	// The recorded paths accumulate over the case's invocations: a later
 	// invocation must keep masking the worktree digests an earlier one
 	// wrote into a file (gen-writers.ts runCase).
-	var records []string
+	var records, stdouts []string
 	for inv, argv := range tpl.Argv {
 		before := treeEntries(t, r.ws, relocation(t, r, records).fileDigest)
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
-			args[i] = fileArgument(t, strings.ReplaceAll(substituteRoots(a, r), busyPortMarker, busyPort), r)
+			args[i] = stdoutArgument(t, fileArgument(t, strings.ReplaceAll(substituteRoots(a, r), busyPortMarker, busyPort), r), stdouts)
 		}
 		command := append([]string{flBinary}, args...)
 		if run.command != nil {
@@ -737,6 +788,8 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 			t.Fatalf("running fl: %v", err)
 		}
 		outText, errText := stdout.String(), stderr.String()
+		stdouts = append(stdouts, outText)
+		plans := planDigests(outText)
 		if run.mask != nil {
 			outText, errText = run.mask(t, r, inv, outText, errText)
 		}
@@ -744,12 +797,13 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		records = append(records, invocationRecords...)
 		reloc := relocation(t, r, records)
 		after := treeEntries(t, r.ws, reloc.fileDigest)
-		res := writerResult{Inv: inv, Stdout: reloc.text(outText), Stderr: reloc.text(errText),
+		res := writerResult{Inv: inv, Stdout: maskPlanDigests(reloc.text(outText), plans), Stderr: maskPlanDigests(reloc.text(errText), plans),
 			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestWith(r.ws, reloc.fileDigest), Modes: modesDigest(after), Files: changedFiles(before, after),
 			contents: map[string][]byte{}}
 		for _, record := range invocationRecords {
 			res.Argv = append(res.Argv, normalizeRecord(record, r, reloc))
 		}
+		res.Argv = sortLeadingVersionRecords(res.Argv)
 		// After the tree and the argv log are read (gen-writers.ts runCase).
 		if bundle, ok := writtenBundle(outText); ok && !run.noVerify {
 			crossVerify(t, repo, inv, tpl.ID, bundle, jsonField(outText, "proofBundle", "rootDigest"))
@@ -779,6 +833,95 @@ func fileArgument(t *testing.T, arg string, r writerRoots) string {
 		t.Fatal(err)
 	}
 	return jsstr.Trim(string(b))
+}
+
+// stdoutArgument replaces an argv string that is exactly
+// <STDOUT:n:/json/pointer> with the string at that JSON pointer of the
+// case's invocation n's stdout (gen-writers.ts stdoutArgument): a project
+// build plan's digest covers the absolute context directory, so `fl runtime
+// project build --expect-plan` takes it from the plan invocation.
+func stdoutArgument(t *testing.T, arg string, stdouts []string) string {
+	m := stdoutArgumentPattern.FindStringSubmatch(arg)
+	if m == nil {
+		return arg
+	}
+	n, _ := strconv.Atoi(m[1])
+	if n >= len(stdouts) {
+		t.Fatalf("%s: no invocation %d before this one", arg, n)
+	}
+	v, err := jsjson.Parse(stdouts[n])
+	if err != nil {
+		t.Fatalf("%s: invocation %d's stdout is not JSON: %v", arg, n, err)
+	}
+	for _, token := range strings.Split(m[2][1:], "/") {
+		v = v.Get(strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~"))
+	}
+	if v.Kind() != jsjson.String {
+		t.Fatalf("%s: not a string in invocation %d's stdout", arg, n)
+	}
+	return v.Str()
+}
+
+var stdoutArgumentPattern = regexp.MustCompile(`^<STDOUT:([0-9]+):(/[^>]*)>$`)
+
+// planDigests are the project build plan digests (src/runtime.ts:481) in an
+// invocation's stdout that equal the digestJson of the plan fields printed
+// beside them (every object whose kind is PROJECT_RUNTIME_IMAGE_BUILD). The
+// digest covers the absolute context directory and Dockerfile, so it
+// differs between case directories; maskPlanDigests replaces exactly these
+// with <PLANDIGEST>, and a wrong digest stays unmasked and fails the
+// comparison (gen-writers.ts planDigests).
+func planDigests(stdout string) []string {
+	parsed, err := jsjson.Parse(stdout)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	var visit func(v jsjson.Value)
+	visit = func(v jsjson.Value) {
+		switch v.Kind() {
+		case jsjson.Array:
+			for _, item := range v.Items() {
+				visit(item)
+			}
+			return
+		case jsjson.Object:
+		default:
+			return
+		}
+		review := v.Get("review")
+		if v.Get("kind").Kind() == jsjson.String && v.Get("kind").Str() == "PROJECT_RUNTIME_IMAGE_BUILD" &&
+			review.Kind() == jsjson.Object && review.Get("planDigest").Kind() == jsjson.String {
+			o := jsjson.NewObj()
+			o.Set("schema", jsjson.MakeString("faultline.project-build-plan.v1"))
+			for _, k := range []string{"contextDirectory", "dockerfile", "imageTag", "network"} {
+				if f, ok := v.Obj().Get(k); ok {
+					o.Set(k, f)
+				}
+			}
+			for _, k := range []string{"contextDigest", "dockerfileDigest"} {
+				if f, ok := review.Obj().Get(k); ok {
+					o.Set(k, f)
+				}
+			}
+			if d, err := canonical.DigestJSON(jsjson.MakeObject(o)); err == nil && d == review.Get("planDigest").Str() {
+				out = append(out, d)
+			}
+		}
+		for _, k := range v.Obj().Keys() {
+			visit(v.Obj().Field(k))
+		}
+	}
+	visit(parsed)
+	return out
+}
+
+// maskPlanDigests replaces each of digests in text with <PLANDIGEST>.
+func maskPlanDigests(text string, digests []string) string {
+	for _, d := range digests {
+		text = strings.ReplaceAll(text, d, "<PLANDIGEST>")
+	}
+	return text
 }
 
 // busyPortMarker in an argv string is the port of a listener the case holds
@@ -1198,4 +1341,102 @@ func runFilter() string {
 		return f.Value.String()
 	}
 	return ""
+}
+
+// The .git/index rule (gitIndexDigest): two indexes that record the same
+// entries with different stat data compare equal, a different entry
+// differs, and an unreadable index falls back to its bytes. Only a path
+// named .git/index takes the rule.
+func TestGitIndexRule(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	r := makeWriterRoots(t)
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = r.ws
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull, "HOME=" + r.home}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %q: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", ".")
+	if err := os.WriteFile(filepath.Join(r.ws, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "a.txt")
+	reloc := relocation(t, r, nil)
+	index := filepath.Join(r.ws, ".git", "index")
+	first, err := os.ReadFile(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := reloc.fileDigest(".git/index", first)
+	// New stat data for the same entry: touch the file, refresh the index.
+	if err := os.Chtimes(filepath.Join(r.ws, "a.txt"), time.Unix(1, 0), time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	git("update-index", "--really-refresh")
+	second, _ := os.ReadFile(index)
+	if bytes.Equal(first, second) {
+		t.Fatal("the refreshed index has the same bytes; the test proves nothing")
+	}
+	if after := reloc.fileDigest(".git/index", second); after != before {
+		t.Errorf("same entries, new stat data: %s != %s", after, before)
+	}
+	if err := os.WriteFile(filepath.Join(r.ws, "a.txt"), []byte("b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "a.txt")
+	third, _ := os.ReadFile(index)
+	if reloc.fileDigest(".git/index", third) == before {
+		t.Error("a changed entry kept the digest")
+	}
+	if got := reloc.fileDigest("sub/index", third); got != canonical.SHA256HexBytes(third) {
+		t.Error("a file not named .git/index took the rule")
+	}
+	if err := os.WriteFile(index, []byte("not an index"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloc.fileDigest(".git/index", []byte("not an index")); got != canonical.SHA256HexBytes([]byte("not an index")) {
+		t.Error("an unreadable index is not compared by its bytes")
+	}
+	if !isGitIndex("repo/.git/index") || isGitIndex(".git/index.lock") || isGitIndex("x.git/index") {
+		t.Error("isGitIndex")
+	}
+}
+
+// Only the leading run of --version records is sorted (Promise.all in
+// doctor); a later --version record keeps its place.
+func TestSortLeadingVersionRecords(t *testing.T) {
+	in := []string{"node --version", "git -c\x1fa=b\x1f--version", "docker --version", "git -C\x1f<WS>\x1fstatus", "docker --version", "docker info"}
+	want := []string{"docker --version", "git -c\x1fa=b\x1f--version", "node --version", "git -C\x1f<WS>\x1fstatus", "docker --version", "docker info"}
+	if got := sortLeadingVersionRecords(in); !slices.Equal(got, want) {
+		t.Errorf("%q", got)
+	}
+	if in[0] != "node --version" {
+		t.Error("the input was reordered in place")
+	}
+	if got := sortLeadingVersionRecords(nil); len(got) != 0 {
+		t.Error(got)
+	}
+}
+
+// doctor-hostile-fsmonitor (tests/cli.test.ts:664): the scenario's
+// repository-local core.fsmonitor command would write fsmonitor-ran into
+// the workspace; doctor's hardened git calls must never run it, so the
+// only file the invocation changes is the index git refreshes. The tree
+// comparison then holds Go to the same.
+func TestDoctorHostileFsmonitorGolden(t *testing.T) {
+	want := loadWriterGoldens(t, repoRoot(t))["doctor-hostile-fsmonitor|0"]
+	if want == nil {
+		t.Fatal("no golden for doctor-hostile-fsmonitor")
+	}
+	if keys := want.Field("files").Obj().Keys(); !slices.Equal(keys, []string{".git/index"}) {
+		t.Fatalf("doctor-hostile-fsmonitor changed %q", keys)
+	}
+	if want.Field("exit").Num() != 0 || !strings.Contains(want.Field("stdout").Str(), "[READY] worktree:") {
+		t.Fatalf("%s", want.Field("stdout").Str())
+	}
 }

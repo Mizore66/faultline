@@ -48,6 +48,15 @@ var writerScenarios = map[string]bool{
 	"git-two-recoveries":         true,
 	"git-overlay-symlink-middle": true,
 	"git-overlay-symlink-pair":   true,
+	"repo-clean":                 true,
+	"repo-dirty":                 true,
+	"repo-rename":                true,
+	"not-a-repo":                 true,
+	"runtime-markers-multiple":   true,
+	"runtime-markers-go":         true,
+	"hostile-fsmonitor":          true,
+	"project-context":            true,
+	"repo-with-config":           true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is
