@@ -155,6 +155,10 @@ TestWriterReplay/posix/doctor-markers-go
 TestWriterReplay/posix/doctor-hostile-fsmonitor
 TestWriterReplay/posix/doctor-security-and-proof-ready
 TestWriterReplay/posix/doctor-repo-missing-value
+TestWriterReplay/posix/doctor-security
+TestWriterReplay/posix/doctor-security-json
+TestWriterReplay/posix/doctor-security-hostile-global-config
+TestWriterReplay/posix/doctor-security-tmp-unwritable
 TestWriterReplay/posix/runtime-resolve-node
 TestWriterReplay/posix/runtime-resolve-python-existing-config
 TestWriterReplay/posix/runtime-resolve-catalog-tag-repo
