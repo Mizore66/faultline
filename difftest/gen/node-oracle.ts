@@ -43,6 +43,8 @@ import * as runtimeModule from "../../src/runtime.js";
 import { lstatSync as cwLstat, readdirSync as cwReaddir } from "node:fs";
 import { sha256 as cwSha256 } from "../../src/canonical.js";
 import type { DockerImageInspectResult } from "../../src/runtime.js";
+import { allowlistConfigDigest, filterAllowlistedHighOccurrences, isEntropyTokenAllowlisted, loadSecretAllowlist } from "../../src/secret-allowlist.js";
+import { planTurnSnapshotPaths } from "../../src/turn-snapshot.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -570,6 +572,31 @@ export const handlers: Record<string, Handler> = {
   },
   // The safe Git -c lists (internal/safegit).
   safeGitLists: () => ({ hostCommand: [...HOST_COMMAND_SAFE_GIT_CONFIG], doctor: [...DOCTOR_SAFE_GIT_CONFIG] }),
+  // Secret allowlist and turn-snapshot path policy (slice 3a, Task 7). The
+  // ignore rules and the secret scan are private to turn-snapshot.ts, so they
+  // run through planTurnSnapshotPaths with a stub Git runner that lists
+  // `paths` as the tracked files; it returns the kept paths and warnings.
+  loadSecretAllowlist: ({ dir }: { dir: string }) => {
+    try {
+      const allowlist = loadSecretAllowlist(dir);
+      return `${allowlistConfigDigest(allowlist)} ${JSON.stringify(allowlist)}`;
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  filterAllowlistedHighOccurrences: ({ allowlist, path, occurrences, fileDigest }: { allowlist: any; path: string; occurrences: any[]; fileDigest: string }) =>
+    canonicalJson(filterAllowlistedHighOccurrences(allowlist, path, { occurrences } as any, fileDigest)),
+  isEntropyTokenAllowlisted: ({ allowlist, path, token, fileDigest }: { allowlist: any; path: string; token: string; fileDigest: string }) =>
+    String(isEntropyTokenAllowlisted(allowlist, path, token, fileDigest)),
+  planTurnSnapshotPaths: ({ root, paths, skipSecretScan }: { root: string; paths: string[]; skipSecretScan: boolean }) => {
+    try {
+      const runGit = (_root: string, args: readonly string[]) => (args.includes("--others") ? "" : paths.join("\0"));
+      const { paths: kept, warnings } = planTurnSnapshotPaths(root, runGit, { trackedFilesOnly: true, skipSecretScan });
+      return canonicalJson({ paths: kept, warnings });
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
   sortCodePoints: () => {
     const all: string[] = [];
     for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));
