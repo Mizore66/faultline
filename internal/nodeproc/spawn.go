@@ -86,17 +86,56 @@ func spawnError(file, code string) error { return errors.New("spawnSync " + file
 // Arguments are JS strings: they reach the child as UTF-8 with each lone
 // surrogate replaced by U+FFFD, as Node encodes them.
 func SpawnSync(file string, args []string, maxBuffer int) Result {
+	return SpawnSyncWith(file, args, SpawnSyncOptions{MaxBuffer: maxBuffer})
+}
+
+// SpawnSyncOptions are the spawnSync options FaultLine's call sites use,
+// always with shell: false and windowsHide: true.
+type SpawnSyncOptions struct {
+	// Env is the env option as "KEY=value" pairs in object order, passed
+	// verbatim (callers encode JS strings with jsstr.ToUTF8 where Node
+	// would); on Windows the pairs are sorted and deduplicated as
+	// normalizeSpawnArguments does. nil inherits process.env (nodeEnv).
+	Env []string
+	// Input is the input option, written to the child's stdin, which is
+	// then shut down (the child reads EOF), when HasInput is set.
+	Input    []byte
+	HasInput bool
+	// Cwd is the cwd option; "" inherits fl's working directory.
+	Cwd string
+	// MaxBuffer is maxBuffer; 0 is Node's default, 1024*1024. The limit is
+	// shared by stdout and stderr (SyncProcessRunner counts both against
+	// one total), as TestSpawnSyncMatchesNode pins.
+	MaxBuffer int
+}
+
+// defaultMaxBuffer is child_process's MAX_BUFFER, spawnSync's default.
+const defaultMaxBuffer = 1024 * 1024
+
+// SpawnSyncWith is spawnSync(file, args, { encoding: "buffer", env, input,
+// cwd, maxBuffer, shell: false, windowsHide: true }). A failed write of
+// Input (the child exited without reading it) is reported like Node's
+// pipe error ("spawnSync <file> EPIPE"), unless ENOBUFS is.
+func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	boot.BeforeSpawn() // the children must see Node's RLIMIT_NOFILE
 	argv := make([]string, 0, len(args)+1)
 	argv = append(argv, jsstr.ToUTF8(file))
 	for _, arg := range args {
 		argv = append(argv, jsstr.ToUTF8(arg))
 	}
-	io, err := newStdio()
+	env := nodeEnv()
+	if o.Env != nil {
+		env = envPairs(o.Env)
+	}
+	maxBuffer := o.MaxBuffer
+	if maxBuffer == 0 {
+		maxBuffer = defaultMaxBuffer
+	}
+	io, err := newStdio(o.HasInput)
 	if err != nil {
 		return Result{Err: spawnError(file, nodefs.SystemErrorName(err))}
 	}
-	proc, code := start(jsstr.ToUTF8(file), argv, nodeEnv(), io.child, "", startOptions{})
+	proc, code := start(jsstr.ToUTF8(file), argv, env, io.child, jsstr.ToUTF8(o.Cwd), startOptions{})
 	io.closeChild()
 	if code != "" {
 		io.closeParent()
@@ -104,9 +143,9 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 	}
 	var closeOnce sync.Once
 	closePipes := func() { closeOnce.Do(io.closeParent) }
-	o := &output{maxBuffer: maxBuffer}
+	out := &output{maxBuffer: maxBuffer}
 	var killed atomic.Bool
-	o.onOverrun = func() {
+	out.onOverrun = func() {
 		killed.Store(true)
 		// SyncProcessRunner::Kill: send killSignal (SIGTERM), close the pipes.
 		if runtime.GOOS == "windows" {
@@ -116,13 +155,28 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 		}
 		closePipes()
 	}
-	stdout, stderr := &stream{out: o}, &stream{out: o}
+	// SyncProcessStdioPipe::Start: uv_write the input, then uv_shutdown.
+	// Only the first pipe error is kept (SetPipeError).
+	var pipeErr error
+	var writer sync.WaitGroup
+	if o.HasInput {
+		writer.Add(1)
+		go func() {
+			defer writer.Done()
+			if _, err := io.stdin.Write(o.Input); err != nil {
+				pipeErr = err
+			}
+			endInput(io.stdin)
+		}()
+	}
+	stdout, stderr := &stream{out: out}, &stream{out: out}
 	var readers sync.WaitGroup
 	readers.Add(2)
 	go stdout.read(io.stdout, &readers)
 	go stderr.read(io.stderr, &readers)
 	readers.Wait()
 	state, _ := proc.Wait()
+	writer.Wait()
 	closePipes()
 	if state != nil && !killed.Load() {
 		if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
@@ -130,11 +184,14 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 		}
 	}
 	result := Result{Stdout: stdout.buf, Stderr: stderr.buf}
-	o.mu.Lock()
-	overflow := o.overflow
-	o.mu.Unlock()
+	out.mu.Lock()
+	overflow := out.overflow
+	out.mu.Unlock()
+	// GetError: the runner's own error (ENOBUFS) wins over a pipe error.
 	if overflow {
 		result.Err = spawnError(file, "ENOBUFS")
+	} else if pipeErr != nil {
+		result.Err = spawnError(file, nodefs.SystemErrorName(pipeErr))
 	}
 	// Node reports the exit code whenever the child exited normally, even
 	// alongside ENOBUFS.

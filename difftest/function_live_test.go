@@ -20,6 +20,7 @@ import (
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/ledgerbind"
+	"github.com/Mizore66/faultline/internal/safegit"
 	"github.com/Mizore66/faultline/internal/schema"
 	"github.com/Mizore66/faultline/internal/witnessresult"
 )
@@ -610,4 +611,30 @@ func TestLiveWitnessResult(t *testing.T) {
 		}
 		return args, canonicalOf(toValue(p))
 	})
+}
+
+// TestLiveSafeGitLists compares internal/safegit with src/doctor.ts's
+// HOST_COMMAND_SAFE_GIT_CONFIG and DOCTOR_SAFE_GIT_CONFIG. (TurnSnapshot's
+// list is built inline in turn-snapshot.ts, so only its two Doctor-based
+// pieces are compared here.)
+func TestLiveSafeGitLists(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	raw, err := c.Call("safeGitLists", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want struct{ HostCommand, Doctor []string }
+	if err := json.Unmarshal([]byte(raw), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(safegit.HostCommand(), want.HostCommand) {
+		t.Errorf("HostCommand:\ngot  %q\nwant %q", safegit.HostCommand(), want.HostCommand)
+	}
+	if !slices.Equal(safegit.Doctor(), want.Doctor) {
+		t.Errorf("Doctor:\ngot  %q\nwant %q", safegit.Doctor(), want.Doctor)
+	}
+	if ts := safegit.TurnSnapshot(); !slices.Equal(ts[:len(want.Doctor)], want.Doctor) {
+		t.Errorf("TurnSnapshot does not start with Doctor: %q", ts)
+	}
 }

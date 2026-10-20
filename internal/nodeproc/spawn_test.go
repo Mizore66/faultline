@@ -115,3 +115,14 @@ func onLinux(linux, other string) string {
 	}
 	return other
 }
+
+func TestSpawnSyncWithEnvAndInput(t *testing.T) {
+	r := SpawnSyncWith("sh", []string{"-c", `printf %s "$FOO"; cat`}, SpawnSyncOptions{
+		Env:      []string{"FOO=bar", "PATH=" + os.Getenv("PATH")},
+		Input:    []byte("in"),
+		HasInput: true,
+	})
+	if r.Err != nil || r.Status == nil || *r.Status != 0 || string(r.Stdout) != "barin" {
+		t.Fatalf("status=%v err=%v stdout=%q stderr=%q", r.Status, r.Err, r.Stdout, r.Stderr)
+	}
+}
