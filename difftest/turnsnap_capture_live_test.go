@@ -59,7 +59,10 @@ func captureGit(t *testing.T, dir string, args ...string) {
 
 func captureGitCmd(dir string, args ...string) *exec.Cmd {
 	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=FaultLine Test", "-c", "user.email=test@faultline.invalid",
-		"-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", "-c", "init.defaultBranch=main"}, args...)...)
+		"-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", "-c", "init.defaultBranch=main",
+		// No detached auto gc or maintenance: it would change .git while a
+		// capture or the manifest walk runs.
+		"-c", "gc.auto=0", "-c", "maintenance.auto=false"}, args...)...)
 	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_AUTHOR_DATE=2026-07-16T12:00:00Z", "GIT_COMMITTER_DATE=2026-07-16T12:00:00Z")
 	return cmd
@@ -73,7 +76,7 @@ func applyCaptureOps(t *testing.T, work string, ops []captureOp) {
 		switch op.kind {
 		case "write":
 			os.MkdirAll(filepath.Dir(path), 0o755)
-			os.Remove(path)
+			os.RemoveAll(path)
 			if err := os.WriteFile(path, []byte(op.content), op.mode); err != nil {
 				t.Error(err)
 			}
@@ -170,7 +173,11 @@ func workManifest(t *testing.T, dir string) string {
 			return nil
 		}
 		rel, _ := filepath.Rel(dir, path)
-		info, _ := d.Info()
+		info, err := d.Info()
+		if err != nil {
+			lines = append(lines, strconv.Quote(rel)+" ERR "+err.Error())
+			return nil
+		}
 		switch {
 		case d.Type()&fs.ModeSymlink != 0:
 			target, _ := os.Readlink(path)
@@ -538,13 +545,16 @@ func TestLiveTurnSnapshotCapture(t *testing.T) {
 	for i := range done {
 		done[i] = make(chan struct{})
 	}
+	workerDone := make(chan struct{})
 	go func() {
+		defer close(workerDone)
 		for i := range jobs {
 			goResults[i] = run(i, cases[i], "go")
 			close(done[i])
 		}
 	}()
-	defer close(jobs)
+	// On any exit, let the worker finish before the temporary directories go.
+	defer func() { close(jobs); <-workerDone }()
 	tsResults := make([][]sideResult, len(cases))
 	outcomes := map[string]int{}
 	steps := 0
