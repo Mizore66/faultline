@@ -23,9 +23,10 @@ var pathMax = map[bool]int{true: 1024, false: 4096}[runtime.GOOS != "linux"]
 const nameMax = 255
 
 // newStdio is libuv's uv__process_init_stdio for three UV_CREATE_PIPE
-// slots: each is a socketpair. Node shuts down its end of stdin at once, so
-// the child reads EOF.
-func newStdio() (*stdio, error) {
+// slots: each is a socketpair. Without input Node shuts down its end of
+// stdin at once, so the child reads EOF; with input, endInput does so once
+// the input is written.
+func newStdio(input bool) (*stdio, error) {
 	parent := make([]*os.File, 3)
 	child := make([]*os.File, 3)
 	for i := range parent {
@@ -39,7 +40,9 @@ func newStdio() (*stdio, error) {
 		}
 		parent[i], child[i] = p, c
 	}
-	shutdownWrite(parent[0])
+	if !input {
+		shutdownWrite(parent[0])
+	}
 	return &stdio{stdin: parent[0], stdout: parent[1], stderr: parent[2], child: child}, nil
 }
 
@@ -64,6 +67,9 @@ func socketPair() (parent, child *os.File, err error) {
 	syscall.SetNonblock(fds[0], true)
 	return os.NewFile(uintptr(fds[0]), "|0"), os.NewFile(uintptr(fds[1]), "|1"), nil
 }
+
+// endInput is uv_shutdown on the stdin socket after the input was written.
+func endInput(f *os.File) { shutdownWrite(f) }
 
 func shutdownWrite(f *os.File) {
 	if raw, err := f.SyscallConn(); err == nil {
