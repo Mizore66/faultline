@@ -550,3 +550,164 @@ func TestLiveProjectContext(t *testing.T) {
 	})
 	t.Logf("outcomes: %v", reached)
 }
+
+// goScriptedRunner replays steps like the oracle's scriptedDockerRunner and
+// records [...argv, timeoutMs] per call.
+func goScriptedRunner(steps []runtimeStep) (runtimeimage.Runner, *[]jsjson.Value) {
+	calls := []jsjson.Value{}
+	return func(args []string, timeout time.Duration, _ int) hostcmd.Result {
+		entry := []jsjson.Value{}
+		for _, a := range args {
+			entry = append(entry, jsjson.MakeString(a))
+		}
+		calls = append(calls, jsjson.MakeArray(append(entry, jsjson.MakeNumber(float64(timeout.Milliseconds())))))
+		if len(steps) == 0 {
+			jsexc.Throw(errors.New("script exhausted"))
+		}
+		step := steps[0]
+		steps = steps[1:]
+		if step.throw != "" {
+			jsexc.Throw(errors.New(step.throw))
+		}
+		return step.result
+	}, &calls
+}
+
+func stepsJSON(steps []runtimeStep) string {
+	items := []jsjson.Value{}
+	for _, s := range steps {
+		items = append(items, s.json())
+	}
+	return jsjson.Stringify(jsjson.MakeArray(items))
+}
+
+// randomProjectInspect is an inspect result whose RepoDigests may match a
+// project tag's repository.
+func randomProjectInspect(r *rand.Rand, tag string) runtimeStep {
+	repo, _, _ := strings.Cut(tag, ":")
+	if i := strings.LastIndexByte(tag, ':'); i > strings.LastIndexByte(tag, '/') {
+		repo = tag[:i]
+	}
+	entries := []jsjson.Value{}
+	for n := 1 + r.IntN(3); n > 0; n-- {
+		candidate := []string{repo, "docker.io/" + repo, "index.docker.io/library/" + repo, "library/" + repo, "registry.example/faultline/demo", "local/faultline", "other/app"}[r.IntN(7)]
+		if r.IntN(5) == 0 {
+			candidate = liveRuntimeRepos[r.IntN(len(liveRuntimeRepos))]
+		}
+		entries = append(entries, jsjson.MakeString(candidate+"@sha256:"+strings.Repeat(string("0123456789abcdef"[r.IntN(16)]), 64)))
+	}
+	stdout := jsjson.Stringify(jsjson.MakeArray(entries)) + "\n"
+	if r.IntN(6) == 0 {
+		stdout = "[]"
+	}
+	return runtimeStep{result: hostcmd.Result{ExitCode: new(0), Stdout: stdout}}
+}
+
+// TestLiveProjectPrepare runs 500 scripted build and inspect sequences
+// through prepareProjectRuntimeImage/resolveProjectRuntimeImage and the Go
+// ports, and compares each outcome and the argv/timeout of each call.
+func TestLiveProjectPrepare(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	r := rand.New(rand.NewPCG(31, 6))
+	base := t.TempDir()
+	var contexts []string
+	for i := 0; i < 3; i++ {
+		dir := filepath.Join(base, "ctx"+strconv.Itoa(i))
+		os.MkdirAll(filepath.Join(dir, "src"), 0o755)
+		os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM node:22-alpine\nCOPY . /app\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "src", "app.js"), []byte("console.log("+strconv.Itoa(i)+")\n"), 0o644)
+		contexts = append(contexts, dir)
+	}
+	reached := map[string]int{}
+	for i := 0; i < 500; i++ {
+		tag := liveProjectTags[r.IntN(5)]
+		if r.IntN(10) == 0 {
+			tag = liveProjectTags[r.IntN(len(liveProjectTags))]
+		}
+		fn := "prepare"
+		if r.IntN(4) == 0 {
+			fn = "resolve"
+		}
+		var steps []runtimeStep
+		if fn == "prepare" {
+			build := randomRuntimeStep(r)
+			if r.IntN(2) == 0 {
+				build = runtimeStep{result: hostcmd.Result{ExitCode: new(0), Stdout: "Successfully built", Stderr: "#1 DONE"}}
+			}
+			steps = append(steps, build)
+		}
+		if r.IntN(3) == 0 {
+			steps = append(steps, randomRuntimeStep(r))
+		} else {
+			steps = append(steps, randomProjectInspect(r, tag))
+		}
+
+		var got, args string
+		if fn == "resolve" {
+			run, calls := goScriptedRunner(steps)
+			v, err := runtimeimage.ResolveProjectImage(tag, run)
+			got = goProjectOutcome(v, err) + "|" + canonicalOf(jsjson.MakeArray(*calls))
+			args = `{"tag":` + jsjson.Quote(tag) + `,"steps":` + stepsJSON(steps) + "}"
+			liveCheck(t, c, "resolveProjectRuntimeImage", args, got)
+		} else {
+			in := runtimeimage.ProjectBuildInput{ContextDirectory: contexts[r.IntN(len(contexts))], Dockerfile: "Dockerfile", ImageTag: tag, Network: "none"}
+			if r.IntN(2) == 0 {
+				in.Network = "default"
+			}
+			if r.IntN(15) == 0 {
+				in.Dockerfile = "missing"
+			}
+			// The reviewed digest: usually this request's own plan.
+			expected := liveDigest
+			reviewedIn := in
+			if r.IntN(8) == 0 {
+				reviewedIn.ContextDirectory = contexts[r.IntN(len(contexts))]
+			}
+			if r.IntN(10) == 0 {
+				reviewedIn.Network = map[string]string{"none": "default", "default": "none"}[in.Network]
+			}
+			if plan, err := runtimeimage.DescribeProjectBuild(reviewedIn); err == nil {
+				expected = plan.Get("review", "planDigest").Str()
+			}
+			switch r.IntN(12) {
+			case 0:
+				expected = "not-a-digest"
+			case 1:
+				expected = ""
+			case 2:
+				expected = strings.ToUpper(expected)
+			case 3:
+				expected = liveDigest
+			}
+			confirmed := r.IntN(12) != 0
+			confirmation := "BUILD_PROJECT_RUNTIME_IMAGE"
+			if !confirmed {
+				confirmation = []string{"NOT_CONFIRMED", "", "build_project_runtime_image", "BUILD_PROJECT_RUNTIME_IMAGE "}[r.IntN(4)]
+			}
+			run, calls := goScriptedRunner(steps)
+			v, err := runtimeimage.PrepareProjectImage(in, runtimeimage.PrepareProjectOptions{Confirmed: confirmed, ExpectedPlanDigest: expected}, run)
+			got = goProjectOutcome(v, err) + "|" + canonicalOf(jsjson.MakeArray(*calls))
+			req := projectRequestJSON(in)
+			req.Set("confirmation", jsjson.MakeString(confirmation))
+			req.Set("expectedPlanDigest", jsjson.MakeString(expected))
+			args = `{"request":` + jsjson.Stringify(jsjson.MakeObject(req)) + `,"steps":` + stepsJSON(steps) + "}"
+			liveCheck(t, c, "prepareProjectRuntimeImage", args, got)
+		}
+		head, _, _ := strings.Cut(got, "|")
+		if rest, ok := strings.CutPrefix(head, "THREW:"); ok {
+			code, _, _ := strings.Cut(rest, ":")
+			reached[code]++
+		} else {
+			reached["OK-"+fn]++
+		}
+	}
+	t.Logf("outcomes: %v", reached)
+	for _, want := range []string{"OK-resolve", "OK-prepare", "PROJECT_IMAGE_CONFIRMATION_REQUIRED", "PROJECT_IMAGE_PLAN_DIGEST_REQUIRED", "PROJECT_IMAGE_PLAN_MISMATCH",
+		"PROJECT_IMAGE_INVALID_INPUT", "DOCKER_BUILD_FAILED", "DOCKER_BUILD_TIMED_OUT", "DOCKER_BUILD_OUTPUT_LIMIT", "DOCKER_INSPECT_FAILED",
+		"DOCKER_INSPECT_TIMED_OUT", "DOCKER_INSPECT_OUTPUT_LIMIT", "UNRESOLVED_REPO_DIGEST", "UNEXPECTED_REPOSITORY"} {
+		if reached[want] == 0 {
+			t.Errorf("no case reached %s", want)
+		}
+	}
+}
