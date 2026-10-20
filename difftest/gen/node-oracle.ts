@@ -35,6 +35,16 @@ import { lifecycleBoundToDescendant, lifecycleBoundToEveryInvestigatedState } fr
 import { redactText, redactValue } from "../../src/redaction.js";
 import { classifyFromWitnessResult, resolveWitnessResultFromStdout, witnessResultConsistentWithExitCode } from "../../src/witness-result.js";
 import { DOCTOR_SAFE_GIT_CONFIG, HOST_COMMAND_SAFE_GIT_CONFIG } from "../../src/doctor.js";
+import {
+  CuratedRuntimeResolutionError, ProjectRuntimeImagePreparationError, describeProjectRuntimeImageBuild, prepareCuratedRuntime, prepareProjectRuntimeImage,
+  resolveCuratedRuntime, resolveProjectRuntimeImage
+} from "../../src/runtime.js";
+import * as runtimeModule from "../../src/runtime.js";
+import { lstatSync as cwLstat, readdirSync as cwReaddir } from "node:fs";
+import { sha256 as cwSha256 } from "../../src/canonical.js";
+import type { DockerImageInspectResult } from "../../src/runtime.js";
+import { allowlistConfigDigest, filterAllowlistedHighOccurrences, isEntropyTokenAllowlisted, loadSecretAllowlist } from "../../src/secret-allowlist.js";
+import { planTurnSnapshotPaths } from "../../src/turn-snapshot.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -54,6 +64,40 @@ export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
 };
 
 type Handler = (args: any) => unknown; // may return a Promise
+
+// Runs a project-image call: JSON.stringify of its result, or
+// THREW:<code>:<message>.
+function projectThrew(error: unknown): string {
+  return `THREW:${error instanceof ProjectRuntimeImagePreparationError ? error.code : "?"}:${(error as Error).message}`;
+}
+function projectOutcome(fn: () => unknown): string {
+  try {
+    return JSON.stringify(fn());
+  } catch (error) {
+    return projectThrew(error);
+  }
+}
+async function projectOutcomeAsync(fn: () => Promise<unknown>): Promise<string> {
+  try {
+    return JSON.stringify(await fn());
+  } catch (error) {
+    return projectThrew(error);
+  }
+}
+
+// A Docker runner that replays steps in order ({ throw } rejects with an
+// Error) and records [...argv, timeoutMs] per call.
+function scriptedDockerRunner(steps: ({ throw: string } | DockerImageInspectResult)[]) {
+  const calls: unknown[] = [];
+  const runner = { run: async (command: { arguments: readonly string[]; timeoutMs: number }) => {
+    calls.push([...command.arguments, command.timeoutMs]);
+    const step = steps.shift();
+    if (step === undefined) throw new Error("script exhausted");
+    if ("throw" in step) throw new Error(step.throw);
+    return step;
+  } };
+  return { runner, calls };
+}
 
 // Git output as the hardened-git ops report it: its length and SHA-256, and
 // the bytes themselves (latin1) up to 64 KiB.
@@ -452,8 +496,107 @@ export const handlers: Record<string, Handler> = {
     const result = redactValue(JSON.parse(text));
     return { value: JSON.stringify(result.value), report: canonicalJson(result.report) };
   },
+  // Curated runtimes (internal/runtimeimage). The injected runner replays
+  // steps in order ({ throw } rejects with an Error); the result is
+  // "<canonical result or THREW:<code>:<message>>|<canonical [[...argv, timeoutMs]]>".
+  curatedRuntime: async ({ fn, requested, steps }: { fn: "resolve" | "prepare"; requested: string; steps: ({ throw: string } | DockerImageInspectResult)[] }) => {
+    const calls: unknown[] = [];
+    const runner = { run: async (command: { arguments: readonly string[]; timeoutMs: number }) => {
+      calls.push([...command.arguments, command.timeoutMs]);
+      const step = steps.shift();
+      if (step === undefined) throw new Error("script exhausted");
+      if ("throw" in step) throw new Error(step.throw);
+      return step;
+    } };
+    let outcome: string;
+    try {
+      outcome = canonicalJson(fn === "resolve" ? await resolveCuratedRuntime(requested, runner) : await prepareCuratedRuntime(requested, { pullRunner: runner, inspectRunner: runner }));
+    } catch (error) {
+      outcome = `THREW:${error instanceof CuratedRuntimeResolutionError ? error.code : "?"}:${(error as Error).message}`;
+    }
+    return `${outcome}|${canonicalJson(calls)}`;
+  },
+  // The unexported RepoDigest helpers, evaluated from the compiled
+  // dist/runtime.js (pnpm build): parseRepoDigests and normalizeRepository
+  // over many inputs.
+  repoDigestHelpers: ({ stdouts, repositories }: { stdouts: string[]; repositories: string[] }) => {
+    const src = cwReadFile(nodePath.join(process.cwd(), "dist", "runtime.js"), "utf8");
+    const take = (name: string) => {
+      const start = src.indexOf(`function ${name}(`);
+      const end = src.indexOf("\n}\n", start);
+      if (start < 0 || end < 0) throw new Error(`${name} not found in dist/runtime.js`);
+      return src.slice(start, end + 2);
+    };
+    const helpers = new Function(`${take("parseRepoDigests")}\n${take("normalizeRepository")}\nreturn { parseRepoDigests, normalizeRepository };`)();
+    return canonicalJson({ parsed: stdouts.map((s) => helpers.parseRepoDigests(s)), normalized: repositories.map((r) => helpers.normalizeRepository(r)) });
+  },
+  // Project runtime images (internal/runtimeimage). Results are
+  // JSON.stringify (key order matters to fl runtime project's output) or
+  // THREW:<code>:<message>.
+  describeProjectRuntimeImageBuild: ({ request }: { request: any }) => projectOutcome(() => describeProjectRuntimeImageBuild(request)),
+  // The unexported walk, evaluated from the compiled dist/runtime.js on an
+  // already normalized context; files is what it handed to digestJson.
+  fingerprintProjectBuildContext: ({ contextDirectory, dockerfile }: { contextDirectory: string; dockerfile: string }) => {
+    const src = cwReadFile(nodePath.join(process.cwd(), "dist", "runtime.js"), "utf8");
+    const start = src.indexOf("function fingerprintProjectBuildContext(");
+    const end = src.indexOf("\n}\n", start);
+    if (start < 0 || end < 0) throw new Error("fingerprintProjectBuildContext not found in dist/runtime.js");
+    let files: unknown;
+    const recordingDigest = (value: { files?: unknown }) => {
+      files = value.files;
+      return digestJson(value);
+    };
+    const projectImageInputError = (message: string) => {
+      throw new ProjectRuntimeImagePreparationError("PROJECT_IMAGE_INVALID_INPUT", message);
+    };
+    const fingerprint = new Function(
+      "readdirSync", "resolve", "lstatSync", "readFileSync", "sha256", "digestJson", "projectImageInputError",
+      "PROJECT_RUNTIME_IMAGE_MAX_CONTEXT_FILES", "PROJECT_RUNTIME_IMAGE_MAX_CONTEXT_BYTES",
+      `${src.slice(start, end + 2)}\nreturn fingerprintProjectBuildContext;`
+    )(cwReaddir, nodePath.resolve, cwLstat, cwReadFile, cwSha256, recordingDigest, projectImageInputError,
+      runtimeModule.PROJECT_RUNTIME_IMAGE_MAX_CONTEXT_FILES, runtimeModule.PROJECT_RUNTIME_IMAGE_MAX_CONTEXT_BYTES);
+    return projectOutcome(() => {
+      const result = fingerprint({ contextDirectory, dockerfile });
+      return { files, ...result };
+    });
+  },
+  // The injected runner replays steps like curatedRuntime; the result is
+  // "<outcome>|<canonical [[...argv, timeoutMs]]>".
+  resolveProjectRuntimeImage: async ({ tag, steps }: { tag: string; steps: ({ throw: string } | DockerImageInspectResult)[] }) => {
+    const { runner, calls } = scriptedDockerRunner(steps);
+    return `${await projectOutcomeAsync(() => resolveProjectRuntimeImage(tag, runner))}|${canonicalJson(calls)}`;
+  },
+  prepareProjectRuntimeImage: async ({ request, steps }: { request: any; steps: ({ throw: string } | DockerImageInspectResult)[] }) => {
+    const { runner, calls } = scriptedDockerRunner(steps);
+    return `${await projectOutcomeAsync(() => prepareProjectRuntimeImage(request, { buildRunner: runner, inspectRunner: runner }))}|${canonicalJson(calls)}`;
+  },
   // The safe Git -c lists (internal/safegit).
   safeGitLists: () => ({ hostCommand: [...HOST_COMMAND_SAFE_GIT_CONFIG], doctor: [...DOCTOR_SAFE_GIT_CONFIG] }),
+  // Secret allowlist and turn-snapshot path policy (slice 3a, Task 7). The
+  // ignore rules and the secret scan are private to turn-snapshot.ts, so they
+  // run through planTurnSnapshotPaths with a stub Git runner that lists
+  // `paths` as the tracked files; it returns the kept paths and warnings.
+  loadSecretAllowlist: ({ dir }: { dir: string }) => {
+    try {
+      const allowlist = loadSecretAllowlist(dir);
+      return `${allowlistConfigDigest(allowlist)} ${JSON.stringify(allowlist)}`;
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  filterAllowlistedHighOccurrences: ({ allowlist, path, occurrences, fileDigest }: { allowlist: any; path: string; occurrences: any[]; fileDigest: string }) =>
+    canonicalJson(filterAllowlistedHighOccurrences(allowlist, path, { occurrences } as any, fileDigest)),
+  isEntropyTokenAllowlisted: ({ allowlist, path, token, fileDigest }: { allowlist: any; path: string; token: string; fileDigest: string }) =>
+    String(isEntropyTokenAllowlisted(allowlist, path, token, fileDigest)),
+  planTurnSnapshotPaths: ({ root, paths, skipSecretScan }: { root: string; paths: string[]; skipSecretScan: boolean }) => {
+    try {
+      const runGit = (_root: string, args: readonly string[]) => (args.includes("--others") ? "" : paths.join("\0"));
+      const { paths: kept, warnings } = planTurnSnapshotPaths(root, runGit, { trackedFilesOnly: true, skipSecretScan });
+      return canonicalJson({ paths: kept, warnings });
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
   sortCodePoints: () => {
     const all: string[] = [];
     for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));
