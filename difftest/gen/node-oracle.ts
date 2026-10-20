@@ -35,6 +35,8 @@ import { lifecycleBoundToDescendant, lifecycleBoundToEveryInvestigatedState } fr
 import { redactText, redactValue } from "../../src/redaction.js";
 import { classifyFromWitnessResult, resolveWitnessResultFromStdout, witnessResultConsistentWithExitCode } from "../../src/witness-result.js";
 import { DOCTOR_SAFE_GIT_CONFIG, HOST_COMMAND_SAFE_GIT_CONFIG } from "../../src/doctor.js";
+import { CuratedRuntimeResolutionError, prepareCuratedRuntime, resolveCuratedRuntime } from "../../src/runtime.js";
+import type { DockerImageInspectResult } from "../../src/runtime.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -451,6 +453,40 @@ export const handlers: Record<string, Handler> = {
   redactValue: ({ text }: { text: string }) => {
     const result = redactValue(JSON.parse(text));
     return { value: JSON.stringify(result.value), report: canonicalJson(result.report) };
+  },
+  // Curated runtimes (internal/runtimeimage). The injected runner replays
+  // steps in order ({ throw } rejects with an Error); the result is
+  // "<canonical result or THREW:<code>:<message>>|<canonical [[...argv, timeoutMs]]>".
+  curatedRuntime: async ({ fn, requested, steps }: { fn: "resolve" | "prepare"; requested: string; steps: ({ throw: string } | DockerImageInspectResult)[] }) => {
+    const calls: unknown[] = [];
+    const runner = { run: async (command: { arguments: readonly string[]; timeoutMs: number }) => {
+      calls.push([...command.arguments, command.timeoutMs]);
+      const step = steps.shift();
+      if (step === undefined) throw new Error("script exhausted");
+      if ("throw" in step) throw new Error(step.throw);
+      return step;
+    } };
+    let outcome: string;
+    try {
+      outcome = canonicalJson(fn === "resolve" ? await resolveCuratedRuntime(requested, runner) : await prepareCuratedRuntime(requested, { pullRunner: runner, inspectRunner: runner }));
+    } catch (error) {
+      outcome = `THREW:${error instanceof CuratedRuntimeResolutionError ? error.code : "?"}:${(error as Error).message}`;
+    }
+    return `${outcome}|${canonicalJson(calls)}`;
+  },
+  // The unexported RepoDigest helpers, evaluated from the compiled
+  // dist/runtime.js (pnpm build): parseRepoDigests and normalizeRepository
+  // over many inputs.
+  repoDigestHelpers: ({ stdouts, repositories }: { stdouts: string[]; repositories: string[] }) => {
+    const src = cwReadFile(nodePath.join(process.cwd(), "dist", "runtime.js"), "utf8");
+    const take = (name: string) => {
+      const start = src.indexOf(`function ${name}(`);
+      const end = src.indexOf("\n}\n", start);
+      if (start < 0 || end < 0) throw new Error(`${name} not found in dist/runtime.js`);
+      return src.slice(start, end + 2);
+    };
+    const helpers = new Function(`${take("parseRepoDigests")}\n${take("normalizeRepository")}\nreturn { parseRepoDigests, normalizeRepository };`)();
+    return canonicalJson({ parsed: stdouts.map((s) => helpers.parseRepoDigests(s)), normalized: repositories.map((r) => helpers.normalizeRepository(r)) });
   },
   // The safe Git -c lists (internal/safegit).
   safeGitLists: () => ({ hostCommand: [...HOST_COMMAND_SAFE_GIT_CONFIG], doctor: [...DOCTOR_SAFE_GIT_CONFIG] }),
