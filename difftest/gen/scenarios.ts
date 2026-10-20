@@ -587,6 +587,34 @@ export const SCENARIOS: Record<string, Scenario> = {
   "runtime-markers-multiple": doctorRepo({ ...DOCTOR_FILES, "package.json": "{\"name\":\"demo\"}\n", "pyproject.toml": "[project]\nname = \"demo\"\n", "go.mod": "module example.test/demo\n" }),
   "runtime-markers-go": doctorRepo({ ...DOCTOR_FILES, "go.mod": "module example.test/demo\n" }),
   "hostile-fsmonitor": doctorRepo(DOCTOR_FILES, undefined, "\tfsmonitor = \"printf invoked > fsmonitor-ran #\"\n"),
+  // fl runtime (slice 3a Task 5). project-context is a fixed project build
+  // context at the workspace root (the default --context): its plan's
+  // context and Dockerfile digests depend only on these bytes and the 0644
+  // modes resetModes gives them. repo-with-config holds an existing project
+  // config (relative stores, a node runtime) that `fl runtime resolve`
+  // updates in place.
+  "project-context": {
+    files: {
+      "Dockerfile": "FROM node:22-alpine\nWORKDIR /app\nCOPY package.json ./\nCOPY src ./src\nRUN node --version\n",
+      "package.json": "{\"name\":\"demo\",\"version\":\"1.0.0\"}\n",
+      "src/index.js": "console.log(\"demo\");\n",
+      "src/lib/util.js": "export const answer = 42;\n",
+      "docker/alt.Dockerfile": "FROM node:22-alpine\nCOPY . /app\n"
+    },
+    argv: []
+  },
+  "repo-with-config": {
+    files: {
+      ".faultline/config.json": `${JSON.stringify({
+        schemaVersion: "faultline.config.v1",
+        image: PINNED_IMAGE,
+        runtime: { alias: "node", image: PINNED_IMAGE },
+        snapshot: { trackedFilesOnly: true },
+        stores: { incidents: ".faultline/incidents", witnesses: ".faultline/witnesses", recordings: ".faultline/recordings" }
+      }, null, 2)}\n`
+    },
+    argv: []
+  },
   "proof-bases": {
     bases: Object.fromEntries(["git-fully-bound", "git-partially-bound", "git-shape-mixed-history", "git-sha256"].map((b) => [`bases/${b}`, b])),
     files: {}, argv: []

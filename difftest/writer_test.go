@@ -766,13 +766,13 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 	// The recorded paths accumulate over the case's invocations: a later
 	// invocation must keep masking the worktree digests an earlier one
 	// wrote into a file (gen-writers.ts runCase).
-	var records []string
+	var records, stdouts []string
 	for inv, argv := range tpl.Argv {
 		before := treeEntries(t, r.ws, relocation(t, r, records).fileDigest)
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
-			args[i] = fileArgument(t, strings.ReplaceAll(substituteRoots(a, r), busyPortMarker, busyPort), r)
+			args[i] = stdoutArgument(t, fileArgument(t, strings.ReplaceAll(substituteRoots(a, r), busyPortMarker, busyPort), r), stdouts)
 		}
 		command := append([]string{flBinary}, args...)
 		if run.command != nil {
@@ -788,6 +788,8 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 			t.Fatalf("running fl: %v", err)
 		}
 		outText, errText := stdout.String(), stderr.String()
+		stdouts = append(stdouts, outText)
+		plans := planDigests(outText)
 		if run.mask != nil {
 			outText, errText = run.mask(t, r, inv, outText, errText)
 		}
@@ -795,7 +797,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		records = append(records, invocationRecords...)
 		reloc := relocation(t, r, records)
 		after := treeEntries(t, r.ws, reloc.fileDigest)
-		res := writerResult{Inv: inv, Stdout: reloc.text(outText), Stderr: reloc.text(errText),
+		res := writerResult{Inv: inv, Stdout: maskPlanDigests(reloc.text(outText), plans), Stderr: maskPlanDigests(reloc.text(errText), plans),
 			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestWith(r.ws, reloc.fileDigest), Modes: modesDigest(after), Files: changedFiles(before, after),
 			contents: map[string][]byte{}}
 		for _, record := range invocationRecords {
@@ -831,6 +833,95 @@ func fileArgument(t *testing.T, arg string, r writerRoots) string {
 		t.Fatal(err)
 	}
 	return jsstr.Trim(string(b))
+}
+
+// stdoutArgument replaces an argv string that is exactly
+// <STDOUT:n:/json/pointer> with the string at that JSON pointer of the
+// case's invocation n's stdout (gen-writers.ts stdoutArgument): a project
+// build plan's digest covers the absolute context directory, so `fl runtime
+// project build --expect-plan` takes it from the plan invocation.
+func stdoutArgument(t *testing.T, arg string, stdouts []string) string {
+	m := stdoutArgumentPattern.FindStringSubmatch(arg)
+	if m == nil {
+		return arg
+	}
+	n, _ := strconv.Atoi(m[1])
+	if n >= len(stdouts) {
+		t.Fatalf("%s: no invocation %d before this one", arg, n)
+	}
+	v, err := jsjson.Parse(stdouts[n])
+	if err != nil {
+		t.Fatalf("%s: invocation %d's stdout is not JSON: %v", arg, n, err)
+	}
+	for _, token := range strings.Split(m[2][1:], "/") {
+		v = v.Get(strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~"))
+	}
+	if v.Kind() != jsjson.String {
+		t.Fatalf("%s: not a string in invocation %d's stdout", arg, n)
+	}
+	return v.Str()
+}
+
+var stdoutArgumentPattern = regexp.MustCompile(`^<STDOUT:([0-9]+):(/[^>]*)>$`)
+
+// planDigests are the project build plan digests (src/runtime.ts:481) in an
+// invocation's stdout that equal the digestJson of the plan fields printed
+// beside them (every object whose kind is PROJECT_RUNTIME_IMAGE_BUILD). The
+// digest covers the absolute context directory and Dockerfile, so it
+// differs between case directories; maskPlanDigests replaces exactly these
+// with <PLANDIGEST>, and a wrong digest stays unmasked and fails the
+// comparison (gen-writers.ts planDigests).
+func planDigests(stdout string) []string {
+	parsed, err := jsjson.Parse(stdout)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	var visit func(v jsjson.Value)
+	visit = func(v jsjson.Value) {
+		switch v.Kind() {
+		case jsjson.Array:
+			for _, item := range v.Items() {
+				visit(item)
+			}
+			return
+		case jsjson.Object:
+		default:
+			return
+		}
+		review := v.Get("review")
+		if v.Get("kind").Kind() == jsjson.String && v.Get("kind").Str() == "PROJECT_RUNTIME_IMAGE_BUILD" &&
+			review.Kind() == jsjson.Object && review.Get("planDigest").Kind() == jsjson.String {
+			o := jsjson.NewObj()
+			o.Set("schema", jsjson.MakeString("faultline.project-build-plan.v1"))
+			for _, k := range []string{"contextDirectory", "dockerfile", "imageTag", "network"} {
+				if f, ok := v.Obj().Get(k); ok {
+					o.Set(k, f)
+				}
+			}
+			for _, k := range []string{"contextDigest", "dockerfileDigest"} {
+				if f, ok := review.Obj().Get(k); ok {
+					o.Set(k, f)
+				}
+			}
+			if d, err := canonical.DigestJSON(jsjson.MakeObject(o)); err == nil && d == review.Get("planDigest").Str() {
+				out = append(out, d)
+			}
+		}
+		for _, k := range v.Obj().Keys() {
+			visit(v.Obj().Field(k))
+		}
+	}
+	visit(parsed)
+	return out
+}
+
+// maskPlanDigests replaces each of digests in text with <PLANDIGEST>.
+func maskPlanDigests(text string, digests []string) string {
+	for _, d := range digests {
+		text = strings.ReplaceAll(text, d, "<PLANDIGEST>")
+	}
+	return text
 }
 
 // busyPortMarker in an argv string is the port of a listener the case holds

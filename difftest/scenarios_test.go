@@ -55,6 +55,8 @@ var writerScenarios = map[string]bool{
 	"runtime-markers-multiple":   true,
 	"runtime-markers-go":         true,
 	"hostile-fsmonitor":          true,
+	"project-context":            true,
+	"repo-with-config":           true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is

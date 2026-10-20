@@ -309,6 +309,55 @@ export function fileArgument(arg: string, roots: CaseRoots): string {
   return m ? readFileSync(join(roots.ws, m[1]!), "utf8").trim() : arg;
 }
 
+// An argv string that is exactly <STDOUT:n:/json/pointer> becomes the
+// string at that JSON pointer of the case's invocation n's stdout (an
+// earlier invocation): a project build plan's digest covers the absolute
+// context directory, so `fl runtime project build --expect-plan` takes it
+// from the plan invocation (the Go twin is stdoutArgument in writer_test.go).
+export function stdoutArgument(arg: string, stdouts: string[]): string {
+  const m = /^<STDOUT:([0-9]+):(\/[^>]*)>$/.exec(arg);
+  if (!m) return arg;
+  let value: unknown = JSON.parse(stdouts[Number(m[1])]!);
+  for (const token of m[2]!.slice(1).split("/")) {
+    value = (value as Record<string, unknown>)[token.split("~1").join("/").split("~0").join("~")];
+  }
+  if (typeof value !== "string") throw new Error(`${arg}: not a string in invocation ${m[1]}'s stdout`);
+  return value;
+}
+
+// A project build plan's planDigest (src/runtime.ts:481) covers the
+// absolute context directory and Dockerfile, so it differs between the TS
+// and the Go case directory. maskPlanDigests replaces it with <PLANDIGEST>
+// in text, but only where it is the digestJson of the plan fields printed
+// beside it in stdout (every object with kind PROJECT_RUNTIME_IMAGE_BUILD):
+// a wrong digest stays unmasked and fails the comparison. The Go twin is
+// maskPlanDigests in writer_test.go.
+export function planDigests(stdout: string): string[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(stdout); } catch { return []; }
+  const out: string[] = [];
+  const visit = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return;
+    const plan = value as Record<string, unknown>;
+    const review = plan.review as Record<string, unknown> | undefined;
+    if (plan.kind === "PROJECT_RUNTIME_IMAGE_BUILD" && review !== null && typeof review === "object" && typeof review.planDigest === "string") {
+      const digest = digestJson({
+        schema: "faultline.project-build-plan.v1", contextDirectory: plan.contextDirectory, dockerfile: plan.dockerfile,
+        imageTag: plan.imageTag, network: plan.network, contextDigest: review.contextDigest, dockerfileDigest: review.dockerfileDigest
+      });
+      if (digest === review.planDigest) out.push(digest);
+    }
+    for (const member of Object.values(value)) visit(member);
+  };
+  visit(parsed);
+  return out;
+}
+export function maskPlanDigests(text: string, digests: string[]): string {
+  let out = text;
+  for (const d of digests) out = out.split(d).join("<PLANDIGEST>");
+  return out;
+}
+
 // HOLD_PORT in a template's env names a fixed port the case holds on
 // 127.0.0.1 while it runs (a command's default port: judge-proof's 4174);
 // if another process already holds it, it is busy all the same. The Go
@@ -353,10 +402,13 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     // invocation must keep masking the worktree digests an earlier one
     // wrote into a file (the Go twin is runWriterCase).
     const records: string[] = [];
+    const stdouts: string[] = [];
     for (const [inv, argv] of t.argv.entries()) {
       const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
       rmSync(roots.argvLog, { force: true });
-      const r = await runCli(roots, argv.map((a) => fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots)), writerEnv(roots, t.id, t.fakeDocker, env, t.fakeTools));
+      const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)), writerEnv(roots, t.id, t.fakeDocker, env, t.fakeTools));
+      stdouts.push(r.stdout);
+      const plans = planDigests(r.stdout);
       const invocationRecords = readArgvLog(roots.argvLog);
       records.push(...invocationRecords);
       const reloc = relocation(roots, records);
@@ -367,7 +419,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       // Windows runs no sh recorder: a case that records argv is POSIX-only.
       if (invocationRecords.length > 0 && !t.posixOnly) throw new Error(`${t.id}: records git/docker argv but is not posixOnly`);
       lines.push(JSON.stringify({
-        case: t.id, inv, stdout: reloc.text(r.stdout), stderr: reloc.text(r.stderr), exit: r.exit,
+        case: t.id, inv, stdout: maskPlanDigests(reloc.text(r.stdout), plans), stderr: maskPlanDigests(reloc.text(r.stderr), plans), exit: r.exit,
         tree, modes: modesDigest(after), files: changedFiles(before, after),
         argv: sortLeadingVersionRecords(invocationRecords.map((record) => normalizeRecord(record, roots, reloc)))
       }));
