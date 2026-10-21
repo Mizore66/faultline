@@ -130,7 +130,8 @@ export type Relocation = { text: (s: string) => string; fileDigest: (rel: string
 // SHA-256 of `git ls-files --stage -z` read from it (the raw bytes' SHA-256
 // when git cannot read it). The Go twin is gitIndexDigest in
 // difftest/writer_test.go.
-export const isGitIndex = (rel: string): boolean => rel === ".git/index" || rel.endsWith("/.git/index");
+// A linked worktree's index (.git/worktrees/<name>/index) takes the rule too.
+export const isGitIndex = (rel: string): boolean => rel === ".git/index" || rel.endsWith("/.git/index") || /(?:^|\/)\.git\/worktrees\/[^/]+\/index$/.test(rel);
 export function gitIndexDigest(gitDir: string, bytes: Buffer): string {
   try {
     const listing = execFileSync("git", ["-c", "core.fsmonitor=false", `--git-dir=${gitDir}`, "ls-files", "--stage", "-z"], {
@@ -141,6 +142,16 @@ export function gitIndexDigest(gitDir: string, bytes: Buffer): string {
   } catch {
     return sha256(bytes);
   }
+}
+// A loose object in the turn-snapshot store (.git/faultline/objects/xx/…,
+// slice 3a Task 10) is zlib-compressed by git, so its bytes depend on the
+// zlib build git links (macOS, Linux); its name is the object id of what it
+// holds, so it is compared by that name. The Go twin is snapshotObjectDigest
+// in difftest/writer_test.go.
+const SNAPSHOT_OBJECT = /(?:^|\/)\.git\/faultline\/objects\/([0-9a-f]{2})\/([0-9a-f]{38}|[0-9a-f]{62})$/;
+export function snapshotObjectDigest(rel: string): string | undefined {
+  const m = SNAPSHOT_OBJECT.exec(rel);
+  return m ? sha256(`git-object:${m[1]}${m[2]}`) : undefined;
 }
 const SELF_DIGEST = /^sha256:[0-9a-f]{64}$/;
 // A minimization run fact's worktreeDigest member, in canonical or indented
@@ -239,6 +250,8 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
     text,
     fileDigest: (rel, bytes) => {
       if (isGitIndex(rel)) return gitIndexDigest(dirname(join(roots.ws, rel)), bytes);
+      const object = snapshotObjectDigest(rel);
+      if (object !== undefined) return object;
       return names.has(sha256(bytes)) ? sha256(text(bytes.toString("utf8"))) : sha256(bytes);
     }
   };
@@ -252,18 +265,24 @@ export function readArgvLog(path: string): string[] {
   return records;
 }
 
-// sortLeadingVersionRecords sorts the leading run of `--version` records
+// sortVersionRecordRuns sorts each run of consecutive `--version` records
 // (a record whose last argument is --version): doctor starts git, node and
 // docker --version together (Promise.all), so the order the recorders
-// append them in is racy on both sides. Nothing else is reordered. The Go
-// twin is sortLeadingVersionRecords in difftest/writer_test.go.
+// append them in is racy on both sides, and `fl init --yes --cli` runs
+// doctor twice. Nothing else is reordered. The Go twin is
+// sortVersionRecordRuns in difftest/writer_test.go.
 export function isVersionRecord(record: string): boolean {
   return record.slice(record.indexOf(" ") + 1).split("\x1f").at(-1) === "--version";
 }
-export function sortLeadingVersionRecords(records: string[]): string[] {
-  let n = 0;
-  while (n < records.length && isVersionRecord(records[n]!)) n += 1;
-  return [...records.slice(0, n).sort(byCodeUnit), ...records.slice(n)];
+export function sortVersionRecordRuns(records: string[]): string[] {
+  const out = [...records];
+  for (let start = 0; start < out.length;) {
+    let end = start;
+    while (end < out.length && isVersionRecord(out[end]!)) end += 1;
+    if (end > start) out.splice(start, end - start, ...out.slice(start, end).sort(byCodeUnit));
+    start = end + 1;
+  }
+  return out;
 }
 
 // normalizeRecord normalizes each argument of a record on its own, so a mask
@@ -421,7 +440,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       lines.push(JSON.stringify({
         case: t.id, inv, stdout: maskPlanDigests(reloc.text(r.stdout), plans), stderr: maskPlanDigests(reloc.text(r.stderr), plans), exit: r.exit,
         tree, modes: modesDigest(after), files: changedFiles(before, after),
-        argv: sortLeadingVersionRecords(invocationRecords.map((record) => normalizeRecord(record, roots, reloc)))
+        argv: sortVersionRecordRuns(invocationRecords.map((record) => normalizeRecord(record, roots, reloc)))
       }));
     }
     return lines;

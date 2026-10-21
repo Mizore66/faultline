@@ -495,6 +495,50 @@ function doctorRepo(files: RepoState, edit?: (ws: string) => void, config = ""):
 }
 const DOCTOR_FILES: RepoState = { "state.txt": "good\n", "src/main.txt": "main\n" };
 
+// Init scenarios (slice 3a Task 10). A Node repository at the workspace
+// root. `fl init --yes` writes .faultlineignore before the pre-warm, so the
+// repository is dirty by then and the capture takes the slow path (objects
+// in .git/faultline/objects, an alternates entry); init-existing-ignore
+// commits .faultlineignore and a .gitignore for .faultline/, so its
+// pre-warm takes the clean fast path (INIT_CLEAN_FILES). init-sidecar commits a
+// .faultlineignore that leaves out .codex/: the hook document holds the
+// absolute --cli path, so a capture that included it would give a tree
+// digest that depends on the case directory. Its --cli targets sit at the
+// workspace root (tool.js, tool.ts, it's/tool.js). INIT_TOKEN is a
+// high-entropy token (48 distinct characters) that the snapshot secret
+// scan refuses as HIGH_ENTROPY_TOKEN; no real credential is committed.
+const INIT_FILES: RepoState = { "package.json": "{\"name\":\"demo\"}\n", "state.txt": "good\n" };
+const INIT_CLEAN_FILES: RepoState = { ...INIT_FILES, ".faultlineignore": "scratch/\n", ".gitignore": ".faultline/\n" };
+const INIT_TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefghijkl";
+const INIT_CONFIG = `${JSON.stringify({
+  schemaVersion: "faultline.config.v1",
+  image: `registry.example/faultline-node@sha256:${"b".repeat(64)}`,
+  runtime: { alias: "node", image: `registry.example/faultline-node@sha256:${"b".repeat(64)}` },
+  snapshot: { trackedFilesOnly: true },
+  stores: { incidents: ".faultline/incidents", witnesses: ".faultline/witnesses", recordings: ".faultline/recordings" }
+}, null, 2)}\n`;
+// initWorktree builds a repository at main/ and a linked worktree of its
+// commit at wt/ (wt/.git is a gitdir file, main/.git/worktrees/wt its
+// administrative directory, every link relative), so wt's
+// --git-common-dir is main/.git, not wt/.git. It holds INIT_CLEAN_FILES,
+// so `fl init --yes` leaves it clean and the pre-warm's fast path writes
+// the cache into main/.git/faultline; a dirty worktree's slow path stops
+// at wt/.git (a file) with ENOTDIR, in TS too.
+function initWorktree(ws: string): void {
+  const built = buildRepo(ws, "main", [INIT_CLEAN_FILES]);
+  const entries = Object.entries(INIT_CLEAN_FILES).map(([path, content]) => ({ path, content }));
+  writeIndex(join(ws, "main", ".git"), entries);
+  const admin = join(ws, "main", ".git", "worktrees", "wt");
+  mkdirSync(admin, { recursive: true });
+  writeFileSync(join(admin, "HEAD"), `${built.commits.at(-1)}\n`);
+  writeFileSync(join(admin, "commondir"), "../..\n");
+  writeFileSync(join(admin, "gitdir"), "../../../wt/.git\n");
+  writeIndex(admin, entries);
+  mkdirSync(join(ws, "wt"), { recursive: true });
+  writeFileSync(join(ws, "wt", ".git"), "gitdir: ../main/.git/worktrees/wt\n");
+  for (const [path, content] of Object.entries(INIT_CLEAN_FILES)) writeFileSync(join(ws, "wt", path), content);
+}
+
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
@@ -615,6 +659,25 @@ export const SCENARIOS: Record<string, Scenario> = {
     },
     argv: []
   },
+  "init-fresh": doctorRepo(INIT_FILES),
+  "init-existing-config": doctorRepo(INIT_FILES, (ws) => {
+    mkdirSync(join(ws, ".faultline"), { recursive: true });
+    writeFileSync(join(ws, ".faultline", "config.json"), INIT_CONFIG);
+  }),
+  "init-existing-ignore": doctorRepo(INIT_CLEAN_FILES),
+  "init-existing-hooks": doctorRepo(INIT_FILES, (ws) => {
+    mkdirSync(join(ws, ".codex"), { recursive: true });
+    writeFileSync(join(ws, ".codex", "hooks.json"), "{}\n");
+    writeFileSync(join(ws, "tool.js"), "export {};\n");
+  }),
+  "init-dirty-secret": doctorRepo(INIT_FILES, (ws) => writeFileSync(join(ws, "notes.txt"), `token ${INIT_TOKEN}\n`)),
+  "init-worktree": { files: { "tool.js": "export {};\n" }, setup: initWorktree, argv: [] },
+  "init-sidecar": doctorRepo({ ...INIT_FILES, ".faultlineignore": "# the hook document holds the absolute --cli path\n.codex/\n" }, (ws) => {
+    writeFileSync(join(ws, "tool.js"), "export {};\n");
+    writeFileSync(join(ws, "tool.ts"), "export {};\n");
+    mkdirSync(join(ws, "it's"), { recursive: true });
+    writeFileSync(join(ws, "it's", "tool.js"), "export {};\n");
+  }),
   "proof-bases": {
     bases: Object.fromEntries(["git-fully-bound", "git-partially-bound", "git-shape-mixed-history", "git-sha256"].map((b) => [`bases/${b}`, b])),
     files: {}, argv: []

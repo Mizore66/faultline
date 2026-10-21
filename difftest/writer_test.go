@@ -617,6 +617,9 @@ func (rel *relocated) fileDigest(path string, b []byte) string {
 	if isGitIndex(path) {
 		return gitIndexDigest(filepath.Dir(filepath.Join(rel.roots.ws, filepath.FromSlash(path))), b)
 	}
+	if d, ok := snapshotObjectDigest(path); ok {
+		return d
+	}
 	d := canonical.SHA256HexBytes(b)
 	if _, ok := rel.names[d]; !ok {
 		return d
@@ -674,8 +677,13 @@ func jsonField(text string, path ...string) string {
 	return ""
 }
 
-// isGitIndex is gen-writers.ts isGitIndex: .git/index at any depth.
-func isGitIndex(rel string) bool { return rel == ".git/index" || strings.HasSuffix(rel, "/.git/index") }
+// isGitIndex is gen-writers.ts isGitIndex: .git/index at any depth, and a
+// linked worktree's index (.git/worktrees/<name>/index).
+func isGitIndex(rel string) bool {
+	return rel == ".git/index" || strings.HasSuffix(rel, "/.git/index") || worktreeIndex.MatchString(rel)
+}
+
+var worktreeIndex = regexp.MustCompile(`(?:^|/)\.git/worktrees/[^/]+/index$`)
 
 // gitIndexDigest ports gen-writers.ts gitIndexDigest: a Git index holds
 // stat data (times, inode, device) that differs between the TS and the Go
@@ -693,6 +701,20 @@ func gitIndexDigest(gitDir string, b []byte) string {
 	return canonical.SHA256HexBytes(append([]byte("git-index:"), listing...))
 }
 
+// snapshotObjectDigest is gen-writers.ts snapshotObjectDigest: a loose
+// object in the turn-snapshot store (.git/faultline/objects/xx/…) is
+// zlib-compressed by git, so its bytes depend on the zlib build git links;
+// it is compared by its name, the id of the object it holds.
+func snapshotObjectDigest(rel string) (string, bool) {
+	m := snapshotObject.FindStringSubmatch(rel)
+	if m == nil {
+		return "", false
+	}
+	return canonical.SHA256Hex("git-object:" + m[1] + m[2]), true
+}
+
+var snapshotObject = regexp.MustCompile(`(?:^|/)\.git/faultline/objects/([0-9a-f]{2})/([0-9a-f]{38}|[0-9a-f]{62})$`)
+
 // isVersionRecord is gen-writers.ts isVersionRecord: a record whose last
 // argument is --version.
 func isVersionRecord(record string) bool {
@@ -700,18 +722,21 @@ func isVersionRecord(record string) bool {
 	return args[len(args)-1] == "--version"
 }
 
-// sortLeadingVersionRecords is gen-writers.ts sortLeadingVersionRecords:
-// doctor starts git, node and docker --version together (Promise.all), so
-// the order the recorders append them in is racy on both sides; the
-// leading run of --version records is sorted by code unit, and nothing
-// else is reordered.
-func sortLeadingVersionRecords(records []string) []string {
-	n := 0
-	for n < len(records) && isVersionRecord(records[n]) {
-		n++
-	}
+// sortVersionRecordRuns is gen-writers.ts sortVersionRecordRuns: doctor
+// starts git, node and docker --version together (Promise.all), so the
+// order the recorders append them in is racy on both sides, and `fl init
+// --yes --cli` runs doctor twice; each run of consecutive --version records
+// is sorted by code unit, and nothing else is reordered.
+func sortVersionRecordRuns(records []string) []string {
 	out := slices.Clone(records)
-	slices.SortFunc(out[:n], jsstr.CompareUTF16)
+	for start := 0; start < len(out); {
+		end := start
+		for end < len(out) && isVersionRecord(out[end]) {
+			end++
+		}
+		slices.SortFunc(out[start:end], jsstr.CompareUTF16)
+		start = end + 1
+	}
 	return out
 }
 
@@ -803,7 +828,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		for _, record := range invocationRecords {
 			res.Argv = append(res.Argv, normalizeRecord(record, r, reloc))
 		}
-		res.Argv = sortLeadingVersionRecords(res.Argv)
+		res.Argv = sortVersionRecordRuns(res.Argv)
 		// After the tree and the argv log are read (gen-writers.ts runCase).
 		if bundle, ok := writtenBundle(outText); ok && !run.noVerify {
 			crossVerify(t, repo, inv, tpl.ID, bundle, jsonField(outText, "proofBundle", "rootDigest"))
@@ -1402,23 +1427,33 @@ func TestGitIndexRule(t *testing.T) {
 	if got := reloc.fileDigest(".git/index", []byte("not an index")); got != canonical.SHA256HexBytes([]byte("not an index")) {
 		t.Error("an unreadable index is not compared by its bytes")
 	}
-	if !isGitIndex("repo/.git/index") || isGitIndex(".git/index.lock") || isGitIndex("x.git/index") {
+	if _, ok := snapshotObjectDigest("main/.git/faultline/objects/ab/" + strings.Repeat("c", 38)); !ok {
+		t.Error("a snapshot object is not compared by name")
+	}
+	if _, ok := snapshotObjectDigest(".git/objects/ab/" + strings.Repeat("c", 38)); ok {
+		t.Error("a repository object took the snapshot object rule")
+	}
+	if !isGitIndex("repo/.git/index") || isGitIndex(".git/index.lock") || isGitIndex("x.git/index") ||
+		!isGitIndex("main/.git/worktrees/wt/index") || isGitIndex("main/.git/worktrees/wt/x/index") || isGitIndex("x.git/worktrees/wt/index") {
 		t.Error("isGitIndex")
 	}
 }
 
-// Only the leading run of --version records is sorted (Promise.all in
-// doctor); a later --version record keeps its place.
-func TestSortLeadingVersionRecords(t *testing.T) {
-	in := []string{"node --version", "git -c\x1fa=b\x1f--version", "docker --version", "git -C\x1f<WS>\x1fstatus", "docker --version", "docker info"}
-	want := []string{"docker --version", "git -c\x1fa=b\x1f--version", "node --version", "git -C\x1f<WS>\x1fstatus", "docker --version", "docker info"}
-	if got := sortLeadingVersionRecords(in); !slices.Equal(got, want) {
+// Each run of consecutive --version records is sorted (Promise.all in
+// doctor, which `fl init --yes --cli` runs twice); every other record keeps
+// its place.
+func TestSortVersionRecordRuns(t *testing.T) {
+	in := []string{"node --version", "git -c\x1fa=b\x1f--version", "docker --version", "git -C\x1f<WS>\x1fstatus", "docker --version", "docker info",
+		"node --version", "docker --version", "git -c\x1fa=b\x1f--version", "docker info"}
+	want := []string{"docker --version", "git -c\x1fa=b\x1f--version", "node --version", "git -C\x1f<WS>\x1fstatus", "docker --version", "docker info",
+		"docker --version", "git -c\x1fa=b\x1f--version", "node --version", "docker info"}
+	if got := sortVersionRecordRuns(in); !slices.Equal(got, want) {
 		t.Errorf("%q", got)
 	}
 	if in[0] != "node --version" {
 		t.Error("the input was reordered in place")
 	}
-	if got := sortLeadingVersionRecords(nil); len(got) != 0 {
+	if got := sortVersionRecordRuns(nil); len(got) != 0 {
 		t.Error(got)
 	}
 }
