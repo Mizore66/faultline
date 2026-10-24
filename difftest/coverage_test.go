@@ -198,6 +198,27 @@ var unreachableLiterals = map[string]string{
 	"class treats surrogates, U+FFFD and astral characters differently": "jsre pattern refusal (TestUnsupportedPanics)",
 	"jsre: /%s/%s: unsupported flag %q":                                 "jsre refuses a flag the port does not implement; every pattern fl compiles is a constant with g or i",
 	"jsre: /%s/: match boundary inside a code point":                    "an internal invariant: RE2 over UTF-8 never ends a match inside a code point",
+
+	// internal/projinit (slice 3a Task 10): SidecarCliCommand and
+	// CodexSidecarLedgerPath are shared with `fl codex sidecar`, not ported
+	// yet; `fl init` passes only `--cli <resolved path>` and the fixed
+	// session id.
+	"must not be empty.": "assertSidecarCommandText runs on --command/--command-windows only, which `fl init` never passes (fl codex sidecar config/install)",
+	"Provide exactly one of --cli <built-cli.js> or --command <stable-hook-command>.": "fl init calls sidecarCliCommand with exactly [--cli, path] (fl codex sidecar config/install)",
+	"--command-windows": "the --command-windows label of assertSidecarCommandText, reached only through fl codex sidecar config/install",
+	"--command-windows is only valid with an explicit --command; --cli generates both platform commands safely.": "fl init never passes --command-windows to sidecarCliCommand (fl codex sidecar config/install)",
+	"Identifier contains unsupported characters":                                                                 "fl init's only session id is the constant faultline-install-check (fl codex sidecar hook takes others)",
+	"faultline-install-check":                                                          "the fixed session id HookTarget passes to codexSidecarLedgerPath: an argument, not output",
+	"FaultLine observes this Codex session":                                            "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"FaultLine records an observed Codex turn":                                         "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"FaultLine records tool-use attribution (digests only)":                            "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"FaultLine records tool-use completion (digests only)":                             "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"FaultLine captures a clean observed checkpoint when available":                    "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"FaultLine could not create the project hook document without replacing anything:": "the preview's existsSync and HookTarget's lstat refuse an existing hooks.json first, so only a race or an unwritable .codex (EACCES: needs a chmod mutation op and a non-root run) reaches it; TestHookTargetAndWrite covers the EEXIST text",
+	"is unavailable:":                  "race only: assertSafeDirectory lstats a directory realpathSync or safeDirectoryExists has just accepted",
+	"FaultLine Git metadata directory": "race only: the label of assertSafeDirectory on the realpath of git's common directory, which exists when git reports it",
+	"Git did not report a common metadata directory for this worktree.": "git rev-parse --git-common-dir prints a path or fails",
+	"FaultLine could not resolve Git metadata storage:":                 "race only: realpathSync of the common directory git just reported",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
@@ -988,7 +1009,7 @@ func exprString(e ast.Expr) string {
 var gatedDirs = []string{
 	"internal/bundle", "internal/clock", "internal/jsre", "internal/safedir", "internal/evidence",
 	"internal/witnessresult", "internal/redaction", "internal/witness", "internal/ledgerbind",
-	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli",
+	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
 }
 
 // gatedLiterals is errorLiterals over every gatedDirs package.
