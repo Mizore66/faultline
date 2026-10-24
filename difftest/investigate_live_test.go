@@ -224,9 +224,6 @@ func randomInvestigateCase(t *testing.T, r *rand.Rand, witnesses []jsjson.Value)
 	return investigateCase{label: label + " " + fake, request: jsjson.MakeObject(request), fake: fake}
 }
 
-// seededEpochMillis is the seeded clock's epoch (difftest/gen/seed.mjs).
-const seededEpochMillis = 1784203200000
-
 // unstableInvestigateCase investigates a repository with one state per
 // verdict (state.txt holds it) through the broken-state fake Docker, under
 // which "broken" fails like a witness that does not parse.
@@ -269,14 +266,6 @@ func overlaySymlinkInvestigateCase(t *testing.T, w jsjson.Value, link int, verdi
 	request.Set("sandbox", jsjson.MustObject("mode", jsjson.MakeString("DOCKER_ISOLATED"), "image", jsjson.MakeString(gitinv.PinnedImageForTest)))
 	return investigateCase{label: "sha1 n=" + strconv.Itoa(len(verdicts)) + " " + strings.Join(verdicts, ",") + " overlay-symlink@" + strconv.Itoa(link) + " pass-fail",
 		request: jsjson.MakeObject(request), fake: "pass-fail"}
-}
-
-func oracleCall(t *testing.T, c *oracle.Client, op, args string) string {
-	raw, err := c.Call(op, args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
 }
 
 func indexOf(values []jsjson.Value, v jsjson.Value) int {

@@ -156,6 +156,18 @@ func recordedOutputs(t *testing.T) string {
 	return ""
 }
 
+// seededEpochMillis is the seeded clock's epoch (difftest/gen/seed.mjs).
+const seededEpochMillis = 1784203200000
+
+// oracleCall calls an oracle op and returns its raw JSON result.
+func oracleCall(t *testing.T, c *oracle.Client, op, args string) string {
+	raw, err := c.Call(op, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 // oracleText calls an oracle op that returns a string.
 func oracleText(t *testing.T, c *oracle.Client, op, args string) string {
 	raw, err := c.Call(op, args)
