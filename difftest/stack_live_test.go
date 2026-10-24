@@ -18,9 +18,9 @@ import (
 
 // unstableTolerance is how far apart, in nesting levels, TS's and Go's
 // last printing depths may be at an unstable site of
-// TestLiveStackThresholdsMatchNode: well above the run-to-run band
-// measured there, far below the bisection's 12,000-level ceiling.
-const unstableTolerance = 256
+// TestLiveStackThresholdsMatchNode: twice the largest gap measured there
+// (241, darwin/arm64), far below the bisection's 12,000-level ceiling.
+const unstableTolerance = 512
 
 // The V8 stack model (internal/jsjson/stack.go) is fitted per platform and
 // call site to the Node release CI pins. Bisect the deepest value whose zod
@@ -48,10 +48,11 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 	// and init reports as snapshotPrewarm.reason (TS overflowing there
 	// reports "Maximum call stack size exceeded" the same way). Both are
 	// unstable: init reads them after awaiting child processes, and on Node
-	// 22.22.2 (linux/arm64) the same depth prints in one run and overflows
-	// in the next across a band of about 45 levels (config) and 100
-	// (allowlist), which Go cannot reproduce (KNOWN_DIFFERENCES.md). There
-	// Go must stay within unstableTolerance levels of TS's bisected depth,
+	// 22.22.2 the same depth prints in one run and overflows in the next.
+	// TS's bisected depth lies up to 63 levels below Go's on linux/arm64
+	// and up to 241 on darwin/arm64 (three runs each), and moves from run to
+	// run, which Go cannot reproduce (KNOWN_DIFFERENCES.md). There Go must
+	// stay within unstableTolerance levels of TS's bisected depth,
 	// which catches a writer that prints at any depth or overflows far too
 	// early. Go reads the config message at SiteCLI and the allowlist one at
 	// the default site; both are within a few levels of the band.
