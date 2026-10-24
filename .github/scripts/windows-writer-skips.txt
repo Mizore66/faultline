@@ -230,3 +230,10 @@ TestWriterReplay/posix/init-standing-missing-command
 TestWriterReplay/posix/init-standing-blank-command
 TestWriterReplay/posix/init-standing-missing-frozen-by
 TestWriterReplay/posix/init-standing-blank-frozen-by
+TestWriterReplay/posix/init-cli-storage-file
+TestWriterReplay/posix/init-cli-recordings-file
+TestWriterReplay/posix/init-cli-repo-symlink
+TestWriterReplay/posix/init-cli-repo-file
+TestWriterReplay/posix/init-cli-repo-under-file
+TestWriterReplay/posix/init-cli-newline-path
+TestWriterReplay/posix/init-cli-plan-config

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Mizore66/faultline/internal/hostcmd"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
@@ -77,10 +78,10 @@ func TestQuoteWindowsCommandArgument(t *testing.T) {
 func TestSidecarCliCommandRefusals(t *testing.T) {
 	dir := t.TempDir()
 	js := filepath.Join(dir, "cli.js")
-	os.WriteFile(js, []byte("export {};\n"), 0o644)
-	os.Symlink(js, filepath.Join(dir, "link.js"))
-	os.WriteFile(filepath.Join(dir, "cli.ts"), nil, 0o644)
-	os.Mkdir(filepath.Join(dir, "dir.js"), 0o755)
+	must(t, os.WriteFile(js, []byte("export {};\n"), 0o644))
+	must(t, os.Symlink(js, filepath.Join(dir, "link.js")))
+	must(t, os.WriteFile(filepath.Join(dir, "cli.ts"), nil, 0o644))
+	must(t, os.Mkdir(filepath.Join(dir, "dir.js"), 0o755))
 	cases := []struct {
 		args []string
 		want string
@@ -131,11 +132,11 @@ func gitRepo(t *testing.T) string {
 		t.Fatal(err)
 	}
 	repo := filepath.Join(dir, "repo")
-	os.Mkdir(repo, 0o755)
+	must(t, os.Mkdir(repo, 0o755))
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "t@example.test"}, {"config", "user.name", "T"}} {
 		gitCmd(t, repo, args...)
 	}
-	os.WriteFile(filepath.Join(repo, "package.json"), []byte("{\"name\":\"x\"}\n"), 0o644)
+	must(t, os.WriteFile(filepath.Join(repo, "package.json"), []byte("{\"name\":\"x\"}\n"), 0o644))
 	gitCmd(t, repo, "add", "package.json")
 	gitCmd(t, repo, "commit", "-qm", "i")
 	return repo
@@ -209,8 +210,9 @@ func TestPlanFreezesStandingPolicy(t *testing.T) {
 	// A NaN timeout fails the policy schema.
 	nan := jsjson.ToNumber("abc")
 	id2 := "nan"
-	if _, err := Plan(Options{Repository: repo, StandingPolicy: &StandingPolicyInput{PolicyID: &id2, FrozenBy: "o", AllowedCommands: []string{"x"}, MaxTimeoutSeconds: &nan}}, readyRunner(repo)); err == nil {
-		t.Fatal("NaN maxTimeoutSeconds accepted")
+	_, err = Plan(Options{Repository: repo, StandingPolicy: &StandingPolicyInput{PolicyID: &id2, FrozenBy: "o", AllowedCommands: []string{"x"}, MaxTimeoutSeconds: &nan}}, readyRunner(repo))
+	if err == nil || !strings.Contains(jsexc.Message(err), `"received": "nan"`) || !strings.Contains(jsexc.Message(err), `"maxTimeoutSeconds"`) {
+		t.Fatalf("NaN maxTimeoutSeconds: %v", err)
 	}
 }
 
@@ -258,8 +260,8 @@ func TestPlanStatuses(t *testing.T) {
 		again.Get("sidecar", "status").Str() != "CLI_REQUIRED" {
 		t.Fatal(jsjson.Stringify(again))
 	}
-	os.MkdirAll(filepath.Join(repo, ".codex"), 0o700)
-	os.WriteFile(filepath.Join(repo, ".codex", "hooks.json"), []byte("{}"), 0o600)
+	must(t, os.MkdirAll(filepath.Join(repo, ".codex"), 0o700))
+	must(t, os.WriteFile(filepath.Join(repo, ".codex", "hooks.json"), []byte("{}"), 0o600))
 	present, _ := Plan(Options{Repository: repo, CliPath: "/x/cli.js"}, run)
 	if present.Get("sidecar", "status").Str() != "ALREADY_PRESENT" {
 		t.Fatal(jsjson.Stringify(present.Get("sidecar")))
@@ -312,9 +314,17 @@ func TestCodexSidecarLedgerPath(t *testing.T) {
 		t.Fatal("an identifier with a space is accepted")
 	}
 	// A recordings directory that is a file is refused.
-	os.MkdirAll(filepath.Join(repo, ".git", "faultline"), 0o700)
-	os.WriteFile(filepath.Join(repo, ".git", "faultline", "recordings"), nil, 0o600)
+	must(t, os.MkdirAll(filepath.Join(repo, ".git", "faultline"), 0o700))
+	must(t, os.WriteFile(filepath.Join(repo, ".git", "faultline", "recordings"), nil, 0o600))
 	if _, err := CodexSidecarLedgerPath(repo, "s"); err == nil || err.Error() != "FaultLine sidecar recordings must be a real directory, not a symlink or file." {
+		t.Fatal(err)
+	}
+}
+
+// must fails the test on a setup error.
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
 		t.Fatal(err)
 	}
 }

@@ -55,10 +55,10 @@ func initRepo(t *testing.T) (dir, repo string) {
 		t.Fatal(err)
 	}
 	repo = filepath.Join(dir, "repo")
-	os.Mkdir(repo, 0o755)
+	must(t, os.Mkdir(repo, 0o755))
 	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "faultline@example.test"}, {"config", "user.name", "FaultLine"}, {"add", "package.json"}, {"commit", "-qm", "init"}} {
 		if args[0] == "add" {
-			os.WriteFile(filepath.Join(repo, "package.json"), []byte("{\"name\":\"demo\"}\n"), 0o644)
+			must(t, os.WriteFile(filepath.Join(repo, "package.json"), []byte("{\"name\":\"demo\"}\n"), 0o644))
 		}
 		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
@@ -88,7 +88,7 @@ func TestInitPlanThenApply(t *testing.T) {
 	dir, repo := initRepo(t)
 	calls := fakeDoctor(t, repo)
 	cli := filepath.Join(dir, "cli.js")
-	os.WriteFile(cli, []byte("export {};\n"), 0o644)
+	must(t, os.WriteFile(cli, []byte("export {};\n"), 0o644))
 
 	plan, _ := runInit(t, "--repo", repo, "--cli", cli, "--runtime", "node")
 	if plan.Get("status").Str() != "INIT_PLAN" || plan.Get("suggestedRuntime").Str() != "node" ||
@@ -172,5 +172,13 @@ func TestInitUsageErrors(t *testing.T) {
 		if code != 1 || stdout != "" || stderr != "FaultLine error: "+c.want+"\nNext: pnpm fl help\n" {
 			t.Errorf("%q: %d %q %q", c.args, code, stdout, stderr)
 		}
+	}
+}
+
+// must fails the test on a setup error.
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }

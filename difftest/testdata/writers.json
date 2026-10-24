@@ -460,5 +460,12 @@
   {"id":"init-standing-missing-command","scenario":"init-fresh","argv":[["init","--yes","--standing-policy"]],"fakeTools":"ready","posixOnly":true},
   {"id":"init-standing-blank-command","scenario":"init-fresh","argv":[["init","--yes","--standing-policy","--standing-command"," ","--standing-frozen-by","ops@example.test"]],"fakeTools":"ready","posixOnly":true},
   {"id":"init-standing-missing-frozen-by","scenario":"init-fresh","argv":[["init","--yes","--standing-command","pnpm test"]],"fakeTools":"ready","posixOnly":true},
-  {"id":"init-standing-blank-frozen-by","scenario":"init-fresh","argv":[["init","--yes","--standing-command","pnpm test","--standing-frozen-by","\t"]],"fakeTools":"ready","posixOnly":true}
+  {"id":"init-standing-blank-frozen-by","scenario":"init-fresh","argv":[["init","--yes","--standing-command","pnpm test","--standing-frozen-by","\t"]],"fakeTools":"ready","posixOnly":true},
+  {"id":"init-cli-storage-file","scenario":"init-sidecar","argv":[["init","--yes","--cli","tool.js"]],"fakeTools":"ready","posixOnly":true,"mutations":[{"op":"add-file","path":".git/faultline","content":"not a directory\n"}]},
+  {"id":"init-cli-recordings-file","scenario":"init-sidecar","argv":[["init","--yes","--cli","tool.js"]],"fakeTools":"ready","posixOnly":true,"mutations":[{"op":"add-file","path":".git/faultline/recordings","content":"not a directory\n"}]},
+  {"id":"init-cli-repo-symlink","scenario":"init-sidecar","argv":[["init","--repo","linked","--yes","--cli","tool.js"]],"fakeTools":"ready","posixOnly":true,"mutations":[{"op":"add-file","path":"linked","content":""},{"op":"symlink","file":"linked","target":"it's"}]},
+  {"id":"init-cli-repo-file","scenario":"init-sidecar","argv":[["init","--repo","tool.js","--yes","--cli","tool.js"]],"fakeTools":"ready","posixOnly":true},
+  {"id":"init-cli-repo-under-file","scenario":"init-sidecar","argv":[["init","--repo","tool.js/x","--yes","--cli","tool.js"]],"fakeTools":"ready","posixOnly":true},
+  {"id":"init-cli-newline-path","scenario":"init-sidecar","argv":[["init","--yes","--cli","bad\nname.js"]],"fakeTools":"ready","posixOnly":true,"mutations":[{"op":"add-file","path":"bad\nname.js","content":"export {};\n"}]},
+  {"id":"init-cli-plan-config","scenario":"init-existing-config","argv":[["init","--cli","to ol.js"]],"fakeTools":"ready","posixOnly":true,"mutations":[{"op":"add-file","path":"to ol.js","content":"export {};\n"}]}
 ]
