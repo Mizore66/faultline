@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,8 @@ export type Template = {
   rebindLifecycle?: boolean;
   // fakeGitPathOnly: PATH is the fake git's directory and a missing one.
   fakeGitPathOnly?: boolean;
+  // mode: a chmod template's permission bits, in octal ("555").
+  mode?: string;
 };
 // JsonEdit is one json-edit step; a json-edit template is one step itself or
 // lists several in `edits`, applied in order.
@@ -408,6 +410,9 @@ export function applyMutation(root: string, c: Case): void {
     case "make-dir": rmSync(path); mkdirSync(path); break;
     case "symlink": rmSync(path); symlinkSync(t.target!, path); break;
     case "add-file": mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, t.content!); break;
+    // A writer case applies chmod after resetModes (gen-writers.ts runCase),
+    // which would otherwise undo it.
+    case "chmod": chmodSync(path, parseInt(t.mode!, 8)); break;
     case "replace-text": {
       const s = readFileSync(path).toString("latin1");
       writeFileSync(path, Buffer.from(s.replace(t.find!, () => t.replace!), "latin1"));

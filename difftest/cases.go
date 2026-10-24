@@ -613,6 +613,13 @@ func applyMutation(root string, c testCase) bool {
 	case "add-file":
 		os.MkdirAll(filepath.Dir(path), 0o755)
 		os.WriteFile(path, []byte(t.str("content")), 0o644)
+	case "chmod":
+		// A writer case applies chmod after resetModes (prepareWriterCase),
+		// which would otherwise undo it.
+		mode, err := strconv.ParseUint(t.str("mode"), 8, 32)
+		if err != nil || os.Chmod(path, os.FileMode(mode)) != nil {
+			return false
+		}
 	case "replace-text":
 		b, _ := os.ReadFile(path)
 		os.WriteFile(path, bytes.Replace(b, latin1(t.str("find")), latin1(t.str("replace")), 1), 0o644)

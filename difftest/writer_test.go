@@ -988,24 +988,49 @@ func holdBusyPort(t *testing.T, tpl writerTemplate) string {
 
 // prepareWriterCase fills the case's workspace: the scenario, then the
 // template's mutations (with <WS>, <TMP>, <HOME> substituted), then
-// resetModes.
+// resetModes, then the chmod mutations, which resetModes would undo
+// (gen-writers.ts runCase). A cleanup makes every directory writable
+// again, so the case directory can be removed.
 func prepareWriterCase(t testing.TB, repo string, tpl writerTemplate, r writerRoots) {
 	t.Helper()
 	copyScenario(t, repo, tpl.Scenario, r.ws)
-	for _, raw := range tpl.Mutations {
-		m := template{substituteDeep(jsjson.MakeObject(raw.fields), r).Obj()}
-		file := m.str("file")
-		if pathOps[m.str("op")] {
-			file = "."
-			if p, ok := m.fields.Get("path"); ok {
-				file = p.Str()
+	apply := func(chmod bool) {
+		for _, raw := range tpl.Mutations {
+			m := template{substituteDeep(jsjson.MakeObject(raw.fields), r).Obj()}
+			if (m.str("op") == "chmod") != chmod {
+				continue
+			}
+			file := m.str("file")
+			if pathOps[m.str("op")] {
+				file = "."
+				if p, ok := m.fields.Get("path"); ok {
+					file = p.Str()
+				}
+			}
+			if !applyMutation(r.ws, testCase{id: tpl.ID, base: "writer", file: file, tpl: &m}) {
+				t.Fatalf("could not apply mutation %s", m.str("op"))
 			}
 		}
-		if !applyMutation(r.ws, testCase{id: tpl.ID, base: "writer", file: file, tpl: &m}) {
-			t.Fatalf("could not apply mutation %s", m.str("op"))
-		}
 	}
+	apply(false)
 	resetModes(t, r.ws)
+	// A read-only directory refuses writes only to a non-root user.
+	if os.Geteuid() == 0 && slices.ContainsFunc(tpl.Mutations, func(m template) bool { return m.str("op") == "chmod" }) {
+		t.Fatalf("%s: chmod cases must run as a non-root user", tpl.ID)
+	}
+	apply(true)
+	t.Cleanup(func() { restoreWritable(r.root) })
+}
+
+// restoreWritable makes every directory under root writable again (a chmod
+// mutation may leave one read-only); gen-writers.ts restoreWritable.
+func restoreWritable(root string) {
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			os.Chmod(path, 0o755)
+		}
+		return nil
+	})
 }
 
 // compareWriter fails on the first difference from the golden line; a tree

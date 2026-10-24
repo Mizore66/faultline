@@ -4,6 +4,7 @@ package difftest
 
 import (
 	"os"
+	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,5 +58,84 @@ func TestEndToEndWithoutNode(t *testing.T) {
 	}
 	if out := run("judge-proof", "--bundle", bundle, "--expect-root", root, "--export-only"); !strings.Contains(out, "Verified root summary: "+root) {
 		t.Fatalf("judge-proof:\n%s", out)
+	}
+}
+
+// TestEndToEndSlice3aWithoutNode is done criterion 3 of the slice 3 spec
+// (4.2, PR 3a; plan correction 5): `fl init --yes`, `fl doctor
+// --proof-ready` and `fl runtime prepare node --yes` on the Go binary in a
+// repository, with PATH holding only git's own directory, the runtime-digest
+// fake Docker and its hash tool, and no `node`. Without Node,
+// doctor's node check is UNAVAILABLE and doctor exits 1 by design (slice 3
+// spec 3.1), so --proof-ready prints NOT READY; init and runtime prepare
+// succeed, and the config holds the prepared image. POSIX only: the fake
+// Docker is a sh script.
+func TestEndToEndSlice3aWithoutNode(t *testing.T) {
+	ws := scenarioWorkspace(t, "init-fresh")
+	exec, err := osexec.Command("git", "--exec-path").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fake Docker runs under #!/bin/sh and needs only sha256sum (or
+	// shasum) from PATH: a directory of its own links that one tool, so no
+	// system directory (which may hold a node) is on PATH.
+	tools := t.TempDir()
+	linked := false
+	for _, name := range []string{"sha256sum", "shasum"} {
+		if p, err := osexec.LookPath(name); err == nil {
+			if err := os.Symlink(p, filepath.Join(tools, name)); err != nil {
+				t.Fatal(err)
+			}
+			linked = true
+			break
+		}
+	}
+	if !linked {
+		t.Fatal("neither sha256sum nor shasum is on PATH")
+	}
+	// git's own directory: /usr/bin/git on macOS is an xcrun shim.
+	var dirs []string
+	for _, dir := range []string{strings.TrimSpace(string(exec)), filepath.Join(repoRoot(t), "difftest", "testdata", "fakedocker", "runtime-digest"), tools} {
+		if _, err := lookPathIn("node", dir); err == nil {
+			t.Fatalf("%s holds a node, so PATH cannot leave Node out", dir)
+		}
+		dirs = append(dirs, dir)
+	}
+	path := strings.Join(dirs, string(os.PathListSeparator))
+	if _, err := lookPathIn("git", path); err != nil {
+		t.Fatal("git is not on PATH")
+	}
+	env := map[string]string{"PATH": path}
+
+	stdout, stderr, code := runFlIn(t, ws, env, "init", "--yes")
+	if code != 0 || jsonField(stdout, "status") != "INIT_APPLIED" {
+		t.Fatalf("fl init --yes: exit %d\n%s%s", code, stdout, stderr)
+	}
+	if got := jsonField(stdout, "snapshotPrewarm", "status"); got != "PREWARMED" {
+		t.Errorf("fl init --yes: snapshotPrewarm.status %q, want PREWARMED\n%s%s", got, stdout, stderr)
+	}
+
+	stdout, stderr, code = runFlIn(t, ws, env, "doctor", "--proof-ready")
+	if code != 1 || !strings.Contains(stdout, "\n[UNAVAILABLE] node: Node.js is unavailable to FaultLine.") || !strings.Contains(stdout, "\n--proof-ready: NOT READY\n") {
+		t.Fatalf("fl doctor --proof-ready: exit %d (want 1 with node UNAVAILABLE and NOT READY)\n%s%s", code, stdout, stderr)
+	}
+
+	stdout, stderr, code = runFlIn(t, ws, env, "runtime", "prepare", "node", "--yes")
+	if code != 0 || jsonField(stdout, "status") != "PREPARED_LOCAL_DIGEST" {
+		t.Fatalf("fl runtime prepare node --yes: exit %d\n%s%s", code, stdout, stderr)
+	}
+	image := jsonField(stdout, "image")
+	if !strings.HasPrefix(image, "node@sha256:") {
+		t.Fatalf("fl runtime prepare node --yes: image %q", image)
+	}
+	config, err := os.ReadFile(filepath.Join(ws, ".faultline", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jsonField(string(config), "image"); got != image {
+		t.Errorf(".faultline/config.json image %q, want %q\n%s", got, image, config)
+	}
+	if got := jsonField(string(config), "runtime", "image"); got != image || jsonField(string(config), "runtime", "alias") != "node" {
+		t.Errorf(".faultline/config.json runtime is not node at %s\n%s", image, config)
 	}
 }

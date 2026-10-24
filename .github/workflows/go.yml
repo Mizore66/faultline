@@ -42,6 +42,8 @@ jobs:
       # may not create symlinks (no administrator, no Developer Mode).
       # TestRemoveAllUnlinkEPERM sets the immutable flag with sudo -n chattr
       # on Linux (the runners' passwordless sudo) and must not skip.
+      # TestChmodMutationAfterResetModes checks POSIX permission bits, which
+      # Windows does not have.
       # TestErrorPathReplacesLoneSurrogate pins the Unix error text (the JS
       # path string through UTF-8, as given); on Windows Node prints the
       # resolved path with backslashes (errorPath's Windows branch), which its
@@ -58,7 +60,7 @@ jobs:
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
             Windows)
               posix=$(tr -d '\r' < .github/scripts/windows-writer-skips.txt | grep -v '^#' | paste -sd '|' -)
-              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestGoldenReplay/.+|$posix" ;;
+              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|$posix" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status
