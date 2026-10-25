@@ -155,6 +155,18 @@ jobs:
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($tests)\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^(TestLiveCwdErrorsMatchNode/(chroot|self0600|parent0311|locked[0-9]+)|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode)$' "$RUNNER_TEMP/live.list" || status=1
           exit $status
+      - name: Measured stack depths
+        # TestLiveStackThresholdsMatchNode runs in the step above on
+        # linux/amd64: annotate what TS and Go reached at every site,
+        # including the unstable init sites' band (KNOWN_DIFFERENCES), as
+        # the stack-live job does for its platforms.
+        if: always()
+        run: |
+          grep -E '^ *stack_live_test\.go:[0-9]+: [a-z0-9]+/[a-z0-9_]+ ' "$RUNNER_TEMP/live.log" | sed 's/^ *stack_live_test\.go:[0-9]*: //' |
+            awk '{ key = $1 " " $2; $1 = ""; $2 = ""; sub(/^ +/, ""); rows[key] = rows[key] (rows[key] == "" ? "" : "; ") $0; if (!(key in seen)) { seen[key] = 1; order[++n] = key } }
+                 END { for (i = 1; i <= n; i++) print order[i] " " rows[order[i]] }' |
+            while read -r line; do echo "::notice title=stack depth::$line"; done
+          grep -E 'stack_live_test\.go:[0-9]+: .*(unexpected output|lacks)' "$RUNNER_TEMP/live.log" | head -5 | while read -r line; do echo "::warning title=stack site::$line"; done
       - name: Install FUSE
         # TestLiveFuseMatchesNode mounts bundles through a FUSE filesystem
         # that misreports d_ino, d_type, sizes and errors.

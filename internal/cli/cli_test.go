@@ -23,6 +23,9 @@ func TestFailures(t *testing.T) {
 		{[]string{"--"}, "FaultLine error: Unknown command: --\nNote: Do not place '--' between 'fl' and your subcommand. Use 'pnpm fl <command>'.\nNext: pnpm fl help\n"},
 		{[]string{"doctor", "--security", "--proof-ready"}, "FaultLine error: Usage: fl doctor [--repo <directory>] [--json] [--proof-ready | --security]\nNext: pnpm fl help\n"},
 		{[]string{"ui"}, "FaultLine error: not yet ported: ui\nNext: pnpm fl help\n"},
+		// fl with no command prints TS's help, which is not ported
+		// (difftest/coverage_test.go's "not yet ported: help" waiver).
+		{[]string{}, "FaultLine error: not yet ported: help\nNext: pnpm fl help\n"},
 	}
 	for _, c := range cases {
 		stdout, stderr, code := run(c.args...)
