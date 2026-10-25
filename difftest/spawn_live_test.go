@@ -263,7 +263,8 @@ type hostCmdResult struct {
 // runners and hostcmd.Run and compares the results: 30 generated sh
 // programs that write random UTF-8 (4-byte characters, invalid bytes) to
 // stdout and stderr in random chunks, cut inside code points, under caps
-// of 1 to 200 bytes, ending in an exit code, a signal or a timeout; each
+// of 1 to 200 bytes, ending in an exit code, a signal or a timeout well
+// after the last write; each
 // runs under doctor's runner ("" error join) and runtime's ("\n"). Writes
 // are 60 ms apart so each is one chunk on both sides, and programs outlive
 // an overflow so the SIGKILL decides the exit code on both sides.
@@ -311,8 +312,17 @@ func TestLiveHostCmd(t *testing.T) {
 		case 3:
 			script = append(script, "sleep 0.2", "kill -KILL $$")
 		case 4:
-			script = append(script, "sleep 3")
-			timeoutMs = 60*len(script)/2 + 400
+			// The timeout falls 2 s after the last write is due and 2 s
+			// before the final sleep ends, so the output the SIGKILL
+			// leaves is all of it on both sides. (With 400 ms of slack, a
+			// loaded macOS runner was still forking the sleeps when the
+			// timer fired: Node kept the last chunk in one case and Go in
+			// its twin, CI round 1.) Both sides read until EOF after the
+			// kill, as 'close' waits for the streams to end; output racing
+			// the kill is timing, not runner behaviour, so it is not
+			// compared.
+			timeoutMs = 60*len(script)/2 + 2000
+			script = append(script, "sleep 4")
 		}
 		cp := 1 + r.IntN(200)
 		args := []string{"-c", strings.Join(script, "; ")}
@@ -325,6 +335,10 @@ func TestLiveHostCmd(t *testing.T) {
 			hostCmdCase{runner, "faultline-no-such-tool", []string{}, 64, 1000},
 			hostCmdCase{runner, "sh", []string{"-c", "true", "a\x00b"}, 64, 1000}, // spawn throws
 			hostCmdCase{runner, "sh", []string{"-c", "printf abc; printf def >&2; exit 2"}, 200, 5000},
+			// After the timeout's SIGKILL a grandchild still holds the
+			// pipes and writes: both runners keep reading until the
+			// streams end ('close'), so "late" is kept.
+			hostCmdCase{runner, "sh", []string{"-c", "printf early; (sleep 1.5; printf late; printf err >&2) & sleep 5"}, 200, 500},
 		)
 	}
 	// The real export, around DOCTOR_MAX_OUTPUT_BYTES (64 KiB).
@@ -376,6 +390,9 @@ func TestLiveHostCmd(t *testing.T) {
 			t.Errorf("case %d (%s, cap %d, %.200q):\nnode %v %q %q timedOut=%v limit=%v\ngo   %v %q %q timedOut=%v limit=%v",
 				i, c.Runner, c.Cap, c.Args, fmtPtr(w.ExitCode), w.Stdout, w.Stderr, w.TimedOut, w.OutputLimitExceeded,
 				fmtPtr(got.ExitCode), got.Stdout, got.Stderr, got.TimedOut, got.OutputLimitExceeded)
+		}
+		if strings.Contains(strings.Join(c.Args, " "), "printf late") && (w.Stdout != "earlylate" || w.Stderr != "err" || !w.TimedOut) {
+			t.Errorf("case %d: node did not read past the kill: %q %q timedOut=%v", i, w.Stdout, w.Stderr, w.TimedOut)
 		}
 		if w.OutputLimitExceeded {
 			limited++
