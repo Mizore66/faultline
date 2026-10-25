@@ -77,13 +77,19 @@ var writerFaultPaths = []struct {
 	{"runtime-mapping-nested-output", "mapping-grandparent", "ws/maps", []string{"mkdir"}},
 	// fl init --yes: .faultlineignore (wx, src/project-init.ts:124), then the
 	// turn-snapshot pre-warm: the object store and its alternates entry
-	// (src/turn-snapshot.ts:207), the temporary index git writes (renaming
-	// its lock onto it) and fl removes (:1117), and the session cache (:781).
+	// (src/turn-snapshot.ts:207), the temporary index git writes by renaming
+	// its lock onto it and fl removes (:1117), and the session cache (:781).
+	// The rename is faulted through the lock, its source: x86_64 git calls
+	// rename(2), on which strace -P matches only the first path (pathtrace.c
+	// has no SEN_rename case), while arm64 has only renameat, which -P
+	// matches on either path (CI round 1: on x86_64 the index path made no
+	// call to fail).
 	{"init-yes-dirty", "ignore-file", "ws/.faultlineignore", []string{"open", "write", "close"}},
 	{"init-yes-dirty", "snapshot-objects-info", "ws/.git/faultline/objects/info", []string{"mkdir"}},
 	{"init-yes-dirty", "snapshot-objects-pack", "ws/.git/faultline/objects/pack", []string{"mkdir"}},
 	{"init-yes-dirty", "alternates", "ws/.git/objects/info/alternates", []string{"open", "write", "close"}},
-	{"init-yes-dirty", "snapshot-index", "tmp/faultline-turn-tree-*.index", []string{"rename", "unlink"}},
+	{"init-yes-dirty", "snapshot-index", "tmp/faultline-turn-tree-*.index", []string{"unlink"}},
+	{"init-yes-dirty", "snapshot-index-lock", "tmp/faultline-turn-tree-*.index.lock", []string{"rename"}},
 	{"init-yes-dirty", "snapshot-cache", "ws/.git/faultline/turn-snapshot-cache.json", []string{"open", "write", "close"}},
 	// The standing policy (0600 wx) and its 0700 directories
 	// (src/standing-approval-policy.ts:154).
