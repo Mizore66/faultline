@@ -19,6 +19,23 @@ export type WriterTemplate = {
 
 const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations"]);
 
+// TMPDIR_FAKE_DOCKERS are the fake Dockers that keep state in $TMPDIR on
+// purpose (difftest/testdata/fakedocker/README.md).
+const TMPDIR_FAKE_DOCKERS = new Set(["timeout-once", "tmpdir-swap"]);
+
+// checksTmpdir says whether a case's TMPDIR (<TMP>) must be empty after
+// each invocation (spec 3.3, "same files left behind"): every case but those
+// whose fake Docker or env puts files there itself. The Go twin is
+// checksTmpdir in difftest/writer_test.go.
+export function checksTmpdir(t: WriterTemplate): boolean {
+  return !TMPDIR_FAKE_DOCKERS.has(t.fakeDocker ?? "") && !Object.values(t.env ?? {}).some((v) => v.includes("<TMP>"));
+}
+
+// tmpLeftovers lists what an invocation left in the case's TMPDIR, sorted.
+export function tmpLeftovers(roots: CaseRoots): string[] {
+  return existsSync(roots.tmp) ? readdirSync(roots.tmp).sort(byCodeUnit) : [];
+}
+
 // checkTemplates rejects what the Go loader rejects too: unknown keys,
 // duplicate ids and cases without invocations.
 function checkTemplates(templates: WriterTemplate[]): void {
@@ -405,6 +422,10 @@ async function holdBusyPort(t: WriterTemplate): Promise<{ port: string; servers:
   return { port: String((server.address() as { port: number }).port), servers };
 }
 
+// tmpFailures collects the invocations that left files in TMPDIR; the run
+// fails after every case has run, naming them all.
+const tmpFailures: string[] = [];
+
 async function runCase(t: WriterTemplate): Promise<string[]> {
   const roots = makeCaseRoots();
   const busy = await holdBusyPort(t);
@@ -431,6 +452,10 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
       rmSync(roots.argvLog, { force: true });
       const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)), writerEnv(roots, t.id, t.fakeDocker, env, t.fakeTools, t.pathTools));
+      // Temporary files fl makes (mkdtemp roots, the snapshot index, the
+      // doctor --security fixture) must be gone, as in Go.
+      const leftovers = checksTmpdir(t) ? tmpLeftovers(roots) : [];
+      if (leftovers.length > 0) tmpFailures.push(`${t.id}|${inv}: TS left ${leftovers.join(", ")} in TMPDIR`);
       stdouts.push(r.stdout);
       const plans = planDigests(r.stdout);
       const invocationRecords = readArgvLog(roots.argvLog);
@@ -508,5 +533,9 @@ await Promise.all(Array.from({ length: 8 }, async () => {
     results[index] = await runCase(templates[index]!);
   }
 }));
+if (tmpFailures.length > 0) {
+  console.error(tmpFailures.sort(byCodeUnit).join("\n"));
+  process.exit(1);
+}
 writeFileSync(join(repo, "difftest/testdata/golden/writers.jsonl"), `${results.flat().join("\n")}\n`);
 console.log(`writers: ${templates.length} cases, ${results.flat().length} invocations`);

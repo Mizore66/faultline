@@ -60,6 +60,9 @@ type writerResult struct {
 	Argv           []string
 	// contents are the bytes of the regular files in Files, for the report.
 	contents map[string][]byte
+	// tmpLeft is what the invocation left in the case's TMPDIR, right after
+	// it exited (TestWriterReplay requires it empty where checksTmpdir).
+	tmpLeft []string
 }
 
 var (
@@ -329,6 +332,36 @@ func linkPathTools(r writerRoots, tools []string) string {
 		}
 	}
 	return bin
+}
+
+// tmpdirFakeDockers are the fake Dockers that keep state in $TMPDIR on
+// purpose (difftest/testdata/fakedocker/README.md).
+var tmpdirFakeDockers = []string{"timeout-once", "tmpdir-swap"}
+
+// checksTmpdir says whether a case's TMPDIR (<TMP>) must be empty after
+// each invocation (spec 3.3, "same files left behind"): every case but
+// those whose fake Docker or env puts files there itself (gen-writers.ts
+// checksTmpdir).
+func checksTmpdir(tpl writerTemplate) bool {
+	if slices.Contains(tmpdirFakeDockers, tpl.FakeDocker) {
+		return false
+	}
+	for _, kv := range tpl.Env {
+		if strings.Contains(kv[1], "<TMP>") {
+			return false
+		}
+	}
+	return true
+}
+
+// tmpLeftovers lists what an invocation left in the case's TMPDIR, sorted
+// (gen-writers.ts tmpLeftovers).
+func tmpLeftovers(r writerRoots) []string {
+	names, err := nodefs.ReadDirNames(r.tmp)
+	if err != nil {
+		return nil
+	}
+	return names
 }
 
 // substituteDeep applies substituteRoots to every string inside a mutation
@@ -855,6 +888,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 			t.Fatalf("running fl: %v", err)
 		}
 		outText, errText := stdout.String(), stderr.String()
+		tmpLeft := tmpLeftovers(r)
 		stdouts = append(stdouts, outText)
 		plans := planDigests(outText)
 		if run.mask != nil {
@@ -866,7 +900,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		after := treeEntries(t, r.ws, reloc.fileDigest)
 		res := writerResult{Inv: inv, Stdout: maskPlanDigests(reloc.text(outText), plans), Stderr: maskPlanDigests(reloc.text(errText), plans),
 			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestWith(r.ws, reloc.fileDigest), Modes: modesDigest(after), Files: changedFiles(before, after),
-			contents: map[string][]byte{}}
+			contents: map[string][]byte{}, tmpLeft: tmpLeft}
 		for _, record := range invocationRecords {
 			res.Argv = append(res.Argv, normalizeRecord(record, r, reloc))
 		}
@@ -1183,6 +1217,12 @@ func TestWriterReplay(t *testing.T) {
 					t.Fatalf("no golden for %s", key)
 				}
 				compareWriter(t, key, got, want) // stdout, stderr, exit, argv, tree and modes (naming changed files)
+				// Temporary files fl makes (mkdtemp roots, the snapshot
+				// index, the doctor --security fixture) must be gone, as
+				// gen-writers.ts requires of TS (spec 3.3).
+				if checksTmpdir(tpl) && len(got.tmpLeft) > 0 {
+					t.Errorf("%s: Go left %s in TMPDIR", key, strings.Join(got.tmpLeft, ", "))
+				}
 			}
 		})
 	}
