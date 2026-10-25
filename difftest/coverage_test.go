@@ -75,6 +75,7 @@ var unreachableLiterals = map[string]string{
 	"Frozen overlay path escaped its worktree:":                                "safeOverlayParts refuses empty, '.' and '..' segments and backslashes first, so the target stays inside the worktree",
 	"Minimization output root is not a real directory:":                        "the CLI's safeManagedFileOutput refuses the same output first",
 	"Minimization output parent is not a real directory:":                      "race only: the directory was just created by mkdir",
+	"FaultLine config path escaped .faultline":                                 "the config path is <dir>/config.json and resolveTrustedSystemPath rewrites the same /var or /tmp alias prefix of both, so the relative path is always config.json",
 	"Minimization output cannot traverse a symbolic link or non-directory:":    "the CLI's safeManagedFileOutput refuses the same output first",
 	"minimization result verification failed safely:":                          "a throw inside the checks of a record that passed the schema: only a V8 limit (string length, stack depth) gets there",
 	// Races: the file or directory changes between two steps of fl.
@@ -94,13 +95,13 @@ var unreachableLiterals = map[string]string{
 	// error struct literals, which errorSites did not collect before.
 	// CLI paths frozen TS runs for real (Go throws `not yet ported`): no
 	// golden can compare them; internal/cli's unit tests pin the texts.
-	"not yet ported: help":                           "fl with no command prints TS's help, which slice 2 does not port; TestRunVerifyUsageAndUnported pins the text",
-	"not yet ported: %s":                             "every unported top-level command (doctor, init, …) runs for real in TS; TestRunVerifyUsageAndUnported pins the text",
+	"not yet ported: help":                           "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
+	"not yet ported: %s":                             "every unported top-level command (incident and prevention in slice 3b; codex, record, prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
 	"not yet ported: investigate --ci-log/--resume":  "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: investigate turns":              "investigate turns runs in TS; TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: turn proof bundle verification": "a turn proof bundle verifies in TS; slice 2 does not port the turn verifier",
-	"not yet ported: witness propose --live":         "witness propose --live calls OpenAI in TS (slice 5); TestWitnessUnported pins the text",
-	"not yet ported: witness %s":                     "witness implement/review call a model in TS; TestWitnessUnported pins the text",
+	"not yet ported: witness propose --live":         "witness propose --live calls OpenAI in TS (slice 5); TestWitnessProposeSampleAndUnported pins the text",
+	"not yet ported: witness %s":                     "witness implement/review call a model in TS; TestWitnessProposeSampleAndUnported pins the text",
 	"%s must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).": "Go-only flags (KNOWN_DIFFERENCES: Codex thread IDs): TS ignores them, so no golden can hold the refusal; TestInvestigateUsageAndGuards pins it",
 	// Witness store invariants and earlier refusals.
 	"Reviewer public key could not be exported as SPKI DER.":               "x509.MarshalPKIXPublicKey of an Ed25519 key never fails; Node's export of a parsed Ed25519 key neither",
@@ -197,6 +198,47 @@ var unreachableLiterals = map[string]string{
 	"class treats surrogates, U+FFFD and astral characters differently": "jsre pattern refusal (TestUnsupportedPanics)",
 	"jsre: /%s/%s: unsupported flag %q":                                 "jsre refuses a flag the port does not implement; every pattern fl compiles is a constant with g or i",
 	"jsre: /%s/: match boundary inside a code point":                    "an internal invariant: RE2 over UTF-8 never ends a match inside a code point",
+
+	// internal/projinit (slice 3a Task 10): SidecarCliCommand and
+	// CodexSidecarLedgerPath are shared with `fl codex sidecar`, not ported
+	// yet; `fl init` passes only `--cli <resolved path>` and the fixed
+	// session id.
+	"must not be empty.": "assertSidecarCommandText runs on --command/--command-windows only, which `fl init` never passes (fl codex sidecar config/install)",
+	"Provide exactly one of --cli <built-cli.js> or --command <stable-hook-command>.": "fl init calls sidecarCliCommand with exactly [--cli, path] (fl codex sidecar config/install)",
+	"--command-windows": "the --command-windows label of assertSidecarCommandText, reached only through fl codex sidecar config/install",
+	"--command-windows is only valid with an explicit --command; --cli generates both platform commands safely.": "fl init never passes --command-windows to sidecarCliCommand (fl codex sidecar config/install)",
+	"Identifier contains unsupported characters":                                                                 "fl init's only session id is the constant faultline-install-check (fl codex sidecar hook takes others)",
+	"faultline-install-check":                                       "the fixed session id HookTarget passes to codexSidecarLedgerPath: an argument, not output",
+	"FaultLine observes this Codex session":                         "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"FaultLine records an observed Codex turn":                      "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"FaultLine records tool-use attribution (digests only)":         "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"FaultLine records tool-use completion (digests only)":          "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"FaultLine captures a clean observed checkpoint when available": "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"is unavailable:":                  "race only: assertSafeDirectory lstats a directory realpathSync or safeDirectoryExists has just accepted",
+	"FaultLine Git metadata directory": "race only: the label of assertSafeDirectory on the realpath of git's common directory, which exists when git reports it",
+	"Git did not report a common metadata directory for this worktree.": "git rev-parse --git-common-dir prints a path or fails",
+	"FaultLine could not resolve Git metadata storage:":                 "race only: realpathSync of the common directory git just reported",
+
+	// internal/runtimeimage/context.go (live-gated by TestLiveProjectContext):
+	"FaultLine could not read the reviewed Dockerfile": "race only: the Dockerfile resolves inside the context, so the walk has just read it (an unreadable one fails there as `could not read build-context file`)",
+
+	// internal/turnsnap (live-gated by TestLiveTurnSnapshotScan and
+	// TestLiveTurnSnapshotCapture): Git's invariants and races with the
+	// worktree.
+	"Could not read":                                                                   "race only: the scan's file (`Could not read <path> for snapshot secret scanning`) was just read whole by computePathDigests, whose failure propagates first",
+	"for snapshot secret scanning:":                                                    "race only: the scan's file was just read whole by computePathDigests, whose failure propagates first",
+	"FaultLine could not stat":                                                         "race only: computeDirtyFingerprint lstats the path just before fullFileContentDigest does",
+	"for content fingerprinting.":                                                      "race only: computeDirtyFingerprint lstats the path just before fullFileContentDigest does",
+	"Refusing to fingerprint non-regular path:":                                        "race only: computeDirtyFingerprint skips symlinks and non-regular files just before",
+	"bytes while hashing.":                                                             "race only: the file grew between its lstat and the read",
+	"Refusing turn-tree snapshot: path is not a regular file:":                         "race only: computeIndexDelta keeps only paths it has just lstat'ed as regular files",
+	"FaultLine could not prove turn-tree quiescence after":                             "race only: four dual-tree attempts must each see the worktree change between two status samples (the unit tests drive it with a scripted runner)",
+	"dual-tree attempt(s) and refused a torn turn tree snapshot.":                      "race only: four dual-tree attempts must each see the worktree change between two status samples",
+	"Git did not return a valid HEAD tree object id for the clean worktree fast path.": "git rev-parse HEAD^{tree} prints a full object id or fails",
+	"Git did not return a valid HEAD tree object id for incremental turn staging.":     "git rev-parse HEAD^{tree} prints a full object id or fails",
+	"git hash-object --stdin did not return a blob id for":                             "git hash-object -w --stdin prints a full object id or fails",
+	"Git did not return a valid tree object id for this turn tree snapshot.":           "git write-tree prints a full object id or fails",
+	"Git did not return a resolvable HEAD commit for this turn tree snapshot.":         "git rev-parse HEAD prints a full object id or fails (an unborn HEAD fails)",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
@@ -987,7 +1029,8 @@ func exprString(e ast.Expr) string {
 var gatedDirs = []string{
 	"internal/bundle", "internal/clock", "internal/jsre", "internal/safedir", "internal/evidence",
 	"internal/witnessresult", "internal/redaction", "internal/witness", "internal/ledgerbind",
-	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli",
+	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
+	"internal/safegit", "internal/hostcmd", "internal/runtimeimage", "internal/doctor", "internal/allowlist", "internal/turnsnap",
 }
 
 // gatedLiterals is errorLiterals over every gatedDirs package.
@@ -1034,6 +1077,15 @@ var liveGatedFiles = map[string]string{
 	"internal/witness/mlkem.go":    "TestLivePEMKeyParsing",
 	"internal/witness/ecmul.go":    "TestLivePEMKeyParsing",
 	"internal/witness/gf2m.go":     "TestLivePEMKeyParsing",
+	// Slice 3a: the Docker image runner's scripted outcomes, the build-context
+	// walk and the turn-snapshot planner and capture, each on generated inputs.
+	"internal/runtimeimage/curated.go": "TestLiveCuratedRuntime",
+	"internal/runtimeimage/context.go": "TestLiveProjectContext",
+	"internal/runtimeimage/project.go": "TestLiveProjectPrepare",
+	"internal/turnsnap/ignore.go":      "TestLiveTurnSnapshotIgnore",
+	"internal/turnsnap/scan.go":        "TestLiveTurnSnapshotScan",
+	"internal/turnsnap/plan.go":        "TestLiveTurnSnapshotCapture",
+	"internal/turnsnap/capture.go":     "TestLiveTurnSnapshotCapture",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally

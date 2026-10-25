@@ -253,3 +253,143 @@ func runInCase(t *testing.T, repo string, r writerRoots, seed string, command []
 	}
 	return stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()
 }
+
+// imageDigestPattern is an image digest in `docker image inspect` output.
+var imageDigestPattern = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
+
+// buildkitGitPrefix starts every git record that docker build itself makes:
+// buildx detects a git build context with `git -c protocol.file.allow=user
+// -c log.showSignature=false rev-parse --is-inside-work-tree` (BuildKit's
+// GitCLI.Run prepends protocol.file.allow=user to every git it runs), and
+// finds git through PATH, where the recorder comes first (CI round 1,
+// ubuntu-24.04). fl never passes protocol.file.allow=user (its git lists
+// set protocol.file.allow=never), and the project build runs no git, so
+// dropping these records leaves every record fl makes, git or docker, in
+// the exact comparison, on both sides.
+const buildkitGitPrefix = "git -c\x1fprotocol.file.allow=user\x1f"
+
+// realDockerBuildTags are the image tags TestLiveRealDockerProjectBuild
+// builds, one per side, so neither side's inspect sees the other's tag.
+var realDockerBuildTags = map[string]string{"TS": "local/faultline-real-docker:ts-side", "Go": "local/faultline-real-docker:go-side"}
+
+// TestLiveRealDockerProjectBuild runs `runtime project plan` and then
+// `runtime project build --expect-plan <digest> --yes` with the real Docker
+// daemon (the recorder stays on PATH) on a context of a Dockerfile FROM the
+// pinned node:22-alpine and one file, in frozen TS and then Go in the same
+// workspace, each with its own tag. With the tag written <TAG> and each
+// verified plan digest <PLANDIGEST> (and any RepoDigest the daemon records
+// for the built image <IMAGEDIGEST>), it compares the plan and the build
+// output byte for byte (fl prints no Docker build output on success), the
+// build status, stderr, the exit codes and the docker argv. Docker's classic
+// image store records no RepoDigest for a local build, so the status is
+// PROJECT_IMAGE_BUILT_NEEDS_REGISTRY_DIGEST; a daemon that does record one
+// (podman: localhost/<repository>@sha256:...) takes another path, which
+// both sides must take alike.
+func TestLiveRealDockerProjectBuild(t *testing.T) {
+	if os.Getenv("FAULTLINE_REAL_DOCKER") != "1" {
+		t.Skip("set FAULTLINE_REAL_DOCKER=1 (needs a Docker daemon and " + realDockerImage + ")")
+	}
+	oracle.Skip(t)
+	if out, err := exec.Command("docker", "image", "inspect", realDockerImage).CombinedOutput(); err != nil {
+		t.Fatalf("docker image inspect %s (pull it first): %v\n%s", realDockerImage, err, out)
+	}
+	removeTags := func() {
+		for _, tag := range realDockerBuildTags {
+			exec.Command("docker", "image", "rm", "-f", tag).Run()
+		}
+	}
+	removeTags()
+	t.Cleanup(removeTags)
+	setWriterUmask(t)
+	repo := repoRoot(t)
+	r := makeWriterRoots(t)
+	for name, text := range map[string]string{
+		"Dockerfile": "FROM " + realDockerImage + "\nCOPY hello.txt /hello.txt\n",
+		"hello.txt":  "hello from the FaultLine real-Docker build\n",
+	} {
+		if err := os.WriteFile(filepath.Join(r.ws, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type outcome struct {
+		plan, build, buildErr, status string
+		buildExit                     int
+		argv                          []string
+		repoDigests                   string
+	}
+	outcomes := map[string]outcome{}
+	for _, s := range []struct {
+		name    string
+		command []string
+	}{{"TS", []string{"node", filepath.Join(repo, "dist", "cli.js")}}, {"Go", []string{flBinary}}} {
+		tag := realDockerBuildTags[s.name]
+		var imageDigests []string
+		mask := func(text string) string {
+			text = maskPlanDigests(text, planDigests(text))
+			for _, d := range imageDigests {
+				text = strings.ReplaceAll(text, d, "<IMAGEDIGEST>")
+			}
+			return strings.ReplaceAll(text, tag, "<TAG>")
+		}
+		os.Remove(r.argvLog)
+		planOut, planErr, code := runInCase(t, repo, r, "", s.command, "runtime", "project", "plan", "--tag", tag)
+		if code != 0 || planErr != "" || len(planDigests(planOut)) != 1 {
+			t.Fatalf("%s plan: exit %d, %d verified plan digest(s)\n%s%s", s.name, code, len(planDigests(planOut)), planOut, planErr)
+		}
+		if records := readArgvLog(r.argvLog); len(records) != 0 {
+			t.Fatalf("%s plan ran %q", s.name, records)
+		}
+		digest := jsonField(planOut, "plan", "review", "planDigest")
+		buildOut, buildErr, buildExit := runInCase(t, repo, r, "", s.command, "runtime", "project", "build", "--tag", tag, "--expect-plan", digest, "--yes")
+		var argv []string
+		for _, record := range readArgvLog(r.argvLog) {
+			if strings.HasPrefix(record, buildkitGitPrefix) {
+				// docker build's own git (buildx's build-context detection
+				// runs the git on PATH, the recorder); fl runs no git here.
+				t.Logf("%s: dropping docker's own %q", s.name, record)
+				continue
+			}
+			argv = append(argv, strings.ReplaceAll(normalizeWriter(record, r), tag, "<TAG>"))
+		}
+		status := ""
+		if v, err := jsjson.Parse(buildOut); err == nil && v.Get("status").Kind() == jsjson.String {
+			status = v.Get("status").Str()
+		}
+		digests, err := exec.Command("docker", "image", "inspect", "--format", "{{json .RepoDigests}}", tag).Output()
+		if err != nil {
+			t.Fatalf("%s: inspecting the built %s: %v", s.name, tag, err)
+		}
+		// Each side builds its own image: its digests differ by side.
+		imageDigests = imageDigestPattern.FindAllString(string(digests), -1)
+		outcomes[s.name] = outcome{mask(planOut), mask(buildOut), mask(buildErr), status, buildExit, argv, strings.TrimSpace(string(digests))}
+		t.Logf("%s build: exit %d, status %q, RepoDigests %s, stderr %.200q", s.name, buildExit, status, digests, buildErr)
+	}
+	ts, goRes := outcomes["TS"], outcomes["Go"]
+	// CI forces the classic image store and sets this, so the brief's case
+	// (no RepoDigest for a local build) is the one that runs there.
+	if os.Getenv("FAULTLINE_REAL_DOCKER_CLASSIC_STORE") == "1" && ts.repoDigests != "[]" {
+		t.Fatalf("FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1, but the daemon recorded RepoDigests %s for the local build (containerd image store?)", ts.repoDigests)
+	}
+	if ts.repoDigests == "[]" && (ts.status != "PROJECT_IMAGE_BUILT_NEEDS_REGISTRY_DIGEST" || ts.buildExit != 1) {
+		t.Fatalf("TS build of an image without a RepoDigest: exit %d, status %q (want 1, PROJECT_IMAGE_BUILT_NEEDS_REGISTRY_DIGEST)\n%s%s", ts.buildExit, ts.status, ts.build, ts.buildErr)
+	}
+	wantArgv := []string{
+		"docker build\x1f--file\x1f<WS>/Dockerfile\x1f--tag\x1f<TAG>\x1f--pull=false\x1f--network=none\x1f<WS>",
+		"docker image\x1finspect\x1f--format\x1f{{json .RepoDigests}}\x1f<TAG>",
+	}
+	if !slices.Equal(ts.argv, wantArgv) {
+		t.Errorf("TS docker argv\n%q\nwant\n%q", ts.argv, wantArgv)
+	}
+	if ts.plan != goRes.plan {
+		t.Errorf("plans differ\n--- Go\n%s\n--- TS\n%s", goRes.plan, ts.plan)
+	}
+	if ts.status != goRes.status || ts.buildExit != goRes.buildExit {
+		t.Errorf("build status differs: Go exit %d %q, TS exit %d %q", goRes.buildExit, goRes.status, ts.buildExit, ts.status)
+	}
+	if ts.build != goRes.build || ts.buildErr != goRes.buildErr {
+		t.Errorf("build output differs\n--- Go\n%s%s\n--- TS\n%s%s", goRes.build, goRes.buildErr, ts.build, ts.buildErr)
+	}
+	if !slices.Equal(ts.argv, goRes.argv) {
+		t.Errorf("docker argv differ\n--- Go\n%q\n--- TS\n%q", goRes.argv, ts.argv)
+	}
+}

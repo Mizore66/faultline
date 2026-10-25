@@ -21,6 +21,7 @@ const seedPreload = join(repo, "difftest", "gen", "seed.mjs");
 export const scenariosDir = join(repo, "difftest", "testdata", "scenarios");
 const recorderDir = join(repo, "difftest", "testdata", "recorder");
 const fakeDockerDir = join(repo, "difftest", "testdata", "fakedocker");
+const fakeToolsDir = join(repo, "difftest", "testdata", "faketools");
 
 // The pinned oracle release: CI regenerates on it and fails on drift.
 export function requireOracleNode(): void {
@@ -81,10 +82,35 @@ export function inheritedOut(name: string): boolean {
   return name.startsWith("GIT_") || name.startsWith("FAULTLINE_") || ["CI", "GITHUB_ACTIONS", "OPENAI_API_KEY"].includes(name);
 }
 
+// linkPathTools gives a case whose template lists pathTools a PATH with no
+// docker on it (difftest/testdata/faketools/README.md): <case>/bin holds a
+// symlink to the first executable of each listed name on the inherited
+// PATH, and the case's recorder docker is removed unless docker is listed.
+// It returns the bin directory. The Go twin is linkPathTools in
+// difftest/writer_test.go.
+export function linkPathTools(roots: CaseRoots, tools: readonly string[]): string {
+  const bin = join(roots.root, "bin");
+  if (existsSync(bin)) return bin;
+  mkdirSync(bin, { mode: 0o755 });
+  for (const name of tools) {
+    const found = (process.env.PATH ?? "").split(":").filter(Boolean).map((dir) => join(dir, name)).find((p) => {
+      try { return statSync(p).isFile() && (statSync(p).mode & 0o111) !== 0; } catch { return false; }
+    });
+    if (found === undefined) throw new Error(`pathTools: no ${name} on PATH`);
+    symlinkSync(found, join(bin, name));
+  }
+  if (!tools.includes("docker")) rmSync(join(roots.recorder, "docker"));
+  return bin;
+}
+
 // The environment every writer invocation runs with; extra is the
-// template's env (after placeholder substitution).
-export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | undefined, extra: Record<string, string>): NodeJS.ProcessEnv {
-  const path = [roots.recorder, ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), process.env.PATH ?? ""].join(":");
+// template's env (after placeholder substitution). PATH is the recorders,
+// then the template's fake toolchain (difftest/testdata/faketools/<name>),
+// then its fake Docker, then the inherited PATH, or, when the template
+// lists pathTools, only those tools (linkPathTools).
+export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | undefined, extra: Record<string, string>, fakeTools?: string, pathTools?: readonly string[]): NodeJS.ProcessEnv {
+  const inherited = pathTools ? linkPathTools(roots, pathTools) : process.env.PATH ?? "";
+  const path = [roots.recorder, ...(fakeTools ? [join(fakeToolsDir, fakeTools)] : []), ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), inherited].join(":");
   return {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !inheritedOut(name))),
     HOME: roots.home, USERPROFILE: roots.home, TMPDIR: roots.tmp, TEMP: roots.tmp, TMP: roots.tmp,
@@ -449,6 +475,93 @@ const hostileTrees: Hostile = (git, built) => {
   };
 };
 
+// Doctor scenarios (slice 3a Task 6). A doctor repository is buildRepo's
+// repository at the workspace root plus an index: `git status` needs one
+// (without it every tracked file is staged as deleted and untracked).
+// writeIndex writes a version 2 index with no extensions whose entries
+// carry only mode, size, object id and path (every other stat field zero),
+// so its bytes depend on nothing but the entries; git refreshes the stat
+// data on its first status, which the writer replay's .git/index rule
+// (gen-writers.ts gitIndexDigest) leaves out of the comparison.
+type IndexEntry = { path: string; content: string };
+function writeIndex(gitDir: string, entries: IndexEntry[]): void {
+  const sha1 = (bytes: Buffer) => createHash("sha1").update(bytes).digest();
+  const parts: Buffer[] = [Buffer.from("DIRC"), Buffer.from([0, 0, 0, 2]), Buffer.alloc(4)];
+  parts[2]!.writeUInt32BE(entries.length);
+  for (const entry of [...entries].sort((a, b) => Buffer.compare(Buffer.from(a.path), Buffer.from(b.path)))) {
+    const content = Buffer.from(entry.content, "utf8");
+    const path = Buffer.from(entry.path, "utf8");
+    const head = Buffer.alloc(62);
+    head.writeUInt32BE(0o100644, 24);
+    head.writeUInt32BE(content.length, 36);
+    sha1(Buffer.concat([Buffer.from(`blob ${content.length}\0`), content])).copy(head, 40);
+    head.writeUInt16BE(Math.min(path.length, 0xfff), 60);
+    const length = 62 + path.length;
+    parts.push(head, path, Buffer.alloc(8 - (length % 8)));
+  }
+  const body = Buffer.concat(parts);
+  writeFileSync(join(gitDir, "index"), Buffer.concat([body, sha1(body)]));
+}
+// doctorRepo builds a one-commit repository of files at the workspace root
+// with a matching index; edit then changes the workspace (and index).
+function doctorRepo(files: RepoState, edit?: (ws: string) => void, config = ""): Scenario {
+  return {
+    files: {},
+    setup: (ws) => {
+      buildRepo(ws, ".", [files]);
+      writeIndex(join(ws, ".git"), Object.entries(files).map(([path, content]) => ({ path, content })));
+      if (config !== "") writeFileSync(join(ws, ".git", "config"), readFileSync(join(ws, ".git", "config"), "utf8") + config);
+      edit?.(ws);
+    },
+    argv: []
+  };
+}
+const DOCTOR_FILES: RepoState = { "state.txt": "good\n", "src/main.txt": "main\n" };
+
+// Init scenarios (slice 3a Task 10). A Node repository at the workspace
+// root. `fl init --yes` writes .faultlineignore before the pre-warm, so the
+// repository is dirty by then and the capture takes the slow path (objects
+// in .git/faultline/objects, an alternates entry); init-existing-ignore
+// commits .faultlineignore and a .gitignore for .faultline/, so its
+// pre-warm takes the clean fast path (INIT_CLEAN_FILES). init-sidecar commits a
+// .faultlineignore that leaves out .codex/: the hook document holds the
+// absolute --cli path, so a capture that included it would give a tree
+// digest that depends on the case directory. Its --cli targets sit at the
+// workspace root (tool.js, tool.ts, it's/tool.js). INIT_TOKEN is a
+// high-entropy token (48 distinct characters) that the snapshot secret
+// scan refuses as HIGH_ENTROPY_TOKEN; no real credential is committed.
+const INIT_FILES: RepoState = { "package.json": "{\"name\":\"demo\"}\n", "state.txt": "good\n" };
+const INIT_CLEAN_FILES: RepoState = { ...INIT_FILES, ".faultlineignore": "scratch/\n", ".gitignore": ".faultline/\n" };
+const INIT_TOKEN = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcdefghijkl";
+const INIT_CONFIG = `${JSON.stringify({
+  schemaVersion: "faultline.config.v1",
+  image: `registry.example/faultline-node@sha256:${"b".repeat(64)}`,
+  runtime: { alias: "node", image: `registry.example/faultline-node@sha256:${"b".repeat(64)}` },
+  snapshot: { trackedFilesOnly: true },
+  stores: { incidents: ".faultline/incidents", witnesses: ".faultline/witnesses", recordings: ".faultline/recordings" }
+}, null, 2)}\n`;
+// initWorktree builds a repository at main/ and a linked worktree of its
+// commit at wt/ (wt/.git is a gitdir file, main/.git/worktrees/wt its
+// administrative directory, every link relative), so wt's
+// --git-common-dir is main/.git, not wt/.git. It holds INIT_CLEAN_FILES,
+// so `fl init --yes` leaves it clean and the pre-warm's fast path writes
+// the cache into main/.git/faultline; a dirty worktree's slow path stops
+// at wt/.git (a file) with ENOTDIR, in TS too.
+function initWorktree(ws: string): void {
+  const built = buildRepo(ws, "main", [INIT_CLEAN_FILES]);
+  const entries = Object.entries(INIT_CLEAN_FILES).map(([path, content]) => ({ path, content }));
+  writeIndex(join(ws, "main", ".git"), entries);
+  const admin = join(ws, "main", ".git", "worktrees", "wt");
+  mkdirSync(admin, { recursive: true });
+  writeFileSync(join(admin, "HEAD"), `${built.commits.at(-1)}\n`);
+  writeFileSync(join(admin, "commondir"), "../..\n");
+  writeFileSync(join(admin, "gitdir"), "../../../wt/.git\n");
+  writeIndex(admin, entries);
+  mkdirSync(join(ws, "wt"), { recursive: true });
+  writeFileSync(join(ws, "wt", ".git"), "gitdir: ../main/.git/worktrees/wt\n");
+  for (const [path, content] of Object.entries(INIT_CLEAN_FILES)) writeFileSync(join(ws, "wt", path), content);
+}
+
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
@@ -521,6 +634,73 @@ export const SCENARIOS: Record<string, Scenario> = {
   },
   // Git proof bundles whose pages take the lifecycle-bound, recovery and
   // unstable-state branches (and one the loader refuses).
+  // Doctor (slice 3a Task 6): a clean repository; a modified file and an
+  // untracked one (2 changed paths); a staged rename (git status -z lists
+  // a rename as two NUL-separated paths, so doctor counts 2); no
+  // repository; runtime markers; and a repository-local fsmonitor command
+  // that the hardened doctor git calls must never run (tests/cli.test.ts:664:
+  // it would leave fsmonitor-ran in the repository).
+  "repo-clean": doctorRepo(DOCTOR_FILES),
+  "repo-dirty": doctorRepo(DOCTOR_FILES, (ws) => {
+    writeFileSync(join(ws, "state.txt"), "bad\n");
+    writeFileSync(join(ws, "notes.txt"), "untracked\n");
+  }),
+  "repo-rename": doctorRepo(DOCTOR_FILES, (ws) => {
+    rmSync(join(ws, "state.txt"));
+    writeFileSync(join(ws, "renamed.txt"), "good\n");
+    writeIndex(join(ws, ".git"), [{ path: "renamed.txt", content: "good\n" }, { path: "src/main.txt", content: "main\n" }]);
+  }),
+  "not-a-repo": { files: { "notes.txt": "not a repository\n" }, argv: [] },
+  "runtime-markers-multiple": doctorRepo({ ...DOCTOR_FILES, "package.json": "{\"name\":\"demo\"}\n", "pyproject.toml": "[project]\nname = \"demo\"\n", "go.mod": "module example.test/demo\n" }),
+  "runtime-markers-go": doctorRepo({ ...DOCTOR_FILES, "go.mod": "module example.test/demo\n" }),
+  "hostile-fsmonitor": doctorRepo(DOCTOR_FILES, undefined, "\tfsmonitor = \"printf invoked > fsmonitor-ran #\"\n"),
+  // fl runtime (slice 3a Task 5). project-context is a fixed project build
+  // context at the workspace root (the default --context): its plan's
+  // context and Dockerfile digests depend only on these bytes and the 0644
+  // modes resetModes gives them. repo-with-config holds an existing project
+  // config (relative stores, a node runtime) that `fl runtime resolve`
+  // updates in place.
+  "project-context": {
+    files: {
+      "Dockerfile": "FROM node:22-alpine\nWORKDIR /app\nCOPY package.json ./\nCOPY src ./src\nRUN node --version\n",
+      "package.json": "{\"name\":\"demo\",\"version\":\"1.0.0\"}\n",
+      "src/index.js": "console.log(\"demo\");\n",
+      "src/lib/util.js": "export const answer = 42;\n",
+      "docker/alt.Dockerfile": "FROM node:22-alpine\nCOPY . /app\n"
+    },
+    argv: []
+  },
+  "repo-with-config": {
+    files: {
+      ".faultline/config.json": `${JSON.stringify({
+        schemaVersion: "faultline.config.v1",
+        image: PINNED_IMAGE,
+        runtime: { alias: "node", image: PINNED_IMAGE },
+        snapshot: { trackedFilesOnly: true },
+        stores: { incidents: ".faultline/incidents", witnesses: ".faultline/witnesses", recordings: ".faultline/recordings" }
+      }, null, 2)}\n`
+    },
+    argv: []
+  },
+  "init-fresh": doctorRepo(INIT_FILES),
+  "init-existing-config": doctorRepo(INIT_FILES, (ws) => {
+    mkdirSync(join(ws, ".faultline"), { recursive: true });
+    writeFileSync(join(ws, ".faultline", "config.json"), INIT_CONFIG);
+  }),
+  "init-existing-ignore": doctorRepo(INIT_CLEAN_FILES),
+  "init-existing-hooks": doctorRepo(INIT_FILES, (ws) => {
+    mkdirSync(join(ws, ".codex"), { recursive: true });
+    writeFileSync(join(ws, ".codex", "hooks.json"), "{}\n");
+    writeFileSync(join(ws, "tool.js"), "export {};\n");
+  }),
+  "init-dirty-secret": doctorRepo(INIT_FILES, (ws) => writeFileSync(join(ws, "notes.txt"), `token ${INIT_TOKEN}\n`)),
+  "init-worktree": { files: { "tool.js": "export {};\n" }, setup: initWorktree, argv: [] },
+  "init-sidecar": doctorRepo({ ...INIT_FILES, ".faultlineignore": "# the hook document holds the absolute --cli path\n.codex/\n" }, (ws) => {
+    writeFileSync(join(ws, "tool.js"), "export {};\n");
+    writeFileSync(join(ws, "tool.ts"), "export {};\n");
+    mkdirSync(join(ws, "it's"), { recursive: true });
+    writeFileSync(join(ws, "it's", "tool.js"), "export {};\n");
+  }),
   "proof-bases": {
     bases: Object.fromEntries(["git-fully-bound", "git-partially-bound", "git-shape-mixed-history", "git-sha256"].map((b) => [`bases/${b}`, b])),
     files: {}, argv: []

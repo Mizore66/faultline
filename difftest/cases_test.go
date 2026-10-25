@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
 // Only git's own diagnostic lines are masked; FaultLine's text and anything
@@ -118,5 +119,45 @@ func TestRelocationNamesUnloggedWorktreeDigest(t *testing.T) {
 		if want := "<PATHDIGEST:worktree:.faultline/minimizations/m.json#0>"; !strings.Contains(got, want) || strings.Contains(got, digest) {
 			t.Errorf("%s: %s", root, got)
 		}
+	}
+}
+
+// A chmod mutation sets the permission bits it names, and a writer case
+// applies it after resetModes (which would set the directory back to 0755);
+// the restore cleanup makes the directory writable again. gen-writers.ts
+// runCase does the same.
+func TestChmodMutationAfterResetModes(t *testing.T) {
+	if windows {
+		t.Skip("POSIX permission bits")
+	}
+	repo := repoRoot(t)
+	mutations, err := jsjson.Parse(`[{"op":"add-file","path":"ro/keep.txt","content":"keep\n"},{"op":"chmod","file":"ro","mode":"555"},{"op":"chmod","file":"ro/keep.txt","mode":"600"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := writerTemplate{ID: "chmod-self-test", Scenario: "empty"}
+	for _, m := range mutations.Items() {
+		tpl.Mutations = append(tpl.Mutations, template{m.Obj()})
+	}
+	r := makeWriterRoots(t)
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permission bits")
+	}
+	prepareWriterCase(t, repo, tpl, r)
+	for rel, want := range map[string]os.FileMode{"ro": 0o555, "ro/keep.txt": 0o600} {
+		info, err := os.Lstat(filepath.Join(r.ws, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s: mode %o, want %o", rel, got, want)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(r.ws, "ro", "new.txt"), nil, 0o644); err == nil {
+		t.Error("a file was created in the 0555 directory")
+	}
+	restoreWritable(r.root)
+	if info, err := os.Lstat(filepath.Join(r.ws, "ro")); err != nil || info.Mode().Perm() != 0o755 {
+		t.Errorf("restoreWritable left ro at %v (%v)", info.Mode().Perm(), err)
 	}
 }

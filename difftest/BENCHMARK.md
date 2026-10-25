@@ -34,3 +34,27 @@ Parsing is no longer the bottleneck it was in round 3: ASCII fast paths in `jsjs
 | `investigate git` on `git-many-states` (12 states, 36 runs) | median 2,093–2,107 ms (runs 2,054–2,172 ms) | median 1,945–1,953 ms (runs 1,917–2,011 ms) | about 1.07× |
 
 The command is dominated by its children, which are the same on both sides: 320 `git` calls (the writer golden records them: materializing 12 worktrees, fingerprints, the bundle and its verification) and 36 fake-Docker shell scripts behind the recorder. Go saves Node's start-up and module loading (about 100 ms here) and little else, so the ratio is close to 1 and would fall further with a real Docker daemon, whose container start-up takes hundreds of milliseconds per run. On the macOS host itself (not in the VM) both sides take about 52 s per run (Go 50.8–51.9 s over 10 runs, TS 51.8–52.2 s over 3): there process creation for the git and shell children dominates completely, as for `verify` above.
+
+## `fl doctor` and `fl init --yes` (slice 3a)
+
+`BenchmarkDoctor` and `BenchmarkInitYes` (`difftest/benchmark_test.go`) run on a 2,000-file dirty repository built by the benchmark. It has 1,989 committed files (`package.json` and 1,988 small `.js` files in 20 directories), 100 of them modified, and 10 untracked files. Both commands run with the `ready` fake toolchain (fake `node` and `docker`, a `git` wrapper over the real git) behind the recorders, seeded like the writer replay.
+- `doctor` writes nothing, so every run uses the same workspace.
+- `init --yes` runs on a fresh copy each run; copying is not timed. Its pre-warm snapshot covers exactly 2,000 eligible files, the turn-snapshot limit: the 1,999 files plus the `.faultlineignore` it writes. The benchmark fails unless doctor reports the 110 changed paths and init reports `PREWARMED`.
+
+Run with `go test -tags faultline_test ./difftest/ -run '^$' -bench 'BenchmarkDoctor|BenchmarkInitYes' -benchtime 10x`.
+
+- **Date:** 2026-10-25 (Task 12 head)
+- **Machine:** Apple M2 Pro host, podman VM (libkrun), Debian bookworm linux/arm64 container limited to 4 CPUs (`--cpus 4`), the worktree copied into the container's own filesystem, run as uid 1000
+- **Versions:** Go 1.27.2, Node v22.22.2 (frozen TS, `node --import difftest/gen/seed.mjs dist/cli.js`), git 2.39.5
+- **Method:** three benchmark runs of 10 iterations each.
+
+| Command | TS | Go | Speedup (median) |
+| --- | --- | --- | --- |
+| `doctor` | median 89.0–91.7 ms (runs 87.2–98.3 ms) | median 29.9–33.0 ms (runs 29.0–33.7 ms) | about 2.8–3.0× |
+| `init --yes` | median 3,491–3,508 ms (runs 3,453–3,638 ms) | median 3,303–3,336 ms (runs 3,276–3,419 ms) | about 1.05× |
+
+`doctor` makes five child calls on both sides: three `git` calls (`--version`, `rev-parse --show-toplevel`, `status --porcelain=v1 -z`) and two to the fake Docker. Go's lead there is mostly Node's start-up and module loading.
+
+`init --yes` is dominated by its children, which are the same on both sides: 467 `git` calls, as the recorder logs them. Almost all come from the pre-warm snapshot. It writes the throwaway tree twice, to confirm quiescence, with a 50 ms sleep between the two writes. Each write runs `hash-object -w --stdin` and `update-index --cacheinfo` once per dirty path. The ratio is therefore close to 1, as for `investigate git`, and it falls further with more dirty paths: with 500 modified files instead of 100, one run took 13.9 s in Go and 14.3 s in TS.
+
+On the macOS host itself (not in the VM; Node 22.23.3, three runs each) process creation dominates: `doctor` took a median of 684 ms in Go and 785 ms in TS, and `init --yes` 86.1 s in Go and 88.4 s in TS.

@@ -13,8 +13,9 @@ import (
 // newStdio gives the child pipes for all three slots, with the 64 KiB
 // buffers libuv gives its pipes. libuv's shutdown of the stdin pipe does not
 // close it, so the parent keeps its end open until the child is done (a
-// child reading stdin waits, as under Node).
-func newStdio() (*stdio, error) {
+// child reading stdin waits, as under Node). With input, endInput closes
+// it once the input is written.
+func newStdio(bool) (*stdio, error) {
 	var parent, child [3]*os.File
 	for i := range parent {
 		r, w, err := pipe64k()
@@ -33,6 +34,11 @@ func newStdio() (*stdio, error) {
 	}
 	return &stdio{stdin: parent[0], stdout: parent[1], stderr: parent[2], child: child[:]}, nil
 }
+
+// endInput ends the input option's write: libuv's shutdown of a pipe the
+// parent only writes (no UV_HANDLE_READABLE) completes with close_pipe
+// (uv__process_pipe_shutdown_req), so the child reads EOF.
+func endInput(f *os.File) { f.Close() }
 
 func pipe64k() (*os.File, *os.File, error) {
 	var r, w syscall.Handle

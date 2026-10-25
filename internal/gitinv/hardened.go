@@ -385,7 +385,7 @@ func MaterializeGitTree(repository, commit, tempRoot, name string) (Materialized
 	cleanup := func() error {
 		err := nodefs.RemoveAllAsync(worktree)
 		if err == nil {
-			err = removeForce(indexFile) // rm(indexFile, { force: true }) is not recursive
+			err = RemoveForce(indexFile) // rm(indexFile, { force: true }) is not recursive
 		}
 		if err != nil {
 			return errors.New(jsexc.Concat("Could not remove temporary materialized tree: ", jsexc.Message(err)))

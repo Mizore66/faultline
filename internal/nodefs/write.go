@@ -27,7 +27,7 @@ func WriteFileBytes(path string, data []byte, mode fs.FileMode, exclusive bool) 
 	}
 	f, err := os.OpenFile(sysPath(path), flags, mode)
 	if err != nil {
-		return wrap(err, "open", path)
+		return openWriteErr(err, path, exclusive)
 	}
 	var writeErr error
 	for len(data) > 0 {

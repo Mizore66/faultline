@@ -1,0 +1,15 @@
+main
+main/.git
+main/.git/objects
+main/.git/objects/12
+main/.git/objects/4c
+main/.git/objects/7d
+main/.git/objects/b6
+main/.git/objects/c5
+main/.git/objects/e8
+main/.git/refs
+main/.git/refs/heads
+main/.git/refs/tags
+main/.git/worktrees
+main/.git/worktrees/wt
+wt

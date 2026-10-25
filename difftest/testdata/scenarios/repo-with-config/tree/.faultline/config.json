@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "faultline.config.v1",
+  "image": "registry.example/faultline-node@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "runtime": {
+    "alias": "node",
+    "image": "registry.example/faultline-node@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "snapshot": {
+    "trackedFilesOnly": true
+  },
+  "stores": {
+    "incidents": ".faultline/incidents",
+    "witnesses": ".faultline/witnesses",
+    "recordings": ".faultline/recordings"
+  }
+}

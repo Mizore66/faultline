@@ -3,19 +3,38 @@
 // one workspace under the seed preload; each invocation gives one line
 // (slice 2 spec 2.3). The Go twin is difftest/writer_test.go.
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts && pnpm exec tsx difftest/gen/gen-writers.ts
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+// (FAULTLINE_WRITERS_ONLY=<regex>: only the matching cases, see below.)
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { canonicalJson, digestJson, sha256 } from "../../src/canonical.js";
 import { PATH_OPS, applyMutation, normalizeWriter, treeDigest, type Template } from "./cases.js";
 import { copyScenario, makeCaseRoots, resetModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
 
 export type WriterTemplate = {
-  id: string; scenario: string; argv: string[][]; fakeDocker?: string; env?: Record<string, string>;
+  id: string; scenario: string; argv: string[][]; fakeDocker?: string; fakeTools?: string; pathTools?: string[]; env?: Record<string, string>;
   posixOnly?: boolean; mutations?: Template[];
 };
 
-const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "env", "posixOnly", "mutations"]);
+const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations"]);
+
+// TMPDIR_FAKE_DOCKERS are the fake Dockers that keep state in $TMPDIR on
+// purpose (difftest/testdata/fakedocker/README.md).
+const TMPDIR_FAKE_DOCKERS = new Set(["timeout-once", "tmpdir-swap"]);
+
+// checksTmpdir says whether a case's TMPDIR (<TMP>) must be empty after
+// each invocation (spec 3.3, "same files left behind"): every case but those
+// whose fake Docker or env puts files there itself. The Go twin is
+// checksTmpdir in difftest/writer_test.go.
+export function checksTmpdir(t: WriterTemplate): boolean {
+  return !TMPDIR_FAKE_DOCKERS.has(t.fakeDocker ?? "") && !Object.values(t.env ?? {}).some((v) => v.includes("<TMP>"));
+}
+
+// tmpLeftovers lists what an invocation left in the case's TMPDIR, sorted.
+export function tmpLeftovers(roots: CaseRoots): string[] {
+  return existsSync(roots.tmp) ? readdirSync(roots.tmp).sort(byCodeUnit) : [];
+}
 
 // checkTemplates rejects what the Go loader rejects too: unknown keys,
 // duplicate ids and cases without invocations.
@@ -120,6 +139,37 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 // Go replay does the same, and TestWriterSameDirectory compares a subset
 // unmasked. The Go twin is relocation in difftest/writer_test.go.
 export type Relocation = { text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string };
+
+// A Git index (.git/index at any depth) holds stat data (times, inode,
+// device) that differs between the TS and the Go copy of a scenario, and
+// git rewrites it on a plain `git status` (doctor sets no
+// GIT_OPTIONAL_LOCKS). It is compared by what it records instead: the
+// SHA-256 of `git ls-files --stage -z` read from it (the raw bytes' SHA-256
+// when git cannot read it). The Go twin is gitIndexDigest in
+// difftest/writer_test.go.
+// A linked worktree's index (.git/worktrees/<name>/index) takes the rule too.
+export const isGitIndex = (rel: string): boolean => rel === ".git/index" || rel.endsWith("/.git/index") || /(?:^|\/)\.git\/worktrees\/[^/]+\/index$/.test(rel);
+export function gitIndexDigest(gitDir: string, bytes: Buffer): string {
+  try {
+    const listing = execFileSync("git", ["-c", "core.fsmonitor=false", `--git-dir=${gitDir}`, "ls-files", "--stage", "-z"], {
+      cwd: gitDir, env: { PATH: process.env.PATH ?? "", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+      stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 26
+    });
+    return sha256(Buffer.concat([Buffer.from("git-index:"), listing]));
+  } catch {
+    return sha256(bytes);
+  }
+}
+// A loose object in the turn-snapshot store (.git/faultline/objects/xx/…,
+// slice 3a Task 10) is zlib-compressed by git, so its bytes depend on the
+// zlib build git links (macOS, Linux); its name is the object id of what it
+// holds, so it is compared by that name. The Go twin is snapshotObjectDigest
+// in difftest/writer_test.go.
+const SNAPSHOT_OBJECT = /(?:^|\/)\.git\/faultline\/objects\/([0-9a-f]{2})\/([0-9a-f]{38}|[0-9a-f]{62})$/;
+export function snapshotObjectDigest(rel: string): string | undefined {
+  const m = SNAPSHOT_OBJECT.exec(rel);
+  return m ? sha256(`git-object:${m[1]}${m[2]}`) : undefined;
+}
 const SELF_DIGEST = /^sha256:[0-9a-f]{64}$/;
 // A minimization run fact's worktreeDigest member, in canonical or indented
 // JSON (the Go twin is worktreeDigestMember).
@@ -215,7 +265,12 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
   };
   return {
     text,
-    fileDigest: (_rel, bytes) => (names.has(sha256(bytes)) ? sha256(text(bytes.toString("utf8"))) : sha256(bytes))
+    fileDigest: (rel, bytes) => {
+      if (isGitIndex(rel)) return gitIndexDigest(dirname(join(roots.ws, rel)), bytes);
+      const object = snapshotObjectDigest(rel);
+      if (object !== undefined) return object;
+      return names.has(sha256(bytes)) ? sha256(text(bytes.toString("utf8"))) : sha256(bytes);
+    }
   };
 }
 
@@ -225,6 +280,26 @@ export function readArgvLog(path: string): string[] {
   const records = readFileSync(path, "utf8").split("\x1e");
   records.pop(); // the text after the last terminator (empty)
   return records;
+}
+
+// sortVersionRecordRuns sorts each run of consecutive `--version` records
+// (a record whose last argument is --version): doctor starts git, node and
+// docker --version together (Promise.all), so the order the recorders
+// append them in is racy on both sides, and `fl init --yes --cli` runs
+// doctor twice. Nothing else is reordered. The Go twin is
+// sortVersionRecordRuns in difftest/writer_test.go.
+export function isVersionRecord(record: string): boolean {
+  return record.slice(record.indexOf(" ") + 1).split("\x1f").at(-1) === "--version";
+}
+export function sortVersionRecordRuns(records: string[]): string[] {
+  const out = [...records];
+  for (let start = 0; start < out.length;) {
+    let end = start;
+    while (end < out.length && isVersionRecord(out[end]!)) end += 1;
+    if (end > start) out.splice(start, end - start, ...out.slice(start, end).sort(byCodeUnit));
+    start = end + 1;
+  }
+  return out;
 }
 
 // normalizeRecord normalizes each argument of a record on its own, so a mask
@@ -270,6 +345,55 @@ export function fileArgument(arg: string, roots: CaseRoots): string {
   return m ? readFileSync(join(roots.ws, m[1]!), "utf8").trim() : arg;
 }
 
+// An argv string that is exactly <STDOUT:n:/json/pointer> becomes the
+// string at that JSON pointer of the case's invocation n's stdout (an
+// earlier invocation): a project build plan's digest covers the absolute
+// context directory, so `fl runtime project build --expect-plan` takes it
+// from the plan invocation (the Go twin is stdoutArgument in writer_test.go).
+export function stdoutArgument(arg: string, stdouts: string[]): string {
+  const m = /^<STDOUT:([0-9]+):(\/[^>]*)>$/.exec(arg);
+  if (!m) return arg;
+  let value: unknown = JSON.parse(stdouts[Number(m[1])]!);
+  for (const token of m[2]!.slice(1).split("/")) {
+    value = (value as Record<string, unknown>)[token.split("~1").join("/").split("~0").join("~")];
+  }
+  if (typeof value !== "string") throw new Error(`${arg}: not a string in invocation ${m[1]}'s stdout`);
+  return value;
+}
+
+// A project build plan's planDigest (src/runtime.ts:481) covers the
+// absolute context directory and Dockerfile, so it differs between the TS
+// and the Go case directory. maskPlanDigests replaces it with <PLANDIGEST>
+// in text, but only where it is the digestJson of the plan fields printed
+// beside it in stdout (every object with kind PROJECT_RUNTIME_IMAGE_BUILD):
+// a wrong digest stays unmasked and fails the comparison. The Go twin is
+// maskPlanDigests in writer_test.go.
+export function planDigests(stdout: string): string[] {
+  let parsed: unknown;
+  try { parsed = JSON.parse(stdout); } catch { return []; }
+  const out: string[] = [];
+  const visit = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return;
+    const plan = value as Record<string, unknown>;
+    const review = plan.review as Record<string, unknown> | undefined;
+    if (plan.kind === "PROJECT_RUNTIME_IMAGE_BUILD" && review !== null && typeof review === "object" && typeof review.planDigest === "string") {
+      const digest = digestJson({
+        schema: "faultline.project-build-plan.v1", contextDirectory: plan.contextDirectory, dockerfile: plan.dockerfile,
+        imageTag: plan.imageTag, network: plan.network, contextDigest: review.contextDigest, dockerfileDigest: review.dockerfileDigest
+      });
+      if (digest === review.planDigest) out.push(digest);
+    }
+    for (const member of Object.values(value)) visit(member);
+  };
+  visit(parsed);
+  return out;
+}
+export function maskPlanDigests(text: string, digests: string[]): string {
+  let out = text;
+  for (const d of digests) out = out.split(d).join("<PLANDIGEST>");
+  return out;
+}
+
 // HOLD_PORT in a template's env names a fixed port the case holds on
 // 127.0.0.1 while it runs (a command's default port: judge-proof's 4174);
 // if another process already holds it, it is busy all the same. The Go
@@ -298,26 +422,42 @@ async function holdBusyPort(t: WriterTemplate): Promise<{ port: string; servers:
   return { port: String((server.address() as { port: number }).port), servers };
 }
 
+// tmpFailures collects the invocations that left files in TMPDIR; the run
+// fails after every case has run, naming them all.
+const tmpFailures: string[] = [];
+
 async function runCase(t: WriterTemplate): Promise<string[]> {
   const roots = makeCaseRoots();
   const busy = await holdBusyPort(t);
   try {
     copyScenario(t.scenario, roots.ws);
-    for (const template of t.mutations ?? []) {
-      const m = substituteDeep(template, roots) as Template;
-      applyMutation(roots.ws, { id: t.id, base: "writer", template: m, file: PATH_OPS.has(m.op) ? m.path ?? "." : m.file! });
-    }
+    // chmod mutations run after resetModes, which would undo them (the Go
+    // twin is prepareWriterCase).
+    const mutations = (t.mutations ?? []).map((template) => substituteDeep(template, roots) as Template);
+    const apply = (m: Template) => applyMutation(roots.ws, { id: t.id, base: "writer", template: m, file: PATH_OPS.has(m.op) ? m.path ?? "." : m.file! });
+    for (const m of mutations) if (m.op !== "chmod") apply(m);
     resetModes(roots.ws);
+    // A read-only directory refuses writes only to a non-root user: a golden
+    // generated as root would drift.
+    if (mutations.some((m) => m.op === "chmod") && process.getuid?.() === 0) throw new Error(`${t.id}: chmod cases must be generated by a non-root user`);
+    for (const m of mutations) if (m.op === "chmod") apply(m);
     const env = Object.fromEntries(Object.entries(t.env ?? {}).map(([k, v]) => [k, substitute(v, roots)]));
     const lines: string[] = [];
     // The recorded paths accumulate over the case's invocations: a later
     // invocation must keep masking the worktree digests an earlier one
     // wrote into a file (the Go twin is runWriterCase).
     const records: string[] = [];
+    const stdouts: string[] = [];
     for (const [inv, argv] of t.argv.entries()) {
       const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
       rmSync(roots.argvLog, { force: true });
-      const r = await runCli(roots, argv.map((a) => fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots)), writerEnv(roots, t.id, t.fakeDocker, env));
+      const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)), writerEnv(roots, t.id, t.fakeDocker, env, t.fakeTools, t.pathTools));
+      // Temporary files fl makes (mkdtemp roots, the snapshot index, the
+      // doctor --security fixture) must be gone, as in Go.
+      const leftovers = checksTmpdir(t) ? tmpLeftovers(roots) : [];
+      if (leftovers.length > 0) tmpFailures.push(`${t.id}|${inv}: TS left ${leftovers.join(", ")} in TMPDIR`);
+      stdouts.push(r.stdout);
+      const plans = planDigests(r.stdout);
       const invocationRecords = readArgvLog(roots.argvLog);
       records.push(...invocationRecords);
       const reloc = relocation(roots, records);
@@ -328,20 +468,39 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       // Windows runs no sh recorder: a case that records argv is POSIX-only.
       if (invocationRecords.length > 0 && !t.posixOnly) throw new Error(`${t.id}: records git/docker argv but is not posixOnly`);
       lines.push(JSON.stringify({
-        case: t.id, inv, stdout: reloc.text(r.stdout), stderr: reloc.text(r.stderr), exit: r.exit,
+        case: t.id, inv, stdout: maskPlanDigests(reloc.text(r.stdout), plans), stderr: maskPlanDigests(reloc.text(r.stderr), plans), exit: r.exit,
         tree, modes: modesDigest(after), files: changedFiles(before, after),
-        argv: invocationRecords.map((record) => normalizeRecord(record, roots, reloc))
+        argv: sortVersionRecordRuns(invocationRecords.map((record) => normalizeRecord(record, roots, reloc)))
       }));
     }
     return lines;
   } finally {
     for (const server of busy.servers) server.close();
+    restoreWritable(roots.root);
     rmSync(roots.root, { recursive: true, force: true });
   }
 }
 
+// restoreWritable makes every directory under root writable again (a chmod
+// mutation may leave one read-only), so the case directory can be removed.
+// The Go twin is restoreWritable in difftest/writer_test.go.
+export function restoreWritable(root: string): void {
+  const walk = (dir: string) => {
+    chmodSync(dir, 0o755);
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (lstatSync(path).isDirectory()) walk(path);
+    }
+  };
+  if (existsSync(root)) walk(root);
+}
+
 requireOracleNode();
 requireFreshBuild();
+// The oracle starts as process.execPath, an absolute path, so a template's
+// fake toolchain `node` (difftest/testdata/faketools) answers fl's own
+// `node --version` and never runs TS itself.
+if (!isAbsolute(process.execPath)) throw new Error(`the oracle node ${process.execPath} is not an absolute path`);
 // Modes are compared under umask 0, so the mode fl asks for is the mode on
 // disk: a 0o666 (Node's default) and a 0o644 do not collapse (Go: difftest/umask_unix.go).
 process.umask(0);
@@ -349,12 +508,34 @@ const repo = resolve(".");
 const templates = JSON.parse(readFileSync(join(repo, "difftest/testdata/writers.json"), "utf8")) as WriterTemplate[];
 checkTemplates(templates);
 const results: string[][] = new Array(templates.length);
+// FAULTLINE_WRITERS_ONLY=<regex> regenerates only the cases whose id
+// matches and keeps every other case's lines from the committed golden
+// (local iteration; CI regenerates everything).
+const only = process.env.FAULTLINE_WRITERS_ONLY ? new RegExp(process.env.FAULTLINE_WRITERS_ONLY) : undefined;
+const pending: number[] = [];
+if (only) {
+  const kept = new Map<string, string[]>();
+  for (const line of readFileSync(join(repo, "difftest/testdata/golden/writers.jsonl"), "utf8").split("\n").filter(Boolean)) {
+    const id = (JSON.parse(line) as { case: string }).case;
+    kept.set(id, [...(kept.get(id) ?? []), line]);
+  }
+  for (const [index, t] of templates.entries()) {
+    if (only.test(t.id) || !kept.has(t.id)) pending.push(index);
+    else results[index] = kept.get(t.id)!;
+  }
+} else {
+  pending.push(...templates.keys());
+}
 let next = 0;
 await Promise.all(Array.from({ length: 8 }, async () => {
-  while (next < templates.length) {
-    const index = next++;
+  while (next < pending.length) {
+    const index = pending[next++]!;
     results[index] = await runCase(templates[index]!);
   }
 }));
+if (tmpFailures.length > 0) {
+  console.error(tmpFailures.sort(byCodeUnit).join("\n"));
+  process.exit(1);
+}
 writeFileSync(join(repo, "difftest/testdata/golden/writers.jsonl"), `${results.flat().join("\n")}\n`);
 console.log(`writers: ${templates.length} cases, ${results.flat().length} invocations`);

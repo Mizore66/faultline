@@ -1,0 +1,10 @@
+.faultline
+.git
+.git/objects
+.git/objects/12
+.git/objects/41
+.git/objects/4c
+.git/objects/65
+.git/refs
+.git/refs/heads
+.git/refs/tags

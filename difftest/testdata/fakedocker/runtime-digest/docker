@@ -1,0 +1,27 @@
+#!/bin/sh
+# Fake Docker "runtime-digest" (README.md): inspect prints Docker's RepoDigests for the reference: one digest of the
+# reference's repository (its tag dropped), whose hex is the SHA-256 of the
+# reference text. `pull` and `build` print progress lines and exit 0.
+# Anything else is refused.
+case "$1" in
+image)
+  if [ "$2" = inspect ]; then
+  ref=$5
+  case "${ref##*/}" in *:*) repo=${ref%:*} ;; *) repo=$ref ;; esac
+  if command -v sha256sum >/dev/null 2>&1; then hex=$(printf '%s' "$ref" | sha256sum); else hex=$(printf '%s' "$ref" | shasum -a 256); fi
+  hex=${hex%% *}
+  printf '["%s@sha256:%s"]\n' "$repo" "$hex"
+  exit 0
+  fi
+  ;;
+pull)
+  printf '%s: Pulling from fake/registry\nDigest: fake\nStatus: Image is up to date for %s\n' "$2" "$2"
+  exit 0
+  ;;
+build)
+  printf '#0 building with "fake" instance\n#1 [internal] load build definition\n#2 DONE 0.0s\n'
+  exit 0
+  ;;
+esac
+printf 'fake docker (runtime-digest): unsupported command: %s\n' "$1" >&2
+exit 125

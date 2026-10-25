@@ -22,13 +22,17 @@ import (
 // the case names that matches it is the one faulted, on both sides.
 type writerFault struct {
 	caseID, label, glob, call, errno string
+	// everyCall fails every call of the group on any path instead of the
+	// first one on the discovered path (see writerFaultPaths).
+	everyCall bool
 }
 
 func (f writerFault) name() string { return f.caseID + "/" + f.label + "/" + f.call + "-" + f.errno }
 
 // faultCalls are the syscalls of each group: libuv and Go reach a file
 // through different members of a family (write or pwrite64, rmdir for an
-// empty directory, renameat2 on newer libcs).
+// empty directory, renameat2 on newer libcs, fchmodat2 on newer kernels; a
+// leading ? lets an strace that does not know the name ignore it).
 var faultCalls = map[string]string{
 	"open":   "open,openat,openat2",
 	"write":  "write,writev,pwrite64,pwritev,pwritev2",
@@ -36,10 +40,12 @@ var faultCalls = map[string]string{
 	"link":   "link,linkat",
 	"unlink": "unlink,unlinkat,rmdir",
 	"close":  "close",
+	"mkdir":  "mkdir,mkdirat",
+	"chmod":  "chmod,fchmodat,?fchmodat2",
 }
 
 // discoveryCalls are traced in the fault-free run that names the paths.
-const discoveryCalls = "open,openat,openat2,rename,renameat,renameat2,link,linkat,unlink,unlinkat,rmdir,mkdir,mkdirat"
+const discoveryCalls = "open,openat,openat2,rename,renameat,renameat2,link,linkat,unlink,unlinkat,rmdir,mkdir,mkdirat,chmod,fchmodat,?fchmodat2"
 
 // writerFaultPaths are the writers of spec 3.2, each with the syscall
 // groups that reach its path in a fault-free run (a group that never does
@@ -59,15 +65,73 @@ var writerFaultPaths = []struct {
 	{"investigate-two-states", "stage-rename", "ws/.faultline/git-proof-bundles/.*.staging-*", []string{"rename"}},
 	{"investigate-two-states", "overlay-staged", "tmp/*/worktrees/*/.faultline-overlay-*", []string{"open", "write", "close", "rename"}},
 	{"commit-proof-preview", "preview-html", "ws/docs/*.html", []string{"open", "write", "close"}},
+	// Slice 3a (spec 3.3). The project config: rewritten in place under a
+	// recursive mkdir of .faultline (src/config.ts:64).
+	{"runtime-resolve-node", "config", "ws/.faultline/config.json", []string{"open", "write", "close"}},
+	{"runtime-resolve-node", "config-dir", "ws/.faultline", []string{"mkdir"}},
+	// The runtime mapping and the recursive mkdir of its parent, whose first
+	// mkdir of maps/2026 fails ENOENT and climbs to maps
+	// (src/runtime-mapping-file.ts:61).
+	{"runtime-mapping-nested-output", "mapping", "ws/maps/2026/mapping.json", []string{"open", "write", "close"}},
+	{"runtime-mapping-nested-output", "mapping-parent", "ws/maps/2026", []string{"mkdir"}},
+	{"runtime-mapping-nested-output", "mapping-grandparent", "ws/maps", []string{"mkdir"}},
+	// fl init --yes: .faultlineignore (wx, src/project-init.ts:124), then the
+	// turn-snapshot pre-warm: the object store and its alternates entry
+	// (src/turn-snapshot.ts:207), the temporary index git writes by renaming
+	// its lock onto it and fl removes (:1117), and the session cache (:781).
+	// The rename is faulted through the lock, its source: x86_64 git calls
+	// rename(2), on which strace -P matches only the first path (pathtrace.c
+	// has no SEN_rename case), while arm64 has only renameat, which -P
+	// matches on either path (CI round 1: on x86_64 the index path made no
+	// call to fail).
+	{"init-yes-dirty", "ignore-file", "ws/.faultlineignore", []string{"open", "write", "close"}},
+	{"init-yes-dirty", "snapshot-objects-info", "ws/.git/faultline/objects/info", []string{"mkdir"}},
+	{"init-yes-dirty", "snapshot-objects-pack", "ws/.git/faultline/objects/pack", []string{"mkdir"}},
+	{"init-yes-dirty", "alternates", "ws/.git/objects/info/alternates", []string{"open", "write", "close"}},
+	{"init-yes-dirty", "snapshot-index", "tmp/faultline-turn-tree-*.index", []string{"unlink"}},
+	{"init-yes-dirty", "snapshot-index-lock", "tmp/faultline-turn-tree-*.index.lock", []string{"rename"}},
+	{"init-yes-dirty", "snapshot-cache", "ws/.git/faultline/turn-snapshot-cache.json", []string{"open", "write", "close"}},
+	// The standing policy (0600 wx) and its 0700 directories
+	// (src/standing-approval-policy.ts:154).
+	{"init-standing", "standing-policy", "ws/.faultline/witnesses/standing-policies/*.json", []string{"open", "write", "close"}},
+	{"init-standing", "standing-policy-dir", "ws/.faultline/witnesses/standing-policies", []string{"mkdir"}},
+	{"init-standing", "witness-store-dir", "ws/.faultline/witnesses", []string{"mkdir"}},
+	// The project hook document (0600 wx) under a 0700 .codex
+	// (src/cli-app.ts:1743).
+	{"init-cli", "hooks", "ws/.codex/hooks.json", []string{"open", "write", "close"}},
+	{"init-cli", "codex-dir", "ws/.codex", []string{"mkdir"}},
+	// doctor --security: the fixture's removal in the finally
+	// (src/doctor.ts:743), and the malicious hook file, its chmod and its
+	// unlink inside that removal.
+	{"doctor-security", "fixture", "tmp/faultline-doctor-security-*", []string{"unlink"}},
+	{"doctor-security", "hook", "tmp/faultline-doctor-security-*/malicious-hooks/pre-commit", []string{"open", "write", "close", "chmod", "unlink"}},
+}
+
+// everyCallFaultPaths fail every call of a group, on any path. The fixture
+// mkdtemp of doctor --security (src/doctor.ts:605) cannot be faulted by
+// path: when the seeded mkdtempSync's mkdir fails other than EEXIST,
+// difftest/gen/seed.mjs retries with the real mkdtempSync, whose random
+// name strace -P does not match. The mkdtemp is the first mkdir either
+// side makes, and its failure ends the command, so failing every mkdir
+// fails exactly it in Go and both the seeded and the real attempt in TS
+// (which then throws Node's own mkdtemp error).
+var everyCallFaultPaths = []struct{ caseID, label, glob, call string }{
+	{"doctor-security", "fixture-mkdtemp", "tmp/faultline-doctor-security-*", "mkdir"},
 }
 
 func writerFaultMatrix() []writerFault {
 	var out []writerFault
+	errnos := []string{"ENOSPC", "EIO", "EACCES"}
 	for _, p := range writerFaultPaths {
 		for _, call := range p.calls {
-			for _, errno := range []string{"ENOSPC", "EIO", "EACCES"} {
-				out = append(out, writerFault{p.caseID, p.label, p.glob, call, errno})
+			for _, errno := range errnos {
+				out = append(out, writerFault{caseID: p.caseID, label: p.label, glob: p.glob, call: call, errno: errno})
 			}
+		}
+	}
+	for _, p := range everyCallFaultPaths {
+		for _, errno := range errnos {
+			out = append(out, writerFault{caseID: p.caseID, label: p.label, glob: p.glob, call: p.call, errno: errno, everyCall: true})
 		}
 	}
 	return out
@@ -118,7 +182,13 @@ func TestLiveWriterFaults(t *testing.T) {
 			if ts.injected == 0 {
 				t.Fatalf("TS made no %s call on %s to fail", f.call, rel)
 			}
-			if goRes.injected != ts.injected {
+			switch {
+			case f.everyCall:
+				// TS's seeded mkdtemp fails, then its real one.
+				if ts.injected != 2 || goRes.injected != 1 || !strings.Contains(ts.trace, rel) || !strings.Contains(goRes.trace, rel) {
+					t.Errorf("every %s failed: %d in TS, %d in Go (want 2 and 1, the first on %s)\n--- TS\n%s--- Go\n%s", f.call, ts.injected, goRes.injected, rel, ts.trace, goRes.trace)
+				}
+			case goRes.injected != ts.injected:
 				t.Errorf("%s on %s injected %d times in TS, %d in Go", f.call, rel, ts.injected, goRes.injected)
 			}
 			compareWriter(t, f.name(), goRes.writerResult, asGolden(ts.writerResult))
@@ -133,6 +203,8 @@ func TestLiveWriterFaults(t *testing.T) {
 type faultResult struct {
 	writerResult
 	injected int
+	// trace is the strace log, with the case root written <R>.
+	trace string
 }
 
 func runTSWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, rel string) faultResult {
@@ -169,26 +241,33 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 	t.Helper()
 	trace := filepath.Join(t.TempDir(), "trace")
 	calls := faultCalls[f.call]
+	var root string
 	run := writerRun{
 		noVerify: true,
 		mask:     maskStagedPid,
 		command: func(r writerRoots, _ int, args []string) []string {
+			root = r.root
 			quote := func(p string) string {
 				return "'" + strings.ReplaceAll(p, "<PID>", `'"$$"'`) + "'"
 			}
 			abs := filepath.Join(r.root, filepath.FromSlash(rel))
-			script := "exec strace -D -f -qq -s 4096 -o " + quote(trace) + " -P " + quote(abs)
-			// A writer may name a workspace path relative to its cwd.
-			if after, ok := strings.CutPrefix(rel, "ws/"); ok {
-				script += " -P " + quote(after)
+			script := "exec strace -D -f -qq -s 4096 -o " + quote(trace)
+			when := "+"
+			if !f.everyCall {
+				when = ""
+				script += " -P " + quote(abs)
+				// A writer may name a workspace path relative to its cwd.
+				if after, ok := strings.CutPrefix(rel, "ws/"); ok {
+					script += " -P " + quote(after)
+				}
 			}
-			script += " -e trace=" + calls + " -e inject=" + calls + ":error=" + f.errno + ":when=1 -- \"$@\""
+			script += " -e trace=" + calls + " -e inject=" + calls + ":error=" + f.errno + ":when=1" + when + " -- \"$@\""
 			return append([]string{"sh", "-c", script, "sh"}, append(command, args...)...)
 		},
 	}
 	res := runWriterCaseWith(t, repo, tpl, run)[0]
 	b, _ := os.ReadFile(trace)
-	return faultResult{res, strings.Count(string(b), "(INJECTED)")}
+	return faultResult{res, strings.Count(string(b), "(INJECTED)"), strings.ReplaceAll(string(b), root+"/", "<R>/")}
 }
 
 // tracedPath is a quoted path argument in an strace line.

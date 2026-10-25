@@ -1,0 +1,24 @@
+#!/bin/sh
+# Fake Docker "runtime-flood" (README.md): inspect prints 70,000 bytes, past the 65,536-byte inspect output cap;
+# `pull` and `build` print progress lines and exit 0.
+# Anything else is refused.
+case "$1" in
+image)
+  if [ "$2" = inspect ]; then
+  i=0
+  line=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  while [ "$i" -lt 700 ]; do printf '%s\n' "$line"; i=$((i + 1)); done
+  exit 0
+  fi
+  ;;
+pull)
+  printf '%s: Pulling from fake/registry\nDigest: fake\nStatus: Image is up to date for %s\n' "$2" "$2"
+  exit 0
+  ;;
+build)
+  printf '#0 building with "fake" instance\n#1 [internal] load build definition\n#2 DONE 0.0s\n'
+  exit 0
+  ;;
+esac
+printf 'fake docker (runtime-flood): unsupported command: %s\n' "$1" >&2
+exit 125

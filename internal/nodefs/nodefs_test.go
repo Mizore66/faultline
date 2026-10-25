@@ -342,3 +342,38 @@ func TestMkdirAllFollowsSymlinks(t *testing.T) {
 		t.Errorf("link2/a/b was not created through the links: %v", err)
 	}
 }
+
+// writeFileSync on a directory: "w" is EISDIR and "wx" EEXIST, as libuv's
+// fs__open reports them on Windows (ERROR_FILE_EXISTS with O_CREAT and
+// without O_EXCL is UV_EISDIR) and open(2) on Unix. On Windows Go's
+// syscall.Open invents syscall.EISDIR for both, which used to print UNKNOWN.
+func TestWriteOpenOnDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if got, want := WriteFileUTF8(dir, "x", 0o666, false), "EISDIR: illegal operation on a directory, open '"+errorPath(dir)+"'"; got == nil || got.Error() != want {
+		t.Errorf("w: got %v, want %q", got, want)
+	}
+	if got, want := WriteFileUTF8(dir, "x", 0o666, true), "EEXIST: file already exists, open '"+errorPath(dir)+"'"; got == nil || got.Error() != want {
+		t.Errorf("wx: got %v, want %q", got, want)
+	}
+	if got, want := WriteFileSyncUTF8(dir, "x", 0o600), "EEXIST: file already exists, open '"+errorPath(dir)+"'"; got == nil || got.Error() != want {
+		t.Errorf("WriteFileSyncUTF8: got %v, want %q", got, want)
+	}
+}
+
+// Go's invented Windows syscall.EISDIR maps by the open's flags; on Unix
+// syscall.EISDIR is the real errno and maps the same way.
+func TestOpenWriteErrMapsGoEISDIR(t *testing.T) {
+	err := &os.PathError{Op: "open", Path: "d", Err: syscall.EISDIR}
+	if got := openWriteErr(err, "/d", false).(*Error).Code; got != "EISDIR" {
+		t.Errorf("w: %s", got)
+	}
+	if got := openWriteErr(err, "/d", true).(*Error).Code; got != "EEXIST" {
+		t.Errorf("wx: %s", got)
+	}
+	if got := codeOf(syscall.EISDIR); got != "EISDIR" {
+		t.Errorf("codeOf(syscall.EISDIR) = %s", got)
+	}
+	if got := openWriteErr(syscall.ENOENT, "/d", true).(*Error).Code; got != "ENOENT" {
+		t.Errorf("ENOENT: %s", got)
+	}
+}

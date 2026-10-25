@@ -1,0 +1,29 @@
+#!/bin/sh
+# Fake toolchain "security-commit-fail" docker (difftest/testdata/faketools/README.md):
+# answers `--version` and `info`, and execs the next docker on PATH after this directory
+# for anything else.
+self=$(cd "$(dirname "$0")" && pwd -P)
+case "$1" in
+--version)
+  printf 'Docker version 27.0.0, build fake\n'
+  exit 0
+  ;;
+info)
+  printf '27.0.0\n'
+  exit 0
+  ;;
+esac
+found=
+rest=$PATH
+while [ -n "$rest" ]; do
+  dir=${rest%%:*}
+  case "$rest" in *:*) rest=${rest#*:} ;; *) rest= ;; esac
+  [ -n "$dir" ] || continue
+  if [ -z "$found" ]; then
+    [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$self" ] && found=1
+    continue
+  fi
+  if [ -f "$dir/docker" ] && [ -x "$dir/docker" ]; then exec "$dir/docker" "$@"; fi
+done
+echo "fake toolchain (security-commit-fail): no docker after $self on PATH" >&2
+exit 127

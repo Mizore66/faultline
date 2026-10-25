@@ -1,0 +1,44 @@
+#!/bin/sh
+# Fake toolchain "security-capture-fail" git (difftest/testdata/faketools/README.md):
+# answers `--version` (its last argument, after the -c pairs), and execs the next git on PATH after this directory
+# for anything else.
+# The turn-snapshot capture's `rev-parse` (the call with the snapshot's
+# core.attributesFile override) exits 128.
+self=$(cd "$(dirname "$0")" && pwd -P)
+for last in "$@"; do :; done
+if [ "$#" -gt 0 ] && [ "$last" = --version ]; then
+  printf 'git version 2.99.0\n'
+  exit 0
+fi
+# dir is the -C argument, sub the first argument after it; hardened is set
+# when the call carries doctor's core.hooksPath override, snapshot when it
+# carries the turn-snapshot core.attributesFile override.
+dir= sub= hardened= snapshot= prev=
+for arg in "$@"; do
+  if [ "$prev" = -C ]; then dir=$arg
+  elif [ -n "$dir" ] && [ -z "$sub" ]; then sub=$arg
+  fi
+  case "$prev=$arg" in
+  -c=core.hooksPath=/nonexistent/faultline-hooks) hardened=1 ;;
+  -c=core.attributesFile=/nonexistent/faultline-attributes) snapshot=1 ;;
+  esac
+  prev=$arg
+done
+if [ -n "$snapshot" ] && [ "$sub" = rev-parse ]; then
+  printf 'fatal: fake snapshot failure\n' >&2
+  exit 128
+fi
+found=
+rest=$PATH
+while [ -n "$rest" ]; do
+  dir=${rest%%:*}
+  case "$rest" in *:*) rest=${rest#*:} ;; *) rest= ;; esac
+  [ -n "$dir" ] || continue
+  if [ -z "$found" ]; then
+    [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$self" ] && found=1
+    continue
+  fi
+  if [ -f "$dir/git" ] && [ -x "$dir/git" ]; then exec "$dir/git" "$@"; fi
+done
+echo "fake toolchain (security-capture-fail): no git after $self on PATH" >&2
+exit 127
