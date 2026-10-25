@@ -94,7 +94,7 @@ difftest/incident_live_test.go, prevention_live_test.go
 **Gotchas:**
 - **Windows-only rewrite.** `openWriteErr` must rewrite EISDIR→EEXIST for `wx` only when `runtime.GOOS == "windows"`. On Linux a path ending in `/` gives EISDIR even with `O_EXCL` (final re-review). Fix the comment's Unix claim to match.
 - **Test both platforms.** The unit test must cover both branches. The mapping is a pure function of `(err, exclusive, goos)`: split out `openWriteCode(errno, exclusive bool, goos string) string` and test it on every OS.
-- **TS name.** `INTAKE_SAFE_GIT_CONFIG` is in `src/cli-app.ts:380-399`. Confirm by reading it that it spreads `HOST_COMMAND_SAFE_GIT_CONFIG` with nothing added. If it adds anything, `Intake()` becomes its own list, and you must say so in the report.
+- **TS name.** `INTAKE_SAFE_GIT_CONFIG` (`src/cli-app.ts:380-399`) is a literal copy of `HOST_COMMAND_SAFE_GIT_CONFIG`, not a spread. The controller checked that it has the same 36 entries in the same order. It is not exported, so the live op extracts it from `dist/cli-app.js`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -133,7 +133,7 @@ Expected: FAIL (undefined: `openWriteCode`, `Intake`).
 
 - [ ] **Step 3: Implement**
 
-Add `openWriteCode(exclusive bool, goos string) string`, which returns `"EEXIST"` only for `exclusive && goos == "windows"` and otherwise `"EISDIR"`. Call it from `openWriteErr` with `runtime.GOOS`. Add `Intake()`. Extend the oracle op and `TestLiveSafeGitLists` with `intake: [...INTAKE_SAFE_GIT_CONFIG]`, after checking that it is exported. If it is not exported, extract it from `dist/cli-app.js` the way the 3a ops extract unexported helpers.
+Add `openWriteCode(exclusive bool, goos string) string`, which returns `"EEXIST"` only for `exclusive && goos == "windows"` and otherwise `"EISDIR"`. Call it from `openWriteErr` with `runtime.GOOS`. Add `Intake()`. Extend the oracle op and `TestLiveSafeGitLists` with `intake`, extracted from `dist/cli-app.js` (a module-level `const` array literal) the way the 3a ops extract unexported helpers.
 
 - [ ] **Step 4: Run to verify the tests pass**
 
@@ -170,7 +170,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 **Gotchas:**
 - **Schemas.**
   - Every schema is `.strict()`.
-  - `IncidentReviewSchema` is a plain `z.union` (116). `internal/schema` has no plain union, so implement it as an ordered try-each. For a tampered draft read, the error must render zod's `invalid_union` issue. Check `internal/schema` for an existing union helper first. If it lacks one, add a minimal `Union` that reproduces zod 3's `invalid_union` (`unionErrors`), and test it against the oracle.
+  - `IncidentReviewSchema` is a plain `z.union` (116). `internal/schema` has only `DiscriminatedUnion` (`composite.go:222`), so add a minimal `Union(options ...Schema)`. It must reproduce zod 3's ordered try-each and its `invalid_union` issue (`unionErrors`) for a tampered draft read. Test it against the oracle in `TestLiveIncidentDraft`.
 - **`SAFE_GIT_REVISION`** is `^(?!-)[^\0\r\n]{1,512}$`. Length is counted in UTF-16 units (`jsstr.Length`), and the first unit must not be `-`.
 - **Range errors** (copy them verbatim):
   - `incident range ancestor and descendant must be different`
@@ -378,7 +378,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - The path must be a regular file: lstat refuses symlinks and directories with "must be a real regular file, not a symbolic link or directory".
   - Read errors use Node's lstat/open text inside `Unable to read --command-file ${file}: ${msg}`.
   - The 32,000-byte cap is checked after reading.
-  - The UTF-8 check is a fatal decode: `--command-file must contain valid UTF-8 without an ambiguous byte encoding.` Check what TS uses (a `TextDecoder` with `fatal: true`? a BOM check?) and match it exactly.
+  - The UTF-8 check is a round trip (`cli-app.ts:237-239`): `bytes.toString("utf8")`, re-encoded, must equal the original bytes. Otherwise it throws `--command-file must contain valid UTF-8 without an ambiguous byte encoding.` In Go: `jsstr.ToUTF8(jsstr.DecodeUTF8(b))` must equal `b`.
 - **HEAD read.**
   - The spawn is `git <Intake> -C <repo> show -s --format=%H%n%P HEAD`, with env `PATH`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `GIT_NO_REPLACE_OBJECTS`, `GIT_LFS_SKIP_SMUDGE`, `GIT_ALLOW_PROTOCOL=none` (plus Windows `SystemRoot`/`ComSpec`/`PATHEXT`), utf8 and the default maxBuffer.
   - Output handling: drop `\r`, split on `\n`, JS-`trim` the first line, and split the parents on JS `/\s+/`.
@@ -527,8 +527,8 @@ import (
 )
 
 func TestAssertBindingRefusesUnbound(t *testing.T) {
-	draft := jsjson.MustParse(`{"review":{"witnessState":"NOT_PROPOSED"}}`)
-	err := AssertFrozenWitnessBinding(draft, jsjson.MustParse(`{}`))
+	draft := mustParse(t, `{"review":{"witnessState":"NOT_PROPOSED"}}`)
+	err := AssertFrozenWitnessBinding(draft, mustParse(t, `{}`))
 	if err == nil || err.Error() != "Incident draft has no proposal binding and cannot continue to investigation." {
 		t.Fatalf("%v", err)
 	}
@@ -543,7 +543,7 @@ func TestAssertBindingListsMismatchesInOrder(t *testing.T) {
 }
 ```
 
-(Check `jsjson.MustParse` exists; otherwise use the parse helper the package tests already use. Write `mismatchedBindingFixture` in the test file with `CreateDraft` and `witness.Propose`/`Approve`/`Freeze` on a temp store.)
+(`jsjson` has `Parse(text) (Value, error)` but no `MustParse`, so add a test helper `mustParse(t, s)` in the test file and use it for the two calls above. Write `mismatchedBindingFixture` in the test file with `CreateDraft` and `witness.Propose`/`Approve`/`Freeze` on a temp store.)
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -671,7 +671,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Consumes: `prevention.Verify`, `BodySchema`, `ManifestSchema`, `RepairedRunsSchema`; `gitproof.Verify`, `GitInvestigationResultSchema`, `FrozenWitnessSchema`, `ByteDigest`; `nodefs.{WriteFileSyncUTF8, SyncDir, Rename, Basename, Mkdir, MkdirAll, WriteFileUTF8, RemoveAll, Exists}`; `safedir.RelativeTrustedSystemPath`; `clock.{NowMillis, NewUUID}`; `canonical.{CanonicalJSON, DigestJSON}`.
 - Produces:
   - `prevention.DefaultRoot(cwd string) string`
-  - `prevention.Write(input jsjson.Value, output string) (Written, error)` with `type Written struct{ Directory, RootDigest, OriginalProofRoot, FrozenWitnessDigest, Classification string }`. Match TS's return fields; check `writePreventionProof`'s return object.
+  - `prevention.Write(input jsjson.Value, output string) (Written, error)` with `type Written struct{ Directory string; Manifest, Body jsjson.Value; RootDigest string }`. This matches TS's return `{directory, manifest, prevention: body, rootDigest}` (`prevention-proof.ts:515`). The CLI derives `originalProofRoot`, `frozenWitnessDigest` and `classification` from `Body` and `Manifest`, as `cli-app.ts` does.
   - `prevention.BuildFromArtifacts(o ArtifactOptions) (jsjson.Value, []string)`, which returns the input or the failure reasons. `ArtifactOptions{Bundle, ExpectedRoot string; RepairedRuns jsjson.Value; RepairedCommit, RepairedTree, PatchDigest, CodexThreadID string; HasThreadID bool}`.
   - `prevention.WriteFromArtifacts(o ArtifactOptions, output string) (Written, []string)`. Writer exceptions become `[message]`.
   - `prevention.DigestRepairPatchFile(path string) (string, error)`
