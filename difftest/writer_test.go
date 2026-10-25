@@ -41,10 +41,13 @@ func repoRoot(t *testing.T) string { return oracle.RepoRoot(t) }
 // in order in one workspace built from Scenario and then Mutations.
 type writerTemplate struct {
 	ID, Scenario, FakeDocker, FakeTools string
-	Argv                                [][]string
-	Env                                 [][2]string
-	PosixOnly                           bool
-	Mutations                           []template
+	// PathTools, when set, replaces the inherited PATH with links to
+	// these tools only, and drops the recorder docker (linkPathTools).
+	PathTools []string
+	Argv      [][]string
+	Env       [][2]string
+	PosixOnly bool
+	Mutations []template
 }
 
 // writerResult is one invocation, normalized like its golden line.
@@ -60,7 +63,7 @@ type writerResult struct {
 }
 
 var (
-	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "fakeTools", "env", "posixOnly", "mutations"}
+	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations"}
 	writerIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	// fileEntry is a regular file's tree entry: its SHA-256, then its mode
 	// except on Windows.
@@ -100,6 +103,9 @@ func loadWriterTemplates(t testing.TB, repo string) []writerTemplate {
 		}
 		if len(tpl.Argv) == 0 {
 			t.Fatalf("writer template %s has no invocation", tpl.ID)
+		}
+		for _, name := range o.Field("pathTools").Items() {
+			tpl.PathTools = append(tpl.PathTools, name.Str())
 		}
 		if env, ok := o.Get("env"); ok {
 			for _, k := range env.Obj().Keys() {
@@ -262,7 +268,8 @@ func writerEnv(repo string, r writerRoots, seed string, tpl writerTemplate) []st
 		}
 	}
 	// The recorders, the fake toolchain (difftest/testdata/faketools), the
-	// fake Docker, then the inherited PATH (scenarios.ts writerEnv).
+	// fake Docker, then the inherited PATH or only the template's
+	// pathTools (scenarios.ts writerEnv).
 	path := []string{r.recorder}
 	if tpl.FakeTools != "" {
 		path = append(path, filepath.Join(repo, "difftest", "testdata", "faketools", tpl.FakeTools))
@@ -270,7 +277,11 @@ func writerEnv(repo string, r writerRoots, seed string, tpl writerTemplate) []st
 	if tpl.FakeDocker != "" {
 		path = append(path, filepath.Join(repo, "difftest", "testdata", "fakedocker", tpl.FakeDocker))
 	}
-	path = append(path, os.Getenv("PATH"))
+	if tpl.PathTools != nil {
+		path = append(path, linkPathTools(r, tpl.PathTools))
+	} else {
+		path = append(path, os.Getenv("PATH"))
+	}
 	for _, kv := range [][2]string{
 		{"HOME", r.home}, {"USERPROFILE", r.home}, {"TMPDIR", r.tmp}, {"TEMP", r.tmp}, {"TMP", r.tmp},
 		{"GIT_CONFIG_NOSYSTEM", "1"}, {"GIT_CONFIG_GLOBAL", filepath.Join(r.home, "empty.gitconfig")}, {"LC_ALL", "C.UTF-8"},
@@ -287,6 +298,37 @@ func writerEnv(repo string, r writerRoots, seed string, tpl writerTemplate) []st
 		out[i] = names[k] + "=" + vars[k]
 	}
 	return out
+}
+
+// linkPathTools gives a case whose template lists pathTools a PATH with no
+// docker on it (difftest/testdata/faketools/README.md): <case>/bin holds a
+// symlink to the first executable of each listed name on the inherited
+// PATH, and the case's recorder docker is removed unless docker is listed.
+// It returns the bin directory (scenarios.ts linkPathTools). A missing
+// tool panics: writerEnv has no testing.TB.
+func linkPathTools(r writerRoots, tools []string) string {
+	bin := filepath.Join(r.root, "bin")
+	if _, err := os.Lstat(bin); err == nil {
+		return bin
+	}
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		panic(err)
+	}
+	for _, name := range tools {
+		found, err := lookPathIn(name, os.Getenv("PATH"))
+		if err != nil {
+			panic("pathTools: " + err.Error())
+		}
+		if err := os.Symlink(found, filepath.Join(bin, name)); err != nil {
+			panic(err)
+		}
+	}
+	if !slices.Contains(tools, "docker") {
+		if err := os.Remove(filepath.Join(r.recorder, "docker")); err != nil {
+			panic(err)
+		}
+	}
+	return bin
 }
 
 // substituteDeep applies substituteRoots to every string inside a mutation

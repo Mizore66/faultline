@@ -275,3 +275,13 @@ TestWriterReplay/posix/alternates-crlf
 TestWriterReplay/posix/alternates-no-newline
 TestWriterReplay/posix/flow-init-prepare-doctor
 TestWriterReplay/posix/init-cli-codex-readonly
+TestWriterReplay/posix/doctor-empty-version
+TestWriterReplay/posix/doctor-daemon-empty
+TestWriterReplay/posix/doctor-no-repository-root
+TestWriterReplay/posix/doctor-status-fail
+TestWriterReplay/posix/doctor-docker-enoent
+TestWriterReplay/posix/doctor-security-hook-runs
+TestWriterReplay/posix/doctor-security-commit-fail
+TestWriterReplay/posix/doctor-security-ls-remote-ok
+TestWriterReplay/posix/doctor-security-lfs-filter
+TestWriterReplay/posix/doctor-security-capture-fail

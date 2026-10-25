@@ -1,0 +1,23 @@
+#!/bin/sh
+# Fake toolchain "security-hook-runs" node (difftest/testdata/faketools/README.md):
+# answers `--version`, and execs the next node on PATH after this directory
+# for anything else.
+self=$(cd "$(dirname "$0")" && pwd -P)
+if [ "$#" = 1 ] && [ "$1" = --version ]; then
+  printf '%s\n' 'v22.22.2'
+  exit 0
+fi
+found=
+rest=$PATH
+while [ -n "$rest" ]; do
+  dir=${rest%%:*}
+  case "$rest" in *:*) rest=${rest#*:} ;; *) rest= ;; esac
+  [ -n "$dir" ] || continue
+  if [ -z "$found" ]; then
+    [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$self" ] && found=1
+    continue
+  fi
+  if [ -f "$dir/node" ] && [ -x "$dir/node" ]; then exec "$dir/node" "$@"; fi
+done
+echo "fake toolchain (security-hook-runs): no node after $self on PATH" >&2
+exit 127

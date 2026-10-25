@@ -35,4 +35,29 @@ directory, the way the recorders do it):
 | `crlf-git` | `git version 2.99.0\r\n\r\n  (fake build)  \r\n` | as `ready` | as `ready` | as `ready` |
 | `long-docker` | as `ready` | as `ready` | 303 bytes: `Docker version `, 144 `1`s, U+1F600 at UTF-16 units 159-160, 139 `y`s (doctor's 160-unit slice cuts the pair) | as `ready` |
 
+| `empty-version` | a blank line | as `ready` | two spaces and a CRLF | not reached |
+| `daemon-empty` | as `ready` | as `ready` | as `ready` | a blank line, exit 0 |
+| `no-repository-root` | as `ready`; `rev-parse --show-toplevel` exits 0 with no output | as `ready` | as `ready` | as `ready` |
+| `status-fail` | as `ready`; `status` prints `fatal: fake status failure` and exits 128 | as `ready` | as `ready` | as `ready` |
+| `security-hook-runs` | as `ready`; a hardened `commit` (one with doctor's `core.hooksPath` override) first writes `HOOK_EXECUTED.marker` in its `-C` directory | as `ready` | as `ready` | as `ready` |
+| `security-commit-fail` | as `ready`; a hardened `commit` prints `fake commit refused` and exits 1 | as `ready` | as `ready` | as `ready` |
+| `security-ls-remote-ok` | as `ready`; `ls-remote` prints one ref and exits 0 | as `ready` | as `ready` | as `ready` |
+| `security-lfs-filter` | as `ready`; a hardened `status` without `--untracked-files=all` and without the turn-snapshot `core.attributesFile` override (only `doctor --security`'s own) first prints `malicious-lfs-filter: invoked` on stderr | as `ready` | as `ready` | as `ready` |
+| `security-capture-fail` | as `ready`; a `rev-parse` carrying the turn-snapshot `core.attributesFile` override prints `fatal: fake snapshot failure` and exits 128 | as `ready` | as `ready` | as `ready` |
+
+The `security-*` toolchains each defeat one `doctor --security` check, so it
+reaches FAIL (and the report INSECURE) on both sides. The fifth check,
+`overlay-path-traversal`, calls no external command, so no toolchain can make
+it fail.
+
+A docker that cannot be started at all (spawn `ENOENT`) needs a `PATH` with
+no `docker` on it, which the recorders and the inherited `PATH` always
+provide. A writer template's `"pathTools": ["git", "dirname"]` asks for that:
+the case's `PATH` is then the recorders, the fake toolchain, the fake Docker
+and `<case>/bin`, which holds a symlink to the first executable of each
+listed name on the inherited `PATH`, with no inherited `PATH` after it; the
+recorder `docker` is left out unless `docker` is listed
+(`difftest/gen/scenarios.ts` `linkPathTools`, `difftest/writer_test.go`
+`linkPathTools`). Use it with the `no-docker` toolchain.
+
 Keep the outputs fixed text: goldens compare them byte for byte.

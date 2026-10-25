@@ -82,12 +82,35 @@ export function inheritedOut(name: string): boolean {
   return name.startsWith("GIT_") || name.startsWith("FAULTLINE_") || ["CI", "GITHUB_ACTIONS", "OPENAI_API_KEY"].includes(name);
 }
 
+// linkPathTools gives a case whose template lists pathTools a PATH with no
+// docker on it (difftest/testdata/faketools/README.md): <case>/bin holds a
+// symlink to the first executable of each listed name on the inherited
+// PATH, and the case's recorder docker is removed unless docker is listed.
+// It returns the bin directory. The Go twin is linkPathTools in
+// difftest/writer_test.go.
+export function linkPathTools(roots: CaseRoots, tools: readonly string[]): string {
+  const bin = join(roots.root, "bin");
+  if (existsSync(bin)) return bin;
+  mkdirSync(bin, { mode: 0o755 });
+  for (const name of tools) {
+    const found = (process.env.PATH ?? "").split(":").filter(Boolean).map((dir) => join(dir, name)).find((p) => {
+      try { return statSync(p).isFile() && (statSync(p).mode & 0o111) !== 0; } catch { return false; }
+    });
+    if (found === undefined) throw new Error(`pathTools: no ${name} on PATH`);
+    symlinkSync(found, join(bin, name));
+  }
+  if (!tools.includes("docker")) rmSync(join(roots.recorder, "docker"));
+  return bin;
+}
+
 // The environment every writer invocation runs with; extra is the
 // template's env (after placeholder substitution). PATH is the recorders,
 // then the template's fake toolchain (difftest/testdata/faketools/<name>),
-// then its fake Docker, then the inherited PATH.
-export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | undefined, extra: Record<string, string>, fakeTools?: string): NodeJS.ProcessEnv {
-  const path = [roots.recorder, ...(fakeTools ? [join(fakeToolsDir, fakeTools)] : []), ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), process.env.PATH ?? ""].join(":");
+// then its fake Docker, then the inherited PATH, or, when the template
+// lists pathTools, only those tools (linkPathTools).
+export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | undefined, extra: Record<string, string>, fakeTools?: string, pathTools?: readonly string[]): NodeJS.ProcessEnv {
+  const inherited = pathTools ? linkPathTools(roots, pathTools) : process.env.PATH ?? "";
+  const path = [roots.recorder, ...(fakeTools ? [join(fakeToolsDir, fakeTools)] : []), ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), inherited].join(":");
   return {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !inheritedOut(name))),
     HOME: roots.home, USERPROFILE: roots.home, TMPDIR: roots.tmp, TEMP: roots.tmp, TMP: roots.tmp,

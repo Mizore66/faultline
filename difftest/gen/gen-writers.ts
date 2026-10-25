@@ -13,11 +13,11 @@ import { PATH_OPS, applyMutation, normalizeWriter, treeDigest, type Template } f
 import { copyScenario, makeCaseRoots, resetModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
 
 export type WriterTemplate = {
-  id: string; scenario: string; argv: string[][]; fakeDocker?: string; fakeTools?: string; env?: Record<string, string>;
+  id: string; scenario: string; argv: string[][]; fakeDocker?: string; fakeTools?: string; pathTools?: string[]; env?: Record<string, string>;
   posixOnly?: boolean; mutations?: Template[];
 };
 
-const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "fakeTools", "env", "posixOnly", "mutations"]);
+const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations"]);
 
 // checkTemplates rejects what the Go loader rejects too: unknown keys,
 // duplicate ids and cases without invocations.
@@ -430,7 +430,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     for (const [inv, argv] of t.argv.entries()) {
       const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
       rmSync(roots.argvLog, { force: true });
-      const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)), writerEnv(roots, t.id, t.fakeDocker, env, t.fakeTools));
+      const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)), writerEnv(roots, t.id, t.fakeDocker, env, t.fakeTools, t.pathTools));
       stdouts.push(r.stdout);
       const plans = planDigests(r.stdout);
       const invocationRecords = readArgvLog(roots.argvLog);
