@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -175,7 +176,9 @@ func TestLoadIgnoreRules(t *testing.T) {
 			t.Fatalf("symlink: %v", err)
 		}
 	}
-	if os.Getuid() != 0 {
+	// chmod 000 denies reads only on POSIX: on Windows it sets the read-only
+	// attribute, and the file stays readable (for Node too).
+	if os.Getuid() != 0 && runtime.GOOS != "windows" {
 		dir = t.TempDir()
 		path := filepath.Join(dir, ".faultlineignore")
 		os.WriteFile(path, []byte("x"), 0o000)

@@ -566,9 +566,17 @@ func TestCaptureRestoredClean(t *testing.T) { // :725-889
 		afterEdit := snap(t, dir, CaptureOptions{SessionCachePath: cache})
 		os.Remove(filepath.Join(dir, "tracked.txt"))
 		afterDelete := snap(t, dir, CaptureOptions{SessionCachePath: cache})
+		if tree(afterDelete) == tree(afterEdit) {
+			t.Fatal("deletion reused a tree")
+		}
 		os.Chmod(filepath.Join(dir, "second.txt"), 0o755)
+		// As the TS test does (:737): Windows cannot record +x (Go and Node
+		// both report 0666 after the chmod), so the mode step ends here.
+		if info, err := os.Lstat(filepath.Join(dir, "second.txt")); err != nil || info.Mode().Perm()&0o111 == 0 {
+			return
+		}
 		afterMode := snap(t, dir, CaptureOptions{SessionCachePath: cache})
-		if tree(afterDelete) == tree(afterEdit) || tree(afterMode) == tree(afterDelete) || git(t, dir, "ls-tree", tree(afterMode), "second.txt")[:6] != "100755" {
+		if tree(afterMode) == tree(afterDelete) || git(t, dir, "ls-tree", tree(afterMode), "second.txt")[:6] != "100755" {
 			t.Fatal("mode change reused a tree")
 		}
 	})

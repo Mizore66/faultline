@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -146,7 +147,9 @@ func TestAssertNoSecretsSkipsAndCaps(t *testing.T) {
 	if err := AssertNoSecrets(dir, []string{"late-nul"}, allowlist.Empty()); err == nil {
 		t.Fatal("late NUL treated as binary")
 	}
-	if os.Getuid() != 0 {
+	// chmod 000 denies reads only on POSIX: on Windows it sets the read-only
+	// attribute, and the file stays readable (for Node too).
+	if os.Getuid() != 0 && runtime.GOOS != "windows" {
 		write(t, dir, "locked", "x")
 		os.Chmod(filepath.Join(dir, "locked"), 0o000)
 		err := AssertNoSecrets(dir, []string{"locked"}, allowlist.Empty())

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -193,11 +194,13 @@ func TestPlanFreezesStandingPolicy(t *testing.T) {
 		t.Fatal(sp.Get("detail").Str())
 	}
 	path := filepath.Join(repo, ".faultline", "witnesses", "standing-policies", "init-default.json")
+	// Windows has no POSIX modes (Go and Node both report 0666 for files,
+	// 0777 for directories), so there only the file's existence is checked.
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatal(info, err)
 	}
-	if dir, _ := os.Stat(filepath.Dir(path)); dir.Mode().Perm() != 0o700 {
+	if dir, _ := os.Stat(filepath.Dir(path)); runtime.GOOS != "windows" && dir.Mode().Perm() != 0o700 {
 		t.Fatal(dir.Mode())
 	}
 	keys := strings.Join(result.Obj().Keys(), ",")
@@ -279,7 +282,7 @@ func TestHookTargetAndWrite(t *testing.T) {
 	}
 	info, _ := os.Stat(file)
 	dir, _ := os.Stat(filepath.Dir(file))
-	if info.Mode().Perm() != 0o600 || dir.Mode().Perm() != 0o700 {
+	if runtime.GOOS != "windows" && (info.Mode().Perm() != 0o600 || dir.Mode().Perm() != 0o700) {
 		t.Fatal(info.Mode(), dir.Mode())
 	}
 	b, _ := os.ReadFile(file)
