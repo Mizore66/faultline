@@ -374,7 +374,7 @@
   {"id":"doctor-security","scenario":"empty","argv":[["doctor","--security"]],"fakeTools":"ready","posixOnly":true},
   {"id":"doctor-security-json","scenario":"empty","argv":[["doctor","--security","--json"]],"fakeTools":"ready","posixOnly":true},
   {"id":"doctor-security-hostile-global-config","scenario":"empty","argv":[["doctor","--security","--json"]],"fakeTools":"ready","posixOnly":true,"env":{"HOME":"<WS>/home","GIT_CONFIG_GLOBAL":"<WS>/home/.gitconfig"},"mutations":[{"op":"add-file","path":"home/.gitconfig","content":"[core]\n\thooksPath = <WS>/home/hooks\n\tfsmonitor = \"printf invoked > <WS>/global-config-ran #\"\n"},{"op":"add-file","path":"home/hooks/pre-commit","content":"#!/bin/sh\nprintf 'hooked\\n' > <WS>/global-hook-ran\n"}]},
-  {"id":"doctor-security-tmp-unwritable","scenario":"empty","argv":[["doctor","--security"]],"fakeTools":"ready","posixOnly":true,"env":{"TMPDIR":"<WS>/does-not-exist"}},
+  {"id":"doctor-security-tmp-missing","scenario":"empty","argv":[["doctor","--security"]],"fakeTools":"ready","posixOnly":true,"env":{"TMPDIR":"<WS>/does-not-exist"}},
   {"id":"runtime-resolve-node","scenario":"empty","argv":[["runtime","resolve","node"]],"fakeDocker":"runtime-digest","posixOnly":true},
   {"id":"runtime-resolve-python-existing-config","scenario":"repo-with-config","argv":[["runtime","resolve","python"]],"fakeDocker":"runtime-digest","posixOnly":true},
   {"id":"runtime-resolve-catalog-tag-repo","scenario":"empty","argv":[["runtime","resolve","golang:1.24-alpine","--repo","nested/project"]],"fakeDocker":"runtime-digest","posixOnly":true},
