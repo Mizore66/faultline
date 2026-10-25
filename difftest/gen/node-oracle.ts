@@ -636,6 +636,57 @@ export const handlers: Record<string, Handler> = {
     const cache = cachePath && tsExists(cachePath) && cwStat(cachePath).isFile() ? cwReadFile(cachePath, "utf8") : null;
     return JSON.stringify({ cachePath, outcome, onWarning, cache, calls });
   }),
+  // Prevention writer, --from-bundle builder and AGENTS.md (slice 3b, Task 7).
+  // writePreventionProof runs in `cwd` (the default root is resolved from
+  // it) under `umask` when given: JSON.stringify of the written package, or
+  // "THREW:<message>". Start the oracle seeded to compare the stage UUID.
+  writePreventionProof: async ({ cwd, output, input, umask }: { cwd: string; output: string; input: any; umask?: number }) => {
+    const { writePreventionProof } = await import("../../src/prevention-proof.js");
+    const saved = process.cwd();
+    const savedUmask = umask === undefined ? undefined : process.umask(umask);
+    process.chdir(cwd);
+    try {
+      return JSON.stringify(writePreventionProof(output, input));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    } finally {
+      process.chdir(saved);
+      if (savedUmask !== undefined) process.umask(savedUmask);
+    }
+  },
+  // fixtures.ts sampleInput and groundedPreventionInput (the slice 1 bases).
+  preventionFixtures: async () => {
+    const { sampleInput, groundedPreventionInput } = await import("./fixtures.js");
+    return JSON.stringify({ summary: sampleInput(), grounded: groundedPreventionInput() });
+  },
+  // upsertFaultLineAgentsMd with classification PREVENTION_VERIFIED:
+  // JSON.stringify of { path, status }, or "THREW:<message>".
+  upsertFaultLineAgentsMd: async ({ repository, input }: { repository: string; input: any }) => {
+    const { upsertFaultLineAgentsMd } = await import("../../src/agents-md.js");
+    try {
+      return JSON.stringify(upsertFaultLineAgentsMd({ repository, classification: "PREVENTION_VERIFIED", ...input }));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  // The --from-bundle build as cli-app.ts:2603 calls it: the patch digest
+  // first (digestRepairPatchFile), then buildPreventionProofFromVerifiedArtifacts.
+  // JSON.stringify of the input, {"reasons":[...]}, or "THREW:<message>".
+  // Start the oracle seeded to compare the verifier's mkdtemp names.
+  buildPreventionProofFromVerifiedArtifacts: async ({ bundle, expectRoot, commit, tree, runs, patch, codexThreadId }: {
+    bundle: string; expectRoot: string; commit: string; tree: string; runs: unknown[]; patch: string; codexThreadId?: string;
+  }) => {
+    const { buildPreventionProofFromVerifiedArtifacts, digestRepairPatchFile } = await import("../../src/prevention-from-artifacts.js");
+    try {
+      const built = buildPreventionProofFromVerifiedArtifacts({
+        bundleDirectory: bundle, expectRoot, repaired: { commit, tree, runs: runs as never },
+        repairPatchDigest: digestRepairPatchFile(patch), ...(codexThreadId === undefined ? {} : { codexThreadId })
+      });
+      return JSON.stringify(built.ok ? built.input : { reasons: built.reasons });
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
   sortCodePoints: () => {
     const all: string[] = [];
     for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));

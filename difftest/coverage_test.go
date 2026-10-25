@@ -58,6 +58,27 @@ var unreachableLiterals = map[string]string{
 	"Git proof source artifact changed before package assembly:":                      "race only: the bundle git just wrote is read back unchanged",
 	"Git proof bundle output appeared during assembly and will not be replaced:":      "race only: the output was refused when it existed before staging",
 
+	// prevention/write.go (TestLivePreventionWrite's requireReached):
+	"Prevention proof root is not a real directory:":                             "the filesystem root is always a real directory",
+	"Prevention proof output appeared during assembly and will not be replaced:": "race only: the output was refused when it existed before staging",
+	"Refusing to publish an invalid prevention proof:":                           "a stage the writer just wrote verifies unless the filesystem fails between the writes and the verify; an unreadable stage (umask 0477) fails its removal too, and that error is thrown instead",
+
+	// prevention/artifacts.go (TestLivePreventionFromArtifacts): the Git proof
+	// verifier runs first, and a bundle it accepts reconstructs its stable
+	// states and transitions from runs that all match the state's commit and
+	// tree, are DOCKER_ISOLATED NATIVE_DOCKER with one decisive verdict and a
+	// PREDICATE_PASS / PREDICATE_FAIL reason, and carry the frozen witness
+	// digests; a PASS_TO_FAIL transition goes from a PASS to a FAIL state.
+	"Prevention export requires a Docker-isolated proof-grade Git investigation.": "the Git proof semantics refuse a non-proof or non-NATIVE_DOCKER investigation first",
+	"stable state at":                                 "a reconstructed PASS_TO_FAIL transition has a PASS before and a FAIL after state",
+	"is not present in the proof bundle":              "stable states are reconstructed from the bundle's own runs",
+	"commit/tree does not match stable state":         "a reconstructed stable state's runs all match its commit and tree",
+	"witness digests do not match the frozen witness": "the Git proof semantics refuse a run whose digests differ from the frozen witness",
+	"is not NATIVE_DOCKER":                            "a reconstructed stable state's runs are all NATIVE_DOCKER",
+	"is not DOCKER_ISOLATED":                          "a reconstructed stable state's runs are all DOCKER_ISOLATED",
+	"PASS reason must be PREDICATE_PASS":              "the Git proof semantics refuse a PASS run without PREDICATE_PASS",
+	"FAIL reason must be PREDICATE_FAIL":              "the Git proof semantics refuse a FAIL run without PREDICATE_FAIL",
+
 	// Slice 2 writers. Git's own invariants: hardened git prints what these
 	// checks expect unless it is broken.
 	"Git range enumeration returned an invalid commit object id.":   "git rev-list prints full object ids",
@@ -1086,6 +1107,11 @@ var liveGatedFiles = map[string]string{
 	"internal/turnsnap/scan.go":        "TestLiveTurnSnapshotScan",
 	"internal/turnsnap/plan.go":        "TestLiveTurnSnapshotCapture",
 	"internal/turnsnap/capture.go":     "TestLiveTurnSnapshotCapture",
+	// Slice 3b: the prevention writer, the --from-bundle build and the
+	// AGENTS.md upsert, on generated inputs.
+	"internal/bundle/prevention/write.go":     "TestLivePreventionWrite",
+	"internal/bundle/prevention/agentsmd.go":  "TestLiveAgentsMd",
+	"internal/bundle/prevention/artifacts.go": "TestLivePreventionFromArtifacts",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally

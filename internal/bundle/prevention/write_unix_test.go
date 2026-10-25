@@ -41,3 +41,26 @@ func currentUmask() os.FileMode {
 	syscall.Umask(old)
 	return os.FileMode(old)
 }
+
+// TestWriteRefusesReadOnlyParent makes the output parent read-only after
+// prepare would create it: the stage mkdir fails and nothing is left behind.
+func TestWriteRefusesReadOnlyParent(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	workspace(t)
+	parent := filepath.Join(defaultRoot(), "ro")
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(parent, 0o500)
+	defer os.Chmod(parent, 0o700)
+	_, err := Write(jsjson.MakeObject(sampleInput()), filepath.Join(parent, "out"))
+	if err == nil || !strings.HasPrefix(err.Error(), "EACCES: permission denied, mkdir '"+parent+"/.out.") {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(parent)
+	if len(entries) != 0 {
+		t.Fatalf("left %v", entries)
+	}
+}

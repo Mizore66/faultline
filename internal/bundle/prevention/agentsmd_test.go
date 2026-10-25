@@ -3,6 +3,7 @@ package prevention
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -22,7 +23,7 @@ func TestUpsertAgentsMdCreatesThenUnchanged(t *testing.T) {
 	if !strings.Contains(string(b), "<!-- FAULTLINE:BEGIN -->") {
 		t.Fatal(string(b))
 	}
-	if info, _ := os.Stat(filepath.Join(repo, "AGENTS.md")); info.Mode().Perm() != 0o644&^currentUmask() {
+	if info, _ := os.Stat(filepath.Join(repo, "AGENTS.md")); runtime.GOOS != "windows" && info.Mode().Perm() != 0o644&^currentUmask() {
 		t.Fatal(info.Mode())
 	}
 }

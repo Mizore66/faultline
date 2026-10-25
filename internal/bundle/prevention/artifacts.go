@@ -27,6 +27,10 @@ type ArtifactOptions struct {
 	HasThreadID                  bool
 }
 
+// verifyGitBundle is verifyGitInvestigationProofBundle; tests memoize it
+// (MemoizeGitVerifyForTest).
+var verifyGitBundle = gitproof.Verify
+
 // stableExecutionCount is STABLE_EXECUTION_COUNT.
 const stableExecutionCount = gitproof.StableExecutionCount
 
@@ -137,7 +141,7 @@ func isString(v jsjson.Value, s string) bool { return v.Kind() == jsjson.String 
 //     none and it defaults to that tree).
 func BuildFromArtifacts(o ArtifactOptions) (jsjson.Value, []string) {
 	bundleDirectory := nodefs.Resolve(o.Bundle)
-	verification := gitproof.Verify(bundleDirectory, o.ExpectedRoot, true)
+	verification := verifyGitBundle(bundleDirectory, o.ExpectedRoot, true)
 	if !verification.Valid || verification.RootDigest == nil {
 		return jsjson.Value{}, append([]string{"Proof bundle verification failed"}, verification.Errors...)
 	}
