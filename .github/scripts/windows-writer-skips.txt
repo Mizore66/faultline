@@ -265,6 +265,8 @@ TestWriterReplay/posix/allowlist-not-json
 TestWriterReplay/posix/allowlist-oversized
 TestWriterReplay/posix/init-yes-too-many-files
 TestWriterReplay/posix/init-yes-total-bytes
+TestWriterReplay/posix/init-cli-recordings-present
+TestWriterReplay/posix/allowlist-symlink
 TestWriterReplay/posix/cache-corrupt
 TestWriterReplay/posix/cache-stale-head
 TestWriterReplay/posix/cache-other-allowlist

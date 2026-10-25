@@ -38,7 +38,7 @@ func assertSidecarCommandText(value, label string) (string, error) {
 		return "", errors.New(jsexc.Concat(label, " must not be empty."))
 	}
 	if controlChars(command) {
-		return "", errors.New(jsexc.Concat(label, " cannot contain a NUL byte or a line break."))
+		return "", errors.New(jsexc.Concat(label, " cannot contain a NUL byte or a line break.")) // coverage gate: unported caller (--command, fl codex sidecar config/install)
 	}
 	return command, nil
 }
@@ -114,7 +114,7 @@ func option(args []string, flag string) (string, bool) {
 func requiredOption(args []string, flag string) (string, error) {
 	value, ok := option(args, flag)
 	if !ok || value == "" || strings.HasPrefix(value, "--") {
-		return "", errors.New("Missing required option: " + flag)
+		return "", errors.New("Missing required option: " + flag) // coverage gate: unported caller (fl init passes --cli an absolute path; fl codex sidecar config/install)
 	}
 	return value, nil
 }
@@ -300,7 +300,7 @@ func WriteHookConfig(repo string, cfg jsjson.Value) (err error) {
 		}
 	}
 	if !realDirectory(directory) {
-		return errors.New(jsexc.Concat("Project .codex directory must be a real directory, not a symbolic link or file: ", directory))
+		return errors.New(jsexc.Concat("Project .codex directory must be a real directory, not a symbolic link or file: ", directory)) // coverage gate: race only (HookTarget refused a non-directory .codex just before)
 	}
 	if err := nodefs.WriteFileUTF8(file, jsexc.Concat(jsjson.StringifyIndent(cfg, "  "), "\n"), 0o600, true); err != nil {
 		return errors.New(jsexc.Concat("FaultLine could not create the project hook document without replacing anything: ", jsexc.Message(err)))
@@ -350,7 +350,7 @@ func assertSafeDirectory(path, label string) error {
 		return errors.New(jsexc.Concat(label, " is unavailable: ", jsexc.Message(err)))
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
-		return errors.New(label + " must be a real directory, not a symlink or file.")
+		return errors.New(label + " must be a real directory, not a symlink or file.") // coverage gate: race only (safeDirectoryExists or realpathSync accepted the same path just before)
 	}
 	return nil
 }

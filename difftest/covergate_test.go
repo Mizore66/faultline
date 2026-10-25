@@ -96,8 +96,9 @@ func coverageGate(repo, coverDir string) error {
 		// A site in no block is a declaration (a schema's message), which
 		// coverage does not instrument; TestGoldensReachEveryErrorLiteral
 		// checks those by text. A site marked raceOnlyMarker on its line can
-		// only be reached by a file that changes between two walks.
-		if !inBlock || strings.Contains(sourceLine(s.file, s.line), raceOnlyMarker) {
+		// only be reached by a file that changes between two walks, and one
+		// marked unportedCallerMarker only by a command not ported yet.
+		if line := sourceLine(s.file, s.line); !inBlock || strings.Contains(line, raceOnlyMarker) || strings.Contains(line, unportedCallerMarker) {
 			continue
 		}
 		if !covered {
@@ -111,8 +112,13 @@ func coverageGate(repo, coverDir string) error {
 }
 
 // raceOnlyMarker marks an error site that only a bundle changing while it is
-// verified can reach.
+// verified (or a file changing between two checks of fl) can reach.
 const raceOnlyMarker = "coverage gate: race only"
+
+// unportedCallerMarker marks an error site in a shared helper that only a
+// command not yet ported reaches (its text is reached elsewhere, so
+// unreachableLiterals cannot list it); the comment names the command.
+const unportedCallerMarker = "coverage gate: unported caller"
 
 func sourceLine(file string, line int) string {
 	b, err := os.ReadFile(file)
