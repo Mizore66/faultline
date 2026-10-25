@@ -115,7 +115,9 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 					if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, filepath.FromSlash(site.file))), 0o755); err != nil {
 						t.Fatal(err)
 					}
-					os.WriteFile(filepath.Join(dir, filepath.FromSlash(site.file)), []byte(site.content), 0o644)
+					if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(site.file)), []byte(site.content), 0o644); err != nil {
+						t.Fatal(err)
+					}
 				case site.argv != nil:
 					if err := os.MkdirAll(dir, 0o755); err != nil {
 						t.Fatal(err)
@@ -124,7 +126,9 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					os.WriteFile(filepath.Join(dir, site.file), b, 0o644)
+					if err := os.WriteFile(filepath.Join(dir, site.file), b, 0o644); err != nil {
+						t.Fatal(err)
+					}
 				default:
 					copyTree(t, filepath.Join("testdata", "bases", site.base), dir)
 				}
@@ -139,13 +143,14 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 				var expected bool
 				if site.argv != nil {
 					// The zod message (on stderr, or JSON-quoted in init's
-					// snapshotPrewarm.reason), or the overflow (TS's uncaught
-					// RangeError report, Go's FaultLine error line, or the
-					// reason).
+					// snapshotPrewarm.reason, where its quotes are escaped),
+					// or the overflow (TS's uncaught RangeError report, Go's
+					// FaultLine error line, or the reason).
 					cmd := exec.Command(argv[0], append(argv[1:], site.argv...)...)
 					cmd.Dir = dir
 					out, _ = cmd.CombinedOutput()
-					expected = strings.Contains(string(out), `received`) || strings.Contains(string(out), "Maximum call stack size exceeded")
+					expected = strings.Contains(string(out), `"received"`) || strings.Contains(string(out), `\"received\"`) ||
+						strings.Contains(string(out), "Maximum call stack size exceeded")
 				} else {
 					out, _ = exec.Command(argv[0], append(argv[1:], "verify", dir)...).Output()
 					expected = strings.Contains(string(out), "self-consistency")

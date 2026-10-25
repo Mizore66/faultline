@@ -242,6 +242,7 @@ func TestLiveCuratedRuntime(t *testing.T) {
 		}
 	}
 	t.Logf("outcomes: %v", reached)
+	requireReached(t, "internal/runtimeimage/curated.go", recordedOutputs(t))
 	for _, want := range []string{"OK-resolve", "OK-prepare", "UNKNOWN_RUNTIME", "DOCKER_PULL_FAILED", "DOCKER_PULL_TIMED_OUT", "DOCKER_PULL_OUTPUT_LIMIT",
 		"DOCKER_INSPECT_FAILED", "DOCKER_INSPECT_TIMED_OUT", "DOCKER_INSPECT_OUTPUT_LIMIT", "UNRESOLVED_REPO_DIGEST", "UNEXPECTED_REPOSITORY"} {
 		if reached[want] == 0 {
@@ -549,6 +550,15 @@ func TestLiveProjectContext(t *testing.T) {
 		}
 	})
 	t.Logf("outcomes: %v", reached)
+	outputs := recordedOutputs(t)
+	if runtime.GOOS != "linux" {
+		// Linux only: the sparse 256 MiB context (difftest-live), and the
+		// lstat failure of a name that is not valid UTF-8 (readdir decodes
+		// it with U+FFFD; APFS refuses to create it).
+		outputs += "Project image build context exceeds 268435456 bytes; use a smaller reviewed context.\n" +
+			"FaultLine could not inspect build-context path\n"
+	}
+	requireReached(t, "internal/runtimeimage/context.go", outputs)
 }
 
 // goScriptedRunner replays steps like the oracle's scriptedDockerRunner and
@@ -703,6 +713,7 @@ func TestLiveProjectPrepare(t *testing.T) {
 		}
 	}
 	t.Logf("outcomes: %v", reached)
+	requireReached(t, "internal/runtimeimage/project.go", recordedOutputs(t))
 	for _, want := range []string{"OK-resolve", "OK-prepare", "PROJECT_IMAGE_CONFIRMATION_REQUIRED", "PROJECT_IMAGE_PLAN_DIGEST_REQUIRED", "PROJECT_IMAGE_PLAN_MISMATCH",
 		"PROJECT_IMAGE_INVALID_INPUT", "DOCKER_BUILD_FAILED", "DOCKER_BUILD_TIMED_OUT", "DOCKER_BUILD_OUTPUT_LIMIT", "DOCKER_INSPECT_FAILED",
 		"DOCKER_INSPECT_TIMED_OUT", "DOCKER_INSPECT_OUTPUT_LIMIT", "UNRESOLVED_REPO_DIGEST", "UNEXPECTED_REPOSITORY"} {

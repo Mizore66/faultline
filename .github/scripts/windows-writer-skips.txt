@@ -263,6 +263,8 @@ TestWriterReplay/posix/allowlist-match
 TestWriterReplay/posix/allowlist-schema
 TestWriterReplay/posix/allowlist-not-json
 TestWriterReplay/posix/allowlist-oversized
+TestWriterReplay/posix/init-yes-too-many-files
+TestWriterReplay/posix/init-yes-total-bytes
 TestWriterReplay/posix/cache-corrupt
 TestWriterReplay/posix/cache-stale-head
 TestWriterReplay/posix/cache-other-allowlist

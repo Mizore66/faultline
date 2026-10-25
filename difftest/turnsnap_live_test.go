@@ -164,6 +164,7 @@ func TestLiveTurnSnapshotIgnore(t *testing.T) {
 			t.Errorf("no generated case produced %q", msg)
 		}
 	}
+	requireReached(t, "internal/turnsnap/ignore.go", outputs)
 	liveSummary(t, "%d (rules, path) pairs in %d rule sets compared", pairs, 220)
 }
 
@@ -324,6 +325,7 @@ func TestLiveTurnSnapshotScan(t *testing.T) {
 			t.Errorf("no generated case produced %q", msg)
 		}
 	}
+	requireReached(t, "internal/turnsnap/scan.go", outputs)
 	liveSummary(t, "%d repositories compared: %d high-confidence refusals, %d entropy refusals, %d accepted",
 		500, counts["high-confidence secret material detected"], counts["high-entropy secret-like token detected"], counts[`{"paths":[`])
 }

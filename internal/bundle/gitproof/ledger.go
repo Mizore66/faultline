@@ -99,6 +99,12 @@ var (
 	ledgerHashSchema       = s.String(s.Regex(s.Pattern(sha256DigestSource), "Expected a sha256 digest"))
 	ledgerGitObjectID      = s.String(s.Regex(s.Pattern(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`), "Expected a Git object id"))
 
+	// HashSchema and GitObjectIDSchema export the two for
+	// src/turn-snapshot.ts:56-57, which declares the same regexes and
+	// messages (internal/turnsnap's session cache).
+	HashSchema        = ledgerHashSchema
+	GitObjectIDSchema = ledgerGitObjectID
+
 	// CanonicalTimestampSchema ports src/ledger.ts:40 (and src/turn-snapshot.ts:58).
 	CanonicalTimestampSchema = s.Refine(s.String(), canonicalTimestampValue, "Expected a canonical ISO-8601 UTC timestamp")
 

@@ -1,24 +1,16 @@
 package cli
 
 import (
-	"io"
 	"strings"
 
 	"github.com/Mizore66/faultline/internal/doctor"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
-	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
 // doctorRunner is the runner `fl doctor` uses; tests replace it.
 var doctorRunner = doctor.NodeRunner
-
-// printHumanNext ports src/cli-app.ts:156: the one next command, on stderr
-// so stdout stays machine-parseable.
-func (e *env) printHumanNext(command string) {
-	io.WriteString(e.stderr, jsstr.ToUTF8(jsexc.Concat("Next: ", command, "\n")))
-}
 
 // doctorSummary ports src/cli-app.ts:302.
 func doctorSummary(report jsjson.Value) string {

@@ -348,6 +348,11 @@ func TestLiveRealDockerProjectBuild(t *testing.T) {
 		t.Logf("%s build: exit %d, status %q, RepoDigests %s, stderr %.200q", s.name, buildExit, status, digests, buildErr)
 	}
 	ts, goRes := outcomes["TS"], outcomes["Go"]
+	// CI forces the classic image store and sets this, so the brief's case
+	// (no RepoDigest for a local build) is the one that runs there.
+	if os.Getenv("FAULTLINE_REAL_DOCKER_CLASSIC_STORE") == "1" && ts.repoDigests != "[]" {
+		t.Fatalf("FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1, but the daemon recorded RepoDigests %s for the local build (containerd image store?)", ts.repoDigests)
+	}
 	if ts.repoDigests == "[]" && (ts.status != "PROJECT_IMAGE_BUILT_NEEDS_REGISTRY_DIGEST" || ts.buildExit != 1) {
 		t.Fatalf("TS build of an image without a RepoDigest: exit %d, status %q (want 1, PROJECT_IMAGE_BUILT_NEEDS_REGISTRY_DIGEST)\n%s%s", ts.buildExit, ts.status, ts.build, ts.buildErr)
 	}

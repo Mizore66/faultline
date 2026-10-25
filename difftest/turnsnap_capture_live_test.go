@@ -653,5 +653,9 @@ func TestLiveTurnSnapshotCapture(t *testing.T) {
 	if outcomes["cache with an integer-like key"] == 0 && first == 0 && n == 150 {
 		t.Error("no written cache had an integer-like key")
 	}
+	if first == 0 && n == 150 {
+		requireReached(t, "internal/turnsnap/plan.go", outputs)
+		requireReached(t, "internal/turnsnap/capture.go", outputs)
+	}
 	liveSummary(t, "%d repositories, %d steps compared; outcomes %v; markers %v", n-first, steps, outcomes, reached)
 }

@@ -77,8 +77,10 @@ func signSnapshot(unsigned jsjson.Value) (jsjson.Value, error) {
 }
 
 var (
-	cacheHash     = s.String(s.Regex(s.Pattern(`^sha256:[a-f0-9]{64}$`), "Expected a sha256 digest"))
-	cacheObjectID = s.String(s.Regex(s.Pattern(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`), "Expected a Git object id"))
+	// src/turn-snapshot.ts:56-57 HashSchema and GitObjectIdSchema (the same
+	// as src/ledger.ts's).
+	cacheHash     = gitproof.HashSchema
+	cacheObjectID = gitproof.GitObjectIDSchema
 
 	// src/turn-snapshot.ts:327 PathCacheEntrySchema.
 	pathCacheEntrySchema = s.Object(
@@ -316,12 +318,12 @@ func capture(repository string, o CaptureOptions) (jsjson.Value, []string, error
 	if now == nil {
 		now = clock.Now
 	}
+	// TS's "quiescence attempt budget must be a positive integer" check
+	// (turn-snapshot.ts:1157) is not ported: no TS caller passes
+	// maxQuiescenceAttempts, and the Go seam is unexported (0 = default).
 	maxAttempts := o.maxAttempts
 	if maxAttempts == 0 {
 		maxAttempts = MaxQuiescenceAttempts
-	}
-	if maxAttempts < 1 {
-		return jsjson.Value{}, nil, &Error{Message: "Turn tree snapshot quiescence attempt budget must be a positive integer."}
 	}
 	c := o.caps.withDefaults()
 	delay := time.Duration(QuiescenceDelayMs) * time.Millisecond

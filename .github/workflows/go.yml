@@ -38,8 +38,10 @@ jobs:
       # per-platform cases may skip; on Windows, the writer cases marked
       # posixOnly (sh recorders, fake Docker), listed by name in
       # .github/scripts/windows-writer-skips.txt.
-      # TestMkdirAllFollowsSymlinks skips on Windows only where the runner
-      # may not create symlinks (no administrator, no Developer Mode).
+      # TestMkdirAllFollowsSymlinks, TestLoadRejectsSymlinkDirectoryAndOversize
+      # (internal/allowlist) and TestCaptureRefusesSymlink (internal/turnsnap)
+      # skip on Windows only where the runner may not create symlinks (no
+      # administrator, no Developer Mode).
       # TestRemoveAllUnlinkEPERM sets the immutable flag with sudo -n chattr
       # on Linux (the runners' passwordless sudo) and must not skip.
       # TestChmodMutationAfterResetModes checks POSIX permission bits, which
@@ -60,7 +62,7 @@ jobs:
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
             Windows)
               posix=$(tr -d '\r' < .github/scripts/windows-writer-skips.txt | grep -v '^#' | paste -sd '|' -)
-              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|$posix" ;;
+              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestLoadRejectsSymlinkDirectoryAndOversize|TestCaptureRefusesSymlink|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|$posix" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status
@@ -134,11 +136,20 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
       - name: Live property tests
         # Every TestLive* but the ones the jobs below run. Only the cases
-        # that need root may skip here; they run below.
+        # that need root may skip here; they run below. Slice 3a adds
+        # TestLiveSafeGitLists, TestLiveHostCmd, TestLiveConfigWriters,
+        # TestLiveRuntimeMappingWriter, TestLiveCuratedRuntime,
+        # TestLiveRepoDigestHelpers, TestLiveProjectContext (with the sparse
+        # 256 MiB context, and as the runner user, so the unreadable file and
+        # directory classes are reached: requireReached fails otherwise),
+        # TestLiveProjectPrepare, TestLiveAllowlist and TestLiveTurnSnapshot*.
+        # TestLiveTurnSnapshotCapture checks its markers and requireReached
+        # only over all 150 cases, so FAULTLINE_TURNSNAP_CASES stays unset.
         run: |
+          unset FAULTLINE_TURNSNAP_CASES
           set -o pipefail
           status=0
-          elsewhere='TestLiveInvestigate TestLiveMinimize TestLiveMinimizationVerify TestLiveProofWriter TestLiveWriterFaults TestLiveRealDocker'
+          elsewhere='TestLiveInvestigate TestLiveMinimize TestLiveMinimizationVerify TestLiveProofWriter TestLiveWriterFaults TestLiveRealDocker TestLiveRealDockerProjectBuild'
           go test -tags faultline_test -list 'TestLive' ./difftest/ | grep -E '^Test' | grep -vxF -f <(printf '%s\n' $elsewhere) > "$RUNNER_TEMP/live.list"
           tests=$(paste -sd '|' "$RUNNER_TEMP/live.list")
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($tests)\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
@@ -263,22 +274,72 @@ jobs:
           go-version: "1.27"
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - name: Install strace
-        # TestLiveWriterFaults fails single syscalls on the writer paths with
-        # strace -e inject; it fails rather than skips without strace in CI.
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
-      - name: Pull the pinned image
-        # TestLiveRealDocker runs investigate against the real daemon with
-        # --pull never.
-        run: docker pull node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
-      - name: Writer replay with TS cross-verification, faults, same directory, real Docker
+      - name: Writer replay with TS cross-verification, same directory, end to end
         # With the oracle on, every bundle Go writes is also verified by frozen TS (spec 2.4).
         run: |
           set -o pipefail
           status=0
-          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestWriterSameDirectory TestLiveWriterFaults TestLiveRealDocker'
+          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestWriterSameDirectory'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
-          FAULTLINE_REAL_DOCKER=1 FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 75m | tee "$RUNNER_TEMP/live.log" || status=$?
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 75m | tee "$RUNNER_TEMP/live.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
+          exit $status
+
+  # Split from difftest-live-replay in slice 3a: the writer fault matrix grew
+  # to about 13 minutes of strace cases with the init --yes paths.
+  difftest-live-faults:
+    name: difftest live writer faults and real Docker (frozen TS oracle)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          # Pinned: the collation data (ICU 78), the stack calibration
+          # (internal/jsjson/stack.go) and the writer goldens follow this
+          # Node release.
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install strace
+        # TestLiveWriterFaults fails single syscalls on the writer paths with
+        # strace -e inject; it fails rather than skips without strace in CI.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
+      - name: Docker's classic image store
+        # TestLiveRealDockerProjectBuild's case is a local build with no
+        # RepoDigest (PROJECT_IMAGE_BUILT_NEEDS_REGISTRY_DIGEST), which only
+        # the classic store gives; the containerd store (Docker 29's default)
+        # records one. Turn the containerd snapshotter off before the pull, so
+        # the pinned image lands in the store the tests read, and check it.
+        run: |
+          sudo python3 -I -c 'import json, os; p = "/etc/docker/daemon.json"; d = json.load(open(p)) if os.path.exists(p) else {}; d.setdefault("features", {})["containerd-snapshotter"] = False; json.dump(d, open(p, "w"), indent=2)'
+          cat /etc/docker/daemon.json
+          sudo systemctl restart docker
+          docker version --format 'client {{.Client.Version}} server {{.Server.Version}}'
+          status=$(docker info --format '{{.Driver}} {{json .DriverStatus}}')
+          echo "$status"
+          case "$status" in *io.containerd.snapshotter*) echo "::error title=docker store::the containerd image store is still on"; exit 1 ;; esac
+      - name: Pull the pinned image
+        # TestLiveRealDocker runs investigate against the real daemon with
+        # --pull never; TestLiveRealDockerProjectBuild builds FROM it.
+        run: docker pull node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+      - name: Writer faults, real Docker
+        # FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 makes
+        # TestLiveRealDockerProjectBuild fail unless the daemon recorded no
+        # RepoDigest, so the NEEDS_REGISTRY_DIGEST comparison is what ran.
+        run: |
+          set -o pipefail
+          status=0
+          tests='TestLiveWriterFaults TestLiveRealDocker TestLiveRealDockerProjectBuild'
+          printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
+          FAULTLINE_REAL_DOCKER=1 FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
           exit $status
 
@@ -293,9 +354,12 @@ jobs:
     # server, its signal stop and browser opener, the seed preload, async
     # spawn and hardened git, and materialization (on macOS a case-colliding
     # tree takes the "Could not verify materialized Git tree" refusal).
+    # Slice 3a adds the host-command runner, the project build-context walk
+    # (on macOS without the sparse 256 MiB case, which is Linux only) and
+    # turn-snapshot capture (all 150 cases: FAULTLINE_TURNSNAP_CASES unset).
     name: stack thresholds vs Node (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:
@@ -316,10 +380,11 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize'
+          unset FAULTLINE_TURNSNAP_CASES
+          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
-          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 45m | tee "$RUNNER_TEMP/live.log" || status=$?
-          if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode)$'; else allowed='^$'; fi
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 70m | tee "$RUNNER_TEMP/live.log" || status=$?
+          if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode|TestLiveProjectContext/sparse256MiB)$'; else allowed='^$'; fi
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" "$allowed" "$RUNNER_TEMP/live.list" || status=1
           exit $status
       - name: Measured stack depths

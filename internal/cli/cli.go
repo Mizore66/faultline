@@ -29,6 +29,12 @@ type env struct {
 // out is process.stdout.write: WTF-8 is encoded like Node encodes JS strings.
 func (e *env) out(s string) { io.WriteString(e.stdout, jsstr.ToUTF8(s)) }
 
+// printHumanNext ports src/cli-app.ts:156: the one next command, on stderr
+// so stdout stays machine-parseable.
+func (e *env) printHumanNext(command string) {
+	io.WriteString(e.stderr, jsstr.ToUTF8(jsexc.Concat("Next: ", command, "\n")))
+}
+
 type cliError struct{ message string }
 
 func (c *cliError) Error() string { return c.message }

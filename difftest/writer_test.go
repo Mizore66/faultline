@@ -1018,8 +1018,10 @@ func prepareWriterCase(t testing.TB, repo string, tpl writerTemplate, r writerRo
 	if os.Geteuid() == 0 && slices.ContainsFunc(tpl.Mutations, func(m template) bool { return m.str("op") == "chmod" }) {
 		t.Fatalf("%s: chmod cases must run as a non-root user", tpl.ID)
 	}
-	apply(true)
+	// Registered first, so a chmod that leaves a directory read-only and then
+	// fails the case is still undone before t.TempDir's cleanup.
 	t.Cleanup(func() { restoreWritable(r.root) })
+	apply(true)
 }
 
 // restoreWritable makes every directory under root writable again (a chmod

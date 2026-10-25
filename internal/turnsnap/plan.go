@@ -152,11 +152,10 @@ func splitNullPaths(value string) []string {
 
 // fullFileContentDigest ports src/turn-snapshot.ts:439. The stream's
 // open and read failures are Node errors (callers catch them), the rest
-// *Error.
+// *Error. TS's "max file bytes must be a positive integer" check is not
+// ported: no TS caller passes maxFileBytes, and caps.withDefaults keeps the
+// Go value positive.
 func fullFileContentDigest(absolute string, maxFileBytes int) (string, error) {
-	if maxFileBytes < 1 {
-		return "", &Error{Message: "Turn snapshot max file bytes must be a positive integer."}
-	}
 	stat, err := nodefs.Lstat(absolute)
 	if err != nil {
 		return "", &Error{Message: jsexc.Concat("FaultLine could not stat ", absolute, " for content fingerprinting.")}
