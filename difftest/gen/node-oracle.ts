@@ -47,6 +47,7 @@ import { allowlistConfigDigest, filterAllowlistedHighOccurrences, isEntropyToken
 import { captureTurnTreeSnapshot, defaultTurnSnapshotGitRunner, planTurnSnapshotPaths, turnSnapshotRepoCachePath } from "../../src/turn-snapshot.js";
 import type { TurnSnapshotGitRunner } from "../../src/turn-snapshot.js";
 import { existsSync as tsExists } from "node:fs";
+import { IncidentIntakeError, createNodeIncidentIntakeRunner, suggestIncidentRanges } from "../../src/incident-intake.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -645,6 +646,33 @@ export const handlers: Record<string, Handler> = {
     const cache = cachePath && tsExists(cachePath) && cwStat(cachePath).isFile() ? cwReadFile(cachePath, "utf8") : null;
     return JSON.stringify({ cachePath, outcome, onWarning, cache, calls });
   }),
+  // Incident intake (slice 3b, Task 3): suggestIncidentRanges on
+  // `repository`. With steps, the runner replays them like curatedRuntime
+  // (an exhausted script throws); without, it is the default Node runner.
+  // Each call records [...argv, timeoutMs, maxOutputBytes]; the result is
+  // "<canonical intake or THREW:<code>:<message>>|<canonical calls>".
+  // safeRefNames tests the unexported SAFE_REF_NAME (from dist) on each ref.
+  suggestIncidentRanges: async ({ repository, steps }: { repository: string; steps?: ({ throw: string } | DockerImageInspectResult)[] }) => {
+    const calls: unknown[] = [];
+    const inner = steps === undefined ? createNodeIncidentIntakeRunner() : scriptedDockerRunner(steps).runner;
+    const runner = { run: (command: { arguments: readonly string[]; timeoutMs: number; maxOutputBytes: number }) => {
+      calls.push([...command.arguments, command.timeoutMs, command.maxOutputBytes]);
+      return inner.run(command as any);
+    } };
+    let outcome: string;
+    try {
+      outcome = canonicalJson(await suggestIncidentRanges({ repository, runner: runner as any }));
+    } catch (error) {
+      outcome = `THREW:${error instanceof IncidentIntakeError ? error.code : "?"}:${(error as Error).message}`;
+    }
+    return `${outcome}|${canonicalJson(calls)}`;
+  },
+  safeRefNames: ({ refs }: { refs: string[] }) => {
+    const line = cwReadFile(nodePath.join(process.cwd(), "dist", "incident-intake.js"), "utf8").split("\n").find((l) => l.startsWith("const SAFE_REF_NAME = "));
+    if (line === undefined) throw new Error("SAFE_REF_NAME not found in dist/incident-intake.js");
+    const re = new Function(`${line}\nreturn SAFE_REF_NAME;`)() as RegExp;
+    return refs.map((ref) => (re.test(ref) ? "1" : "0")).join("");
+  },
   sortCodePoints: () => {
     const all: string[] = [];
     for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));
