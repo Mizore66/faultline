@@ -573,7 +573,16 @@ export const handlers: Record<string, Handler> = {
     return `${await projectOutcomeAsync(() => prepareProjectRuntimeImage(request, { buildRunner: runner, inspectRunner: runner }))}|${canonicalJson(calls)}`;
   },
   // The safe Git -c lists (internal/safegit).
-  safeGitLists: () => ({ hostCommand: [...HOST_COMMAND_SAFE_GIT_CONFIG], doctor: [...DOCTOR_SAFE_GIT_CONFIG] }),
+  // intake is INTAKE_SAFE_GIT_CONFIG, unexported from cli-app.ts, evaluated
+  // from the module-level const array literal in dist/cli-app.js.
+  safeGitLists: () => {
+    const src = cwReadFile(nodePath.join(process.cwd(), "dist", "cli-app.js"), "utf8");
+    const start = src.indexOf("const INTAKE_SAFE_GIT_CONFIG = [");
+    const end = src.indexOf("\n];", start);
+    if (start < 0 || end < 0) throw new Error("INTAKE_SAFE_GIT_CONFIG not found in dist/cli-app.js");
+    const intake = new Function(`${src.slice(start, end + 3)}\nreturn INTAKE_SAFE_GIT_CONFIG;`)();
+    return { hostCommand: [...HOST_COMMAND_SAFE_GIT_CONFIG], doctor: [...DOCTOR_SAFE_GIT_CONFIG], intake };
+  },
   // Secret allowlist and turn-snapshot path policy (slice 3a, Task 7). The
   // ignore rules and the secret scan are private to turn-snapshot.ts, so they
   // run through planTurnSnapshotPaths with a stub Git runner that lists

@@ -8,6 +8,7 @@ import (
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"io/fs"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -213,18 +214,23 @@ func wrap(err error, syscallName, path string) error {
 // CREATE_ALWAYS or CREATE_NEW on a directory fails with ERROR_FILE_EXISTS,
 // which fs__open reports as UV_EISDIR when O_CREAT comes without O_EXCL
 // and as EEXIST otherwise (libuv 1.51 src/win/fs.c:590). On Unix open(2)
-// itself gives EISDIR for "w" and EEXIST for "wx" (O_EXCL is checked
-// first), so the rule holds there too.
+// reports EISDIR for a directory (or a path ending in "/") even with
+// O_EXCL, so the EEXIST rewrite is Windows-only.
 func openWriteErr(err error, path string, exclusive bool) error {
 	var errno syscall.Errno
 	if errors.As(err, &errno) && errno == syscall.EISDIR {
-		code := "EISDIR"
-		if exclusive {
-			code = "EEXIST"
-		}
-		return &Error{Code: code, Syscall: "open", Path: errorPath(path)}
+		return &Error{Code: openWriteCode(exclusive, runtime.GOOS), Syscall: "open", Path: errorPath(path)}
 	}
 	return wrap(err, "open", path)
+}
+
+// openWriteCode is the code for an EISDIR open failure: EEXIST only for an
+// exclusive open on Windows, EISDIR otherwise.
+func openWriteCode(exclusive bool, goos string) string {
+	if exclusive && goos == "windows" {
+		return "EEXIST"
+	}
+	return "EISDIR"
 }
 
 // kIoMaxLength is the largest file readFileSync reads into a Buffer.

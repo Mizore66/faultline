@@ -33,6 +33,12 @@ func HostCommand() []string {
 	return append([]string(nil), hostCommand...)
 }
 
+// Intake ports src/cli-app.ts:380 INTAKE_SAFE_GIT_CONFIG, a literal copy of
+// HostCommand's list. Each call returns a fresh slice.
+func Intake() []string {
+	return HostCommand()
+}
+
 // Doctor ports src/doctor.ts:54 DOCTOR_SAFE_GIT_CONFIG: HostCommand plus
 // core.autocrlf=false, for deterministic diagnostic text. Each call returns
 // a fresh slice.

@@ -367,13 +367,30 @@ func TestOpenWriteErrMapsGoEISDIR(t *testing.T) {
 	if got := openWriteErr(err, "/d", false).(*Error).Code; got != "EISDIR" {
 		t.Errorf("w: %s", got)
 	}
-	if got := openWriteErr(err, "/d", true).(*Error).Code; got != "EEXIST" {
-		t.Errorf("wx: %s", got)
+	wantWx := openWriteCode(true, runtime.GOOS)
+	if got := openWriteErr(err, "/d", true).(*Error).Code; got != wantWx {
+		t.Errorf("wx: %s, want %s", got, wantWx)
 	}
 	if got := codeOf(syscall.EISDIR); got != "EISDIR" {
 		t.Errorf("codeOf(syscall.EISDIR) = %s", got)
 	}
 	if got := openWriteErr(syscall.ENOENT, "/d", true).(*Error).Code; got != "ENOENT" {
 		t.Errorf("ENOENT: %s", got)
+	}
+}
+
+func TestOpenWriteCodeByPlatform(t *testing.T) {
+	cases := []struct {
+		exclusive  bool
+		goos, want string
+	}{
+		{false, "windows", "EISDIR"}, {true, "windows", "EEXIST"},
+		{false, "linux", "EISDIR"}, {true, "linux", "EISDIR"},
+		{true, "darwin", "EISDIR"},
+	}
+	for _, c := range cases {
+		if got := openWriteCode(c.exclusive, c.goos); got != c.want {
+			t.Errorf("%v %s: %s, want %s", c.exclusive, c.goos, got, c.want)
+		}
 	}
 }
