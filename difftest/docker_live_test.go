@@ -257,6 +257,17 @@ func runInCase(t *testing.T, repo string, r writerRoots, seed string, command []
 // imageDigestPattern is an image digest in `docker image inspect` output.
 var imageDigestPattern = regexp.MustCompile(`sha256:[0-9a-f]{64}`)
 
+// buildkitGitPrefix starts every git record that docker build itself makes:
+// buildx detects a git build context with `git -c protocol.file.allow=user
+// -c log.showSignature=false rev-parse --is-inside-work-tree` (BuildKit's
+// GitCLI.Run prepends protocol.file.allow=user to every git it runs), and
+// finds git through PATH, where the recorder comes first (CI round 1,
+// ubuntu-24.04). fl never passes protocol.file.allow=user (its git lists
+// set protocol.file.allow=never), and the project build runs no git, so
+// dropping these records leaves every record fl makes, git or docker, in
+// the exact comparison, on both sides.
+const buildkitGitPrefix = "git -c\x1fprotocol.file.allow=user\x1f"
+
 // realDockerBuildTags are the image tags TestLiveRealDockerProjectBuild
 // builds, one per side, so neither side's inspect sees the other's tag.
 var realDockerBuildTags = map[string]string{"TS": "local/faultline-real-docker:ts-side", "Go": "local/faultline-real-docker:go-side"}
@@ -332,6 +343,12 @@ func TestLiveRealDockerProjectBuild(t *testing.T) {
 		buildOut, buildErr, buildExit := runInCase(t, repo, r, "", s.command, "runtime", "project", "build", "--tag", tag, "--expect-plan", digest, "--yes")
 		var argv []string
 		for _, record := range readArgvLog(r.argvLog) {
+			if strings.HasPrefix(record, buildkitGitPrefix) {
+				// docker build's own git (buildx's build-context detection
+				// runs the git on PATH, the recorder); fl runs no git here.
+				t.Logf("%s: dropping docker's own %q", s.name, record)
+				continue
+			}
 			argv = append(argv, strings.ReplaceAll(normalizeWriter(record, r), tag, "<TAG>"))
 		}
 		status := ""
