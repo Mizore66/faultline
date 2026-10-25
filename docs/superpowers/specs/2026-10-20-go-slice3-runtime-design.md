@@ -1,7 +1,7 @@
 # Go migration slice 3 — runtime, doctor, init, incident, prevention
 
 - **Date:** 2026-10-20
-- **Status:** Approved design (brainstorming session, 2026-10-20)
+- **Status:** Approved design (brainstorming session, 2026-10-20); corrected 2026-10-25 with the PR 3a plan's five corrections and what PR 3a's tasks found (package name, git config lists, doctor env, masks and harness rules, the end-to-end result, the ignore matcher, the Docker image store)
 - **Parent:** [Go migration overview](2026-09-25-go-migration-overview.md); builds on [slice 1](2026-09-25-go-slice1-verify-design.md) and [slice 2](2026-10-14-go-slice2-git-path-design.md)
 - **TS oracle:** frozen TS at `ce99a79` (`v0.1.10-buildweek`), run as `node dist/cli.js`. This is the `src/` that CI has built since slice 1. Earlier specs name `faa98c0` (`v0.1.9-buildweek`), but `14ad89d` and `ce99a79` changed `src/` after it (Section 3.1). This slice corrects the overview and `difftest/KNOWN_DIFFERENCES.md`.
 - **Tracking:** issue #211
@@ -44,7 +44,7 @@ Every other subcommand keeps throwing `not yet ported: <name>`.
 - the capture side of `src/turn-snapshot.ts` (`captureTurnTreeSnapshot`, `turnSnapshotRepoCachePath`, the repository cache, quiescence and the object alternates). The turn-bundle verifier stays where slice 2 put it, in `internal/bundle/gitproof`;
 - `src/secret-allowlist.ts` (`captureAllowlistedEvent` in `src/redaction.ts` has no caller in `src/` and stays in slice 4);
 - from `src/codex-sidecar.ts`: `codexSidecarLedgerPath` and the hook-config writer that `init --cli` uses (`sidecarCliCommand`, `codexSidecarHookConfig`, `sidecarProjectHookTarget`, `writeSidecarProjectHookConfig` in `src/cli-app.ts:1656-1760`);
-- the git config override lists `HOST_COMMAND_SAFE_GIT_CONFIG` and `DOCTOR_SAFE_GIT_CONFIG` (`src/doctor.ts`), and `INTAKE_SAFE_GIT_CONFIG` (`src/cli-app.ts:380-399`). These differ from slice 2's `materializationSafeGitConfig`.
+- the git config override lists `HOST_COMMAND_SAFE_GIT_CONFIG` and `DOCTOR_SAFE_GIT_CONFIG` (`src/doctor.ts`), and `INTAKE_SAFE_GIT_CONFIG` (`src/cli-app.ts:380-399`). These differ from slice 2's `materializationSafeGitConfig`. `HOST_COMMAND_SAFE_GIT_CONFIG` has 18 `-c` pairs (36 entries; `TestLiveSafeGitLists` compares it with TS), and `DOCTOR_SAFE_GIT_CONFIG` adds `-c core.autocrlf=false`. Two more lists derive from it: turn-snapshot capture runs git with `HOST_COMMAND_SAFE_GIT_CONFIG` + `-c core.autocrlf=false` + `-c core.attributesFile=/nonexistent/faultline-attributes` (`turn-snapshot.ts:253-281`; 40 entries), and `codexSidecarLedgerPath`'s runner uses `HOST_COMMAND_SAFE_GIT_CONFIG` alone (`codex-sidecar.ts:234`). `internal/safegit` holds all of them.
 
 ### Out of scope
 
@@ -57,14 +57,17 @@ Every other subcommand keeps throwing `not yet ported: <name>`.
 New packages, one Go file per TS module:
 
 ```
-internal/runtime      curated runtimes, Docker inspect/pull/build, context fingerprint, project image
+internal/runtimeimage curated runtimes, Docker inspect/pull/build, context fingerprint, project image
 internal/doctor       checks, preflight, security self-test, summary
 internal/projinit     planProjectInit and apply, .faultlineignore, sidecar hook config
 internal/turnsnap     capture, repository cache, quiescence, alternates
 internal/allowlist    secret-allowlist
 internal/incident     intake (suggest), draft, store, continue
-internal/safegit      the HOST_COMMAND, DOCTOR and INTAKE override lists
+internal/safegit      the HOST_COMMAND, DOCTOR, TURN_SNAPSHOT and INTAKE override lists
+internal/hostcmd      the shared runner for Node's decoded-chunk spawn capture (doctor.ts, runtime.ts)
 ```
+
+The runtime package is `internal/runtimeimage`, not `internal/runtime`: that name would shadow the standard `runtime` package in every importer (plan correction 1).
 
 - `internal/bundle/prevention` gains the writer, `--from-bundle` builder and `AGENTS.md` upsert next to slice 1's verifier.
 - The config and runtime-mapping writers join their read sides in `internal/gitinv`.
@@ -94,10 +97,17 @@ Go reads them in TS's order. The quiescence wait (`Atomics.wait`, 50 ms per atte
 - **Fake Docker** (`difftest/testdata/fakedocker/`) gains scripted answers for `image inspect --format {{json .RepoDigests}}` (digest present, absent, malformed), `pull`, `build`, `--version` and `info --format {{.ServerVersion}}`, with failures, slow exits past the timeout and output past the cap.
 - **Fake toolchain for `doctor`:** a `git` wrapper on `PATH` answers `--version` and passes every other call to the real git; a fake `node` answers `--version`. The harness starts the oracle by absolute path, so the fake `node` does not affect it. `doctor` output then does not depend on the machine.
 - **Real git** for `init --yes`, `doctor --security`, turn-snapshot capture, `incident suggest` and `incident start`, as slice 2's investigate cases do.
+- **Harness rules added in 3a** (each a no-op on every slice 2 golden, which a full regeneration showed):
+  - the `fakeTools` template key selects a toolchain under `difftest/testdata/faketools/<name>`; PATH is the recorder, then `faketools/<name>`, then `fakedocker/<name>`, then the inherited PATH;
+  - `doctor` starts git, node and docker `--version` together (`Promise.all`), so their order in the recorded argv is racy on both sides: every run of consecutive `--version` records is sorted by UTF-16 code unit, and nothing else is reordered (`fl init --yes --cli` runs doctor twice);
+  - a Git index (`.git/index` at any depth, and a linked worktree's `.git/worktrees/<name>/index`) holds stat data that differs between the two case directories and that git rewrites on a plain `git status`, so it is compared by the SHA-256 of `git ls-files --stage -z` read from it;
+  - a loose object in the turn-snapshot store (`.git/faultline/objects/xx/…`) is zlib-compressed by git, so its bytes depend on the zlib git links: it is compared by its name, the id of the object it holds;
+  - a `chmod` mutation op, applied on both sides after the mode reset, makes a directory read-only; such cases need a non-root user, and both harness sides fail loudly as root;
+  - each recorder appends a record in one write, so concurrent doctor processes cannot interleave records.
 
 ### 2.3 What a case compares
 
-1. stdout, stderr and the exit code, with slice 2's normalizations and a new `<TMPDIR>` mask for the `doctor --security` path;
+1. stdout, stderr and the exit code, with slice 2's normalizations. The `doctor --security` fixture path needs no new mask: the slice 2 harness already points `TMPDIR` at the case's `<TMP>`, so the path prints as `<TMP>/faultline-doctor-security-<seeded>`. Project build plans print a digest over the absolute context directory and Dockerfile, which differ between the TS and Go case directories: a `<PLANDIGEST>` mask replaces a printed plan digest only when it equals the `digestJson` of the plan fields printed beside it (so a wrong Go digest stays unmasked and fails), and an argv string `<STDOUT:n:/json/pointer>` takes the string at that pointer of invocation n's stdout (`runtime project build --expect-plan <STDOUT:0:/plan/review/planDigest>`);
 2. the tree digest and file modes of every path the command wrote, which now includes `.faultline/`, `.faultlineignore`, `.codex/hooks.json`, `.git/faultline/` (objects, cache), `.git/objects/info/alternates`, witness and draft stores, bindings, prevention packages and `AGENTS.md`;
 3. the recorded `git` and `docker` argv sequence.
 
@@ -131,7 +141,7 @@ For inputs a golden list cannot enumerate, both sides run on generated inputs an
 
 ### 2.6 Not compared byte for byte
 
-- Real Docker daemon output (`build`, `pull`): masked as in slice 2.
+- Real Docker daemon output (`build`, `pull`): masked as in slice 2. The real-Docker `runtime project build` comparison also depends on the daemon's image store: the classic store records no RepoDigest for a local build (`PROJECT_IMAGE_BUILT_NEEDS_REGISTRY_DIGEST`, exit 1), the containerd store (Docker 29's default) records one (`PROJECT_IMAGE_PREPARED_LOCAL_DIGEST`), and podman records `localhost/<repository>@sha256:…` (`UNEXPECTED_REPOSITORY`). The test compares TS and Go on whichever store runs; CI forces the classic store.
 - Real host tool versions, when a test runs without the fake toolchain.
 - Quiescence wall time.
 
@@ -155,9 +165,9 @@ Go keeps TS's choice of synchronous or asynchronous spawn at each call site, and
   - `incident suggest`'s git calls;
   - every `runtime` Docker call.
 
-  Each keeps its own timer, SIGKILL on timeout and output cap: 5 s and 64 KiB for checks and `image inspect`; 5 min for `pull`; 10 min and 128 KiB for `build`.
+  Each keeps its own timer, SIGKILL on timeout and output cap: 5 s and 64 KiB for checks and `image inspect`; 5 min for `pull`; 10 min and 128 KiB for `build`. Doctor's asynchronous calls pass no `env` and no `cwd`: they inherit both, including the user's global git config, and only the `-c` overrides apply.
 - **Synchronous, through slice 1's `spawnSync` port:**
-  - `doctor --security`'s git calls;
+  - `doctor --security`'s git calls, with an env stripped to `PATH`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` and `GIT_TERMINAL_PROMPT=0` (plus `SystemRoot`/`ComSpec` on Windows; not `PATHEXT`);
   - `init`'s hook-target `rev-parse`;
   - turn-snapshot capture;
   - `incident start`'s `git show -s --format=%H%n%P HEAD`.
@@ -182,12 +192,13 @@ When a write or a child process fails part way, Go leaves the same files behind 
 - The same git argv sequence (`ls-files`, `status`, `rev-parse HEAD`, `read-tree`, `update-index`, `hash-object -w --stdin`, `write-tree`, `cat-file -e`) and the same environment.
 - The same temporary index, quiescence loop (up to 4 attempts) and cache format.
 - `init`'s pre-warm reports `snapshotPrewarm.status: "SKIPPED"` on the same failures, and writes the same stderr lines.
+- `.faultlineignore` rules do not run through `jsre`: TS builds each line into a `RegExp` with flag `i`, whose `[^/]` and non-ASCII literals `jsre` cannot compile with JS semantics. `internal/turnsnap/ignore.go` keeps TS's regex source and matches it with a set-of-states scan over UTF-16 units (ECMAScript case folding without `u` from a V8-verified table, `.` excluding line terminators, last match wins). V8's "Regular expression too large" and "Stack overflow" on lines of tens of kilobytes are not reproduced (KNOWN_DIFFERENCES).
 
 ### 3.5 Runtime
 
 - The curated images are exactly `node:22-alpine`, `python:3.13-alpine` and `golang:1.24-alpine`.
 - `--pull` is rejected; `--yes` gates `prepare` and `project build` as in TS.
-- The build-context fingerprint keeps TS's walk order, limits and error texts.
+- The build-context fingerprint keeps TS's walk order, limits and error texts. `normalizeProjectBuildPaths` requires an absolute `contextDirectory` (`runtime.ts:363`); a relative Dockerfile is resolved against the context, not the process cwd.
 - `--expect-plan` matching and every status are unchanged, including the exit-1 statuses `CONFIRMATION_REQUIRED`, `PROJECT_IMAGE_DIGEST_UNAVAILABLE` and `PROJECT_IMAGE_BUILT_NEEDS_REGISTRY_DIGEST`.
 
 ### 3.6 Incident and prevention
@@ -200,7 +211,7 @@ When a write or a child process fails part way, Go leaves the same files behind 
 
 ### 3.7 Expected KNOWN_DIFFERENCES entries
 
-Added as they are confirmed: real `docker build` and `pull` diagnostics; host tool version strings outside the fake toolchain; quiescence timing. `difftest/KNOWN_DIFFERENCES.md` holds the final list, and its title moves to `ce99a79`.
+Added as they are confirmed: real `docker build` and `pull` diagnostics and the image-store dependency of the project build status; host tool version strings outside the fake toolchain; quiescence timing; oversized `.faultlineignore` rules (V8's regex size limit); the non-deterministic V8 stack depth at `fl init`'s config and secret-allowlist zod sites. `difftest/KNOWN_DIFFERENCES.md` holds the final list, and its title moves to `ce99a79`.
 
 ## 4. CI and done criteria
 
@@ -225,7 +236,7 @@ Each holds for PR 3a and again for PR 3b, for the commands that PR ports.
 1. `go test ./...` passes on all six runners, and every writer case matches its golden: stdout, stderr, exit code, written-tree digest with modes, and git and Docker argv.
 2. `difftest-live` and `stack-live` pass, including the real-Docker comparison.
 3. The commands run end to end on the Go binary without Node:
-   - **3a:** `fl init --yes` → `fl doctor --proof-ready` → `fl runtime prepare node --yes`;
+   - **3a:** `fl init --yes` → `fl doctor --proof-ready` → `fl runtime prepare node --yes` (with fake Docker). Without `node` on `PATH`, `doctor` reports the node check UNAVAILABLE and exits 1 by design (Section 3.1), so `--proof-ready` prints `NOT READY`; the check (`TestEndToEndSlice3aWithoutNode`) asserts that result, and that `init` and `runtime prepare` succeed;
    - **3b:** `incident start` → `witness approve` and `freeze` → `incident continue` → `prevention write --from-bundle` → `fl verify`.
 4. Every Git proof bundle and prevention proof Go writes verifies under both the Go and the TS verifier.
 5. `difftest/KNOWN_DIFFERENCES.md` lists every intentional difference.

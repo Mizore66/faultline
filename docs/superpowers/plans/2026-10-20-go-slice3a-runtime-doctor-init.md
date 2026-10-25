@@ -106,7 +106,7 @@ difftest/runtime_live_test.go, turnsnap_live_test.go, doctor_live_test.go, allow
 
 **Interfaces:**
 - Produces:
-  - `safegit.HostCommand() []string` (19 `-c` pairs, exact order of `doctor.ts:26-46`), `safegit.Doctor() []string` (HostCommand plus `-c core.autocrlf=false`), `safegit.TurnSnapshot() []string` (HostCommand plus `-c core.autocrlf=false -c core.attributesFile=/nonexistent/faultline-attributes`). Each returns a fresh slice.
+  - `safegit.HostCommand() []string` (18 `-c` pairs, 36 entries, exact order of `doctor.ts:26-46`; the test below was written for 19 and Task 1 corrected its indices to 36/35/36/38), `safegit.Doctor() []string` (HostCommand plus `-c core.autocrlf=false`), `safegit.TurnSnapshot() []string` (HostCommand plus `-c core.autocrlf=false -c core.attributesFile=/nonexistent/faultline-attributes`). Each returns a fresh slice.
   - `nodeproc.SpawnSyncOptions{Env []string /* nil = inherit */; Input []byte; HasInput bool; Cwd string; MaxBuffer int /* 0 = Node default 1024*1024 */}` and `nodeproc.SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result`.
   - `hostcmd.Options{Timeout time.Duration; MaxOutputBytes int; ErrorJoin string}`, `hostcmd.Result{ExitCode *int; Stdout, Stderr string; TimedOut, OutputLimitExceeded bool}`, `hostcmd.Run(file string, args []string, o Options) (Result, error)`. `error` is non-nil only where the TS runner would reject; neither TS runner rejects, so callers treat it as a bug.
 
@@ -128,7 +128,7 @@ difftest/runtime_live_test.go, turnsnap_live_test.go, doctor_live_test.go, allow
 - `SpawnSyncWith` with `HasInput` writes `Input` to the child's stdin and closes it, like Node's `input` option. `Env` is passed verbatim. On Windows, keep `nodeproc`'s existing env-block sorting (`envPairs`).
 - Node's spawnSync `maxBuffer` covers stdout and stderr separately. Check the slice 1 implementation and keep its ENOBUFS semantics (the `fakegit/enobufs` cases pin them).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `internal/safegit/safegit_test.go`:
 
@@ -199,22 +199,22 @@ func TestMissingExecutable(t *testing.T) {
 
 Add `TestSpawnSyncWithEnvAndInput` to `internal/nodeproc/spawn_test.go`: run `sh -c 'printf %s "$FOO"; cat'` with `Env: []string{"FOO=bar", "PATH=" + os.Getenv("PATH")}`, `Input: []byte("in")`, `HasInput: true`. Expect stdout `barin`.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/safegit/ ./internal/hostcmd/ ./internal/nodeproc/ -run 'TestLists|TestBudget|TestTimeout|TestMissing|TestSpawnSyncWith'`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement** by transcription. Add the live op `safeGitLists` to `node-oracle.ts`: import `HOST_COMMAND_SAFE_GIT_CONFIG` and `DOCTOR_SAFE_GIT_CONFIG` from `dist/doctor.js` and return both. Add `TestLiveSafeGitLists`, which compares them with `safegit.HostCommand()` and `safegit.Doctor()`. Add `TestLiveHostCmd` to `difftest/spawn_live_test.go`. It runs a small Node script that calls the TS runner (`createNodeDoctorRunner` from `dist/doctor.js`) and `hostcmd.Run` on the same commands, and compares the results:
+- [x] **Step 3: Implement** by transcription. Add the live op `safeGitLists` to `node-oracle.ts`: import `HOST_COMMAND_SAFE_GIT_CONFIG` and `DOCTOR_SAFE_GIT_CONFIG` from `dist/doctor.js` and return both. Add `TestLiveSafeGitLists`, which compares them with `safegit.HostCommand()` and `safegit.Doctor()`. Add `TestLiveHostCmd` to `difftest/spawn_live_test.go`. It runs a small Node script that calls the TS runner (`createNodeDoctorRunner` from `dist/doctor.js`) and `hostcmd.Run` on the same commands, and compares the results:
 - 30 generated `sh -c` programs that print random UTF-8 (including 4-byte characters) in random chunk sizes;
 - caps of 1–200 bytes;
 - exits, signals and timeouts.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/safegit/ ./internal/hostcmd/ ./internal/nodeproc/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run 'TestLiveSafeGitLists|TestLiveHostCmd' -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/safegit internal/hostcmd internal/nodeproc difftest
@@ -264,7 +264,7 @@ Transcribe `src/config.ts:38-125` and `src/runtime-mapping-file.ts:30-64`.
   - Writes use `mkdirSync(dirname, {recursive: true})` (0o777 before umask) and `writeFileSync(path, ..., "utf8")` (0o666, flag `w`).
 - Mapping keys that look like integers cannot occur, because they are `sha256:` digests. Still use `*jsjson.Obj` so insertion order is kept.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `internal/gitinv/write_test.go`:
 
@@ -314,19 +314,19 @@ Live tests:
 - `TestLiveConfigWriters`: 500 generated sequences of `ensure`/`update` calls on repositories with no config, a valid config, or a config with a runtime, with random alias/image combinations. Compare the status, the file bytes and the mode after each call.
 - `TestLiveRuntimeMappingWriter`: 1,000 generated pair lists (valid, malformed digest, unpinned image, duplicates, conflicts) with a fixed `generatedAt`. Compare the file bytes or the `THREW:` message.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test -tags faultline_test ./internal/gitinv/ -run 'TestEnsureConfig|TestWriteRuntimeMapping'`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement** by transcription.
+- [x] **Step 3: Implement** by transcription.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test -tags faultline_test ./internal/gitinv/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run 'TestLiveConfigWriters|TestLiveRuntimeMappingWriter' -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/gitinv difftest
@@ -372,7 +372,7 @@ Transcribe `src/runtime.ts:11-56, 135-340, 598-654, 720-841, 917-1005`.
   - Copy every message text and code verbatim from `runtime.ts`.
 - **Prepare:** pull, then resolve. The result is `{...resolved, pull: {tag, resolvedRepoDigest}}`, with insertion order kept.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `internal/runtimeimage/curated_test.go`:
 
@@ -427,19 +427,19 @@ Add one test per remaining `tests/runtime.test.ts` case from lines 122–273: no
 
 Live: `TestLiveCuratedRuntime` runs 1,500 generated scripted-runner sequences in both implementations and compares the canonical result or the `THREW:<code>:<message>`. The sequences cover random RepoDigests output (valid, other repo, mutable tag, malformed JSON, non-array, very long stderr with CR/LF and astral characters), exit codes, timeouts and output limits.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/runtimeimage/`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement** by transcription.
+- [x] **Step 3: Implement** by transcription.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/runtimeimage/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run TestLiveCuratedRuntime -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/runtimeimage difftest
@@ -506,7 +506,7 @@ Transcribe `src/runtime.ts:345-596, 661-719, 842-916`.
 
   No inspect runs after a failed, timed-out or output-limited build. The prepared object's key order is at 897.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `internal/runtimeimage/project_test.go`:
 
@@ -567,19 +567,19 @@ Live: `TestLiveProjectContext` builds 200 generated contexts and compares the `d
 
 `TestLiveProjectPrepare` runs 500 scripted build and inspect sequences.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/runtimeimage/ -run 'TestDescribe|TestSymlink'`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement** by transcription.
+- [x] **Step 3: Implement** by transcription.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/runtimeimage/ && FAULTLINE_NODE_ORACLE=1 timeout 280 go test -tags faultline_test ./difftest/ -run 'TestLiveProjectContext|TestLiveProjectPrepare' -v > /tmp/s3a-t4.log 2>&1; tail -5 /tmp/s3a-t4.log`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/runtimeimage difftest .github/scripts/check-skips.sh
@@ -650,12 +650,12 @@ Transcribe `src/cli-app.ts:695-877`.
   - `runtime-project-build-fail`, `runtime-project-resolve-nodigest`, `runtime-project-resolve-ok`
 - **usage errors:** one case per usage error in `runtimeCommand`.
 
-- [ ] **Step 1: Add the writer cases to `writers.json` and run the replay to see them fail**
+- [x] **Step 1: Add the writer cases to `writers.json` and run the replay to see them fail**
 
 Run: `go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/runtime-'`
 Expected: FAIL (`no golden for runtime-resolve-node|0`), then, after goldens are generated, `not yet ported: runtime`.
 
-- [ ] **Step 2: Write `internal/cli/runtime_test.go`** with direct tests for the pair scanner:
+- [x] **Step 2: Write `internal/cli/runtime_test.go`** with direct tests for the pair scanner:
 
 ```go
 package cli
@@ -672,18 +672,18 @@ func TestMappingPairScanReusesValues(t *testing.T) {
 
 Copy the expected error text from `cli-app.ts:805-815`.
 
-- [ ] **Step 3: Implement the handler and the fakes; generate goldens**
+- [x] **Step 3: Implement the handler and the fakes; generate goldens**
 
 ```bash
 pnpm build && pnpm exec tsx difftest/gen/scenarios.ts && pnpm exec tsx difftest/gen/gen-writers.ts
 ```
 
-- [ ] **Step 4: Run to verify the replay passes**
+- [x] **Step 4: Run to verify the replay passes**
 
 Run: `go test ./internal/cli/ && go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/runtime-|TestWindowsWriterSkipsList' -v`
 Expected: PASS. A mismatch is fixed in Go, never in the golden.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/cli difftest .github
@@ -773,7 +773,7 @@ Transcribe `src/doctor.ts:1-543, 767-829` and `src/cli-app.ts:302-378`.
 - **hostile config:** `doctor-hostile-fsmonitor` (the `tests/cli.test.ts:664` case; assert that no marker file appears in the tree)
 - **usage errors:** `doctor-security-and-proof-ready`, `doctor-repo-missing-value`
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 `internal/doctor/doctor_test.go` (an injected runner, like `tests/doctor.test.ts`):
 
@@ -815,19 +815,19 @@ func TestGitMissingMakesRepoChecksInapplicable(t *testing.T) {
 
 Port the other eight `tests/doctor.test.ts` cases the same way, all except the live `--security` one, which goes to Task 9.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/doctor/`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement** the package, the CLI handler, the fake toolchains, the `fakeTools` template key (TS and Go), the argv `--version` normalization and the `.git/index` rule. Add the writer cases and generate the goldens (same commands as Task 5).
+- [x] **Step 3: Implement** the package, the CLI handler, the fake toolchains, the `fakeTools` template key (TS and Go), the argv `--version` normalization and the `.git/index` rule. Add the writer cases and generate the goldens (same commands as Task 5).
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/doctor/ ./internal/cli/ && go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/doctor-|TestWindowsWriterSkipsList' -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/doctor internal/cli difftest .github
@@ -883,7 +883,7 @@ Transcribe `src/secret-allowlist.ts` (all) and `src/turn-snapshot.ts:51-158, 368
   - Error texts are at `turn-snapshot.ts:898, 927, 936, 942, 1080, 1084, 1097, 1108`, plus `Could not load secret allowlist: …`.
   - The entropy uses `Math.log2` on JS doubles. Compute it in the same order (sum of `-p*log2(p)` over characters in first-seen order) so the comparison against 4.5 rounds the same way.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `internal/turnsnap/ignore_test.go`:
 
@@ -916,19 +916,19 @@ Live tests:
 
 If the TS functions are not exported, `TestLiveTurnSnapshotIgnore` and `TestLiveTurnSnapshotScan` run through `captureTurnTreeSnapshot` on a one-commit repository after Task 8. Note that in the test file and move these two tests to Task 8.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/allowlist/ ./internal/turnsnap/`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement** by transcription.
+- [x] **Step 3: Implement** by transcription.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/allowlist/ ./internal/turnsnap/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run 'TestLiveAllowlist|TestLiveTurnSnapshotIgnore|TestLiveTurnSnapshotScan' -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/allowlist internal/turnsnap difftest
@@ -998,7 +998,7 @@ Transcribe `src/turn-snapshot.ts:177-300, 327-345, 439-660, 772-1335`.
 - **Sleep:** the default is a blocking `time.Sleep(50ms)`, skipped when the delay is 0 or less. The live op and the Go test both pass a no-op, so quiescence never retries on a quiet repository.
 - **Batch staging:** PR #195's batch staging is not in frozen TS. Do not add it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `internal/turnsnap/capture_test.go` (needs real git, so skip if `git` is missing):
 
@@ -1068,19 +1068,19 @@ Live: `TestLiveTurnSnapshotCapture` uses 150 generated repositories and compares
 
 Each repository is copied twice so both sides start from identical bytes.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/turnsnap/ -run 'TestCleanCapture|TestDirtyCapture'`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement** by transcription.
+- [x] **Step 3: Implement** by transcription.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/turnsnap/ ./internal/bundle/gitproof/ && FAULTLINE_NODE_ORACLE=1 timeout 280 go test -tags faultline_test ./difftest/ -run 'TestLiveTurnSnapshot' -v > /tmp/s3a-t8.log 2>&1; tail -5 /tmp/s3a-t8.log`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/turnsnap internal/bundle/gitproof difftest
@@ -1134,9 +1134,9 @@ Transcribe `src/doctor.ts:545-760` and the `--security` branch of `doctorCommand
 **Writer cases** (`posixOnly`, fakeTools `ready`):
 - `doctor-security`, `doctor-security-json`
 - `doctor-security-hostile-global-config` (sets `HOME` gitconfig with `core.hooksPath`; the stripped env must ignore it)
-- `doctor-security-tmp-unwritable` (`TMPDIR` points to a read-only directory; `mkdtemp` fails with Node's `EACCES` text)
+- `doctor-security-tmp-missing` (`TMPDIR` points to a missing directory, `<WS>/does-not-exist`; `mkdtemp` fails with Node's `ENOENT` text. First written as `doctor-security-tmp-unwritable` with `TMPDIR=/etc` and `EACCES`, which a root golden run would not reproduce; renamed in Task 13)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `internal/doctor/security_test.go`:
 
@@ -1164,19 +1164,19 @@ func TestSecuritySelfTestIsSecure(t *testing.T) {
 
 (Add `git` to `check-skips.sh`'s allowed skip reasons only if a CI runner lacks it. None does today, so the skip must never fire in CI.)
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/doctor/ -run TestSecuritySelfTest`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement**, add the writer cases and generate goldens.
+- [x] **Step 3: Implement**, add the writer cases and generate goldens.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/doctor/ && go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/doctor-security' -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/doctor internal/cli difftest .github
@@ -1257,7 +1257,7 @@ Transcribe `src/project-init.ts` (all), `src/cli-app.ts:1611-1755, 1839-1951` an
   - `init-standing-no-yes`, `init-standing-blank-command`, `init-standing-nan-timeout`, `init-standing-custom-id`
 - **usage errors:** one case per usage error.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `internal/projinit/projinit_test.go`:
 
@@ -1288,19 +1288,19 @@ func TestStarterIgnoreEndsWithNewline(t *testing.T) {
 
 Also port `tests/coh12-autonomous-session.test.ts:151` (`Plan` with a standing policy gives CREATED and the policy path) and the `tests/cli.test.ts:1025` plan/apply sequence as a Go test that drives `initCommand` on a temp repository with a fake doctor runner.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/projinit/`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement**, add the scenarios and writer cases, and generate goldens.
+- [x] **Step 3: Implement**, add the scenarios and writer cases, and generate goldens.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/projinit/ ./internal/cli/ && go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/init-|TestWindowsWriterSkipsList' -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/projinit internal/cli difftest .github
@@ -1336,12 +1336,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `runtime prepare` exits 0 with `PREPARED_LOCAL_DIGEST`;
   - `.faultline/config.json` holds the resolved image.
 
-- [ ] **Step 1: Add the cases and the end-to-end test; generate goldens; run**
+- [x] **Step 1: Add the cases and the end-to-end test; generate goldens; run**
 
 Run: `go test -tags faultline_test ./difftest/ -run 'TestWriterReplay|TestEndToEndSlice3aWithoutNode' > /tmp/s3a-t11.log 2>&1; tail -20 /tmp/s3a-t11.log`
 Expected: PASS after Go fixes. A mismatch is fixed in Go, never in the golden.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add difftest
@@ -1379,17 +1379,17 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Benchmark** (spec 4.2 point 7): time `doctor` (fakeTools `ready`) and `init --yes` on a 2,000-file dirty repository for TS and Go. Record the median and range of 10 runs in `BENCHMARK.md`, as in slice 2.
 
-- [ ] **Step 1: Extend the matrix and run it to see mismatches**
+- [x] **Step 1: Extend the matrix and run it to see mismatches**
 
 Run: `FAULTLINE_NODE_ORACLE=1 timeout 280 go test -tags faultline_test ./difftest/ -run TestLiveWriterFaults > /tmp/s3a-t12.log 2>&1; grep -E '^(---|FAIL|ok)' /tmp/s3a-t12.log | head -40` (on Linux, or in the podman image `localhost/r73img`)
 Expected: the new cases are listed. Fix every mismatch in Go.
 
-- [ ] **Step 2: Add the real-Docker test and benchmarks; run them**
+- [x] **Step 2: Add the real-Docker test and benchmarks; run them**
 
 Run: `FAULTLINE_NODE_ORACLE=1 FAULTLINE_REAL_DOCKER=1 go test -tags faultline_test ./difftest/ -run TestLiveRealDockerProjectBuild -v && go test -tags faultline_test ./difftest/ -run '^$' -bench 'BenchmarkDoctor|BenchmarkInitYes' -benchtime 10x`
 Expected: PASS; numbers recorded.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add difftest
