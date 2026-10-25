@@ -29,7 +29,7 @@ func Basename(p string) string {
 func WriteFileSyncUTF8(path, text string, mode fs.FileMode) error {
 	f, err := os.OpenFile(sysPath(path), os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
-		return wrap(err, "open", path)
+		return openWriteErr(err, path, true)
 	}
 	data := []byte(jsstr.ToUTF8(text))
 	for len(data) > 0 {

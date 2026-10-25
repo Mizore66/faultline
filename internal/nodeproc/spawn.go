@@ -191,7 +191,14 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	if overflow {
 		result.Err = spawnError(file, "ENOBUFS")
 	} else if pipeErr != nil {
-		result.Err = spawnError(file, nodefs.SystemErrorName(pipeErr))
+		code, failsStart := inputWriteError(pipeErr, runtime.GOOS)
+		if failsStart {
+			// SyncProcessRunner::TryInitializeAndRunLoop returns as soon
+			// as a pipe fails to start, before uv_run: no exit status and
+			// no output (status, stdout and stderr are null).
+			return Result{Err: spawnError(file, code)}
+		}
+		result.Err = spawnError(file, code)
 	}
 	// Node reports the exit code whenever the child exited normally, even
 	// alongside ENOBUFS.
@@ -200,6 +207,35 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 		result.Status = &status
 	}
 	return result
+}
+
+// errorNoData is Windows' ERROR_NO_DATA.
+const errorNoData = syscall.Errno(232)
+
+// inputWriteError names a failed write of the input option as Node's
+// SyncProcessStdioPipe reports it on goos, and whether the failure stops
+// spawnSync before its loop runs.
+//
+// On Unix, libuv delivers every uv_write error to the write callback, so the
+// loop runs, the child is waited for, and the error is the pipe error.
+//
+// On Windows (libuv 1.51 src/win/stream.c and pipe.c), uv_write returns an
+// error from WriteFile itself through uv_translate_write_sys_error, which
+// makes ERROR_BROKEN_PIPE and ERROR_NO_DATA EPIPE, and
+// SyncProcessStdioPipe::Start's failure ends spawnSync at once. A write that
+// was queued and fails later completes through uv__process_pipe_write_req
+// with plain uv_translate_sys_error, where ERROR_BROKEN_PIPE is EOF. The
+// named-pipe driver fails a write begun after the reader closed with
+// STATUS_PIPE_CLOSING (ERROR_NO_DATA) and completes a pending write broken
+// by the reader's close with STATUS_PIPE_BROKEN (ERROR_BROKEN_PIPE). Go's
+// blocking write cannot tell the two apart otherwise, so ERROR_NO_DATA is
+// the synchronous EPIPE, and ERROR_BROKEN_PIPE keeps the table's EOF.
+func inputWriteError(err error, goos string) (code string, failsStart bool) {
+	var errno syscall.Errno
+	if goos == "windows" && errors.As(err, &errno) && errno == errorNoData {
+		return "EPIPE", true
+	}
+	return nodefs.SystemErrorName(err), false
 }
 
 // stdio holds the parent's ends (stdin shut down for writing, stdout and

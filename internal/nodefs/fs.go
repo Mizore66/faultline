@@ -151,6 +151,12 @@ func codeOf(err error) string {
 			if code, ok := win32Codes[uintptr(errno)]; ok {
 				return code
 			}
+			// Go's syscall.Open invents EISDIR (APPLICATION_ERROR+n, not a
+			// Win32 code) for a directory opened for writing; see
+			// openWriteErr for the code libuv reports there.
+			if errno == syscall.EISDIR {
+				return "EISDIR"
+			}
 			return "UNKNOWN"
 		}
 		if code, ok := unixCodes[errno]; ok {
@@ -197,6 +203,28 @@ func wrap(err error, syscallName, path string) error {
 		code = "ENOTDIR"
 	}
 	return &Error{Code: code, Syscall: syscallName, Path: errorPath(path)}
+}
+
+// openWriteErr is a failed open(path, "w") (exclusive false) or "wx"
+// (exclusive true). On Windows, Go's syscall.Open leaves out
+// FILE_FLAG_BACKUP_SEMANTICS when writing, so CreateFileW on a directory
+// fails with ERROR_ACCESS_DENIED and Go invents syscall.EISDIR. libuv's
+// fs__open always sets that flag, so the create disposition decides:
+// CREATE_ALWAYS or CREATE_NEW on a directory fails with ERROR_FILE_EXISTS,
+// which fs__open reports as UV_EISDIR when O_CREAT comes without O_EXCL
+// and as EEXIST otherwise (libuv 1.51 src/win/fs.c:590). On Unix open(2)
+// itself gives EISDIR for "w" and EEXIST for "wx" (O_EXCL is checked
+// first), so the rule holds there too.
+func openWriteErr(err error, path string, exclusive bool) error {
+	var errno syscall.Errno
+	if errors.As(err, &errno) && errno == syscall.EISDIR {
+		code := "EISDIR"
+		if exclusive {
+			code = "EEXIST"
+		}
+		return &Error{Code: code, Syscall: "open", Path: errorPath(path)}
+	}
+	return wrap(err, "open", path)
 }
 
 // kIoMaxLength is the largest file readFileSync reads into a Buffer.
