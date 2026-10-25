@@ -543,3 +543,27 @@ func TestSafeRefName(t *testing.T) {
 		}
 	}
 }
+
+// TestIsInsideDirectoryIdentityWalk covers the dev/ino fallback: on a
+// case-insensitive filesystem a differently-cased spelling of the root is
+// the same directory, which path.relative cannot see.
+func TestIsInsideDirectoryIdentityWalk(t *testing.T) {
+	base := realTempDir(t)
+	sub := filepath.Join(base, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !isInsideDirectory(sub, base) || !isInsideDirectory(base, base) || isInsideDirectory(base, sub) {
+		t.Fatal("relative check")
+	}
+	upper := filepath.Join(filepath.Dir(base), strings.ToUpper(filepath.Base(base)))
+	if _, err := os.Stat(upper); err != nil {
+		t.Skip("case-sensitive filesystem")
+	}
+	if !isInsideDirectory(sub, upper) {
+		t.Error("identity walk did not accept the same directory")
+	}
+	if isInsideDirectory(realTempDir(t), upper) {
+		t.Error("identity walk accepted an unrelated directory")
+	}
+}
