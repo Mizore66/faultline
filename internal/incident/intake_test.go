@@ -491,7 +491,7 @@ func TestNodeIntakeRunnerBoundsOutput(t *testing.T) {
 // safeRefNameByDefinition evaluates SAFE_REF_NAME's lookahead literally:
 // at every position the lookahead's .* can reach (it cannot consume a line
 // terminator), try each alternative; then match the final class with Go's
-// regexp. (TestLiveIncidentSuggest compares safeRefName with the TS regex.)
+// regexp. (TestLiveIncidentSuggest compares SafeRefName with the TS regex.)
 func safeRefNameByDefinition(s string) bool {
 	rest, found := strings.CutPrefix(s, "refs/")
 	if !found {
@@ -525,7 +525,7 @@ func TestSafeRefName(t *testing.T) {
 	pieces := []string{"refs/", "refs", "heads", "remotes/origin/", "main", "/", "//", ".", "..", "@", "@{", "{", "}", "~", "^", ":", "?", "*", "[", "\\",
 		" ", "\t", "\n", "\r", "\u00a0", "\u2028", "\u3000", "\ufeff", "é", "-", "_", "#", "!", "$", "%", "&", "'", "(", ")", "+", ",", ";", "=", "a", "Z", "0", ".lock", "\x00", "\"", "<", "|"}
 	for _, s := range []string{"refs/remotes/origin/main", "refs/", "refs/a.", "refs/a/", "refs/a..b", "refs/a@{b", "refs/a//b", "refs/@", "refs/.a", "refs/a@b", "--unsafe", "refs/a\nb"} {
-		if got, want := safeRefName(s), safeRefNameByDefinition(s); got != want {
+		if got, want := SafeRefName(s), safeRefNameByDefinition(s); got != want {
 			t.Errorf("%q: %v, want %v", s, got, want)
 		}
 	}
@@ -538,7 +538,7 @@ func TestSafeRefName(t *testing.T) {
 			b.WriteString(pieces[r.IntN(len(pieces))])
 		}
 		s := b.String()
-		if got, want := safeRefName(s), safeRefNameByDefinition(s); got != want {
+		if got, want := SafeRefName(s), safeRefNameByDefinition(s); got != want {
 			t.Fatalf("%q: %v, want %v", s, got, want)
 		}
 	}

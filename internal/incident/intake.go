@@ -43,14 +43,14 @@ var gitObjectID = jsre.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`, "")
 // lineBreak is the /[\r\n]/ of src/incident-intake.ts:317 singleLine.
 var lineBreak = jsre.MustCompile(`[\r\n]`, "")
 
-// safeRefName is src/incident-intake.ts:17 SAFE_REF_NAME,
+// SafeRefName reports whether s matches src/incident-intake.ts:17 SAFE_REF_NAME,
 // /^refs\/(?!.*(?:\.\.|@\{|[~^:?*\[\\\s]|\/{2}|\/$|\.$))[A-Za-z0-9!#$%&'()+,./;=@_-]+$/,
 // written out because of its lookahead. After "refs/" the rest must be one
 // or more characters of the final class, which holds no line terminator,
 // whitespace or any of ~^:?*[\ , so the lookahead's `.*` can reach every
 // position and its first, third and fifth alternatives need only checking
 // for "..", "@{" and "//", and for a trailing "/" or ".".
-func safeRefName(s string) bool {
+func SafeRefName(s string) bool {
 	rest, ok := strings.CutPrefix(s, "refs/")
 	if !ok || rest == "" {
 		return false
@@ -406,7 +406,7 @@ func inspectLocalUpstream(run IntakeRunner, repository, head string) (*candidate
 		return notAvailable("No resolvable local upstream reference was configured for the current HEAD; no upstream range was proposed.")
 	}
 	upstreamRef := upstreamOutput.value
-	if !safeRefName(upstreamRef) {
+	if !SafeRefName(upstreamRef) {
 		return notAvailable("Git returned an unsafe local upstream reference; FaultLine refused to use it.")
 	}
 
