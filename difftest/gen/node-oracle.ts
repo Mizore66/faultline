@@ -32,6 +32,9 @@ import { resignLedger, richLedger } from "./ledger-seed.js";
 import { resignSandbox, sandboxVariant } from "./sandbox-seed.js";
 import { makeWitness, resignWitness } from "./witness-seed.js";
 import { lifecycleBoundToDescendant, lifecycleBoundToEveryInvestigatedState } from "./fixtures.js";
+import { createIncidentDraft, resolveIncidentRange, verifyIncidentDraft } from "../../src/incident.js";
+import { readIncidentDraft, writeIncidentDraft } from "../../src/incident-store.js";
+import { realpathSync } from "node:fs";
 import { redactText, redactValue } from "../../src/redaction.js";
 import { classifyFromWitnessResult, resolveWitnessResultFromStdout, witnessResultConsistentWithExitCode } from "../../src/witness-result.js";
 import { DOCTOR_SAFE_GIT_CONFIG, HOST_COMMAND_SAFE_GIT_CONFIG } from "../../src/doctor.js";
@@ -413,6 +416,46 @@ export const handlers: Record<string, Handler> = {
   // Date.now() minus the seeded epoch: under seed.mjs, how many clock ticks
   // the oracle had used (tsx's startup takes some), plus this read.
   seededTick: () => Date.now() - 1784203200000,
+  // Slice 3b Task 2 (incident drafts): JSON.stringify of the result (key
+  // order kept), or "THREW:<message>". createIncidentDraft reads
+  // `new Date()` for createdAt when the input has none, as the CLI does
+  // (cli-app.ts:617).
+  createIncidentDraft: ({ input }: { input: Record<string, unknown> }) => {
+    try {
+      return JSON.stringify(createIncidentDraft("createdAt" in input ? input : { ...input, createdAt: new Date().toISOString() }));
+    } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  verifyIncidentDraft: ({ text }: { text: string }) => {
+    try { return JSON.stringify(verifyIncidentDraft(JSON.parse(text))); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  resolveIncidentRange: ({ facts }: { facts: unknown }) => {
+    try { return JSON.stringify(resolveIncidentRange(facts)); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  // Runs write/read steps on draft stores under dir, then lists dir's tree
+  // (path, type, mode, file bytes in base64), with dir and its realpath
+  // masked as <D>.
+  incidentStoreRoundTrip: ({ dir, steps }: { dir: string; steps: { kind: "write" | "read"; store: string; text?: string; id?: string }[] }) => {
+    const real = realpathSync(dir);
+    const mask = (text: string) => text.split(real).join("<D>").split(dir).join("<D>");
+    const lines = steps.map((step) => {
+      try {
+        if (step.kind === "write") return `OK:${mask(writeIncidentDraft(step.store, JSON.parse(step.text!)).path)}`;
+        const stored = readIncidentDraft(step.store, step.id!);
+        return `OK:${mask(stored.path)}:${canonicalJson(stored.draft)}`;
+      } catch (error) { return `THREW:${mask((error as Error).message)}`; }
+    });
+    const walk = (rel: string): void => {
+      for (const name of cwReaddir(nodePath.join(dir, rel)).sort()) {
+        const child = rel === "" ? name : `${rel}/${name}`;
+        const stat = cwLstat(nodePath.join(dir, child));
+        const kind = stat.isSymbolicLink() ? "l" : stat.isDirectory() ? "d" : "f";
+        lines.push(`${child}|${kind}|${(stat.mode & 0o777).toString(8)}${kind === "f" ? `|${cwReadFile(nodePath.join(dir, child)).toString("base64")}` : ""}`);
+        if (kind === "d") { try { walk(child); } catch { lines.push(`${child}|unreadable`); } }
+      }
+    };
+    walk("");
+    return lines.join("\n");
+  },
   // investigateGitRange with the native runner, with PATH and
   // FAULTLINE_ARGV_LOG (the git and docker recorders' log) replaced:
   // JSON.stringify of the result (key order kept), or "THREW:<message>".

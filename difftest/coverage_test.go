@@ -1086,6 +1086,11 @@ var liveGatedFiles = map[string]string{
 	"internal/turnsnap/scan.go":        "TestLiveTurnSnapshotScan",
 	"internal/turnsnap/plan.go":        "TestLiveTurnSnapshotCapture",
 	"internal/turnsnap/capture.go":     "TestLiveTurnSnapshotCapture",
+	// Slice 3b: the incident draft schemas, creation and store, on
+	// generated inputs and store layouts.
+	"internal/incident/schemas.go": "TestLiveIncidentDraft",
+	"internal/incident/draft.go":   "TestLiveIncidentDraft",
+	"internal/incident/store.go":   "TestLiveIncidentDraft",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally

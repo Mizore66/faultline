@@ -19,8 +19,8 @@ type RangeError struct{ Code, Message string }
 func (e *RangeError) Error() string { return e.Message }
 
 // DraftInput is createIncidentDraft's input (src/incident.ts:88). An
-// Undefined jsjson.Value (the zero value) is an absent member; a Null
-// Runtime or Proposal is absent too (the CLI's `?? null`).
+// Undefined jsjson.Value (the zero value, "nil") is an absent member; any
+// other value, null included, is validated as TS validates it.
 type DraftInput struct {
 	ID, Repository, Command string
 	// CreatedAt is the draft's createdAt. "" reads clock.Now() once, inside
@@ -62,14 +62,6 @@ func parse(v jsjson.Value, schema s.Schema) jsjson.Value {
 func tryValue(fn func() jsjson.Value) (v jsjson.Value, err error) {
 	err = jsexc.Try(func() { v = fn() })
 	return
-}
-
-// orAbsent maps the CLI's null to an absent member.
-func orAbsent(v jsjson.Value) jsjson.Value {
-	if v.Kind() == jsjson.Null {
-		return jsjson.Value{}
-	}
-	return v
 }
 
 func str(v string) jsjson.Value { return jsjson.MakeString(v) }
@@ -143,10 +135,10 @@ func resolveIncidentRange(input jsjson.Value) jsjson.Value {
 		throwRange("AMBIGUOUS_HEAD", "HEAD has multiple parents; select an explicit range instead of guessing a parent")
 	}
 
+	// TS then refuses an undefined parents[0] (src/incident.ts:215, "locally
+	// observed HEAD parent is unavailable"); a parsed array of one string
+	// always has it, so the check is dead and not ported.
 	ancestor := parents[0]
-	if ancestor.Kind() == jsjson.Undefined {
-		throwRange("LOCAL_HEAD_REQUIRED", "locally observed HEAD parent is unavailable")
-	}
 	resolved := jsjson.MustObject("ancestor", ancestor, "descendant", localHead.Get("head"))
 	assertNonDegenerateRange(resolved)
 	// This is the concrete, locally observed equivalent of HEAD~1 -> HEAD.
@@ -209,8 +201,8 @@ func CreateDraft(in DraftInput) (jsjson.Value, error) {
 		}
 		setDefined(raw, "range", rangeValue)
 		setDefined(raw, "localHead", localHead)
-		setDefined(raw, "runtime", orAbsent(in.Runtime))
-		setDefined(raw, "proposal", orAbsent(in.Proposal))
+		setDefined(raw, "runtime", in.Runtime)
+		setDefined(raw, "proposal", in.Proposal)
 		return createIncidentDraft(jsjson.MakeObject(raw))
 	})
 }

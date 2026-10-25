@@ -17,16 +17,15 @@ import (
 // which proves that an intake did not turn a pasted CI command into an
 // approved witness behind the user's back.
 
-const storeSymlinkMessage = "Incident draft store path must be a real non-symlink directory: "
-
 // Port of src/incident-store.ts:37 ensureSafeDirectory.
 func ensureSafeDirectory(path string) {
-	witness.EnsureSafeDirectory(path, storeSymlinkMessage)
+	witness.EnsureSafeDirectory(path, "Incident draft store path must be a real non-symlink directory: ")
 }
 
 // Port of src/incident-store.ts:51 assertSafeExistingDirectory.
 func assertSafeExistingDirectory(path string) {
-	witness.AssertSafeExistingDirectory(path, storeSymlinkMessage, "Incident draft store directory does not exist: ")
+	witness.AssertSafeExistingDirectory(path, "Incident draft store path must be a real non-symlink directory: ",
+		"Incident draft store directory does not exist: ")
 }
 
 // Port of src/incident-store.ts:64 storeRoot.
