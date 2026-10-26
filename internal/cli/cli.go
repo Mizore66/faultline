@@ -84,6 +84,8 @@ func dispatch(e *env, args []string) error {
 		return runtimeCommand(e, rest)
 	case command == "init":
 		return initCommand(e, rest)
+	case command == "prevention":
+		return preventionCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:
