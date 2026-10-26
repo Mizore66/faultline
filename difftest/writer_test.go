@@ -909,6 +909,9 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		if bundle, ok := writtenBundle(outText); ok && !run.noVerify {
 			crossVerify(t, repo, inv, tpl.ID, bundle, jsonField(outText, "proofBundle", "rootDigest"))
 		}
+		if pkg, root, ok := writtenPrevention(outText); ok && !run.noVerify {
+			crossVerify(t, repo, inv, tpl.ID, pkg, root)
+		}
 		for rel, entry := range res.Files {
 			if fileEntry.MatchString(entry) {
 				res.contents[rel], _ = os.ReadFile(filepath.Join(r.ws, filepath.FromSlash(rel)))
@@ -1367,6 +1370,27 @@ func writtenBundle(stdout string) (string, bool) {
 		return d.Str(), true
 	}
 	return "", false
+}
+
+// writtenPrevention is the package directory and root digest an `fl
+// prevention write` run printed (its JSON, then the claim line;
+// gen-writers.ts writtenPrevention); ok is false when it wrote none.
+func writtenPrevention(stdout string) (dir, root string, ok bool) {
+	var text string
+	for _, claim := range []string{"\nPrevention verified\n", "\nPrevention evidence summary\n"} {
+		if strings.HasSuffix(stdout, claim) {
+			text = stdout[:len(stdout)-len(claim)+1]
+		}
+	}
+	v, err := jsjson.Parse(text)
+	if text == "" || err != nil || v.Kind() != jsjson.Object {
+		return "", "", false
+	}
+	status, d, r := v.Get("status"), v.Get("directory"), v.Get("rootDigest")
+	if status.Kind() != jsjson.String || !strings.HasPrefix(status.Str(), "PREVENTION_") || d.Kind() != jsjson.String || r.Kind() != jsjson.String {
+		return "", "", false
+	}
+	return d.Str(), r.Str(), true
 }
 
 // proofDirectory is the bundle directory a successful investigate printed.

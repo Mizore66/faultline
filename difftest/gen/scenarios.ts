@@ -945,6 +945,31 @@ Object.assign(SCENARIOS, {
     mkdirSync(join(ws, "cmd-dir"));
   })
 } satisfies Record<string, Scenario>);
+// fl prevention (slice 3b Task 8). prevention-input holds the slice 1
+// write inputs (fixtures.ts sampleInput and groundedPreventionInput) and
+// the two packages the slice 1 bases wrote from them. prevention-from-bundle
+// is the slice 2 base git-unbound plus the repaired runs of its third state
+// (transitions[1].after: commit, tree, its three runs' runId/executionId),
+// bound to the frozen witness digest and the homogeneous environment digest.
+const { sampleInput: preventionSummaryInput, groundedPreventionInput } = await import("./fixtures.js");
+function preventionRepairedRuns(): string {
+  const investigation = JSON.parse(baseText("git-unbound/investigation.json"));
+  const frozen = JSON.parse(baseText("git-unbound/witness/frozen.json"));
+  const state = investigation.transitions[1].after;
+  return jsonText({
+    runs: state.runIds.map((runId: string, i: number) => ({
+      runId, executionId: state.executionIds[i], commit: state.commit, tree: state.tree, verdict: "PASS",
+      witnessDigest: frozen.witnessDigest, environmentDigest: investigation.environment.distinctDigests[0],
+      executionTrust: "NATIVE_DOCKER", executionKind: "EXECUTED"
+    }))
+  });
+}
+SCENARIOS["prevention-input"] = {
+  bases: { "summary-pkg": "prevention-summary", "verified-pkg": "prevention-verified" },
+  files: { "summary.json": jsonText(preventionSummaryInput()), "grounded.json": jsonText(groundedPreventionInput()) },
+  argv: []
+};
+SCENARIOS["prevention-from-bundle"] = { bases: { bundle: "git-unbound" }, files: { "repaired-runs.json": preventionRepairedRuns() }, argv: [] };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // Umask 0, like gen-writers.ts: fl's modes reach the files as requested.

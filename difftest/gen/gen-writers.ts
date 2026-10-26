@@ -323,10 +323,28 @@ export function writtenBundle(stdout: string): string | undefined {
 // 2.4); TestWriterReplay does the same with Go on the bundles Go wrote. It
 // runs after the invocation's argv log is read, so its git calls are not
 // recorded.
+// writtenPrevention is the package an `fl prevention write` invocation
+// reports on stdout (its JSON, then the claim line): the directory and
+// root digest, or undefined when it wrote none. The Go twin is
+// writtenPrevention in difftest/writer_test.go.
+export function writtenPrevention(stdout: string): { directory: string; rootDigest: string } | undefined {
+  const claim = /\n(?:Prevention verified|Prevention evidence summary)\n$/.exec(stdout);
+  if (!claim) return undefined;
+  try {
+    const v = JSON.parse(stdout.slice(0, claim.index + 1)) as { status?: unknown; directory?: unknown; rootDigest?: unknown };
+    if (typeof v.status !== "string" || !v.status.startsWith("PREVENTION_") || typeof v.directory !== "string" || typeof v.rootDigest !== "string") return undefined;
+    return { directory: v.directory, rootDigest: v.rootDigest };
+  } catch {
+    return undefined;
+  }
+}
+
+// crossVerify also runs TS `fl verify` on every prevention package TS wrote.
 async function crossVerify(id: string, inv: number, roots: CaseRoots, stdout: string): Promise<void> {
-  const directory = writtenBundle(stdout);
+  const prevention = writtenPrevention(stdout);
+  const directory = prevention?.directory ?? writtenBundle(stdout);
   if (directory === undefined) return;
-  const root = (JSON.parse(stdout) as { proofBundle: { rootDigest: string } }).proofBundle.rootDigest;
+  const root = prevention?.rootDigest ?? (JSON.parse(stdout) as { proofBundle: { rootDigest: string } }).proofBundle.rootDigest;
   const r = await runCli(roots, ["verify", directory, "--expect-root", root], writerEnv(roots, `${id}:verify`, undefined, {}));
   if (r.exit !== 0 || !r.stdout.startsWith("Integrity: VALID\n") || !r.stdout.includes("\nExternal root: MATCH\n")) throw new Error(`${id}|${inv}: TS verify of the bundle TS wrote failed (exit ${r.exit})\n${r.stdout}${r.stderr}`);
 }
