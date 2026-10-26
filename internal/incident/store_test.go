@@ -3,6 +3,7 @@ package incident
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -39,14 +40,25 @@ func TestStoreWritesCanonicalWriteOnceDrafts(t *testing.T) {
 	if !strings.HasSuffix(path, filepath.Join("incidents", "drafts", "first-incident.json")) {
 		t.Fatalf("path %s", path)
 	}
+	// Windows has no POSIX modes: Go and Node both report 0666/0777 there.
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode: %v %v", info, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if dir, _ := os.Stat(filepath.Dir(path)); dir.Mode().Perm() != 0o700 {
-		t.Fatalf("drafts mode %v", dir.Mode())
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %o", info.Mode().Perm())
 	}
-	bytes, _ := os.ReadFile(path)
+	dir, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && dir.Mode().Perm() != 0o700 {
+		t.Fatalf("drafts mode %o", dir.Mode().Perm())
+	}
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if string(bytes) != canonicalText(t, sampleDraft(t))+"\n" {
 		t.Fatalf("bytes %s", bytes)
 	}
@@ -111,16 +123,25 @@ func TestStoreReadRefusals(t *testing.T) {
 		t.Fatalf("unsafe id: %v", err)
 	}
 	drafts := filepath.Join(store, "drafts")
-	os.WriteFile(filepath.Join(drafts, "bad.json"), []byte("{"), 0o600)
+	if err := os.WriteFile(filepath.Join(drafts, "bad.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := ReadDraft(store, "bad"); err == nil || !strings.HasPrefix(err.Error(), "Incident draft is not valid JSON: ") {
 		t.Fatalf("bad json: %v", err)
 	}
-	os.Symlink("first-incident.json", filepath.Join(drafts, "link.json"))
-	if _, err := ReadDraft(store, "link"); err == nil || !strings.HasPrefix(err.Error(), "Incident draft must be a regular non-symlink file: ") {
+	// Symlinks need a privilege on Windows: skip only this check without it.
+	if err := os.Symlink("first-incident.json", filepath.Join(drafts, "link.json")); err != nil {
+		t.Logf("symlink check skipped: %v", err)
+	} else if _, err := ReadDraft(store, "link"); err == nil || !strings.HasPrefix(err.Error(), "Incident draft must be a regular non-symlink file: ") {
 		t.Fatalf("link: %v", err)
 	}
-	bytes, _ := os.ReadFile(filepath.Join(drafts, "first-incident.json"))
-	os.WriteFile(filepath.Join(drafts, "renamed.json"), bytes, 0o600)
+	bytes, err := os.ReadFile(filepath.Join(drafts, "first-incident.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(drafts, "renamed.json"), bytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := ReadDraft(store, "renamed"); err == nil || err.Error() != "Stored incident draft identifier does not match the requested identifier" {
 		t.Fatalf("renamed: %v", err)
 	}
