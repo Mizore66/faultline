@@ -208,7 +208,7 @@ When a write or a child process fails part way, Go leaves the same files behind 
 - The draft (`faultline.incident-draft.v1`) and intake (`faultline.incident-intake.v1`) schemas, incident IDs and `--command-file` validation (a regular file, at most 32,000 bytes, valid UTF-8) match TS.
 - `incident status` exits 1 only for `INVALID_FROZEN_WITNESS`.
 - `incident continue` exits 1 with the full result for `INVESTIGATION_NOT_PROOF` and 0 for `PROOF_BUNDLE_READY`.
-- `incident continue` writes the session binding first, before any verification, so the binding persists when the continuation fails later (`cli-app.ts:545-556`; PR 3b plan correction 3).
+- `incident continue` writes the session binding after the draft read, the `--repo` check, the inherited-facts read and the image resolution (`--image`, then the repository config, then the draft runtime), but before the frozen-witness verification and the investigation, so the binding persists when the continuation fails later (`cli-app.ts:545-556`; PR 3b plan correction 3).
 - `incident continue`'s output differs from `investigate git`'s (PR 3b plan correction 4):
   - its proof root is `<draft repository>/.faultline/git-proof-bundles`, not the cwd default;
   - its `proofBundle` keys are `directory, rootDigest, externalRootStatus, lifecycle`, in that order;
