@@ -152,8 +152,6 @@ func TestIncidentUsage(t *testing.T) {
 		{[]string{"incident", "start", "--repo", ".", "--command", "x", "--from", "a"}, "Incident intake accepts --from and --to together, or neither for the conservative local HEAD-parent fallback."},
 		{[]string{"incident", "start", "--repo", ".", "--command", "x", "--id", "i", "--runtime", "node", "--image", "y"}, "Incident intake accepts either --runtime <node|python|go> or --image <digest-pinned-image>, not both."},
 		{[]string{"incident", "start", "--repo", ".", "--command", "x", "--id", "i", "--timeout-seconds", "0"}, "--timeout-seconds must be an integer from 1 through 3600."},
-		{[]string{"incident", "status", "x"}, "not yet ported: incident status"},
-		{[]string{"incident", "continue", "x"}, "not yet ported: incident continue"},
 	} {
 		var stdout, stderr bytes.Buffer
 		if code := Run(c.args, &stdout, &stderr); code != 1 || stdout.Len() != 0 ||
