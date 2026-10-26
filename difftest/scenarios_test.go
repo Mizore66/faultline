@@ -64,6 +64,12 @@ var writerScenarios = map[string]bool{
 	"init-dirty-secret":          true,
 	"init-worktree":              true,
 	"init-sidecar":               true,
+	"incident-two-states":        true,
+	"incident-two-states-frozen": true,
+	"incident-no-runtime":        true,
+	"incident-all-pass":          true,
+	"incident-binding-mismatch":  true,
+	"incident-ledger-full":       true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is
