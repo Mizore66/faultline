@@ -319,10 +319,6 @@ export function writtenBundle(stdout: string): string | undefined {
   }
 }
 
-// crossVerify runs TS `fl verify` on every bundle TS wrote (slice 2 spec
-// 2.4); TestWriterReplay does the same with Go on the bundles Go wrote. It
-// runs after the invocation's argv log is read, so its git calls are not
-// recorded.
 // writtenPrevention is the package an `fl prevention write` invocation
 // reports on stdout (its JSON, then the claim line): the directory and
 // root digest, or undefined when it wrote none. The Go twin is
@@ -339,7 +335,10 @@ export function writtenPrevention(stdout: string): { directory: string; rootDige
   }
 }
 
-// crossVerify also runs TS `fl verify` on every prevention package TS wrote.
+// crossVerify runs TS `fl verify` on every bundle (slice 2 spec 2.4) and
+// every prevention package TS wrote; TestWriterReplay does the same with Go
+// on the ones Go wrote. It runs after the invocation's argv log is read, so
+// its git calls are not recorded.
 async function crossVerify(id: string, inv: number, roots: CaseRoots, stdout: string): Promise<void> {
   const prevention = writtenPrevention(stdout);
   const directory = prevention?.directory ?? writtenBundle(stdout);
