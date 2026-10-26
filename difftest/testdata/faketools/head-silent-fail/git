@@ -1,0 +1,37 @@
+#!/bin/sh
+# Fake toolchain "head-silent-fail" git (difftest/testdata/faketools/README.md):
+# answers `--version` (its last argument, after the -c pairs), and execs the next git on PATH after this directory
+# for anything else.
+# `show` exits 1 with no output.
+self=$(cd "$(dirname "$0")" && pwd -P)
+for last in "$@"; do :; done
+if [ "$#" -gt 0 ] && [ "$last" = --version ]; then
+  printf 'git version 2.99.0\n'
+  exit 0
+fi
+# dir is the -C argument, sub the first argument after it.
+dir= sub= prev=
+for arg in "$@"; do
+  if [ "$prev" = -C ]; then dir=$arg
+  elif [ -n "$dir" ] && [ -z "$sub" ]; then sub=$arg
+  fi
+  prev=$arg
+done
+found= next=
+rest=$PATH
+while [ -n "$rest" ]; do
+  dir=${rest%%:*}
+  case "$rest" in *:*) rest=${rest#*:} ;; *) rest= ;; esac
+  [ -n "$dir" ] || continue
+  if [ -z "$found" ]; then
+    [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$self" ] && found=1
+    continue
+  fi
+  if [ -f "$dir/git" ] && [ -x "$dir/git" ]; then next=$dir/git; break; fi
+done
+if [ -z "$next" ]; then
+  echo "fake toolchain (head-silent-fail): no git after $self on PATH" >&2
+  exit 127
+fi
+if [ "$sub" = show ]; then exit 1; fi
+exec "$next" "$@"

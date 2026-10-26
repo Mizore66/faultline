@@ -801,6 +801,59 @@ async function buildScenario(name: string): Promise<void> {
   }
 }
 
+// Incident intake scenarios (slice 3b Task 4). Each holds a repository at
+// repo/ (buildRepo: objects, refs and the last state's files, no index;
+// `git show -s` and the intake's rev-parse calls need none).
+//   incident-repo          two commits; repo/sub/ is a subdirectory
+//   incident-upstream      three local commits and a refs/remotes/origin/main
+//                          tracking ref on a side commit of the first: the
+//                          local branch is ahead by two and behind by one,
+//                          so the upstream merge-base (commit 0) and the
+//                          parent fallback (commit 1) are distinct candidates
+//   incident-root          one commit (a root HEAD)
+//   incident-merge         HEAD is a merge of commit 1 and a side commit
+//   incident-command-file  incident-repo plus --command-file inputs: cmd.txt
+//                          (regular), big.txt (32,001 bytes), bad.txt
+//                          (invalid UTF-8) and cmd-dir/ (a directory); the
+//                          symlink comes from a writer mutation, since a
+//                          committed scenario holds regular files only
+const INCIDENT_STATES: RepoState[] = [state("good", { "sub/keep.txt": "keep\n" }), state("bad", { "sub/keep.txt": "keep\n" })];
+let incidentUpstreamTip = "";
+const incidentUpstreamSide: Hostile = (git, built) => {
+  const blob = git(["hash-object", "-w", "--stdin"], Buffer.from("upstream\n")).toString("utf8").trim();
+  const tree = git(["mktree"], Buffer.from(`100644 blob ${blob}\tstate.txt\n`)).toString("utf8").trim();
+  incidentUpstreamTip = git(["commit-tree", tree, "-p", built.commits[0]!, "-m", "upstream"]).toString("utf8").trim();
+  return { refs: {}, drop: [] };
+};
+const incidentMergeHead: Hostile = (git, built) => {
+  const blob = git(["hash-object", "-w", "--stdin"], Buffer.from("side\n")).toString("utf8").trim();
+  const sideTree = git(["mktree"], Buffer.from(`100644 blob ${blob}\tstate.txt\n`)).toString("utf8").trim();
+  const side = git(["commit-tree", sideTree, "-p", built.commits[0]!, "-m", "side"]).toString("utf8").trim();
+  const merge = git(["commit-tree", built.trees.at(-1)!, "-p", built.commits.at(-1)!, "-p", side, "-m", "merge"]).toString("utf8").trim();
+  // Written after refs/heads/main, so main becomes the merge.
+  return { refs: { main: merge }, drop: [] };
+};
+function incidentScenario(states: RepoState[], hostile?: Hostile, edit?: (ws: string) => void): Scenario {
+  return { files: {}, setup: (ws) => { buildRepo(ws, "repo", states, "sha1", hostile); edit?.(ws); }, argv: [] };
+}
+Object.assign(SCENARIOS, {
+  "incident-repo": incidentScenario(INCIDENT_STATES),
+  "incident-upstream": incidentScenario([...INCIDENT_STATES, state("worse", { "sub/keep.txt": "keep\n" })], incidentUpstreamSide, (ws) => {
+    const gitDir = join(ws, "repo", ".git");
+    mkdirSync(join(gitDir, "refs", "remotes", "origin"), { recursive: true });
+    writeFileSync(join(gitDir, "refs", "remotes", "origin", "main"), `${incidentUpstreamTip}\n`);
+    writeFileSync(join(gitDir, "config"), `${readFileSync(join(gitDir, "config"), "utf8")}[remote "origin"]\n\turl = https://example.invalid/faultline.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`);
+  }),
+  "incident-root": incidentScenario([state("bad")]),
+  "incident-merge": incidentScenario(INCIDENT_STATES, incidentMergeHead),
+  "incident-command-file": incidentScenario(INCIDENT_STATES, undefined, (ws) => {
+    writeFileSync(join(ws, "cmd.txt"), "grep -q good state.txt && echo 'état: ✓' # \"quoted\" $HOME\n");
+    writeFileSync(join(ws, "big.txt"), "x".repeat(32_001));
+    writeFileSync(join(ws, "bad.txt"), Buffer.from([0x65, 0x63, 0x68, 0x6f, 0x20, 0xff, 0x0a]));
+    mkdirSync(join(ws, "cmd-dir"));
+  })
+} satisfies Record<string, Scenario>);
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // Umask 0, like gen-writers.ts: fl's modes reach the files as requested.
   process.umask(0);

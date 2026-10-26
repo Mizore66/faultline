@@ -1,7 +1,8 @@
 # Fake toolchains
 
 Each directory here is one fake toolchain for `fl doctor`: POSIX `sh`
-scripts named `git`, `node` and (except `no-docker`) `docker`. A writer
+scripts named `git`, `node` and (except `no-docker`) `docker`; the `head-*`
+toolchains, for `fl incident start`'s HEAD read, hold only `git`. A writer
 template selects one with `"fakeTools": "<name>"`; the writer replay
 (`difftest/writer_test.go`, `difftest/gen/gen-writers.ts`) then puts the
 directory on `PATH` after the recorders (`difftest/testdata/recorder`) and
@@ -44,6 +45,9 @@ directory, the way the recorders do it):
 | `security-ls-remote-ok` | as `ready`; `ls-remote` prints one ref and exits 0 | as `ready` | as `ready` | as `ready` |
 | `security-lfs-filter` | as `ready`; a hardened `status` without `--untracked-files=all` and without the turn-snapshot `core.attributesFile` override (only `doctor --security`'s own) first prints `malicious-lfs-filter: invoked` on stderr | as `ready` | as `ready` | as `ready` |
 | `security-capture-fail` | as `ready`; a `rev-parse` carrying the turn-snapshot `core.attributesFile` override prints `fatal: fake snapshot failure` and exits 128 | as `ready` | as `ready` | as `ready` |
+| `head-silent-fail` | as `ready`; `show` exits 1 with no output (incident start's HEAD read) | none (git only) | none (git only) | not reached |
+| `head-empty` | as `ready`; `show` prints two empty lines and exits 0 | none (git only) | none (git only) | not reached |
+| `head-padded` | as `ready`; `show` runs the real git, widens each space to a tab and two spaces, and pads each line with two spaces before and a space and CR after | none (git only) | none (git only) | not reached |
 
 The `security-*` toolchains each defeat one `doctor --security` check, so it
 reaches FAIL (and the report INSECURE) on both sides. The fifth check,
