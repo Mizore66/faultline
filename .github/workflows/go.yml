@@ -145,6 +145,10 @@ jobs:
         # TestLiveProjectPrepare, TestLiveAllowlist and TestLiveTurnSnapshot*.
         # TestLiveTurnSnapshotCapture checks its markers and requireReached
         # only over all 150 cases, so FAULTLINE_TURNSNAP_CASES stays unset.
+        # Slice 3b adds TestLiveIncidentSuggest, TestLiveIncidentDraft,
+        # TestLivePreventionWrite, TestLiveAgentsMd and
+        # TestLivePreventionFromArtifacts (about 4.5 minutes together locally,
+        # most of it the TS Git proof verifier in PreventionFromArtifacts).
         run: |
           unset FAULTLINE_TURNSNAP_CASES
           set -o pipefail
@@ -287,18 +291,21 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Writer replay with TS cross-verification, same directory, end to end
-        # With the oracle on, every bundle Go writes is also verified by frozen TS (spec 2.4).
+        # With the oracle on, every bundle Go writes is also verified by frozen TS (spec 2.4),
+        # including the incident continue bundles and prevention packages of slice 3b.
         run: |
           set -o pipefail
           status=0
-          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestWriterSameDirectory'
+          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestEndToEndSlice3bWithoutNode TestWriterSameDirectory'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 75m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
           exit $status
 
   # Split from difftest-live-replay in slice 3a: the writer fault matrix grew
-  # to about 13 minutes of strace cases with the init --yes paths.
+  # to about 13 minutes of strace cases with the init --yes paths (577 s on
+  # CI in slice 3a). Slice 3b's incident and prevention writer paths add
+  # about 5 minutes, well inside the 60 minute go test timeout.
   difftest-live-faults:
     name: difftest live writer faults and real Docker (frozen TS oracle)
     runs-on: ubuntu-24.04
@@ -369,6 +376,11 @@ jobs:
     # Slice 3a adds the host-command runner, the project build-context walk
     # (on macOS without the sparse 256 MiB case, which is Linux only) and
     # turn-snapshot capture (all 150 cases: FAULTLINE_TURNSNAP_CASES unset).
+    # Slice 3b adds incident suggest (real repositories: the /var ->
+    # /private/var realpath, isInsideDirectory's dev/ino fallback through
+    # the darwin StatIdentity) and the incident draft store (about 80 s and
+    # 3 s on macOS); the prevention live tests are platform-neutral and stay
+    # in difftest-live.
     name: stack thresholds vs Node (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
@@ -393,7 +405,7 @@ jobs:
           set -o pipefail
           status=0
           unset FAULTLINE_TURNSNAP_CASES
-          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture'
+          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 70m | tee "$RUNNER_TEMP/live.log" || status=$?
           if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode|TestLiveProjectContext/sparse256MiB)$'; else allowed='^$'; fi

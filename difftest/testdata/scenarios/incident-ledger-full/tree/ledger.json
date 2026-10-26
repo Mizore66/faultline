@@ -1,0 +1,229 @@
+{
+  "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+  "ledgerId": "ledger-scenario",
+  "sessionId": "scenario-session",
+  "createdAt": "2026-07-16T10:00:00.000Z",
+  "events": [
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 1,
+      "eventId": "event-1",
+      "occurredAt": "2026-07-16T10:00:01.000Z",
+      "event": {
+        "type": "SESSION_STARTED",
+        "payload": {
+          "transport": "SIDE_CAR",
+          "workingDirectory": "/work/repository",
+          "model": "gpt-5.6"
+        }
+      },
+      "previousHash": "sha256:bc5220c3aff784f2cfd5002357da1bf8999c36f4708aa1ecd9fbb2de1a056818",
+      "hash": "sha256:31274eb6e3e1148f92cadd9758e52e0bc4b66f31b6b1ad77e87eb6b1d63c5610"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 2,
+      "eventId": "event-2",
+      "occurredAt": "2026-07-16T10:00:02.000Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "promptDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "previousHash": "sha256:31274eb6e3e1148f92cadd9758e52e0bc4b66f31b6b1ad77e87eb6b1d63c5610",
+      "hash": "sha256:a25f7671a8edc54bf6998a15e98ecbd84b49bd5dd96ba45a058d57814dec4237"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 3,
+      "eventId": "event-3",
+      "occurredAt": "2026-07-16T10:00:03.000Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "outcome": "COMPLETED",
+          "outputDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "previousHash": "sha256:a25f7671a8edc54bf6998a15e98ecbd84b49bd5dd96ba45a058d57814dec4237",
+      "hash": "sha256:8e4618971319e98492d082b7e725ba4452a6d94eac62a7f1aedafbc1ae8f33c8"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 4,
+      "eventId": "event-4",
+      "occurredAt": "2026-07-16T10:00:04.000Z",
+      "event": {
+        "type": "WORKTREE_CHECKPOINT",
+        "payload": {
+          "checkpoint": {
+            "schemaVersion": "faultline.git-checkpoint.v1",
+            "repositoryRoot": "/work/repository",
+            "headCommit": "d9fa667cb11652a22bc92eb0aec7fbb69a02ab18",
+            "treeDigest": "60f794b477849d472035d0aa945e31354b3116af",
+            "capturedAt": "2026-07-16T10:00:03.000Z",
+            "clean": true,
+            "digest": "sha256:b947636b2a00c16ef4be789292805b93036507ceb507bb8c4eebcb56a44dba29"
+          },
+          "afterTurnOrdinal": 1
+        }
+      },
+      "previousHash": "sha256:8e4618971319e98492d082b7e725ba4452a6d94eac62a7f1aedafbc1ae8f33c8",
+      "hash": "sha256:3689949990804dadf6657053be727c8e08be0fbeb2173606e92c5e6763dbfe68"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 5,
+      "eventId": "event-5",
+      "occurredAt": "2026-07-16T10:00:05.000Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "turn-2",
+          "turnOrdinal": 2,
+          "promptDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "previousHash": "sha256:3689949990804dadf6657053be727c8e08be0fbeb2173606e92c5e6763dbfe68",
+      "hash": "sha256:3928cdecd3baeb7b82df86765c55b1202d5e45203d8864ed9bc93129579b583c"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 6,
+      "eventId": "event-6",
+      "occurredAt": "2026-07-16T10:00:06.000Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "turn-2",
+          "turnOrdinal": 2,
+          "outcome": "COMPLETED",
+          "outputDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "previousHash": "sha256:3928cdecd3baeb7b82df86765c55b1202d5e45203d8864ed9bc93129579b583c",
+      "hash": "sha256:07b602121870b23570e26434c80900a0e4ed0ac44aafb92a45bb13b61a052f27"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 7,
+      "eventId": "event-7",
+      "occurredAt": "2026-07-16T10:00:07.000Z",
+      "event": {
+        "type": "WORKTREE_CHECKPOINT",
+        "payload": {
+          "checkpoint": {
+            "schemaVersion": "faultline.git-checkpoint.v1",
+            "repositoryRoot": "/work/repository",
+            "headCommit": "1b15685039f1806ca6c2cd3211f6f26b64b3db10",
+            "treeDigest": "09ed3065db16e202cc2fe15366a11cf1e023333b",
+            "capturedAt": "2026-07-16T10:00:06.000Z",
+            "clean": true,
+            "digest": "sha256:4f322b38f421e88cf169b3a5401f31d27f36c6ea9a5d3104c922af86524f694c"
+          },
+          "afterTurnOrdinal": 2
+        }
+      },
+      "previousHash": "sha256:07b602121870b23570e26434c80900a0e4ed0ac44aafb92a45bb13b61a052f27",
+      "hash": "sha256:9c57da0b4a35a1524a0d6350e913e016da76fc36f36d4eb7a80da98a11055fba"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 8,
+      "eventId": "event-8",
+      "occurredAt": "2026-07-16T10:00:08.000Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "turn-3",
+          "turnOrdinal": 3,
+          "promptDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "previousHash": "sha256:9c57da0b4a35a1524a0d6350e913e016da76fc36f36d4eb7a80da98a11055fba",
+      "hash": "sha256:d21f3f76d97af2508f8909b6afda95ad9a9014038af0dbcb92f122dedaa87ce4"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 9,
+      "eventId": "event-9",
+      "occurredAt": "2026-07-16T10:00:09.000Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "turn-3",
+          "turnOrdinal": 3,
+          "outcome": "COMPLETED",
+          "outputDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "previousHash": "sha256:d21f3f76d97af2508f8909b6afda95ad9a9014038af0dbcb92f122dedaa87ce4",
+      "hash": "sha256:0db7b1f753da5e83a60c4ed2572a61a2f889e1f7459e975184a40069ab1ad01e"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 10,
+      "eventId": "event-10",
+      "occurredAt": "2026-07-16T10:00:10.000Z",
+      "event": {
+        "type": "WORKTREE_CHECKPOINT",
+        "payload": {
+          "checkpoint": {
+            "schemaVersion": "faultline.git-checkpoint.v1",
+            "repositoryRoot": "/work/repository",
+            "headCommit": "9d0d86bb3bba120060b546528caef1e3eb5e80c1",
+            "treeDigest": "44088aaf2c4cd60151e5732ce3a5295ee882844d",
+            "capturedAt": "2026-07-16T10:00:09.000Z",
+            "clean": true,
+            "digest": "sha256:d42e97b60d30b64869feb8bef3138afec2af02e9f5076447ac57d4c5ffd03e62"
+          },
+          "afterTurnOrdinal": 3
+        }
+      },
+      "previousHash": "sha256:0db7b1f753da5e83a60c4ed2572a61a2f889e1f7459e975184a40069ab1ad01e",
+      "hash": "sha256:1f4d611c3438938bd99404d3af140a3ed74c9011fd0323af3f802140cb4ccbfc"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-scenario",
+      "sessionId": "scenario-session",
+      "sequence": 11,
+      "eventId": "event-11",
+      "occurredAt": "2026-07-16T10:00:11.000Z",
+      "event": {
+        "type": "SESSION_ENDED",
+        "payload": {
+          "reason": "COMPLETED",
+          "completedTurns": 3
+        }
+      },
+      "previousHash": "sha256:1f4d611c3438938bd99404d3af140a3ed74c9011fd0323af3f802140cb4ccbfc",
+      "hash": "sha256:f21f066c34b993b2f330dbc9e4dcc0ea7e2267f0f04bcd4ea6cdf8c9257850c3"
+    }
+  ]
+}

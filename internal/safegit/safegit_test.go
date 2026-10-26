@@ -29,3 +29,9 @@ func TestListsExtendHostCommand(t *testing.T) {
 		t.Fatal("Doctor must return a fresh slice")
 	}
 }
+
+func TestIntakeIsHostCommand(t *testing.T) {
+	if !slices.Equal(Intake(), HostCommand()) {
+		t.Fatal("Intake must equal HostCommand")
+	}
+}

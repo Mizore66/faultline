@@ -6,7 +6,7 @@
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,6 +14,9 @@ import { deflateSync } from "node:zlib";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { computeEnvironmentFingerprint } from "../../src/environment-fingerprint.js";
 import { appendLifecycleEvent, createCodexLifecycleLedger, GIT_CHECKPOINT_VERSION, signGitCheckpoint, type CodexLifecycleLedger } from "../../src/ledger.js";
+import { createIncidentDraft } from "../../src/incident.js";
+import { writeIncidentDraft } from "../../src/incident-store.js";
+import { proposeWitness } from "../../src/witness-lock.js";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const cli = join(repo, "dist", "cli.js");
@@ -562,6 +565,102 @@ function initWorktree(ws: string): void {
   for (const [path, content] of Object.entries(INIT_CLEAN_FILES)) writeFileSync(join(ws, "wt", path), content);
 }
 
+// Incident continuation scenarios (slice 3b Task 6). Each holds a scenario
+// repository at repo/ and the records `fl incident start --repo repo --id
+// demo-1 --from <ancestor> --to <descendant> [--image <PINNED_IMAGE>]
+// --command "node witness.mjs"` writes (cli-app.ts:589-693): a review-only
+// proposal in repo/.faultline/witnesses and the draft bound to it in
+// repo/.faultline/incidents. They are made with the TS functions start
+// calls, not the CLI, for two reasons: start records the absolute
+// repository, which would name the build directory, so the draft records
+// the relative "repo" (resolve(draft.repository) is <WS>/repo on both
+// sides); and the proposal's proposedAt and the draft's createdAt are fixed.
+// The cases then run witness approve and freeze, incident status and
+// incident continue. witness.mjs is committed in every state so the stored
+// command names a real file; pass-fail fake Docker reads only state.txt.
+const INCIDENT_ID = "demo-1";
+const INCIDENT_COMMAND = "node witness.mjs";
+const INCIDENT_AT = "2026-07-16T10:30:00.000Z";
+const incidentState = (value: string): RepoState => state(value, { "witness.mjs": "export const faultLineWitness = 'incident';\n" });
+function writeIncidentRecords(ws: string, options: { ancestor: string; runtime: boolean; swapProposal?: boolean; unbound?: boolean; foreignProposal?: boolean }): void {
+  const repository = "repo";
+  const draftInput = {
+    draftId: INCIDENT_ID,
+    createdAt: INCIDENT_AT,
+    repository,
+    command: INCIDENT_COMMAND,
+    range: { ancestor: options.ancestor, descendant: "HEAD" },
+    ...(options.runtime ? { runtime: { requested: "explicit", image: PINNED_IMAGE } } : {})
+  };
+  const preliminary = createIncidentDraft(draftInput);
+  const store = join(ws, repository, ".faultline", "witnesses");
+  const proposalInput = (command: string, proposalId: string = preliminary.draftId, symptom = "A human-reported command is failing and requires a reviewed, frozen witness before localization.") => ({
+    proposalId,
+    proposalOrigin: "HUMAN",
+    proposedAt: INCIDENT_AT,
+    incidentPacket: {
+      symptom,
+      ciLog: "The exact user-supplied command is stored in the reviewable witness, not executed by incident intake.",
+      repositoryLanguage: "Unknown",
+      repositorySummary: `Review-only local Git range ${preliminary.range.ancestor} to ${preliminary.range.descendant} (${preliminary.range.source}). No remote base was selected.${preliminary.runtime === undefined ? "" : ` The selected local runtime resolves to ${preliminary.runtime.image}.`}`
+    },
+    witness: {
+      behavior: "The human-supplied command must exit successfully at the selected immutable Git states.",
+      command,
+      overlays: [],
+      policy: { network: "disabled", credentials: "redacted", timeoutSeconds: 300 }
+    }
+  });
+  const proposal = proposeWitness(store, proposalInput(INCIDENT_COMMAND));
+  const draft = createIncidentDraft({
+    ...draftInput,
+    proposal: {
+      proposalId: proposal.proposalId,
+      proposalDigest: proposal.proposalDigest,
+      incidentPacketDigest: proposal.incidentPacketDigest,
+      commandDigest: proposal.witness.commandDigest
+    }
+  });
+  // An unbound draft: the one start would write without a proposal
+  // (createIncidentDraft with no proposal binding, witnessState NOT_PROPOSED).
+  writeIncidentDraft(join(ws, repository, ".faultline", "incidents"), options.unbound ? preliminary : draft);
+  // A proposal stored under the draft's identifier whose own proposalId and
+  // incident packet differ (same command): the witness store keys records
+  // by the requested identifier and approve and freeze accept it, so only
+  // the draft binding check sees the identifier and packet mismatch.
+  if (options.foreignProposal) {
+    rmSync(join(store, "proposals", `${INCIDENT_ID}.json`));
+    proposeWitness(store, proposalInput(INCIDENT_COMMAND, "demo-2", "A different incident packet."));
+    renameSync(join(store, "proposals", "demo-2.json"), join(store, "proposals", `${INCIDENT_ID}.json`));
+  }
+  // A frozen witness for a different command under the same identifier:
+  // the review chain is intact, only the draft binding disagrees.
+  if (options.swapProposal) {
+    rmSync(join(store, "proposals", `${INCIDENT_ID}.json`));
+    proposeWitness(store, proposalInput("node other.mjs"));
+  }
+}
+const INCIDENT_STORE = "repo/.faultline/witnesses";
+const INCIDENT_APPROVE = ["witness", "approve", INCIDENT_ID, "--approved-by", "reviewer@example.test", "--store", INCIDENT_STORE];
+const INCIDENT_FREEZE = ["witness", "freeze", INCIDENT_ID, "--store", INCIDENT_STORE, "--repo", "repo"];
+function incidentScenario(states: RepoState[], options: { runtime?: boolean; swapProposal?: boolean; unbound?: boolean; foreignProposal?: boolean; frozen?: boolean; extra?: (repo: BuiltRepo) => Record<string, string> } = {}): Scenario {
+  return {
+    files: {},
+    setup: (ws) => {
+      const built = buildRepo(ws, "repo", states);
+      writeIncidentRecords(ws, {
+        ancestor: `HEAD~${states.length - 1}`, runtime: options.runtime ?? true,
+        ...(options.swapProposal ? { swapProposal: true } : {}),
+        ...(options.unbound ? { unbound: true } : {}),
+        ...(options.foreignProposal ? { foreignProposal: true } : {})
+      });
+      for (const [path, text] of Object.entries(options.extra?.(built) ?? {})) writeFileSync(join(ws, path), text);
+    },
+    argv: options.frozen ? [INCIDENT_APPROVE, INCIDENT_FREEZE] : []
+  };
+}
+const INCIDENT_GOOD_BAD = [incidentState("good"), incidentState("bad")];
+
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
@@ -704,7 +803,20 @@ export const SCENARIOS: Record<string, Scenario> = {
   "proof-bases": {
     bases: Object.fromEntries(["git-fully-bound", "git-partially-bound", "git-shape-mixed-history", "git-sha256"].map((b) => [`bases/${b}`, b])),
     files: {}, argv: []
-  }
+  },
+  // Incident status and continue (slice 3b Task 6).
+  "incident-two-states": incidentScenario(INCIDENT_GOOD_BAD),
+  "incident-two-states-frozen": incidentScenario(INCIDENT_GOOD_BAD, { frozen: true }),
+  "incident-no-runtime": incidentScenario(INCIDENT_GOOD_BAD, { runtime: false }),
+  "incident-all-pass": incidentScenario([incidentState("good"), incidentState("good")]),
+  "incident-binding-mismatch": incidentScenario(INCIDENT_GOOD_BAD, { swapProposal: true }),
+  // Slice 3b Task 9: the binding check's unbound-draft and identifier /
+  // packet branches.
+  "incident-unbound": incidentScenario(INCIDENT_GOOD_BAD, { unbound: true }),
+  "incident-foreign-proposal": incidentScenario(INCIDENT_GOOD_BAD, { foreignProposal: true }),
+  "incident-ledger-full": incidentScenario(GOOD_BAD_REPAIRED.map((s) => incidentState(s["state.txt"]!.trim())), {
+    extra: (built) => ({ "ledger.json": lifecycleLedger(built, [0, 1, 2]) })
+  })
 };
 
 // A scenario is committed as <name>/dirs.txt, every directory of the
@@ -800,6 +912,84 @@ async function buildScenario(name: string): Promise<void> {
     rmSync(roots.root, { recursive: true, force: true });
   }
 }
+
+// Incident intake scenarios (slice 3b Task 4). Each holds a repository at
+// repo/ (buildRepo: objects, refs and the last state's files, no index;
+// `git show -s` and the intake's rev-parse calls need none).
+//   incident-repo          two commits; repo/sub/ is a subdirectory
+//   incident-upstream      three local commits and a refs/remotes/origin/main
+//                          tracking ref on a side commit of the first: the
+//                          local branch is ahead by two and behind by one,
+//                          so the upstream merge-base (commit 0) and the
+//                          parent fallback (commit 1) are distinct candidates
+//   incident-root          one commit (a root HEAD)
+//   incident-merge         HEAD is a merge of commit 1 and a side commit
+//   incident-command-file  incident-repo plus --command-file inputs: cmd.txt
+//                          (regular), big.txt (32,001 bytes), bad.txt
+//                          (invalid UTF-8) and cmd-dir/ (a directory); the
+//                          symlink comes from a writer mutation, since a
+//                          committed scenario holds regular files only
+const INCIDENT_STATES: RepoState[] = [state("good", { "sub/keep.txt": "keep\n" }), state("bad", { "sub/keep.txt": "keep\n" })];
+let incidentUpstreamTip = "";
+const incidentUpstreamSide: Hostile = (git, built) => {
+  const blob = git(["hash-object", "-w", "--stdin"], Buffer.from("upstream\n")).toString("utf8").trim();
+  const tree = git(["mktree"], Buffer.from(`100644 blob ${blob}\tstate.txt\n`)).toString("utf8").trim();
+  incidentUpstreamTip = git(["commit-tree", tree, "-p", built.commits[0]!, "-m", "upstream"]).toString("utf8").trim();
+  return { refs: {}, drop: [] };
+};
+const incidentMergeHead: Hostile = (git, built) => {
+  const blob = git(["hash-object", "-w", "--stdin"], Buffer.from("side\n")).toString("utf8").trim();
+  const sideTree = git(["mktree"], Buffer.from(`100644 blob ${blob}\tstate.txt\n`)).toString("utf8").trim();
+  const side = git(["commit-tree", sideTree, "-p", built.commits[0]!, "-m", "side"]).toString("utf8").trim();
+  const merge = git(["commit-tree", built.trees.at(-1)!, "-p", built.commits.at(-1)!, "-p", side, "-m", "merge"]).toString("utf8").trim();
+  // Written after refs/heads/main, so main becomes the merge.
+  return { refs: { main: merge }, drop: [] };
+};
+function intakeScenario(states: RepoState[], hostile?: Hostile, edit?: (ws: string) => void): Scenario {
+  return { files: {}, setup: (ws) => { buildRepo(ws, "repo", states, "sha1", hostile); edit?.(ws); }, argv: [] };
+}
+Object.assign(SCENARIOS, {
+  "incident-repo": intakeScenario(INCIDENT_STATES),
+  "incident-upstream": intakeScenario([...INCIDENT_STATES, state("worse", { "sub/keep.txt": "keep\n" })], incidentUpstreamSide, (ws) => {
+    const gitDir = join(ws, "repo", ".git");
+    mkdirSync(join(gitDir, "refs", "remotes", "origin"), { recursive: true });
+    writeFileSync(join(gitDir, "refs", "remotes", "origin", "main"), `${incidentUpstreamTip}\n`);
+    writeFileSync(join(gitDir, "config"), `${readFileSync(join(gitDir, "config"), "utf8")}[remote "origin"]\n\turl = https://example.invalid/faultline.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`);
+  }),
+  "incident-root": intakeScenario([state("bad")]),
+  "incident-merge": intakeScenario(INCIDENT_STATES, incidentMergeHead),
+  "incident-command-file": intakeScenario(INCIDENT_STATES, undefined, (ws) => {
+    writeFileSync(join(ws, "cmd.txt"), "grep -q good state.txt && echo 'état: ✓' # \"quoted\" $HOME\n");
+    writeFileSync(join(ws, "big.txt"), "x".repeat(32_001));
+    writeFileSync(join(ws, "bad.txt"), Buffer.from([0x65, 0x63, 0x68, 0x6f, 0x20, 0xff, 0x0a]));
+    mkdirSync(join(ws, "cmd-dir"));
+  })
+} satisfies Record<string, Scenario>);
+// fl prevention (slice 3b Task 8). prevention-input holds the slice 1
+// write inputs (fixtures.ts sampleInput and groundedPreventionInput) and
+// the two packages the slice 1 bases wrote from them. prevention-from-bundle
+// is the slice 2 base git-unbound plus the repaired runs of its third state
+// (transitions[1].after: commit, tree, its three runs' runId/executionId),
+// bound to the frozen witness digest and the homogeneous environment digest.
+const { sampleInput: preventionSummaryInput, groundedPreventionInput } = await import("./fixtures.js");
+function preventionRepairedRuns(): string {
+  const investigation = JSON.parse(baseText("git-unbound/investigation.json"));
+  const frozen = JSON.parse(baseText("git-unbound/witness/frozen.json"));
+  const state = investigation.transitions[1].after;
+  return jsonText({
+    runs: state.runIds.map((runId: string, i: number) => ({
+      runId, executionId: state.executionIds[i], commit: state.commit, tree: state.tree, verdict: "PASS",
+      witnessDigest: frozen.witnessDigest, environmentDigest: investigation.environment.distinctDigests[0],
+      executionTrust: "NATIVE_DOCKER", executionKind: "EXECUTED"
+    }))
+  });
+}
+SCENARIOS["prevention-input"] = {
+  bases: { "summary-pkg": "prevention-summary", "verified-pkg": "prevention-verified" },
+  files: { "summary.json": jsonText(preventionSummaryInput()), "grounded.json": jsonText(groundedPreventionInput()) },
+  argv: []
+};
+SCENARIOS["prevention-from-bundle"] = { bases: { bundle: "git-unbound" }, files: { "repaired-runs.json": preventionRepairedRuns() }, argv: [] };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // Umask 0, like gen-writers.ts: fl's modes reach the files as requested.

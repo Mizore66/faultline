@@ -360,20 +360,39 @@ func TestWriteOpenOnDirectory(t *testing.T) {
 	}
 }
 
-// Go's invented Windows syscall.EISDIR maps by the open's flags; on Unix
-// syscall.EISDIR is the real errno and maps the same way.
+// Go's invented Windows syscall.EISDIR maps by the open's flags (EEXIST for
+// wx). On Unix syscall.EISDIR is the kernel's own errno (Linux reports it
+// for wx only on a path ending in "/"; a plain directory gives EEXIST) and
+// stays EISDIR for w and wx alike.
 func TestOpenWriteErrMapsGoEISDIR(t *testing.T) {
 	err := &os.PathError{Op: "open", Path: "d", Err: syscall.EISDIR}
 	if got := openWriteErr(err, "/d", false).(*Error).Code; got != "EISDIR" {
 		t.Errorf("w: %s", got)
 	}
-	if got := openWriteErr(err, "/d", true).(*Error).Code; got != "EEXIST" {
-		t.Errorf("wx: %s", got)
+	wantWx := openWriteCode(true, runtime.GOOS)
+	if got := openWriteErr(err, "/d", true).(*Error).Code; got != wantWx {
+		t.Errorf("wx: %s, want %s", got, wantWx)
 	}
 	if got := codeOf(syscall.EISDIR); got != "EISDIR" {
 		t.Errorf("codeOf(syscall.EISDIR) = %s", got)
 	}
 	if got := openWriteErr(syscall.ENOENT, "/d", true).(*Error).Code; got != "ENOENT" {
 		t.Errorf("ENOENT: %s", got)
+	}
+}
+
+func TestOpenWriteCodeByPlatform(t *testing.T) {
+	cases := []struct {
+		exclusive  bool
+		goos, want string
+	}{
+		{false, "windows", "EISDIR"}, {true, "windows", "EEXIST"},
+		{false, "linux", "EISDIR"}, {true, "linux", "EISDIR"},
+		{true, "darwin", "EISDIR"},
+	}
+	for _, c := range cases {
+		if got := openWriteCode(c.exclusive, c.goos); got != c.want {
+			t.Errorf("%v %s: %s, want %s", c.exclusive, c.goos, got, c.want)
+		}
 	}
 }

@@ -48,10 +48,11 @@ func statPreparePath(p string) string {
 }
 
 type winStat struct {
-	name string
-	size int64
-	mode fs.FileMode
-	mod  time.Time
+	name     string
+	size     int64
+	mode     fs.FileMode
+	mod      time.Time
+	dev, ino uint64 // see StatIdentity
 }
 
 func (s winStat) Name() string       { return s.name }
@@ -119,7 +120,9 @@ func statImplFromPath(raw string, lstat bool) (fs.FileInfo, error) {
 			return nil, err
 		}
 	}
-	return assignStat(baseName(raw), d.FileAttributes, size, d.LastWriteTime, lstat), nil
+	st := assignStat(baseName(raw), d.FileAttributes, size, d.LastWriteTime, lstat)
+	st.dev, st.ino = uint64(d.VolumeSerialNumber), uint64(d.FileIndexHigh)<<32|uint64(d.FileIndexLow)
+	return st, nil
 }
 
 // statDirectory is fs__stat_directory: the entry as its parent directory

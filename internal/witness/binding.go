@@ -53,14 +53,17 @@ type InheritedFacts struct {
 	InheritedExpectDigest, InheritedLedgerPath bool
 }
 
-// Port of src/incident-binding.ts:32 assertNonSymlinkDirectory.
-func assertNonSymlinkDirectory(path string) string {
+// AssertNonSymlinkDirectory ports assertNonSymlinkDirectory
+// (src/incident-binding.ts:32, src/incident-store.ts:28): it returns the
+// safe segment, or throws (jsexc) message followed by the path. The first
+// lstat's error propagates in Node's format.
+func AssertNonSymlinkDirectory(path, message string) string {
 	safe, ok, err := safedir.ResolveSafeDirectorySegment(path)
 	if err != nil {
 		jsexc.Throw(err)
 	}
 	if !ok {
-		throw(jsexc.Concat("Incident binding store path must be a real non-symlink directory: ", path))
+		throw(jsexc.Concat(message, path))
 	}
 	return safe
 }
@@ -81,9 +84,25 @@ func volumeRoot(p string) string {
 	return root
 }
 
-// Port of src/incident-binding.ts:40 ensureSafeDirectory: each missing
-// segment is created on its own (mode 0o700) and checked before descending.
-func ensureSafeDirectory(path string) {
+// EnsureSafeDirectory ports ensureSafeDirectory (src/incident-binding.ts:40,
+// src/incident-store.ts:37): each missing segment from the volume root is
+// created on its own (mode 0o700) and checked before descending; a refused
+// segment throws (jsexc) message followed by its path.
+func EnsureSafeDirectory(path, message string) {
+	walkSafeDirectory(path, message, "")
+}
+
+// AssertSafeExistingDirectory ports src/incident-store.ts:51
+// assertSafeExistingDirectory: it checks existing segments only (reads must
+// never create paths); a missing segment throws (jsexc) missingMessage
+// followed by its path.
+func AssertSafeExistingDirectory(path, message, missingMessage string) {
+	walkSafeDirectory(path, message, missingMessage)
+}
+
+// walkSafeDirectory creates a missing segment when missingMessage is "",
+// and otherwise refuses it.
+func walkSafeDirectory(path, message, missingMessage string) {
 	target := jsexc.Must(safedir.ResolveTrustedSystemPath(path))
 	root := volumeRoot(target)
 	current := root
@@ -93,12 +112,20 @@ func ensureSafeDirectory(path string) {
 		}
 		current = nodefs.Join(current, segment)
 		if !nodefs.Exists(current) {
+			if missingMessage != "" {
+				throw(jsexc.Concat(missingMessage, current))
+			}
 			if err := nodefs.Mkdir(current, 0o700); err != nil {
 				jsexc.Throw(err)
 			}
 		}
-		current = assertNonSymlinkDirectory(current)
+		current = AssertNonSymlinkDirectory(current, message)
 	}
+}
+
+// Port of src/incident-binding.ts:40 ensureSafeDirectory.
+func ensureSafeDirectory(path string) {
+	EnsureSafeDirectory(path, "Incident binding store path must be a real non-symlink directory: ")
 }
 
 // Port of src/incident-binding.ts:54 bindingDirectory.

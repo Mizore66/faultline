@@ -72,3 +72,16 @@ func TestRecordDropsProtoKey(t *testing.T) {
 		t.Fatalf("out = %s ok=%v", jsjson.Stringify(out), ok)
 	}
 }
+
+// TestUnionMatchesZod pins zod 3.25.76's z.union results, captured with
+// z.union([z.object({a:z.literal(1)}).strict(), z.object({b:z.string()})]).
+func TestUnionMatchesZod(t *testing.T) {
+	u := Union(Object(Field{"a", Literal(jsjson.MakeNumber(1))}).Strict(), Object(Field{"b", String()}))
+	expectMessage(t, u, `{"a":2}`, "[\n  {\n    \"code\": \"invalid_union\",\n    \"unionErrors\": [\n      {\n        \"issues\": [\n          {\n            \"received\": 2,\n            \"code\": \"invalid_literal\",\n            \"expected\": 1,\n            \"path\": [\n              \"a\"\n            ],\n            \"message\": \"Invalid literal value, expected 1\"\n          }\n        ],\n        \"name\": \"ZodError\"\n      },\n      {\n        \"issues\": [\n          {\n            \"code\": \"invalid_type\",\n            \"expected\": \"string\",\n            \"received\": \"undefined\",\n            \"path\": [\n              \"b\"\n            ],\n            \"message\": \"Required\"\n          }\n        ],\n        \"name\": \"ZodError\"\n      }\n    ],\n    \"path\": [],\n    \"message\": \"Invalid input\"\n  }\n]")
+	// The first dirty option's issues win over a later aborted one.
+	expectMessage(t, u, `{"a":1,"z":1}`, "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"z\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key(s) in object: 'z'\"\n  }\n]")
+	out, _, ok := Parse(u, mustParse(t, `{"b":"q","a":1}`))
+	if !ok || jsjson.Stringify(out) != `{"b":"q"}` {
+		t.Fatalf("out = %s ok=%v", jsjson.Stringify(out), ok)
+	}
+}

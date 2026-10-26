@@ -1,0 +1,16 @@
+cmd-dir
+repo
+repo/.git
+repo/.git/objects
+repo/.git/objects/12
+repo/.git/objects/2f
+repo/.git/objects/46
+repo/.git/objects/67
+repo/.git/objects/6a
+repo/.git/objects/8c
+repo/.git/objects/aa
+repo/.git/objects/b0
+repo/.git/refs
+repo/.git/refs/heads
+repo/.git/refs/tags
+repo/sub

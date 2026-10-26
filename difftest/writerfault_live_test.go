@@ -42,6 +42,7 @@ var faultCalls = map[string]string{
 	"close":  "close",
 	"mkdir":  "mkdir,mkdirat",
 	"chmod":  "chmod,fchmodat,?fchmodat2",
+	"fsync":  "fsync,fdatasync",
 }
 
 // discoveryCalls are traced in the fault-free run that names the paths.
@@ -105,7 +106,55 @@ var writerFaultPaths = []struct {
 	// unlink inside that removal.
 	{"doctor-security", "fixture", "tmp/faultline-doctor-security-*", []string{"unlink"}},
 	{"doctor-security", "hook", "tmp/faultline-doctor-security-*/malicious-hooks/pre-commit", []string{"open", "write", "close", "chmod", "unlink"}},
+	// Slice 3b (spec 3.3). No 3b writer unlinks in a fault-free run (the
+	// stage removals run only after a failure), so no unlink group.
+	// fl incident start: the witness proposal (0600 wx under the 0700 store
+	// a recursive mkdir makes, src/witness-lock.ts:254), then the draft
+	// (0600 wx) under directories made one segment at a time
+	// (src/incident-store.ts:37).
+	{"incident-start-command", "draft", "ws/repo/.faultline/incidents/drafts/*.json", []string{"open", "write", "close"}},
+	{"incident-start-command", "drafts-dir", "ws/repo/.faultline/incidents/drafts", []string{"mkdir"}},
+	{"incident-start-command", "incidents-dir", "ws/repo/.faultline/incidents", []string{"mkdir"}},
+	{"incident-start-command", "proposal", "ws/repo/.faultline/witnesses/proposals/*.json", []string{"open", "write", "close"}},
+	{"incident-start-command", "witness-store-dir", "ws/repo/.faultline/witnesses", []string{"mkdir"}},
+	{"incident-start-command", "repo-faultline-dir", "ws/repo/.faultline", []string{"mkdir"}},
+	// fl incident continue: the session binding (0600, overwritten,
+	// src/incident-binding.ts:105). With none yet, its first open is the
+	// write; an existing one is read first, so only its write is faulted.
+	{"incident-continue-unapproved", "binding", "ws/repo/.faultline/incidents/bindings/*.json", []string{"open", "write", "close"}},
+	{"incident-continue-unapproved", "bindings-dir", "ws/repo/.faultline/incidents/bindings", []string{"mkdir"}},
+	{"incident-continue-inherit-digest", "binding-overwrite", "ws/repo/.faultline/incidents/bindings/*.json", []string{"write"}},
+	// The continuation's bundle: its root directory, the stage (mkdir and
+	// the rename into place, faulted through the stage, its source) and a
+	// staged file (src/git-proof-bundle.ts:1060).
+	{"incident-continue-inherit-digest", "bundles-dir", "ws/repo/.faultline/git-proof-bundles", []string{"mkdir"}},
+	{"incident-continue-inherit-digest", "bundle-stage", "ws/repo/.faultline/git-proof-bundles/.*.staging-*", []string{"mkdir", "rename"}},
+	{"incident-continue-inherit-digest", "bundle-stage-manifest", "ws/repo/.faultline/git-proof-bundles/.*.staging-*/manifest.json", []string{"open", "write", "close"}},
+	// fl prevention write --from-bundle (src/prevention-proof.ts:470): the
+	// proof root's directories, the 0700 stage, its 0600 wx files with
+	// fsync (the first and the last), the stage's own fsync (open and fsync
+	// errors swallowed), the rename and the parent directory's fsync
+	// (swallowed); then AGENTS.md, created under a recursive mkdir of the
+	// repository, its errors swallowed (src/cli-app.ts:2539).
+	{"prevention-write-bundle-ok", "proof-root-parent", "ws/.faultline", []string{"mkdir"}},
+	{"prevention-write-bundle-ok", "proof-root", "ws/.faultline/prevention-proofs", []string{"mkdir", "open", "fsync"}},
+	{"prevention-write-bundle-ok", "stage", "ws/.faultline/prevention-proofs/.prevention-*.tmp", []string{"mkdir", "open", "fsync", "rename"}},
+	{"prevention-write-bundle-ok", "stage-readme", "ws/.faultline/prevention-proofs/.prevention-*.tmp/README.md", []string{"open", "write", "fsync", "close"}},
+	{"prevention-write-bundle-ok", "stage-repaired-runs", "ws/.faultline/prevention-proofs/.prevention-*.tmp/repaired-runs.json", []string{"open", "write", "fsync", "close"}},
+	{"prevention-write-bundle-ok", "agents", "ws/AGENTS.md", []string{"open", "write", "close"}},
+	{"prevention-write-bundle-ok", "agents-dir", "ws", []string{"mkdir"}},
+	// fl prevention write --input, whose write errors throw instead of
+	// becoming PREVENTION_EXPORT_FAILED; and an existing AGENTS.md, read
+	// (the first open) before it is rewritten.
+	{"prevention-write-input-summary", "stage", "ws/.faultline/prevention-proofs/.s.*.tmp", []string{"mkdir", "rename"}},
+	{"prevention-write-input-summary", "stage-prevention", "ws/.faultline/prevention-proofs/.s.*.tmp/prevention.json", []string{"open", "write", "fsync", "close"}},
+	{"prevention-write-input-agents-append", "agents-existing", "ws/AGENTS.md", []string{"open", "write"}},
 }
+
+// faultFirstInvocation are multi-invocation writer cases whose first
+// invocation alone is faulted: prevention-write-bundle-ok's first is the
+// only single --from-bundle write, and the only one creating AGENTS.md.
+var faultFirstInvocation = map[string]bool{"prevention-write-bundle-ok": true}
 
 // everyCallFaultPaths fail every call of a group, on any path. The fixture
 // mkdtemp of doctor --security (src/doctor.ts:605) cannot be faulted by
@@ -168,6 +217,9 @@ func TestLiveWriterFaults(t *testing.T) {
 	for _, f := range matrix {
 		t.Run(f.name(), func(t *testing.T) {
 			tpl, ok := templates[f.caseID]
+			if ok && faultFirstInvocation[f.caseID] {
+				tpl.Argv = tpl.Argv[:1]
+			}
 			if !ok || len(tpl.Argv) != 1 {
 				t.Fatalf("writer template %s missing or not a single invocation", f.caseID)
 			}

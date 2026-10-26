@@ -1,0 +1,9 @@
+repo
+repo/.git
+repo/.git/objects
+repo/.git/objects/67
+repo/.git/objects/a1
+repo/.git/objects/cf
+repo/.git/refs
+repo/.git/refs/heads
+repo/.git/refs/tags

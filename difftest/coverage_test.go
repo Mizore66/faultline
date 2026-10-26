@@ -22,7 +22,6 @@ import (
 // output, so a dropped or reworded check fails replay.
 var unreachableLiterals = map[string]string{
 	"Git proof bundle directory does not exist":                               "a Git bundle is only recognised by reading its manifest.json, so its directory exists (short of a race)",
-	"Prevention proof directory does not exist":                               "a prevention bundle is only recognised by reading its manifest.json, so its directory exists (short of a race)",
 	"Unsafe artifact path:":                                                   "metadata and manifest paths are schema-checked with the same safe-path rule first",
 	"Git range patch exceeds FaultLine's portable artifact limit.":            "git diff output past the 4 MiB maxBuffer fails with ENOBUFS before the 128 MiB artifact limit is checked",
 	"AGENT_DRAFT evidence cannot be exported as a Git proof bundle":           "proof.evidenceGrade is a zod enum without AGENT_DRAFT",
@@ -58,6 +57,33 @@ var unreachableLiterals = map[string]string{
 	"Git proof source artifact changed before package assembly:":                      "race only: the bundle git just wrote is read back unchanged",
 	"Git proof bundle output appeared during assembly and will not be replaced:":      "race only: the output was refused when it existed before staging",
 
+	// prevention/write.go (TestLivePreventionWrite's requireReached):
+	"Prevention proof root is not a real directory:":                             "the filesystem root is always a real directory",
+	"Prevention proof output appeared during assembly and will not be replaced:": "race only: the output was refused when it existed before staging",
+	"Refusing to publish an invalid prevention proof:":                           "a stage the writer just wrote verifies unless the filesystem fails between the writes and the verify; an unreadable stage (umask 0477) fails its removal too, and that error is thrown instead",
+
+	// prevention/artifacts.go (TestLivePreventionFromArtifacts): the Git proof
+	// verifier runs first, and a bundle it accepts reconstructs its stable
+	// states and transitions from runs that all match the state's commit and
+	// tree, are DOCKER_ISOLATED NATIVE_DOCKER with one decisive verdict and a
+	// PREDICATE_PASS / PREDICATE_FAIL reason, and carry the frozen witness
+	// digests; a PASS_TO_FAIL transition goes from a PASS to a FAIL state.
+	// TS's "repairBaseTree must equal the first-bad state's tree" check is
+	// not ported (artifacts.go): the CLI passes no repairBaseTree, which then
+	// defaults to that tree. The writer case prevention-write-bundle-base-
+	// tree-mismatch is named for it but pins the refusal the CLI can reach
+	// (--repaired-tree set to the first-bad tree: "Repaired run … commit/tree
+	// does not match the repaired state."), not that check.
+	"Prevention export requires a Docker-isolated proof-grade Git investigation.": "the Git proof semantics refuse a non-proof or non-NATIVE_DOCKER investigation first",
+	"stable state at":                                 "a reconstructed PASS_TO_FAIL transition has a PASS before and a FAIL after state",
+	"is not present in the proof bundle":              "stable states are reconstructed from the bundle's own runs",
+	"commit/tree does not match stable state":         "a reconstructed stable state's runs all match its commit and tree",
+	"witness digests do not match the frozen witness": "the Git proof semantics refuse a run whose digests differ from the frozen witness",
+	"is not NATIVE_DOCKER":                            "a reconstructed stable state's runs are all NATIVE_DOCKER",
+	"is not DOCKER_ISOLATED":                          "a reconstructed stable state's runs are all DOCKER_ISOLATED",
+	"PASS reason must be PREDICATE_PASS":              "the Git proof semantics refuse a PASS run without PREDICATE_PASS",
+	"FAIL reason must be PREDICATE_FAIL":              "the Git proof semantics refuse a FAIL run without PREDICATE_FAIL",
+
 	// Slice 2 writers. Git's own invariants: hardened git prints what these
 	// checks expect unless it is broken.
 	"Git range enumeration returned an invalid commit object id.":   "git rev-list prints full object ids",
@@ -88,6 +114,7 @@ var unreachableLiterals = map[string]string{
 	"Git minimization result already exists and will not be replaced:":                     "race only: the CLI's safeManagedFileOutput refused an existing output just before",
 	"minimization result changed beyond FaultLine's verification read limit while reading": "race only: lstat just reported a size within the limit",
 	"Generated Git proof bundle failed verification:":                                      "race only: the bundle fl just wrote verifies unless it changes underneath",
+	"Generated incident proof bundle failed verification:":                                 "race only: the bundle incident continue just wrote verifies unless it changes underneath (the Git bundle text above is the same check)",
 	"Refusing to render a Git proof bundle that changed during verification:":              "race only: the bundle is verified twice in a row",
 	"Unable to read verified":                                                              "race only: the file was just verified, so it exists and parses",
 
@@ -96,7 +123,7 @@ var unreachableLiterals = map[string]string{
 	// CLI paths frozen TS runs for real (Go throws `not yet ported`): no
 	// golden can compare them; internal/cli's unit tests pin the texts.
 	"not yet ported: help":                           "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
-	"not yet ported: %s":                             "every unported top-level command (incident and prevention in slice 3b; codex, record, prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
+	"not yet ported: %s":                             "every unported top-level command (codex, record, prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
 	"not yet ported: investigate --ci-log/--resume":  "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: investigate turns":              "investigate turns runs in TS; TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: turn proof bundle verification": "a turn proof bundle verifies in TS; slice 2 does not port the turn verifier",
@@ -116,6 +143,7 @@ var unreachableLiterals = map[string]string{
 	"Ratification refused: executed witness digest is malformed.":          "the digest is compared with the stored witness digest first, so a malformed one is refused as a mismatch",
 	"Autonomous session path escaped its store":                            "the id is schema-checked as a safe filename segment first",
 	"Incident binding path escaped its configured store":                   "the incident id is schema-checked as a safe identifier first",
+	"Incident draft path escaped its configured store":                     "the draft id is schema-checked as a safe identifier first",
 	"Witness lock path escaped its configured store":                       "proposalId is schema-checked as a safe filename segment first",
 	"Standing approval refused:":                                           "the CLI applies a policy only after matchStandingApprovalPolicy accepted the same proposal (tryAutoFreezeFromStandingPolicy, resolveAutonomousProposal)",
 	"unknown OpenSSL reason":                                               "a programming error: every reason the PEM and DER readers raise is in the generated table (TestPEMProbes would panic)",
@@ -1025,12 +1053,13 @@ func exprString(e ast.Expr) string {
 // gatedDirs are the packages (relative to the module root) whose error
 // literals the goldens must reach (TestGoldensReachEveryErrorLiteral) and
 // whose error sites the replays must run (coverageGate): the verifier
-// (slice 1) and the slice 2 writers.
+// (slice 1), the slice 2 writers and the slice 3 commands.
 var gatedDirs = []string{
 	"internal/bundle", "internal/clock", "internal/jsre", "internal/safedir", "internal/evidence",
 	"internal/witnessresult", "internal/redaction", "internal/witness", "internal/ledgerbind",
 	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
 	"internal/safegit", "internal/hostcmd", "internal/runtimeimage", "internal/doctor", "internal/allowlist", "internal/turnsnap",
+	"internal/incident",
 }
 
 // gatedLiterals is errorLiterals over every gatedDirs package.
@@ -1086,6 +1115,19 @@ var liveGatedFiles = map[string]string{
 	"internal/turnsnap/scan.go":        "TestLiveTurnSnapshotScan",
 	"internal/turnsnap/plan.go":        "TestLiveTurnSnapshotCapture",
 	"internal/turnsnap/capture.go":     "TestLiveTurnSnapshotCapture",
+	// Slice 3b: the incident draft schemas, creation and store, on
+	// generated inputs and store layouts.
+	"internal/incident/schemas.go": "TestLiveIncidentDraft",
+	"internal/incident/draft.go":   "TestLiveIncidentDraft",
+	"internal/incident/store.go":   "TestLiveIncidentDraft",
+	// Slice 3b: the incident intake runner, on scripted Git transcripts and
+	// real repositories.
+	"internal/incident/intake.go": "TestLiveIncidentSuggest",
+	// Slice 3b: the prevention writer, the --from-bundle build and the
+	// AGENTS.md upsert, on generated inputs.
+	"internal/bundle/prevention/write.go":     "TestLivePreventionWrite",
+	"internal/bundle/prevention/agentsmd.go":  "TestLiveAgentsMd",
+	"internal/bundle/prevention/artifacts.go": "TestLivePreventionFromArtifacts",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally

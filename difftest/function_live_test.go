@@ -636,7 +636,7 @@ func TestLiveSafeGitLists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var want struct{ HostCommand, Doctor []string }
+	var want struct{ HostCommand, Doctor, Intake []string }
 	if err := json.Unmarshal([]byte(raw), &want); err != nil {
 		t.Fatal(err)
 	}
@@ -645,6 +645,9 @@ func TestLiveSafeGitLists(t *testing.T) {
 	}
 	if !slices.Equal(safegit.Doctor(), want.Doctor) {
 		t.Errorf("Doctor:\ngot  %q\nwant %q", safegit.Doctor(), want.Doctor)
+	}
+	if !slices.Equal(safegit.Intake(), want.Intake) || len(want.Intake) == 0 {
+		t.Errorf("Intake:\ngot  %q\nwant %q", safegit.Intake(), want.Intake)
 	}
 	if ts := safegit.TurnSnapshot(); !slices.Equal(ts[:len(want.Doctor)], want.Doctor) {
 		t.Errorf("TurnSnapshot does not start with Doctor: %q", ts)

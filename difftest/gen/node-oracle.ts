@@ -32,6 +32,9 @@ import { resignLedger, richLedger } from "./ledger-seed.js";
 import { resignSandbox, sandboxVariant } from "./sandbox-seed.js";
 import { makeWitness, resignWitness } from "./witness-seed.js";
 import { lifecycleBoundToDescendant, lifecycleBoundToEveryInvestigatedState } from "./fixtures.js";
+import { createIncidentDraft, resolveIncidentRange, verifyIncidentDraft } from "../../src/incident.js";
+import { readIncidentDraft, writeIncidentDraft } from "../../src/incident-store.js";
+import { realpathSync } from "node:fs";
 import { redactText, redactValue } from "../../src/redaction.js";
 import { classifyFromWitnessResult, resolveWitnessResultFromStdout, witnessResultConsistentWithExitCode } from "../../src/witness-result.js";
 import { DOCTOR_SAFE_GIT_CONFIG, HOST_COMMAND_SAFE_GIT_CONFIG } from "../../src/doctor.js";
@@ -47,6 +50,7 @@ import { allowlistConfigDigest, filterAllowlistedHighOccurrences, isEntropyToken
 import { captureTurnTreeSnapshot, defaultTurnSnapshotGitRunner, planTurnSnapshotPaths, turnSnapshotRepoCachePath } from "../../src/turn-snapshot.js";
 import type { TurnSnapshotGitRunner } from "../../src/turn-snapshot.js";
 import { existsSync as tsExists } from "node:fs";
+import { IncidentIntakeError, createNodeIncidentIntakeRunner, suggestIncidentRanges } from "../../src/incident-intake.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -413,6 +417,46 @@ export const handlers: Record<string, Handler> = {
   // Date.now() minus the seeded epoch: under seed.mjs, how many clock ticks
   // the oracle had used (tsx's startup takes some), plus this read.
   seededTick: () => Date.now() - 1784203200000,
+  // Slice 3b Task 2 (incident drafts): JSON.stringify of the result (key
+  // order kept), or "THREW:<message>". createIncidentDraft reads
+  // `new Date()` for createdAt when the input has none, as the CLI does
+  // (cli-app.ts:617).
+  createIncidentDraft: ({ input }: { input: Record<string, unknown> }) => {
+    try {
+      return JSON.stringify(createIncidentDraft("createdAt" in input ? input : { ...input, createdAt: new Date().toISOString() }));
+    } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  verifyIncidentDraft: ({ text }: { text: string }) => {
+    try { return JSON.stringify(verifyIncidentDraft(JSON.parse(text))); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  resolveIncidentRange: ({ facts }: { facts: unknown }) => {
+    try { return JSON.stringify(resolveIncidentRange(facts)); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  // Runs write/read steps on draft stores under dir, then lists dir's tree
+  // (path, type, mode, file bytes in base64), with dir and its realpath
+  // masked as <D>.
+  incidentStoreRoundTrip: ({ dir, steps }: { dir: string; steps: { kind: "write" | "read"; store: string; text?: string; id?: string }[] }) => {
+    const real = realpathSync(dir);
+    const mask = (text: string) => text.split(real).join("<D>").split(dir).join("<D>");
+    const lines = steps.map((step) => {
+      try {
+        if (step.kind === "write") return `OK:${mask(writeIncidentDraft(step.store, JSON.parse(step.text!)).path)}`;
+        const stored = readIncidentDraft(step.store, step.id!);
+        return `OK:${mask(stored.path)}:${canonicalJson(stored.draft)}`;
+      } catch (error) { return `THREW:${mask((error as Error).message)}`; }
+    });
+    const walk = (rel: string): void => {
+      for (const name of cwReaddir(nodePath.join(dir, rel)).sort()) {
+        const child = rel === "" ? name : `${rel}/${name}`;
+        const stat = cwLstat(nodePath.join(dir, child));
+        const kind = stat.isSymbolicLink() ? "l" : stat.isDirectory() ? "d" : "f";
+        lines.push(`${child}|${kind}|${(stat.mode & 0o777).toString(8)}${kind === "f" ? `|${cwReadFile(nodePath.join(dir, child)).toString("base64")}` : ""}`);
+        if (kind === "d") { try { walk(child); } catch { lines.push(`${child}|unreadable`); } }
+      }
+    };
+    walk("");
+    return lines.join("\n");
+  },
   // investigateGitRange with the native runner, with PATH and
   // FAULTLINE_ARGV_LOG (the git and docker recorders' log) replaced:
   // JSON.stringify of the result (key order kept), or "THREW:<message>".
@@ -573,7 +617,16 @@ export const handlers: Record<string, Handler> = {
     return `${await projectOutcomeAsync(() => prepareProjectRuntimeImage(request, { buildRunner: runner, inspectRunner: runner }))}|${canonicalJson(calls)}`;
   },
   // The safe Git -c lists (internal/safegit).
-  safeGitLists: () => ({ hostCommand: [...HOST_COMMAND_SAFE_GIT_CONFIG], doctor: [...DOCTOR_SAFE_GIT_CONFIG] }),
+  // intake is INTAKE_SAFE_GIT_CONFIG, unexported from cli-app.ts, evaluated
+  // from the module-level const array literal in dist/cli-app.js.
+  safeGitLists: () => {
+    const src = cwReadFile(nodePath.join(process.cwd(), "dist", "cli-app.js"), "utf8");
+    const start = src.indexOf("const INTAKE_SAFE_GIT_CONFIG = [");
+    const end = src.indexOf("\n];", start);
+    if (start < 0 || end < 0) throw new Error("INTAKE_SAFE_GIT_CONFIG not found in dist/cli-app.js");
+    const intake = new Function(`${src.slice(start, end + 3)}\nreturn INTAKE_SAFE_GIT_CONFIG;`)();
+    return { hostCommand: [...HOST_COMMAND_SAFE_GIT_CONFIG], doctor: [...DOCTOR_SAFE_GIT_CONFIG], intake };
+  },
   // Secret allowlist and turn-snapshot path policy (slice 3a, Task 7). The
   // ignore rules and the secret scan are private to turn-snapshot.ts, so they
   // run through planTurnSnapshotPaths with a stub Git runner that lists
@@ -636,6 +689,84 @@ export const handlers: Record<string, Handler> = {
     const cache = cachePath && tsExists(cachePath) && cwStat(cachePath).isFile() ? cwReadFile(cachePath, "utf8") : null;
     return JSON.stringify({ cachePath, outcome, onWarning, cache, calls });
   }),
+  // Incident intake (slice 3b, Task 3): suggestIncidentRanges on
+  // `repository`. With steps, the runner replays them like curatedRuntime
+  // (an exhausted script throws); without, it is the default Node runner.
+  // Each call records [...argv, timeoutMs, maxOutputBytes]; the result is
+  // "<canonical intake or THREW:<code>:<message>>|<canonical calls>".
+  // safeRefNames tests the unexported SAFE_REF_NAME (from dist) on each ref.
+  suggestIncidentRanges: async ({ repository, steps }: { repository: string; steps?: ({ throw: string } | DockerImageInspectResult)[] }) => {
+    const calls: unknown[] = [];
+    const inner = steps === undefined ? createNodeIncidentIntakeRunner() : scriptedDockerRunner(steps).runner;
+    const runner = { run: (command: { arguments: readonly string[]; timeoutMs: number; maxOutputBytes: number }) => {
+      calls.push([...command.arguments, command.timeoutMs, command.maxOutputBytes]);
+      return inner.run(command as any);
+    } };
+    let outcome: string;
+    try {
+      outcome = canonicalJson(await suggestIncidentRanges({ repository, runner: runner as any }));
+    } catch (error) {
+      outcome = `THREW:${error instanceof IncidentIntakeError ? error.code : "?"}:${(error as Error).message}`;
+    }
+    return `${outcome}|${canonicalJson(calls)}`;
+  },
+  safeRefNames: ({ refs }: { refs: string[] }) => {
+    const line = cwReadFile(nodePath.join(process.cwd(), "dist", "incident-intake.js"), "utf8").split("\n").find((l) => l.startsWith("const SAFE_REF_NAME = "));
+    if (line === undefined) throw new Error("SAFE_REF_NAME not found in dist/incident-intake.js");
+    const re = new Function(`${line}\nreturn SAFE_REF_NAME;`)() as RegExp;
+    return refs.map((ref) => (re.test(ref) ? "1" : "0")).join("");
+  },
+  // Prevention writer, --from-bundle builder and AGENTS.md (slice 3b, Task 7).
+  // writePreventionProof runs in `cwd` (the default root is resolved from
+  // it) under `umask` when given: JSON.stringify of the written package, or
+  // "THREW:<message>". Start the oracle seeded to compare the stage UUID.
+  writePreventionProof: async ({ cwd, output, input, umask }: { cwd: string; output: string; input: any; umask?: number }) => {
+    const { writePreventionProof } = await import("../../src/prevention-proof.js");
+    const saved = process.cwd();
+    const savedUmask = umask === undefined ? undefined : process.umask(umask);
+    process.chdir(cwd);
+    try {
+      return JSON.stringify(writePreventionProof(output, input));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    } finally {
+      process.chdir(saved);
+      if (savedUmask !== undefined) process.umask(savedUmask);
+    }
+  },
+  // fixtures.ts sampleInput and groundedPreventionInput (the slice 1 bases).
+  preventionFixtures: async () => {
+    const { sampleInput, groundedPreventionInput } = await import("./fixtures.js");
+    return JSON.stringify({ summary: sampleInput(), grounded: groundedPreventionInput() });
+  },
+  // upsertFaultLineAgentsMd with classification PREVENTION_VERIFIED:
+  // JSON.stringify of { path, status }, or "THREW:<message>".
+  upsertFaultLineAgentsMd: async ({ repository, input }: { repository: string; input: any }) => {
+    const { upsertFaultLineAgentsMd } = await import("../../src/agents-md.js");
+    try {
+      return JSON.stringify(upsertFaultLineAgentsMd({ repository, classification: "PREVENTION_VERIFIED", ...input }));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  // The --from-bundle build as cli-app.ts:2603 calls it: the patch digest
+  // first (digestRepairPatchFile), then buildPreventionProofFromVerifiedArtifacts.
+  // JSON.stringify of the input, {"reasons":[...]}, or "THREW:<message>".
+  // Start the oracle seeded to compare the verifier's mkdtemp names.
+  buildPreventionProofFromVerifiedArtifacts: async ({ bundle, expectRoot, commit, tree, runs, patch, codexThreadId }: {
+    bundle: string; expectRoot: string; commit: string; tree: string; runs: unknown[]; patch: string; codexThreadId?: string;
+  }) => {
+    const { buildPreventionProofFromVerifiedArtifacts, digestRepairPatchFile } = await import("../../src/prevention-from-artifacts.js");
+    try {
+      const built = buildPreventionProofFromVerifiedArtifacts({
+        bundleDirectory: bundle, expectRoot, repaired: { commit, tree, runs: runs as never },
+        repairPatchDigest: digestRepairPatchFile(patch), ...(codexThreadId === undefined ? {} : { codexThreadId })
+      });
+      return JSON.stringify(built.ok ? built.input : { reasons: built.reasons });
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
   sortCodePoints: () => {
     const all: string[] = [];
     for (let c = 0; c <= 0x10ffff; c++) all.push(c >= 0xd800 && c <= 0xdfff ? String.fromCharCode(c) : String.fromCodePoint(c));

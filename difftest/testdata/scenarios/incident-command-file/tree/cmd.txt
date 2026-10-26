@@ -1,0 +1,1 @@
+grep -q good state.txt && echo 'état: ✓' # "quoted" $HOME

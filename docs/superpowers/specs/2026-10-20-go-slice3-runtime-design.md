@@ -1,7 +1,7 @@
 # Go migration slice 3 — runtime, doctor, init, incident, prevention
 
 - **Date:** 2026-10-20
-- **Status:** Approved design (brainstorming session, 2026-10-20); corrected 2026-10-25 with the PR 3a plan's five corrections and what PR 3a's tasks found (package name, git config lists, doctor env, masks and harness rules, the end-to-end result, the ignore matcher, the Docker image store)
+- **Status:** Approved design (brainstorming session, 2026-10-20); corrected 2026-10-25 with the PR 3a plan's five corrections and what PR 3a's tasks found (package name, git config lists, doctor env, masks and harness rules, the end-to-end result, the ignore matcher, the Docker image store); corrected 2026-10-26 with the PR 3b plan's five corrections and what PR 3b's tasks found (the incident git environments and runner, the intake list alias, `continue`'s binding write and output, `prevention write --input`, the TS-built incident scenarios). Slice 3 is complete: PR 3a and PR 3b port every command in Section 1
 - **Parent:** [Go migration overview](2026-09-25-go-migration-overview.md); builds on [slice 1](2026-09-25-go-slice1-verify-design.md) and [slice 2](2026-10-14-go-slice2-git-path-design.md)
 - **TS oracle:** frozen TS at `ce99a79` (`v0.1.10-buildweek`), run as `node dist/cli.js`. This is the `src/` that CI has built since slice 1. Earlier specs name `faa98c0` (`v0.1.9-buildweek`), but `14ad89d` and `ce99a79` changed `src/` after it (Section 3.1). This slice corrects the overview and `difftest/KNOWN_DIFFERENCES.md`.
 - **Tracking:** issue #211
@@ -29,9 +29,9 @@ PR 3a also ports the write side of `src/config.ts` (`writeFaultLineConfig`, `ens
 | Command | TS entry | Notes |
 | --- | --- | --- |
 | `incident suggest` | `incidentCommand` (`src/cli-app.ts:573-693`), `src/incident-intake.ts` | `--repo` is required. |
-| `incident start` | `incidentCommand`, `src/incident.ts`, `src/incident-store.ts` | `--repo`, plus exactly one of `--command` and `--command-file`. Optional: `--from`/`--to` (both or neither), `--id`, `--runtime` or `--image` (not both), `--timeout-seconds` (1–3600, default 300), `--store`, `--draft-store`, `--symptom`, `--language`, `--behavior`. |
+| `incident start` | `incidentCommand`, `src/incident.ts`, `src/incident-store.ts` | `--repo`, plus exactly one of `--command` and `--command-file`. Optional: `--from`/`--to` (both or neither), `--id`, `--runtime` or `--image` (not both), `--timeout-seconds` (1–3600, default 300), `--store`, `--draft-store`, `--symptom`, `--language`, `--behavior`. It reads HEAD even when `--from`/`--to` are given (Section 3.2). |
 | `incident status <id>` | `incidentStatusCommand` (`src/cli-app.ts:464-520`) | `--repo`, `--store`, `--draft-store`, `--expect-digest`. |
-| `incident continue <id>` | `continueIncidentCommand` (`src/cli-app.ts:522-571`), `src/incident-continue.ts` | `--repo`, `--store`, `--draft-store`, `--image`, `--expect-digest`, `--ledger`, `--max-states`, `--output`. Reuses slice 2's investigation and bundle writer. |
+| `incident continue <id>` | `continueIncidentCommand` (`src/cli-app.ts:522-571`), `src/incident-continue.ts` | `--repo`, `--store`, `--draft-store`, `--image`, `--expect-digest`, `--ledger`, `--max-states`, `--output`. Reuses slice 2's investigation and bundle writer, with its own proof root and output (Section 3.6). |
 | `prevention verify <dir>` | `preventionCommand` (`src/cli-app.ts:2560-2665`) | `--expect-root`. JSON output followed by the summary line; slice 1 already has the verifier and `fl verify`'s text form. |
 | `prevention write` | `preventionCommand`, `src/prevention-proof.ts`, `src/prevention-from-artifacts.ts`, `src/agents-md.ts` | `--input` or `--from-bundle` (not both), `--output`, `--repo`. `--from-bundle` also needs `--expect-root`, `--repaired-runs`, `--repaired-commit`, `--repaired-tree` and `--patch`; `--codex-thread-id` is optional. |
 
@@ -44,7 +44,7 @@ Every other subcommand keeps throwing `not yet ported: <name>`.
 - the capture side of `src/turn-snapshot.ts` (`captureTurnTreeSnapshot`, `turnSnapshotRepoCachePath`, the repository cache, quiescence and the object alternates). The turn-bundle verifier stays where slice 2 put it, in `internal/bundle/gitproof`;
 - `src/secret-allowlist.ts` (`captureAllowlistedEvent` in `src/redaction.ts` has no caller in `src/` and stays in slice 4);
 - from `src/codex-sidecar.ts`: `codexSidecarLedgerPath` and the hook-config writer that `init --cli` uses (`sidecarCliCommand`, `codexSidecarHookConfig`, `sidecarProjectHookTarget`, `writeSidecarProjectHookConfig` in `src/cli-app.ts:1656-1760`);
-- the git config override lists `HOST_COMMAND_SAFE_GIT_CONFIG` and `DOCTOR_SAFE_GIT_CONFIG` (`src/doctor.ts`), and `INTAKE_SAFE_GIT_CONFIG` (`src/cli-app.ts:380-399`). These differ from slice 2's `materializationSafeGitConfig`. `HOST_COMMAND_SAFE_GIT_CONFIG` has 18 `-c` pairs (36 entries; `TestLiveSafeGitLists` compares it with TS), and `DOCTOR_SAFE_GIT_CONFIG` adds `-c core.autocrlf=false`. Two more lists derive from it: turn-snapshot capture runs git with `HOST_COMMAND_SAFE_GIT_CONFIG` + `-c core.autocrlf=false` + `-c core.attributesFile=/nonexistent/faultline-attributes` (`turn-snapshot.ts:253-281`; 40 entries), and `codexSidecarLedgerPath`'s runner uses `HOST_COMMAND_SAFE_GIT_CONFIG` alone (`codex-sidecar.ts:234`). `internal/safegit` holds all of them.
+- the git config override lists `HOST_COMMAND_SAFE_GIT_CONFIG` and `DOCTOR_SAFE_GIT_CONFIG` (`src/doctor.ts`), and `INTAKE_SAFE_GIT_CONFIG` (`src/cli-app.ts:380-399`), which is the same list as `HOST_COMMAND_SAFE_GIT_CONFIG` (`safegit.Intake()` is an alias with a live equality test, not a new list; PR 3b plan correction 2). These differ from slice 2's `materializationSafeGitConfig`. `HOST_COMMAND_SAFE_GIT_CONFIG` has 18 `-c` pairs (36 entries; `TestLiveSafeGitLists` compares it with TS), and `DOCTOR_SAFE_GIT_CONFIG` adds `-c core.autocrlf=false`. Two more lists derive from it: turn-snapshot capture runs git with `HOST_COMMAND_SAFE_GIT_CONFIG` + `-c core.autocrlf=false` + `-c core.attributesFile=/nonexistent/faultline-attributes` (`turn-snapshot.ts:253-281`; 40 entries), and `codexSidecarLedgerPath`'s runner uses `HOST_COMMAND_SAFE_GIT_CONFIG` alone (`codex-sidecar.ts:234`). `internal/safegit` holds all of them.
 
 ### Out of scope
 
@@ -63,7 +63,7 @@ internal/projinit     planProjectInit and apply, .faultlineignore, sidecar hook 
 internal/turnsnap     capture, repository cache, quiescence, alternates
 internal/allowlist    secret-allowlist
 internal/incident     intake (suggest), draft, store, continue
-internal/safegit      the HOST_COMMAND, DOCTOR, TURN_SNAPSHOT and INTAKE override lists
+internal/safegit      the HOST_COMMAND, DOCTOR and TURN_SNAPSHOT override lists, and INTAKE (an alias of HOST_COMMAND)
 internal/hostcmd      the shared runner for Node's decoded-chunk spawn capture (doctor.ts, runtime.ts)
 ```
 
@@ -118,7 +118,7 @@ Go reads them in TS's order. The quiescence wait (`Atomics.wait`, 50 ms per atte
   - each curated runtime;
   - a runtime mapping with several pairs;
   - a project build context with a symlink, an executable bit and nested directories;
-  - an incident flow end to end (`start`, witness approve and freeze, `status`, `continue`);
+  - an incident flow end to end (`start`, witness approve and freeze, `status`, `continue`). The `start` and `suggest` cases run the CLI on generated repositories. The `status` and `continue` cases start from scenarios that TS builds with the functions `incident start` calls (`createIncidentDraft`, `proposeWitness`, `writeIncidentDraft`, as `cli-app.ts:589-693` calls them): the draft records the relative repository `repo` (an absolute one would name the build directory), with fixed `createdAt` and `proposedAt` and an explicit `HEAD~n..HEAD` range. The chain from a Go-written draft with an absolute repository through `continue` is covered by `TestEndToEndSlice3bWithoutNode`;
   - `prevention write` from `--input` and from `--from-bundle`.
 - **Mutation templates:**
   - flag combinations and invalid values;
@@ -162,7 +162,7 @@ Go keeps TS's choice of synchronous or asynchronous spawn at each call site, and
 - **Asynchronous, through `nodeproc.Spawn`:**
   - `doctor`'s three version checks (git, node, docker), started together as `Promise.all` starts them;
   - then `rev-parse --show-toplevel`, `status --porcelain=v1 --untracked-files=all -z`, and `docker info` only when the Docker CLI is READY;
-  - `incident suggest`'s git calls;
+  - `incident suggest`'s git calls. The runner is a port of `createNodeIncidentIntakeRunner` on `nodeproc.Spawn`, not `hostcmd`: it joins the output bytes and decodes them once, counts its 64 KiB cap on raw byte lengths, and on a spawn error keeps only the bytes already read. Its env is the hardened set (`GIT_CONFIG_GLOBAL` set) plus `GIT_PROTOCOL_FROM_USER=0` right after `GIT_ALLOW_PROTOCOL`, and its list is `safegit.Doctor()` (5 s, 64 KiB, SIGKILL);
   - every `runtime` Docker call.
 
   Each keeps its own timer, SIGKILL on timeout and output cap: 5 s and 64 KiB for checks and `image inspect`; 5 min for `pull`; 10 min and 128 KiB for `build`. Doctor's asynchronous calls pass no `env` and no `cwd`: they inherit both, including the user's global git config, and only the `-c` overrides apply.
@@ -170,7 +170,9 @@ Go keeps TS's choice of synchronous or asynchronous spawn at each call site, and
   - `doctor --security`'s git calls, with an env stripped to `PATH`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` and `GIT_TERMINAL_PROMPT=0` (plus `SystemRoot`/`ComSpec` on Windows; not `PATHEXT`);
   - `init`'s hook-target `rev-parse`;
   - turn-snapshot capture;
-  - `incident start`'s `git show -s --format=%H%n%P HEAD`.
+  - `incident start`'s `git show -s --format=%H%n%P HEAD`, with `safegit.Intake()` (that is `HOST_COMMAND_SAFE_GIT_CONFIG`) and an env with no `GIT_CONFIG_GLOBAL`, no `GIT_ATTR_NOSYSTEM` and no `GIT_PROTOCOL_FROM_USER` (`cli-app.ts:402-433`). `start` reads HEAD even when `--from` and `--to` are given.
+
+So incident runs git in three environments: `suggest`'s hardened async runner, `start`'s synchronous HEAD read, and `continue`'s slice 2 materialization (PR 3b plan correction 1).
 
 ### 3.3 Writes
 
@@ -206,6 +208,14 @@ When a write or a child process fails part way, Go leaves the same files behind 
 - The draft (`faultline.incident-draft.v1`) and intake (`faultline.incident-intake.v1`) schemas, incident IDs and `--command-file` validation (a regular file, at most 32,000 bytes, valid UTF-8) match TS.
 - `incident status` exits 1 only for `INVALID_FROZEN_WITNESS`.
 - `incident continue` exits 1 with the full result for `INVESTIGATION_NOT_PROOF` and 0 for `PROOF_BUNDLE_READY`.
+- `incident continue` writes the session binding after the draft read, the `--repo` check, the inherited-facts read and the image resolution (`--image`, then the repository config, then the draft runtime), but before the frozen-witness verification and the investigation, so the binding persists when the continuation fails later (`cli-app.ts:545-556`; PR 3b plan correction 3).
+- `incident continue`'s output differs from `investigate git`'s (PR 3b plan correction 4):
+  - its proof root is `<draft repository>/.faultline/git-proof-bundles`, not the cwd default;
+  - its `proofBundle` keys are `directory, rootDigest, externalRootStatus, lifecycle`, in that order;
+  - it leaves `investigation` out of the proof output;
+  - a bundle that fails its own verification prints `Generated incident proof bundle failed verification: …` (race only: the coverage gate lists it with slice 2's Git bundle text).
+- `internal/incident.ContinueOptions` keeps TS's difference between an absent option and a supplied empty string: `Image`, `LedgerFile` and `Output` are `*string` (nil is absent), because the CLI can pass `--image ""`, `--ledger ""` or `--output ""` and TS treats each as present.
+- `prevention write --input` is ordinary: with `grounding: "VERIFIED"` input it also yields `PREVENTION_VERIFIED` and runs the `AGENTS.md` upsert, so the upsert is not specific to `--from-bundle` (PR 3b plan correction 5).
 - `prevention verify` and `prevention write` print the JSON and then `Prevention verified` or `Prevention evidence summary`; `PREVENTION_EXPORT_FAILED` exits 1.
 - `--from-bundle` verifies the bundle through slice 1's Git proof verifier before building the proof.
 
@@ -237,7 +247,7 @@ Each holds for PR 3a and again for PR 3b, for the commands that PR ports.
 2. `difftest-live` and `stack-live` pass, including the real-Docker comparison.
 3. The commands run end to end on the Go binary without Node:
    - **3a:** `fl init --yes` → `fl doctor --proof-ready` → `fl runtime prepare node --yes` (with fake Docker). Without `node` on `PATH`, `doctor` reports the node check UNAVAILABLE and exits 1 by design (Section 3.1), so `--proof-ready` prints `NOT READY`; the check (`TestEndToEndSlice3aWithoutNode`) asserts that result, and that `init` and `runtime prepare` succeed;
-   - **3b:** `incident start` → `witness approve` and `freeze` → `incident continue` → `prevention write --from-bundle` → `fl verify`.
+   - **3b:** `incident start` → `witness approve` and `freeze` → `incident continue` → `prevention write --from-bundle` → `fl verify`, which must report `Prevention verified` (`TestEndToEndSlice3bWithoutNode`, with the `pass-fail` fake Docker and an absolute repository path in the draft).
 4. Every Git proof bundle and prevention proof Go writes verifies under both the Go and the TS verifier.
 5. `difftest/KNOWN_DIFFERENCES.md` lists every intentional difference.
 6. The overview is updated:

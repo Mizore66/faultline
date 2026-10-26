@@ -278,3 +278,45 @@ func (d *defaultSchema) parse(c *ctx, v jsjson.Value, path []any) (jsjson.Value,
 	}
 	return d.inner.parse(c, v, path)
 }
+
+type unionSchema struct{ options []Schema }
+
+// Union is z.union(options) (zod 3 ZodUnion._parse, sync): the options are
+// tried in order, each with its own issue list. The first valid result wins;
+// otherwise the first dirty one, with its issues; otherwise one
+// invalid_union issue whose unionErrors are a ZodError per option that
+// raised issues ({"issues": […], "name": "ZodError"} once stringified).
+func Union(options ...Schema) Schema { return &unionSchema{options} }
+
+func (u *unionSchema) parse(c *ctx, v jsjson.Value, path []any) (jsjson.Value, status) {
+	var dirtyIssues []Issue
+	var dirtyValue jsjson.Value
+	haveDirty := false
+	var unionErrors []jsjson.Value
+	for _, option := range u.options {
+		child := &ctx{}
+		out, st := option.parse(child, v, path)
+		if st == valid {
+			return out, valid
+		}
+		if st == dirty && !haveDirty {
+			haveDirty, dirtyIssues, dirtyValue = true, child.issues, out
+		}
+		if len(child.issues) > 0 {
+			issues := make([]jsjson.Value, len(child.issues))
+			for i, issue := range child.issues {
+				issues[i] = jsjson.MakeObject(issue.Fields)
+			}
+			zodError := jsjson.NewObj()
+			zodError.Set("issues", jsjson.MakeArray(issues))
+			zodError.Set("name", str("ZodError"))
+			unionErrors = append(unionErrors, jsjson.MakeObject(zodError))
+		}
+	}
+	if haveDirty {
+		c.issues = append(c.issues, dirtyIssues...)
+		return dirtyValue, dirty
+	}
+	c.addIssue(path, []kv{{"code", str("invalid_union")}, {"unionErrors", jsjson.MakeArray(unionErrors)}}, "Invalid input")
+	return jsjson.Value{}, aborted
+}
