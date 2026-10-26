@@ -46,7 +46,7 @@
 
 ## Corrections to the spec found while planning
 
-Fold these into the spec in Task 9:
+Fold these into the spec in Task 9 (done 2026-10-26: the spec carries all five, with what the tasks found):
 
 1. **Three git environments in incident.**
    - `suggest` uses `safegit.Doctor()` and an async runner (5 s, 64 KiB, SIGKILL). Its env is the hardened set plus `GIT_PROTOCOL_FROM_USER=0`, with `GIT_CONFIG_GLOBAL` set.
@@ -96,7 +96,7 @@ difftest/incident_live_test.go, prevention_live_test.go
 - **Test both platforms.** The unit test must cover both branches. The mapping is a pure function of `(err, exclusive, goos)`: split out `openWriteCode(errno, exclusive bool, goos string) string` and test it on every OS.
 - **TS name.** `INTAKE_SAFE_GIT_CONFIG` (`src/cli-app.ts:380-399`) is a literal copy of `HOST_COMMAND_SAFE_GIT_CONFIG`, not a spread. The controller checked that it has the same 36 entries in the same order. It is not exported, so the live op extracts it from `dist/cli-app.js`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 // internal/nodefs/nodefs_test.go
@@ -126,21 +126,21 @@ func TestIntakeIsHostCommand(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/nodefs/ ./internal/safegit/ -run 'TestOpenWriteCodeByPlatform|TestIntakeIsHostCommand'`
 Expected: FAIL (undefined: `openWriteCode`, `Intake`).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add `openWriteCode(exclusive bool, goos string) string`, which returns `"EEXIST"` only for `exclusive && goos == "windows"` and otherwise `"EISDIR"`. Call it from `openWriteErr` with `runtime.GOOS`. Add `Intake()`. Extend the oracle op and `TestLiveSafeGitLists` with `intake`, extracted from `dist/cli-app.js` (a module-level `const` array literal) the way the 3a ops extract unexported helpers.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/nodefs/ ./internal/safegit/ && GOOS=windows go vet ./internal/nodefs/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run TestLiveSafeGitLists -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/nodefs internal/safegit difftest
@@ -184,7 +184,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - The draft path uses `safedir.ResolveTrustedSystemPath`, which on macOS turns `/var` into `/private/var`.
 - **Clock.** `createdAt` is a single `clock.Now()` read inside `CreateDraft`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 // internal/incident/draft_test.go
@@ -222,19 +222,19 @@ Live test, `TestLiveIncidentDraft`:
 - 300 tampered drafts for `VerifyDraft`.
 - Compare canonical results or `THREW:<message>`, under the seeded clock.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/incident/`
 Expected: FAIL (package does not exist).
 
-- [ ] **Step 3: Implement** by transcription. Every function carries its TS source comment.
+- [x] **Step 3: Implement** by transcription. Every function carries its TS source comment.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/incident/ ./internal/witness/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run TestLiveIncidentDraft -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/incident internal/witness difftest
@@ -281,7 +281,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - **Messages.** Copy every observation reason, candidate reason and error text verbatim from `src/incident-intake.ts`, including the `${op}` and `upstreamRef` interpolations.
 - **Order.** Candidates are always upstream, then parent; observations are always `[upstream, parent]`. There is no sorting.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 // internal/incident/intake_test.go
@@ -328,19 +328,19 @@ Live test, `TestLiveIncidentSuggest`:
   - a subdirectory as `--repo`.
 - Compare the canonical result or `THREW:` message, plus the argv sequence.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/incident/ -run TestSuggest`
 Expected: FAIL (undefined: `SuggestRanges`).
 
-- [ ] **Step 3: Implement** by transcription.
+- [x] **Step 3: Implement** by transcription.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/incident/ ./internal/hostcmd/ && FAULTLINE_NODE_ORACLE=1 timeout 280 go test -tags faultline_test ./difftest/ -run TestLiveIncidentSuggest -v > /tmp/s3b-t3.log 2>&1; tail -5 /tmp/s3b-t3.log`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/incident internal/hostcmd difftest
@@ -427,12 +427,12 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `incident-start-symptom-empty` (zod)
 - Usage errors: `incident-unknown-subcommand`, and one case per usage error.
 
-- [ ] **Step 1: Add the writer cases and run the replay to see them fail**
+- [x] **Step 1: Add the writer cases and run the replay to see them fail**
 
 Run: `go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/posix/incident-(suggest|start)'`
 Expected: FAIL (`not yet ported: incident`, once the goldens exist).
 
-- [ ] **Step 2: Write `internal/cli/incident_test.go`**
+- [x] **Step 2: Write `internal/cli/incident_test.go`**
 
 The test covers the id format, the timeout parsing (`" 5 "`, `"0x10"`, `"1e3"` accepted; `"1.5"` and `"0"` refused) and the command-input precedence:
 
@@ -457,16 +457,16 @@ func TestGeneratedIncidentIDShape(t *testing.T) {
 
 (Put this test in a `//go:build faultline_test` file, because `clock.ResetForTest` exists only under that tag.)
 
-- [ ] **Step 3: Implement the handler; generate the goldens**
+- [x] **Step 3: Implement the handler; generate the goldens**
 
 Use podman `localhost/r73img` as uid 1000; the 3a Task 10 and 11 reports give the exact command. Regenerate all writer goldens and confirm that the `git diff` of `writers.jsonl` shows only added `incident-` lines.
 
-- [ ] **Step 4: Run to verify the replay passes**
+- [x] **Step 4: Run to verify the replay passes**
 
 Run: `go test ./internal/cli/ && go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/posix/incident-|TestWindowsWriterSkipsList|TestGoldensReachEveryErrorLiteral' -v > /tmp/s3b-t4.log 2>&1; grep -E '^(---|ok|FAIL)' /tmp/s3b-t4.log | tail -20`
 Expected: PASS. A mismatch is fixed in Go, never in the golden.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/cli difftest .github
@@ -513,7 +513,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
      - Write the bundle, verify it with the root, and on failure throw `Generated incident proof bundle failed verification: …`.
 - **The undefined-digest check** at :101 cannot be reached from the CLI. Mark it `// coverage gate: unported caller` only if the gate demands it; otherwise drop it with a TS-cited comment, as Task 8 of 3a did for its dead checks.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 // internal/incident/continue_test.go
@@ -545,19 +545,19 @@ func TestAssertBindingListsMismatchesInOrder(t *testing.T) {
 
 (`jsjson` has `Parse(text) (Value, error)` but no `MustParse`, so add a test helper `mustParse(t, s)` in the test file and use it for the two calls above. Write `mismatchedBindingFixture` in the test file with `CreateDraft` and `witness.Propose`/`Approve`/`Freeze` on a temp store.)
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/incident/ -run TestAssertBinding`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement** by transcription.
+- [x] **Step 3: Implement** by transcription.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/incident/`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/incident
@@ -636,21 +636,21 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `unknown-flag` (`--unsafe-local`, ignored)
 - Usage cases.
 
-- [ ] **Step 1: Add the cases; see them fail**
+- [x] **Step 1: Add the cases; see them fail**
 
 Run: `go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/posix/incident-(status|continue)'`
 Expected: FAIL.
 
-- [ ] **Step 2: Unit test** `loadIncidentCommandContext`'s repo-mismatch text and the witness-store default (the draft's repository, not the cwd) in `internal/cli/incident_test.go`.
+- [x] **Step 2: Unit test** `loadIncidentCommandContext`'s repo-mismatch text and the witness-store default (the draft's repository, not the cwd) in `internal/cli/incident_test.go`.
 
-- [ ] **Step 3: Implement; generate goldens** (podman, uid 1000; confirm only added lines).
+- [x] **Step 3: Implement; generate goldens** (podman, uid 1000; confirm only added lines).
 
-- [ ] **Step 4: Run to verify the replay passes**
+- [x] **Step 4: Run to verify the replay passes**
 
 Run: `go test ./internal/cli/ && go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/posix/incident-|TestGoldensReachEveryErrorLiteral|TestWindowsWriterSkipsList' > /tmp/s3b-t6.log 2>&1; grep -E '^(---|ok|FAIL)' /tmp/s3b-t6.log | tail -20`
 Expected: PASS. Every bundle written by a `continue` case must verify VALID under the Go and TS verifiers (the writer harness's existing cross-check; confirm it covers bundles under `.faultline/git-proof-bundles`).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/cli difftest .github
@@ -720,7 +720,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `CREATED` exactly when `existing.length === 0`, so a whitespace-only file reports `UPDATED`.
   - `assertDigestOnly` refuses non-digest values. Copy its text.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```go
 // internal/bundle/prevention/agentsmd_test.go
@@ -764,19 +764,19 @@ Live tests:
 - `TestLiveAgentsMd`: 1,000 generated existing contents (markers in all orders, CRLF, whitespace-only, invalid UTF-8, nested markers).
 - `TestLivePreventionFromArtifacts`: the `git-unbound` base bundle with 300 generated repaired-runs and flag variations. Compare the input object or the reasons.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/bundle/prevention/`
 Expected: FAIL (undefined).
 
-- [ ] **Step 3: Implement** by transcription.
+- [x] **Step 3: Implement** by transcription.
 
-- [ ] **Step 4: Run to verify the tests pass**
+- [x] **Step 4: Run to verify the tests pass**
 
 Run: `go test ./internal/bundle/prevention/ && FAULTLINE_NODE_ORACLE=1 timeout 280 go test -tags faultline_test ./difftest/ -run 'TestLivePreventionWrite|TestLiveAgentsMd|TestLivePreventionFromArtifacts' -v > /tmp/s3b-t7.log 2>&1; tail -5 /tmp/s3b-t7.log`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/bundle/prevention difftest
@@ -840,21 +840,21 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `missing-patch`, `missing-repaired-runs`, `bad-thread-id`, `with-thread-id`
 - `prevention-write-both-flags`, `prevention-write-neither-flag`, `prevention-unknown-subcommand`.
 
-- [ ] **Step 1: Add the cases; see them fail**
+- [x] **Step 1: Add the cases; see them fail**
 
 Run: `go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/(posix/)?prevention-'`
 Expected: FAIL (`not yet ported: prevention`).
 
-- [ ] **Step 2: Unit test** the `--input` / `--from-bundle` exactly-one rule with a last-position flag in `internal/cli/prevention_test.go`.
+- [x] **Step 2: Unit test** the `--input` / `--from-bundle` exactly-one rule with a last-position flag in `internal/cli/prevention_test.go`.
 
-- [ ] **Step 3: Implement; generate the goldens** (podman, uid 1000; confirm only added lines).
+- [x] **Step 3: Implement; generate the goldens** (podman, uid 1000; confirm only added lines).
 
-- [ ] **Step 4: Run to verify the replay passes**
+- [x] **Step 4: Run to verify the replay passes**
 
 Run: `go test ./internal/cli/ && go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/(posix/)?prevention-|TestGoldensReachEveryErrorLiteral|TestWindowsWriterSkipsList' > /tmp/s3b-t8.log 2>&1; grep -E '^(---|ok|FAIL)' /tmp/s3b-t8.log | tail -20`
 Expected: PASS. Every prevention package Go writes must verify under both the Go and TS verifiers; add it to the writer cross-check if the cross-check only knows Git bundles.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/cli difftest .github
