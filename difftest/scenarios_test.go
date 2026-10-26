@@ -64,6 +64,8 @@ var writerScenarios = map[string]bool{
 	"init-dirty-secret":          true,
 	"init-worktree":              true,
 	"init-sidecar":               true,
+	"prevention-input":           true,
+	"prevention-from-bundle":     true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is
