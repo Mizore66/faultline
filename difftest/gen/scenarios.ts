@@ -14,6 +14,9 @@ import { deflateSync } from "node:zlib";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { computeEnvironmentFingerprint } from "../../src/environment-fingerprint.js";
 import { appendLifecycleEvent, createCodexLifecycleLedger, GIT_CHECKPOINT_VERSION, signGitCheckpoint, type CodexLifecycleLedger } from "../../src/ledger.js";
+import { createIncidentDraft } from "../../src/incident.js";
+import { writeIncidentDraft } from "../../src/incident-store.js";
+import { proposeWitness } from "../../src/witness-lock.js";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const cli = join(repo, "dist", "cli.js");
@@ -562,6 +565,86 @@ function initWorktree(ws: string): void {
   for (const [path, content] of Object.entries(INIT_CLEAN_FILES)) writeFileSync(join(ws, "wt", path), content);
 }
 
+// Incident continuation scenarios (slice 3b Task 6). Each holds a scenario
+// repository at repo/ and the records `fl incident start --repo repo --id
+// demo-1 --from <ancestor> --to <descendant> [--image <PINNED_IMAGE>]
+// --command "node witness.mjs"` writes (cli-app.ts:589-693): a review-only
+// proposal in repo/.faultline/witnesses and the draft bound to it in
+// repo/.faultline/incidents. They are made with the TS functions start
+// calls, not the CLI, for two reasons: start records the absolute
+// repository, which would name the build directory, so the draft records
+// the relative "repo" (resolve(draft.repository) is <WS>/repo on both
+// sides); and the proposal's proposedAt and the draft's createdAt are fixed.
+// The cases then run witness approve and freeze, incident status and
+// incident continue. witness.mjs is committed in every state so the stored
+// command names a real file; pass-fail fake Docker reads only state.txt.
+const INCIDENT_ID = "demo-1";
+const INCIDENT_COMMAND = "node witness.mjs";
+const INCIDENT_AT = "2026-07-16T10:30:00.000Z";
+const incidentState = (value: string): RepoState => state(value, { "witness.mjs": "export const faultLineWitness = 'incident';\n" });
+function writeIncidentRecords(ws: string, options: { ancestor: string; runtime: boolean; swapProposal?: boolean }): void {
+  const repository = "repo";
+  const draftInput = {
+    draftId: INCIDENT_ID,
+    createdAt: INCIDENT_AT,
+    repository,
+    command: INCIDENT_COMMAND,
+    range: { ancestor: options.ancestor, descendant: "HEAD" },
+    ...(options.runtime ? { runtime: { requested: "explicit", image: PINNED_IMAGE } } : {})
+  };
+  const preliminary = createIncidentDraft(draftInput);
+  const store = join(ws, repository, ".faultline", "witnesses");
+  const proposalInput = (command: string) => ({
+    proposalId: preliminary.draftId,
+    proposalOrigin: "HUMAN",
+    proposedAt: INCIDENT_AT,
+    incidentPacket: {
+      symptom: "A human-reported command is failing and requires a reviewed, frozen witness before localization.",
+      ciLog: "The exact user-supplied command is stored in the reviewable witness, not executed by incident intake.",
+      repositoryLanguage: "Unknown",
+      repositorySummary: `Review-only local Git range ${preliminary.range.ancestor} to ${preliminary.range.descendant} (${preliminary.range.source}). No remote base was selected.${preliminary.runtime === undefined ? "" : ` The selected local runtime resolves to ${preliminary.runtime.image}.`}`
+    },
+    witness: {
+      behavior: "The human-supplied command must exit successfully at the selected immutable Git states.",
+      command,
+      overlays: [],
+      policy: { network: "disabled", credentials: "redacted", timeoutSeconds: 300 }
+    }
+  });
+  const proposal = proposeWitness(store, proposalInput(INCIDENT_COMMAND));
+  const draft = createIncidentDraft({
+    ...draftInput,
+    proposal: {
+      proposalId: proposal.proposalId,
+      proposalDigest: proposal.proposalDigest,
+      incidentPacketDigest: proposal.incidentPacketDigest,
+      commandDigest: proposal.witness.commandDigest
+    }
+  });
+  writeIncidentDraft(join(ws, repository, ".faultline", "incidents"), draft);
+  // A frozen witness for a different command under the same identifier:
+  // the review chain is intact, only the draft binding disagrees.
+  if (options.swapProposal) {
+    rmSync(join(store, "proposals", `${INCIDENT_ID}.json`));
+    proposeWitness(store, proposalInput("node other.mjs"));
+  }
+}
+const INCIDENT_STORE = "repo/.faultline/witnesses";
+const INCIDENT_APPROVE = ["witness", "approve", INCIDENT_ID, "--approved-by", "reviewer@example.test", "--store", INCIDENT_STORE];
+const INCIDENT_FREEZE = ["witness", "freeze", INCIDENT_ID, "--store", INCIDENT_STORE, "--repo", "repo"];
+function incidentScenario(states: RepoState[], options: { runtime?: boolean; swapProposal?: boolean; frozen?: boolean; extra?: (repo: BuiltRepo) => Record<string, string> } = {}): Scenario {
+  return {
+    files: {},
+    setup: (ws) => {
+      const built = buildRepo(ws, "repo", states);
+      writeIncidentRecords(ws, { ancestor: `HEAD~${states.length - 1}`, runtime: options.runtime ?? true, ...(options.swapProposal ? { swapProposal: true } : {}) });
+      for (const [path, text] of Object.entries(options.extra?.(built) ?? {})) writeFileSync(join(ws, path), text);
+    },
+    argv: options.frozen ? [INCIDENT_APPROVE, INCIDENT_FREEZE] : []
+  };
+}
+const INCIDENT_GOOD_BAD = [incidentState("good"), incidentState("bad")];
+
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
@@ -704,7 +787,16 @@ export const SCENARIOS: Record<string, Scenario> = {
   "proof-bases": {
     bases: Object.fromEntries(["git-fully-bound", "git-partially-bound", "git-shape-mixed-history", "git-sha256"].map((b) => [`bases/${b}`, b])),
     files: {}, argv: []
-  }
+  },
+  // Incident status and continue (slice 3b Task 6).
+  "incident-two-states": incidentScenario(INCIDENT_GOOD_BAD),
+  "incident-two-states-frozen": incidentScenario(INCIDENT_GOOD_BAD, { frozen: true }),
+  "incident-no-runtime": incidentScenario(INCIDENT_GOOD_BAD, { runtime: false }),
+  "incident-all-pass": incidentScenario([incidentState("good"), incidentState("good")]),
+  "incident-binding-mismatch": incidentScenario(INCIDENT_GOOD_BAD, { swapProposal: true }),
+  "incident-ledger-full": incidentScenario(GOOD_BAD_REPAIRED.map((s) => incidentState(s["state.txt"]!.trim())), {
+    extra: (built) => ({ "ledger.json": lifecycleLedger(built, [0, 1, 2]) })
+  })
 };
 
 // A scenario is committed as <name>/dirs.txt, every directory of the
