@@ -925,20 +925,20 @@ const incidentMergeHead: Hostile = (git, built) => {
   // Written after refs/heads/main, so main becomes the merge.
   return { refs: { main: merge }, drop: [] };
 };
-function incidentScenario(states: RepoState[], hostile?: Hostile, edit?: (ws: string) => void): Scenario {
+function intakeScenario(states: RepoState[], hostile?: Hostile, edit?: (ws: string) => void): Scenario {
   return { files: {}, setup: (ws) => { buildRepo(ws, "repo", states, "sha1", hostile); edit?.(ws); }, argv: [] };
 }
 Object.assign(SCENARIOS, {
-  "incident-repo": incidentScenario(INCIDENT_STATES),
-  "incident-upstream": incidentScenario([...INCIDENT_STATES, state("worse", { "sub/keep.txt": "keep\n" })], incidentUpstreamSide, (ws) => {
+  "incident-repo": intakeScenario(INCIDENT_STATES),
+  "incident-upstream": intakeScenario([...INCIDENT_STATES, state("worse", { "sub/keep.txt": "keep\n" })], incidentUpstreamSide, (ws) => {
     const gitDir = join(ws, "repo", ".git");
     mkdirSync(join(gitDir, "refs", "remotes", "origin"), { recursive: true });
     writeFileSync(join(gitDir, "refs", "remotes", "origin", "main"), `${incidentUpstreamTip}\n`);
     writeFileSync(join(gitDir, "config"), `${readFileSync(join(gitDir, "config"), "utf8")}[remote "origin"]\n\turl = https://example.invalid/faultline.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`);
   }),
-  "incident-root": incidentScenario([state("bad")]),
-  "incident-merge": incidentScenario(INCIDENT_STATES, incidentMergeHead),
-  "incident-command-file": incidentScenario(INCIDENT_STATES, undefined, (ws) => {
+  "incident-root": intakeScenario([state("bad")]),
+  "incident-merge": intakeScenario(INCIDENT_STATES, incidentMergeHead),
+  "incident-command-file": intakeScenario(INCIDENT_STATES, undefined, (ws) => {
     writeFileSync(join(ws, "cmd.txt"), "grep -q good state.txt && echo 'état: ✓' # \"quoted\" $HOME\n");
     writeFileSync(join(ws, "big.txt"), "x".repeat(32_001));
     writeFileSync(join(ws, "bad.txt"), Buffer.from([0x65, 0x63, 0x68, 0x6f, 0x20, 0xff, 0x0a]));
