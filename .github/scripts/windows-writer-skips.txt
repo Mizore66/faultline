@@ -410,3 +410,7 @@ TestWriterReplay/posix/prevention-write-bundle-missing-repaired-runs
 TestWriterReplay/posix/prevention-write-bundle-missing-flags
 TestWriterReplay/posix/prevention-write-bundle-bad-thread-id
 TestWriterReplay/posix/prevention-write-bundle-with-thread-id
+TestWriterReplay/posix/incident-status-unbound
+TestWriterReplay/posix/incident-continue-unbound
+TestWriterReplay/posix/incident-status-foreign-proposal
+TestWriterReplay/posix/incident-continue-foreign-proposal

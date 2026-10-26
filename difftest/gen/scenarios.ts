@@ -6,7 +6,7 @@
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -582,7 +582,7 @@ const INCIDENT_ID = "demo-1";
 const INCIDENT_COMMAND = "node witness.mjs";
 const INCIDENT_AT = "2026-07-16T10:30:00.000Z";
 const incidentState = (value: string): RepoState => state(value, { "witness.mjs": "export const faultLineWitness = 'incident';\n" });
-function writeIncidentRecords(ws: string, options: { ancestor: string; runtime: boolean; swapProposal?: boolean }): void {
+function writeIncidentRecords(ws: string, options: { ancestor: string; runtime: boolean; swapProposal?: boolean; unbound?: boolean; foreignProposal?: boolean }): void {
   const repository = "repo";
   const draftInput = {
     draftId: INCIDENT_ID,
@@ -594,12 +594,12 @@ function writeIncidentRecords(ws: string, options: { ancestor: string; runtime: 
   };
   const preliminary = createIncidentDraft(draftInput);
   const store = join(ws, repository, ".faultline", "witnesses");
-  const proposalInput = (command: string) => ({
-    proposalId: preliminary.draftId,
+  const proposalInput = (command: string, proposalId: string = preliminary.draftId, symptom = "A human-reported command is failing and requires a reviewed, frozen witness before localization.") => ({
+    proposalId,
     proposalOrigin: "HUMAN",
     proposedAt: INCIDENT_AT,
     incidentPacket: {
-      symptom: "A human-reported command is failing and requires a reviewed, frozen witness before localization.",
+      symptom,
       ciLog: "The exact user-supplied command is stored in the reviewable witness, not executed by incident intake.",
       repositoryLanguage: "Unknown",
       repositorySummary: `Review-only local Git range ${preliminary.range.ancestor} to ${preliminary.range.descendant} (${preliminary.range.source}). No remote base was selected.${preliminary.runtime === undefined ? "" : ` The selected local runtime resolves to ${preliminary.runtime.image}.`}`
@@ -621,7 +621,18 @@ function writeIncidentRecords(ws: string, options: { ancestor: string; runtime: 
       commandDigest: proposal.witness.commandDigest
     }
   });
-  writeIncidentDraft(join(ws, repository, ".faultline", "incidents"), draft);
+  // An unbound draft: the one start would write without a proposal
+  // (createIncidentDraft with no proposal binding, witnessState NOT_PROPOSED).
+  writeIncidentDraft(join(ws, repository, ".faultline", "incidents"), options.unbound ? preliminary : draft);
+  // A proposal stored under the draft's identifier whose own proposalId and
+  // incident packet differ (same command): the witness store keys records
+  // by the requested identifier and approve and freeze accept it, so only
+  // the draft binding check sees the identifier and packet mismatch.
+  if (options.foreignProposal) {
+    rmSync(join(store, "proposals", `${INCIDENT_ID}.json`));
+    proposeWitness(store, proposalInput(INCIDENT_COMMAND, "demo-2", "A different incident packet."));
+    renameSync(join(store, "proposals", "demo-2.json"), join(store, "proposals", `${INCIDENT_ID}.json`));
+  }
   // A frozen witness for a different command under the same identifier:
   // the review chain is intact, only the draft binding disagrees.
   if (options.swapProposal) {
@@ -632,12 +643,17 @@ function writeIncidentRecords(ws: string, options: { ancestor: string; runtime: 
 const INCIDENT_STORE = "repo/.faultline/witnesses";
 const INCIDENT_APPROVE = ["witness", "approve", INCIDENT_ID, "--approved-by", "reviewer@example.test", "--store", INCIDENT_STORE];
 const INCIDENT_FREEZE = ["witness", "freeze", INCIDENT_ID, "--store", INCIDENT_STORE, "--repo", "repo"];
-function incidentScenario(states: RepoState[], options: { runtime?: boolean; swapProposal?: boolean; frozen?: boolean; extra?: (repo: BuiltRepo) => Record<string, string> } = {}): Scenario {
+function incidentScenario(states: RepoState[], options: { runtime?: boolean; swapProposal?: boolean; unbound?: boolean; foreignProposal?: boolean; frozen?: boolean; extra?: (repo: BuiltRepo) => Record<string, string> } = {}): Scenario {
   return {
     files: {},
     setup: (ws) => {
       const built = buildRepo(ws, "repo", states);
-      writeIncidentRecords(ws, { ancestor: `HEAD~${states.length - 1}`, runtime: options.runtime ?? true, ...(options.swapProposal ? { swapProposal: true } : {}) });
+      writeIncidentRecords(ws, {
+        ancestor: `HEAD~${states.length - 1}`, runtime: options.runtime ?? true,
+        ...(options.swapProposal ? { swapProposal: true } : {}),
+        ...(options.unbound ? { unbound: true } : {}),
+        ...(options.foreignProposal ? { foreignProposal: true } : {})
+      });
       for (const [path, text] of Object.entries(options.extra?.(built) ?? {})) writeFileSync(join(ws, path), text);
     },
     argv: options.frozen ? [INCIDENT_APPROVE, INCIDENT_FREEZE] : []
@@ -794,6 +810,10 @@ export const SCENARIOS: Record<string, Scenario> = {
   "incident-no-runtime": incidentScenario(INCIDENT_GOOD_BAD, { runtime: false }),
   "incident-all-pass": incidentScenario([incidentState("good"), incidentState("good")]),
   "incident-binding-mismatch": incidentScenario(INCIDENT_GOOD_BAD, { swapProposal: true }),
+  // Slice 3b Task 9: the binding check's unbound-draft and identifier /
+  // packet branches.
+  "incident-unbound": incidentScenario(INCIDENT_GOOD_BAD, { unbound: true }),
+  "incident-foreign-proposal": incidentScenario(INCIDENT_GOOD_BAD, { foreignProposal: true }),
   "incident-ledger-full": incidentScenario(GOOD_BAD_REPAIRED.map((s) => incidentState(s["state.txt"]!.trim())), {
     extra: (built) => ({ "ledger.json": lifecycleLedger(built, [0, 1, 2]) })
   })

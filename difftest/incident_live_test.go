@@ -24,14 +24,6 @@ import (
 	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
-// incidentUnreachable are error literals of internal/incident that no
-// input can produce, with the reason. internal/incident is not in
-// gatedDirs yet (slice 3b Task 9 gates it), so unreachableLiterals cannot
-// list them; the live test counts them as reached instead.
-var incidentUnreachable = map[string]string{
-	"Incident draft path escaped its configured store": "the draft id is schema-checked as a safe identifier first",
-}
-
 // stringifiedOr renders a Go result like the incident oracle ops:
 // JSON.stringify (key order kept), or "THREW:<message>".
 func stringifiedOr(v jsjson.Value, err error) string {
@@ -357,9 +349,6 @@ func TestLiveIncidentDraft(t *testing.T) {
 	liveIncidentStore(t, c, r, drafts)
 
 	outputs := recordedOutputs(t)
-	for lit := range incidentUnreachable {
-		outputs += lit + "\n"
-	}
 	for _, file := range []string{"internal/incident/schemas.go", "internal/incident/draft.go", "internal/incident/store.go"} {
 		requireReached(t, file, outputs)
 	}

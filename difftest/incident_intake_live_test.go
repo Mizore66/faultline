@@ -604,13 +604,7 @@ func TestLiveIncidentSuggest(t *testing.T) {
 	}
 	// Every message literal of intake.go was produced by some case.
 	outputs := recordedOutputs(t)
-	for lit, pos := range errorLiterals(t, filepath.Join(oracle.RepoRoot(t), "internal", "incident", "intake.go")) {
-		for _, frag := range messageFragments(lit) {
-			if q := jsjson.Quote(frag); !strings.Contains(outputs, q[1:len(q)-1]) {
-				t.Errorf("%s: no case reached %q", pos, lit)
-			}
-		}
-	}
+	requireReached(t, "internal/incident/intake.go", outputs)
 	for _, msg := range []string{"Requested repository directory does not exist.", "Requested repository directory is unavailable.",
 		"Requested repository directory must be a real directory, not a symlink or file.", "Git worktree root does not exist.",
 		"Git worktree root is unavailable.", "Git worktree root must be a real directory, not a symlink or file."} {

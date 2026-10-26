@@ -74,6 +74,8 @@ var writerScenarios = map[string]bool{
 	"incident-no-runtime":        true,
 	"incident-all-pass":          true,
 	"incident-binding-mismatch":  true,
+	"incident-unbound":           true,
+	"incident-foreign-proposal":  true,
 	"incident-ledger-full":       true,
 	"prevention-input":           true,
 	"prevention-from-bundle":     true,
