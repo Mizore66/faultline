@@ -68,6 +68,12 @@ var unreachableLiterals = map[string]string{
 	// tree, are DOCKER_ISOLATED NATIVE_DOCKER with one decisive verdict and a
 	// PREDICATE_PASS / PREDICATE_FAIL reason, and carry the frozen witness
 	// digests; a PASS_TO_FAIL transition goes from a PASS to a FAIL state.
+	// TS's "repairBaseTree must equal the first-bad state's tree" check is
+	// not ported (artifacts.go): the CLI passes no repairBaseTree, which then
+	// defaults to that tree. The writer case prevention-write-bundle-base-
+	// tree-mismatch is named for it but pins the refusal the CLI can reach
+	// (--repaired-tree set to the first-bad tree: "Repaired run … commit/tree
+	// does not match the repaired state."), not that check.
 	"Prevention export requires a Docker-isolated proof-grade Git investigation.": "the Git proof semantics refuse a non-proof or non-NATIVE_DOCKER investigation first",
 	"stable state at":                                 "a reconstructed PASS_TO_FAIL transition has a PASS before and a FAIL after state",
 	"is not present in the proof bundle":              "stable states are reconstructed from the bundle's own runs",

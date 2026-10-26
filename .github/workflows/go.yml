@@ -145,6 +145,10 @@ jobs:
         # TestLiveProjectPrepare, TestLiveAllowlist and TestLiveTurnSnapshot*.
         # TestLiveTurnSnapshotCapture checks its markers and requireReached
         # only over all 150 cases, so FAULTLINE_TURNSNAP_CASES stays unset.
+        # Slice 3b adds TestLiveIncidentSuggest, TestLiveIncidentDraft,
+        # TestLivePreventionWrite, TestLiveAgentsMd and
+        # TestLivePreventionFromArtifacts (about 4.5 minutes together locally,
+        # most of it the TS Git proof verifier in PreventionFromArtifacts).
         run: |
           unset FAULTLINE_TURNSNAP_CASES
           set -o pipefail
@@ -287,11 +291,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Writer replay with TS cross-verification, same directory, end to end
-        # With the oracle on, every bundle Go writes is also verified by frozen TS (spec 2.4).
+        # With the oracle on, every bundle Go writes is also verified by frozen TS (spec 2.4),
+        # including the incident continue bundles and prevention packages of slice 3b.
         run: |
           set -o pipefail
           status=0
-          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestWriterSameDirectory'
+          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestEndToEndSlice3bWithoutNode TestWriterSameDirectory'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 75m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
