@@ -900,12 +900,12 @@ Every step must succeed with the expected status, and the final verify must repo
 
 **KNOWN_DIFFERENCES:** add only what a task recorded. Expected: none.
 
-- [ ] **Step 1: Add the end-to-end test and the fault paths; run them**
+- [x] **Step 1: Add the end-to-end test and the fault paths; run them**
 
 Run: `go test -tags faultline_test ./difftest/ -run TestEndToEndSlice3bWithoutNode -v` and, in podman as uid 1000, the fault subset for the new paths.
 Expected: PASS; fix any mismatch in Go.
 
-- [ ] **Step 2: CI, gate and docs**; the full gated local run goes in the background with polled logs (3a Task 13's report has the command).
+- [x] **Step 2: CI, gate and docs**; the full gated local run goes in the background with polled logs (3a Task 13's report has the command).
 
 - [ ] **Step 3: Commit; hand back to the controller to push** (the controller pushes as Mizore66 and reads CI).
 

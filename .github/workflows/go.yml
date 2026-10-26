@@ -303,7 +303,9 @@ jobs:
           exit $status
 
   # Split from difftest-live-replay in slice 3a: the writer fault matrix grew
-  # to about 13 minutes of strace cases with the init --yes paths.
+  # to about 13 minutes of strace cases with the init --yes paths (577 s on
+  # CI in slice 3a). Slice 3b's incident and prevention writer paths add
+  # about 5 minutes, well inside the 60 minute go test timeout.
   difftest-live-faults:
     name: difftest live writer faults and real Docker (frozen TS oracle)
     runs-on: ubuntu-24.04
