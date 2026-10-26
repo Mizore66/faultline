@@ -360,8 +360,10 @@ func TestWriteOpenOnDirectory(t *testing.T) {
 	}
 }
 
-// Go's invented Windows syscall.EISDIR maps by the open's flags; on Unix
-// syscall.EISDIR is the real errno and maps the same way.
+// Go's invented Windows syscall.EISDIR maps by the open's flags (EEXIST for
+// wx). On Unix syscall.EISDIR is the kernel's own errno (Linux reports it
+// for wx only on a path ending in "/"; a plain directory gives EEXIST) and
+// stays EISDIR for w and wx alike.
 func TestOpenWriteErrMapsGoEISDIR(t *testing.T) {
 	err := &os.PathError{Op: "open", Path: "d", Err: syscall.EISDIR}
 	if got := openWriteErr(err, "/d", false).(*Error).Code; got != "EISDIR" {

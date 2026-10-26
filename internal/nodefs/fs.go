@@ -213,9 +213,12 @@ func wrap(err error, syscallName, path string) error {
 // fs__open always sets that flag, so the create disposition decides:
 // CREATE_ALWAYS or CREATE_NEW on a directory fails with ERROR_FILE_EXISTS,
 // which fs__open reports as UV_EISDIR when O_CREAT comes without O_EXCL
-// and as EEXIST otherwise (libuv 1.51 src/win/fs.c:590). On Unix open(2)
-// reports EISDIR for a directory (or a path ending in "/") even with
-// O_EXCL, so the EEXIST rewrite is Windows-only.
+// and as EEXIST otherwise (libuv 1.51 src/win/fs.c:590). On Linux and
+// darwin the errno is the kernel's own, which wrap passes through as libuv
+// does: open(dir, O_CREAT|O_EXCL) on an existing directory gives EEXIST
+// (Linux gives EISDIR only for a path ending in "/"), and without O_EXCL
+// EISDIR. The EEXIST rewrite exists only because Go invents EISDIR on
+// Windows, so it is Windows-only.
 func openWriteErr(err error, path string, exclusive bool) error {
 	var errno syscall.Errno
 	if errors.As(err, &errno) && errno == syscall.EISDIR {
