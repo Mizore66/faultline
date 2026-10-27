@@ -36,6 +36,108 @@ func TestMaskGitDetail(t *testing.T) {
 			t.Errorf("maskGitDetail(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
+	// The turn verifier's and writer's labels: maskGitDetail runs on the text
+	// after each, up to the next "\n- "; with maskGit false nothing changes.
+	tree := strings.Repeat("0123456789", 4)
+	for _, label := range []string{
+		"Turn tree pack is not a valid Git pack: ",
+		"Could not create temporary bare repository for pack verification: ",
+		"Could not pack turn trees: ",
+		"Could not enumerate objects for turn tree " + tree + ": ",
+		"Could not enumerate objects for turn tree " + tree + strings.Repeat("a", 24) + ": ",
+	} {
+		in := "- " + label + "error: x\nfatal: y\n- " + label + "exit 3\n"
+		want := "- " + label + "<GIT-STDERR>\n- " + label + "exit 3\n"
+		if got := maskGitOutput(in, true); got != want {
+			t.Errorf("maskGitOutput(%q) = %q, want %q", in, got, want)
+		}
+		if got := maskGitOutput(in, false); got != in {
+			t.Errorf("maskGitOutput(%q, false) = %q", in, got)
+		}
+	}
+	// A tree id that is not 40 or 64 hex digits is not the label.
+	in := "Could not enumerate objects for turn tree " + strings.Repeat("g", 40) + ": fatal: y"
+	if got := maskGitOutput(in, true); got != in {
+		t.Errorf("maskGitOutput(%q) = %q", in, got)
+	}
+}
+
+func TestTurnGitLabelsMasked(t *testing.T) {
+	in := "- Turn tree pack is not a valid Git pack: fatal: early EOF\nfatal: index-pack failed\n- next"
+	if got := maskGitOutput(in, true); got != "- Turn tree pack is not a valid Git pack: <GIT-STDERR>\n- next" {
+		t.Fatalf("%q", got)
+	}
+	in = "x /tmp/faultline-turn-proof-pack-Ab12Cd/objects y"
+	if got := maskGitOutput(in, true); got != "x <GITTMP>/objects y" {
+		t.Fatalf("%q", got)
+	}
+	in = "Could not enumerate objects for turn tree " + strings.Repeat("a", 40) + ": fatal: bad object"
+	if got := maskGitOutput(in, true); !strings.HasSuffix(got, ": <GIT-STDERR>") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestPadFile(t *testing.T) {
+	repo := repoRoot(t)
+	work := t.TempDir()
+	copyTree(t, filepath.Join(repo, "difftest", "testdata", "bases", "turn-two-states"), work)
+	v, err := jsjson.Parse(`{"id":"x","op":"pad-file","file":"hashes.txt","total":4194304}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := &template{fields: v.Obj()}
+	if !applyMutation(work, testCase{id: "x", base: "turn-two-states", tpl: tpl, file: "hashes.txt"}) {
+		t.Fatal("not applied")
+	}
+	if info, err := os.Stat(filepath.Join(work, "hashes.txt")); err != nil || info.Size() != 4194304 {
+		t.Fatal(info, err)
+	}
+}
+
+// resignTurn rewrites a turn bundle consistently: after a semantic edit of
+// investigation.json the run artifacts, the manifest's index and digest and
+// (with rehash) the catalog all follow, so only the semantic checks fail.
+func TestResignTurn(t *testing.T) {
+	repo := repoRoot(t)
+	work := t.TempDir()
+	copyTree(t, filepath.Join(repo, "difftest", "testdata", "bases", "turn-two-states"), work)
+	v, err := jsjson.Parse(`{"id":"x","op":"json-edit","file":"investigation.json","jsonPath":["runs",3,"result","exitCode"],"value":0,"resignTurn":true,"rehash":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applyMutation(work, testCase{id: "x", base: "turn-two-states", tpl: &template{fields: v.Obj()}, file: "investigation.json"}) {
+		t.Fatal("not applied")
+	}
+	investigation, _ := parseObjectFile(filepath.Join(work, "investigation.json"))
+	manifest, _ := parseObjectFile(filepath.Join(work, "manifest.json"))
+	runs := investigation.Field("runs").Items()
+	index := manifest.Field("artifacts").Get("runs").Items()
+	if len(index) != len(runs) {
+		t.Fatalf("%d runs, %d indexed", len(runs), len(index))
+	}
+	for i, run := range runs {
+		id := run.Get("runId").Str()
+		if want, _ := canonical.DigestJSON(withoutKey(run.Obj(), "runId")); id != want {
+			t.Errorf("run %d: runId %s, want %s", i, id, want)
+		}
+		if index[i].Get("runId").Str() != id {
+			t.Errorf("run %d: indexed as %s", i, index[i].Get("runId").Str())
+		}
+		if _, err := os.Stat(filepath.Join(work, filepath.FromSlash(index[i].Get("path").Str()))); err != nil {
+			t.Error(err)
+		}
+	}
+	entries, _ := os.ReadDir(filepath.Join(work, "runs"))
+	if len(entries) != len(runs) {
+		t.Errorf("%d run files, want %d", len(entries), len(runs))
+	}
+	if d, _ := canonical.DigestJSON(jsjson.MakeObject(investigation)); manifest.Field("investigationDigest").Str() != d {
+		t.Errorf("investigationDigest %s, want %s", manifest.Field("investigationDigest").Str(), d)
+	}
+	stable := investigation.Field("stableStates").Items()[1].Get("runIds").Items()
+	if stable[0].Str() != runs[3].Get("runId").Str() {
+		t.Errorf("stableStates[1].runIds[0] = %s, want the re-signed %s", stable[0].Str(), runs[3].Get("runId").Str())
+	}
 }
 
 // The writer masks: the case's directories, a loopback port, git's

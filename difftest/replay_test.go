@@ -23,6 +23,11 @@ import (
 // portedTypes gates golden replay per bundle type; verifier tasks add entries.
 var portedTypes = map[string]bool{"demo": true, "prevention": true, "git": true}
 
+// deferredTypes are bundle types whose bases and goldens exist before their
+// verifier is ported: the replay requires the golden and skips the base.
+// The verifier's task deletes the entry.
+var deferredTypes = map[string]string{"turn": "Task 7 ports the turn verifier"}
+
 // flBinary is the fl command built for this test run; replay executes it so
 // that anything written outside cli.Run's writers, and the exit status of the
 // real process, are compared too.
@@ -185,6 +190,53 @@ func copyTree(t *testing.T, from, to string) {
 	}
 }
 
+// checkMutationTrees expands a base's cases as the replay does and checks
+// that each mutated tree has the golden's tree digest, without running fl.
+func checkMutationTrees(t *testing.T, root, goldenPath, base string, templates []template) {
+	text, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digests := map[string]string{}
+	var order []string
+	for _, line := range strings.Split(strings.TrimSuffix(string(text), "\n"), "\n") {
+		v, err := jsjson.Parse(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Get("inv").Str() == "plain" {
+			order = append(order, v.Get("case").Str())
+			digests[v.Get("case").Str()] = v.Get("treeDigest").Str()
+		}
+	}
+	cases := expandCases(base, root, templates)
+	if len(cases) != len(order) {
+		t.Fatalf("Go expands %d cases, goldens have %d", len(cases), len(order))
+	}
+	for i, c := range cases {
+		if c.id != order[i] {
+			t.Fatalf("case %d: Go %q, golden %q", i, c.id, order[i])
+		}
+		t.Run(c.id, func(t *testing.T) {
+			t.Parallel()
+			if c.tpl != nil && c.tpl.fields.Field("posixOnly").Bool() && runtime.GOOS == "windows" {
+				t.Skip("posixOnly mutation")
+			}
+			bundle := filepath.Join(t.TempDir(), "bundle")
+			copyTree(t, root, bundle)
+			if !applyMutation(bundle, c) {
+				if runtime.GOOS != "windows" || !windowsUncreatable[c.tpl.str("op")] {
+					t.Fatal("could not apply the mutation")
+				}
+				t.Skip("platform cannot create this case (symlink, named pipe, or a POSIX fake git)")
+			}
+			if got := treeDigest(bundle); got != digests[c.id] {
+				t.Fatalf("tree digest %s, golden %s: the Go (difftest/cases.go) and TS (difftest/gen/cases.ts) mutation engines built different trees", got, digests[c.id])
+			}
+		})
+	}
+}
+
 func TestGoldenReplay(t *testing.T) {
 	repo := oracle.RepoRoot(t)
 	templates := loadTemplates(t, filepath.Join(repo, "difftest", "testdata", "mutations.json"))
@@ -221,6 +273,16 @@ func TestGoldenReplay(t *testing.T) {
 	}
 	for _, base := range bases {
 		kind, _, _ := strings.Cut(base, "-")
+		if reason, ok := deferredTypes[kind]; ok {
+			// The golden is there (the bases/goldens check above), and the Go
+			// mutation engine must build the trees TS built; fl does not run.
+			t.Run(base, func(t *testing.T) {
+				t.Parallel()
+				t.Logf("not replayed: %s", reason)
+				checkMutationTrees(t, filepath.Join(basesDir, base), filepath.Join(goldenDir, base+".jsonl"), base, templates)
+			})
+			continue
+		}
 		if !portedTypes[kind] {
 			t.Fatalf("base %s has no ported verifier type", base)
 		}
@@ -261,6 +323,9 @@ func TestGoldenReplay(t *testing.T) {
 				}
 				t.Run(c.id, func(t *testing.T) {
 					t.Parallel()
+					if c.tpl != nil && c.tpl.fields.Field("posixOnly").Bool() && runtime.GOOS == "windows" {
+						t.Skip("posixOnly mutation")
+					}
 					work := t.TempDir()
 					bundle := filepath.Join(work, "bundle")
 					copyTree(t, root, bundle)

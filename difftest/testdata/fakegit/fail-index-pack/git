@@ -1,0 +1,14 @@
+#!/bin/sh
+# Fake git for difftest: `git unpack-objects` fails with planted text, then
+# `git index-pack` fails silently, so the turn verifier's message falls back
+# to unpack-objects' stderr (turn-proof-bundle.ts:475-481). That pins both
+# calls and their order: unpack-objects first, index-pack as the fallback.
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+# The subcommand comes after the hardened runner's global options.
+. "$here/../lib/subcommand.sh"
+if [ "$sub" = unpack-objects ]; then { echo "fatal: planted unpack failure" >&2; exit 128; }; fi
+if [ "$sub" = index-pack ]; then exit 128; fi
+exec git "$@"
