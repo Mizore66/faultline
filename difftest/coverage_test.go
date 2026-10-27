@@ -36,7 +36,6 @@ var unreachableLiterals = map[string]string{
 	"three-state prevention requires PASS → FAIL → PASS":                      "each state's verdict is a zod literal (PASS, FAIL, PASS); the schema rejects other orders first",
 	"prevention requires at least three distinct executions per state":        "distinctExecutionCount has a zod minimum of 3",
 	"source metadata artifact paths do not match the manifest":                "both paths are zod literals, so they always agree after the schemas pass",
-	"Cannot bind an invalid Codex lifecycle ledger:":                          "binding runs only after the ledger verified",
 	"Cannot bind a lifecycle ledger that has no SESSION_STARTED observation.": "a verified ledger always starts with SESSION_STARTED",
 
 	// gitproof/write.go (TestLiveProofWriter's requireReached):
@@ -270,16 +269,11 @@ var unreachableLiterals = map[string]string{
 
 	// turnproof/files.go: reached by Task 7/8 goldens; remove each row when
 	// they land (the gate then reports the row as stale).
-	"Turn proof bundle must be a real directory:":                         "reached by Task 7/8 goldens; remove when they land",
-	"Turn proof bundle contains a symbolic link or special file:":         "reached by Task 7/8 goldens; remove when they land",
-	"Turn proof bundle artifact exceeds FaultLine's read limit:":          "reached by Task 7/8 goldens; remove when they land",
-	"Turn proof bundle contains too many files to verify safely":          "reached by Task 7/8 goldens; remove when they land",
-	"Turn proof bundle exceeds FaultLine's total verification read limit": "reached by Task 7/8 goldens; remove when they land",
+	"Turn proof bundle artifact exceeds FaultLine's read limit:": "reached by Task 7/8 goldens; remove when they land",
 
 	// turnproof/pack.go (TestLiveTurnTreesPack's requireReached):
-	"Turn tree pack enumeration produced no Git objects.":               "rev-list --objects <tree> always lists the tree itself",
-	"Turn tree pack exceeds FaultLine's portable artifact limit.":       "pack-objects output past the 64 MiB runHardenedGit cap fails first, below the 128 MiB limit",
-	"Could not create temporary bare repository for pack verification:": "reached by Task 2 turn-git-fail-init golden; remove when it lands",
+	"Turn tree pack enumeration produced no Git objects.":         "rev-list --objects <tree> always lists the tree itself",
+	"Turn tree pack exceeds FaultLine's portable artifact limit.": "pack-objects output past the 64 MiB runHardenedGit cap fails first, below the 128 MiB limit",
 
 	// turninv/investigate.go (TestLiveInvestigateTurns's requireReached):
 	"Missing prepared state or fingerprint at index":    "phase 2 runs only after the fingerprint count check, so every state has a fingerprint",

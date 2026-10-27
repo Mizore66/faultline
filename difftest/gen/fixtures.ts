@@ -1,5 +1,6 @@
-// Test fixtures copied from tests/git-proof-bundle.test.ts:32-204 and
-// tests/prevention-proof.test.ts:15-62 (frozen TS), exported for difftest generators.
+// Test fixtures copied from tests/git-proof-bundle.test.ts:32-204,
+// tests/prevention-proof.test.ts:15-62 and tests/turn-proof-bundle.test.ts:114-159
+// (frozen TS), exported for difftest generators.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +25,16 @@ import {
   type CodexLifecycleLedger
 } from "../../src/ledger.js";
 import type { PreventionProofWriteInput } from "../../src/prevention-proof.js";
+import { TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL } from "../../src/evidence-grade.js";
+import {
+  attributeFailureIntroduction,
+  findStableTurnTransitions,
+  reconstructStableTurnStates,
+  TURN_INVESTIGATION_SCHEMA_VERSION,
+  TurnInvestigationResultSchema,
+  type TurnInvestigationResult
+} from "../../src/turn-investigation.js";
+import { signTurnTreeSnapshot, TURN_TREE_SNAPSHOT_VERSION } from "../../src/turn-snapshot.js";
 
 export const pinnedImage = `registry.example/faultline-node@sha256:${"b".repeat(64)}`;
 
@@ -51,9 +62,11 @@ export function createRepository(objectFormat: "sha1" | "sha256" = "sha1"): { ro
 
 export type ExtraOverlay = { path: string; text: string };
 
-export function createFrozenWitness(store: string, extraOverlays: ExtraOverlay[] = []): FrozenWitness {
+export function createFrozenWitness(
+  store: string, extraOverlays: ExtraOverlay[] = [], proposalId = "portable-git-proof"
+): FrozenWitness {
   const proposal = proposeWitness(store, {
-    proposalId: "portable-git-proof",
+    proposalId,
     proposalOrigin: "HUMAN",
     proposedAt: "2026-07-16T11:00:00.000Z",
     incidentPacket: {
@@ -268,5 +281,134 @@ export function groundedPreventionInput(): PreventionProofWriteInput {
       runId, executionId: digest(`exec-${index}`), commit: hexCommit(3), tree: hexCommit(33), verdict: "PASS" as const,
       witnessDigest: witness, environmentDigest: environment, executionTrust: "NATIVE_DOCKER" as const, executionKind: "EXECUTED" as const
     }))
+  });
+}
+
+// The turn proof bases (gen-bases.ts turnBase). Everything investigateTurnTrees
+// reads from the clock or the host is fixed, so a rerun writes the same bytes;
+// only the tree pack follows git (plan correction 8).
+
+/** The repository path the turn bases record; the writer packs from the real one. */
+export const TURN_REPOSITORY = "/work/turn-repository";
+
+/**
+ * createFrozenWitness's witness under its own proposal id: the overlay bytes
+ * stay the ones deterministicDockerRunner checks.
+ */
+export function createTurnFrozenWitness(store: string): FrozenWitness {
+  return createFrozenWitness(store, [], "portable-turn-proof");
+}
+
+/** One commit per state ("good", "bad", ...): state.txt holds the state. */
+export function createTurnRepository(states: readonly string[]): { root: string; commits: string[]; trees: string[] } {
+  const root = mkdtempSync(join(tmpdir(), "faultline-turn-proof-repository-"));
+  git(root, ["init", "--object-format=sha1"]);
+  git(root, ["config", "user.email", "faultline@example.test"]);
+  git(root, ["config", "user.name", "FaultLine Test"]);
+  const commits = states.map((state, index) => commit(root, state, `turn state ${index}: ${state}`));
+  return { root, commits, trees: commits.map((c) => git(root, ["rev-parse", `${c}^{tree}`])) };
+}
+
+export type TurnLedgerState = { ordinal: number; tree: string; dirty: boolean; commit?: string };
+
+/**
+ * A closed Codex session with fixed ids and times: SESSION_STARTED, the
+ * baseline snapshot (states[0], ordinal 0) when baseline is set, then
+ * TURN_STARTED, TURN_COMPLETED and TURN_TREE_SNAPSHOT for each other state,
+ * then SESSION_ENDED. Every event is one second after the one before; a
+ * snapshot is captured when its event occurs.
+ */
+export function turnLedger(options: { states: readonly TurnLedgerState[]; baseline: boolean }): CodexLifecycleLedger {
+  let second = 0;
+  let sequence = 0;
+  const at = () => new Date(Date.UTC(2026, 6, 16, 10, 30, second++)).toISOString();
+  const createdAt = at();
+  let ledger = createCodexLifecycleLedger({ ledgerId: "ledger-turn-proof", sessionId: "turn-proof-session", createdAt });
+  const append = (input: Parameters<typeof appendLifecycleEvent>[1], occurredAt = at()) => {
+    sequence += 1;
+    ledger = appendLifecycleEvent(ledger, input, { eventId: `event-${String(sequence).padStart(4, "0")}`, occurredAt });
+  };
+  const snapshot = (state: TurnLedgerState, capturedAt: string) => signTurnTreeSnapshot({
+    schemaVersion: TURN_TREE_SNAPSHOT_VERSION,
+    repositoryRoot: TURN_REPOSITORY,
+    headCommit: state.commit ?? state.tree,
+    treeDigest: state.tree,
+    capturedAt,
+    dirty: state.dirty,
+    statusDigest: `sha256:${sha256(state.dirty ? "dirty" : "")}`
+  });
+  append({ type: "SESSION_STARTED", payload: { transport: "SIDE_CAR", workingDirectory: TURN_REPOSITORY } });
+  const [first, ...rest] = options.states;
+  const turns = options.baseline ? rest : [...options.states];
+  if (options.baseline && first) {
+    const occurredAt = at();
+    append({ type: "SESSION_BASELINE_SNAPSHOT", payload: { snapshot: snapshot(first, occurredAt) } }, occurredAt);
+  }
+  for (const state of turns) {
+    const turnId = `turn-${state.ordinal}`;
+    append({ type: "TURN_STARTED", payload: { turnId, turnOrdinal: state.ordinal, promptDigest: `sha256:${"a".repeat(64)}` } });
+    append({ type: "TURN_COMPLETED", payload: { turnId, turnOrdinal: state.ordinal, outcome: "COMPLETED" } });
+    const occurredAt = at();
+    append({ type: "TURN_TREE_SNAPSHOT", payload: { turnId, turnOrdinal: state.ordinal, snapshot: snapshot(state, occurredAt) } }, occurredAt);
+  }
+  append({ type: "SESSION_ENDED", payload: { reason: "COMPLETED", completedTurns: turns.length } });
+  return ledger;
+}
+
+/**
+ * The turn twin of nativeDockerFixture: investigateTurnTrees marks injected
+ * runners non-proof, so a base promotes its observation to native Docker,
+ * after replacing what the investigation read from the clock (nonces and
+ * times) and the scratch repository path with fixed values, and rebuilding
+ * the derived fields with the frozen TS reconstruction.
+ */
+export function nativeTurnFixture(observed: TurnInvestigationResult): TurnInvestigationResult {
+  const runs = observed.runs.map((run, i) => {
+    const executionNonce = `00000000-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
+    // turn-investigation.ts:544-555
+    const executionId = digestJson({
+      schemaVersion: TURN_INVESTIGATION_SCHEMA_VERSION,
+      executionNonce,
+      stateIndex: run.stateIndex,
+      turnId: run.turnId,
+      turnOrdinal: run.turnOrdinal,
+      treeDigest: run.treeDigest,
+      snapshotDigest: run.snapshotDigest,
+      environmentFingerprintDigest: run.environmentFingerprintDigest,
+      frozenDigest: run.frozenDigest,
+      executionAttempt: run.executionAttempt
+    });
+    const { runId: _runId, ...unsigned } = {
+      ...run,
+      executionId,
+      executionNonce,
+      startedAt: "2026-07-16T11:03:00.000Z",
+      finishedAt: "2026-07-16T11:03:00.000Z",
+      durationMs: 0,
+      result: { ...run.result, executor: "NATIVE_DOCKER" as const }
+    };
+    return { ...unsigned, runId: digestJson(unsigned) };
+  });
+  const stableStates = reconstructStableTurnStates(observed.states, runs);
+  const transitions = findStableTurnTransitions(stableStates);
+  return TurnInvestigationResultSchema.parse({
+    ...observed,
+    repository: TURN_REPOSITORY,
+    runs,
+    stableStates,
+    transitions,
+    nonMonotonic: transitions.some((transition) => transition.kind === "PASS_TO_FAIL")
+      && transitions.some((transition) => transition.kind === "FAIL_TO_PASS"),
+    introduction: attributeFailureIntroduction(observed.states, transitions, stableStates),
+    proof: {
+      requiresDockerIsolation: true,
+      dockerIsolated: true,
+      executionTrust: "NATIVE_DOCKER",
+      proofTransitions: transitions.length,
+      isProof: transitions.length > 0,
+      reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent turn-tree states.",
+      evidenceGrade: "EXPERIMENTAL_TURN",
+      evidenceLabel: TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL
+    }
   });
 }
