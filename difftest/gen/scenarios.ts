@@ -884,6 +884,17 @@ export function refreshScenarioIndexes(name: string, ws: string): void {
   if (!existsSync(list)) return;
   for (const rel of readFileSync(list, "utf8").split("\n").filter(Boolean)) refreshIndex(join(ws, rel));
 }
+// gitIndexes lists every Git index file under root (.git/index and
+// .git/worktrees/<name>/index at any depth).
+function gitIndexes(root: string, rel = "", out: string[] = []): string[] {
+  for (const name of readdirSync(join(root, rel))) {
+    const r = rel ? `${rel}/${name}` : name;
+    const stat = lstatSync(join(root, r));
+    if (stat.isDirectory()) gitIndexes(root, r, out);
+    else if (stat.isFile() && /(?:^|\/)\.git\/(?:worktrees\/[^/]+\/)?index$/.test(r)) out.push(join(root, r));
+  }
+  return out;
+}
 function refreshIndex(dir: string): void {
   const r = spawnSync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/nonexistent/faultline-hooks", "-C", dir, "update-index", "-q", "--refresh"], {
     env: { PATH: process.env.PATH ?? "", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" }, encoding: "utf8"
@@ -945,11 +956,14 @@ async function buildScenario(name: string): Promise<void> {
       writeFileSync(join(roots.ws, path), text);
     }
     scenario.setup?.(roots.ws);
-    // A build that runs git on the scenario repositories sees them clean,
-    // and commits the stat-free index it wrote (restored after the run).
-    const indexes = (scenario.refreshIndex ?? []).map((rel) => join(roots.ws, rel, ".git", "index")).filter((p) => existsSync(p));
+    // A build that runs fl or seeded code on the scenario repositories sees
+    // them clean, and commits the stat-free indexes it wrote: every index in
+    // the workspace (a linked worktree's lives in its main repository) is
+    // restored after the run.
+    const runs = scenario.argv.length > 0 || scenario.seeded !== undefined;
+    const indexes = runs && scenario.refreshIndex !== undefined ? gitIndexes(roots.ws) : [];
     const saved = indexes.map((p) => readFileSync(p));
-    for (const rel of scenario.refreshIndex ?? []) refreshIndex(join(roots.ws, rel));
+    if (runs) for (const rel of scenario.refreshIndex ?? []) refreshIndex(join(roots.ws, rel));
     for (const argv of scenario.argv) {
       const r = await runCli(roots, argv, writerEnv(roots, `scenario:${name}`, "pass-fail", {}));
       if (r.exit !== 0) throw new Error(`scenario ${name}: fl ${argv.join(" ")} exited ${r.exit}\n${r.stdout}${r.stderr}`);
