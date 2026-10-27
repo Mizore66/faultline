@@ -1071,7 +1071,117 @@ export const handlers: Record<string, Handler> = {
       return ((b[0]! & 15) === 8 ? zlib.inflateSync(b, opts) : zlib.inflateRawSync(b, opts)).toString("hex");
     } catch { return "E"; }
   },
+  // Slice 4c, Task 14: src/github-provenance.ts, from a copy of the
+  // compiled dist/github-provenance.js (pnpm build) whose
+  // loadVerifiedGitProofView is memoized per directory (a view or the
+  // thrown error), as the Go live tests memoize theirs: a bundle load takes
+  // seconds and the bases do not change. Results are canonicalJson (create)
+  // or JSON.stringify (key order kept: the verifiers, readTrust), or
+  // "THREW:<message>". create takes a bundle directory or a view object;
+  // without createdAt it reads the seeded clock.
+  // env is set around the call (git-sha256's verification needs
+  // GIT_DEFAULT_HASH=sha256 on its first, memoized, load).
+  createGithubProvenanceReceiptFromView: async ({ bundle, view, ci, createdAt, env }: {
+    bundle?: string; view?: any; ci: unknown; createdAt?: string; env?: Record<string, string>;
+  }) => {
+    const p = await provenanceModule();
+    const saved = Object.fromEntries(Object.keys(env ?? {}).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, env ?? {});
+    try {
+      return canonicalJson(view === undefined ? p.createGithubProvenanceReceipt(bundle, ci, createdAt) : p.createGithubProvenanceReceiptFromView(view, ci, createdAt));
+    } catch (error) { return `THREW:${(error as Error).message}`; } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  },
+  // githubActionsIdentityFromEnvironment(workspace) with the default
+  // process.env, run in one child node (dist/) per batch: for each case the
+  // child deletes every GITHUB_* name from its process.env, sets the case's
+  // env (a null value leaves the name unset; Node stores a lone surrogate
+  // as its WTF-8 bytes) and calls the function, whose execFileSync git
+  // inherits that environment. One canonicalJson or "THREW:<message>" per
+  // case.
+  githubActionsIdentityFromEnvironment: async ({ cases }: { cases: Array<{ workspace: string; env: Record<string, string | null> }> }) => {
+    const { spawnSync } = await import("node:child_process");
+    const { pathToFileURL } = await import("node:url");
+    const dist = (name: string) => pathToFileURL(nodePath.join(process.cwd(), "dist", name)).href;
+    const script = `const { githubActionsIdentityFromEnvironment } = await import(${JSON.stringify(dist("github-provenance.js"))});
+const { canonicalJson } = await import(${JSON.stringify(dist("canonical.js"))});
+const { readFileSync } = await import("node:fs");
+const cases = JSON.parse(readFileSync(0, "utf8"));
+const outs = [];
+for (const c of cases) {
+  for (const k of Object.keys(process.env)) if (k.startsWith("GITHUB_")) delete process.env[k];
+  for (const [k, v] of Object.entries(c.env)) if (v !== null) process.env[k] = v;
+  try { outs.push(canonicalJson(githubActionsIdentityFromEnvironment(c.workspace))); } catch (error) { outs.push("THREW:" + error.message); }
+}
+process.stdout.write(JSON.stringify(outs));`;
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { input: JSON.stringify(cases), encoding: "utf8", maxBuffer: 1 << 28 });
+    if (result.status !== 0) throw new Error(`identity child failed: ${result.status} ${result.stderr}`);
+    return JSON.parse(result.stdout);
+  },
+  verifyGithubProvenanceBinding: async ({ bundle, receipt, trust }: { bundle: string; receipt: unknown; trust: unknown }) => {
+    const p = await provenanceModule();
+    try { return JSON.stringify(p.verifyGithubProvenanceBinding(bundle, receipt, trust)); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  // The gh runners spawn "gh" from PATH, set to path for the call.
+  verifyGithubArtifactAttestation: async ({ receiptFile, bundleFile, trust, sourceCommit, path }: {
+    receiptFile: string; bundleFile: string; trust: unknown; sourceCommit: string; path: string;
+  }) => {
+    const p = await provenanceModule();
+    const saved = process.env.PATH;
+    process.env.PATH = path;
+    try { return JSON.stringify(p.verifyGithubArtifactAttestation(receiptFile, bundleFile, trust, sourceCommit)); } catch (error) { return `THREW:${(error as Error).message}`; } finally { process.env.PATH = saved; }
+  },
+  verifySignedGithubProvenance: async ({ bundle, receiptFile, attestationBundleFile, trust, path }: {
+    bundle: string; receiptFile: string; attestationBundleFile: string; trust: unknown; path: string;
+  }) => {
+    const p = await provenanceModule();
+    const saved = process.env.PATH;
+    process.env.PATH = path;
+    try { return JSON.stringify(p.verifySignedGithubProvenance({ bundleDirectory: bundle, receiptFile, attestationBundleFile, trust })); } catch (error) { return `THREW:${(error as Error).message}`; } finally { process.env.PATH = saved; }
+  },
+  readGithubArtifactAttestationTrust: async ({ path }: { path: string }) => {
+    const p = await provenanceModule();
+    try { return JSON.stringify(p.readGithubArtifactAttestationTrust(path)); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  writeGithubProvenanceReceipt: async ({ cwd, output, receipt, root }: { cwd?: string; output: string; receipt: unknown; root: string }) => {
+    const p = await provenanceModule();
+    const saved = process.cwd();
+    if (cwd !== undefined) process.chdir(cwd);
+    try { return p.writeGithubProvenanceReceipt(output, receipt, root); } catch (error) { return `THREW:${(error as Error).message}`; } finally { process.chdir(saved); }
+  },
 };
+
+// provenanceModule is dist/github-provenance.js with its
+// loadVerifiedGitProofView import replaced by a per-directory memo (the
+// view, or the error it threw), written next to it as
+// dist/.difftest-github-provenance-memo-<pid>.js (dist/ is git-ignored),
+// imported once and removed.
+let provenanceMemo: Promise<any> | undefined;
+function provenanceModule(): Promise<any> {
+  provenanceMemo ??= (async () => {
+    const { unlinkSync, writeFileSync } = await import("node:fs");
+    const { pathToFileURL } = await import("node:url");
+    const dist = nodePath.join(process.cwd(), "dist");
+    const source = cwReadFile(nodePath.join(dist, "github-provenance.js"), "utf8");
+    const line = 'import { loadVerifiedGitProofView } from "./git-proof-view.js";';
+    if (!source.includes(line)) throw new Error("loadVerifiedGitProofView import not found in dist/github-provenance.js");
+    const memo = `import { loadVerifiedGitProofView as loadUncached } from "./git-proof-view.js";
+const views = new Map();
+function loadVerifiedGitProofView(directory) {
+  if (!views.has(directory)) {
+    try { views.set(directory, { view: loadUncached(directory) }); } catch (error) { views.set(directory, { error }); }
+  }
+  const entry = views.get(directory);
+  if (entry.error !== undefined) throw entry.error;
+  return entry.view;
+}`;
+    const file = nodePath.join(dist, `.difftest-github-provenance-memo-${process.pid}.js`);
+    writeFileSync(file, source.replace(line, memo));
+    try { return await import(pathToFileURL(file).href); } finally { unlinkSync(file); }
+  })();
+  return provenanceMemo;
+}
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 rl.on("line", async (line) => {
