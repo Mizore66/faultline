@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,24 +21,6 @@ import (
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
-
-// requireReachedExcept is requireReached for a file that is not in
-// liveGatedFiles yet (Task 11 moves these into the map): every error
-// literal of the file, bar skip, must appear in outputs.
-func requireReachedExcept(t *testing.T, file, outputs string, skip map[string]bool) {
-	t.Helper()
-	for lit, pos := range errorLiterals(t, filepath.Join(oracle.RepoRoot(t), filepath.FromSlash(file))) {
-		if skip[strings.TrimSpace(lit)] {
-			continue
-		}
-		for _, frag := range messageFragments(lit) {
-			if !strings.Contains(outputs, jsjson.Quote(frag)[1:len(jsjson.Quote(frag))-1]) {
-				t.Errorf("%s: no generated input reached %q", pos, lit)
-				break
-			}
-		}
-	}
-}
 
 // catalogBytes generates one hashes.txt covering the kinds of line, line end
 // and name the parser must tell apart.
@@ -189,20 +172,7 @@ func TestLiveTurnHashCatalog(t *testing.T) {
 		}
 	}
 	liveSummary(t, "5000 generated catalogs compared, %d errors, %d with entries", threw, withEntries)
-	requireReachedExcept(t, "internal/bundle/turnproof/catalog.go", outputs.String(), map[string]bool{
-		// The file walks and the artifact writer: verified by the verifier and writer tests.
-		"Turn proof bundle must be a real directory:":                         true,
-		"Turn proof bundle contains a symbolic link or special file:":         true,
-		"must be a regular non-symlink file":                                  true,
-		"exceeds FaultLine's":                                                 true,
-		"byte read limit":                                                     true,
-		"Turn proof bundle artifact exceeds FaultLine's read limit:":          true,
-		"Turn proof bundle contains too many files to verify safely":          true,
-		"Turn proof bundle exceeds FaultLine's total verification read limit": true,
-		"Unsafe artifact path:":                                               true,
-		"Artifact path escapes its bundle:":                                   true,
-		"artifact":                                                            true,
-	})
+	requireReached(t, "internal/bundle/turnproof/catalog.go", outputs.String())
 }
 
 // gitRepo is one generated repository with its object ids.
@@ -282,14 +252,33 @@ func TestLiveTurnTreesPack(t *testing.T) {
 		clock.NowMillis()
 	}
 
-	r := rand.New(rand.NewPCG(42, 1))
+	// FAULTLINE_TURNPACK_CASES=first:end compares only repositories
+	// [first, end), for local runs in pieces; each has its own seed, so a
+	// window reproduces the same cases. CI runs all 200.
+	const total = 200
+	n, first := total, 0
+	if window := os.Getenv("FAULTLINE_TURNPACK_CASES"); window != "" {
+		a, b, ok := strings.Cut(window, ":")
+		var errA, errB error
+		first, errA = strconv.Atoi(a)
+		n, errB = strconv.Atoi(b)
+		if !ok || errA != nil || errB != nil || first < 0 || first >= n || n > total {
+			t.Fatalf("FAULTLINE_TURNPACK_CASES=%q: want first:end with 0 <= first < end <= %d", window, total)
+		}
+	}
+	full := first == 0 && n == total
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var repos []gitRepo
-	for i := 0; i < 200; i++ {
-		repos = append(repos, buildRepo(t, r, root, i, i%10 == 9))
+	built := map[int]gitRepo{}
+	repoAt := func(i int) gitRepo {
+		if g, ok := built[i]; ok {
+			return g
+		}
+		g := buildRepo(t, rand.New(rand.NewPCG(42, uint64(i))), root, i, i%10 == 9)
+		built[i] = g
+		return g
 	}
 	quoteList := func(ids []string) string {
 		parts := make([]string, len(ids))
@@ -313,7 +302,9 @@ func TestLiveTurnTreesPack(t *testing.T) {
 	}
 	var outputs strings.Builder
 	packs, verified, withErrors := 0, 0, 0
-	for i, g := range repos {
+	for i := first; i < n; i++ {
+		g := repoAt(i)
+		r := rand.New(rand.NewPCG(43, uint64(i)))
 		// 2 to 6 trees: mostly trees, sometimes a commit, a blob or a missing id.
 		count := 2 + r.IntN(5)
 		var trees []string
@@ -352,7 +343,7 @@ func TestLiveTurnTreesPack(t *testing.T) {
 			flipped[r.IntN(len(flipped))] ^= byte(1 + r.IntN(255))
 			candidates = append(candidates, cut, flipped)
 		}
-		other := repos[(i+1)%len(repos)]
+		other := repoAt((i + 1) % total)
 		if p, perr := turnproof.PackTurnTrees(other.dir, other.trees[:1]); perr == nil {
 			candidates = append(candidates, p)
 		}
@@ -362,8 +353,8 @@ func TestLiveTurnTreesPack(t *testing.T) {
 			verifyTrees = g.trees[:1+r.IntN(len(g.trees))]
 		}
 		for _, pack := range candidates {
-			before := leftover()
 			want := oracleText(t, c, "verifyTreesPack", `{"hex":"`+hex.EncodeToString(pack)+`","trees":`+quoteList(verifyTrees)+`}`)
+			before := leftover()
 			outputs.WriteString(want + "\n")
 			var errs []string
 			verr := turnproof.VerifyTreesPack(pack, verifyTrees, &errs)
@@ -388,11 +379,8 @@ func TestLiveTurnTreesPack(t *testing.T) {
 			}
 		}
 	}
-	liveSummary(t, "%d generated repositories, %d packs compared, %d verifications (%d with errors)", len(repos), packs, verified, withErrors)
-	requireReachedExcept(t, "internal/bundle/turnproof/pack.go", outputs.String(), map[string]bool{
-		"Turn tree pack enumeration produced no Git objects.":         true,
-		"Turn tree pack exceeds FaultLine's portable artifact limit.": true,
-		// git init --bare in a directory mkdtemp just made cannot fail.
-		"Could not create temporary bare repository for pack verification:": true,
-	})
+	liveSummary(t, "%d generated repositories, %d packs compared, %d verifications (%d with errors)", n-first, packs, verified, withErrors)
+	if full {
+		requireReached(t, "internal/bundle/turnproof/pack.go", outputs.String())
+	}
 }

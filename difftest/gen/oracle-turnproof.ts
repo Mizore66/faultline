@@ -20,14 +20,18 @@ function take(src: string, name: string): string {
   return src.slice(start + 1, end + 2);
 }
 
-function catalogFns(): { parseHashCatalog: (hashes: Buffer, errors: string[]) => Map<string, string> } {
+let catalogCache: ReturnType<typeof buildCatalogFns> | undefined;
+const catalogFns = () => (catalogCache ??= buildCatalogFns());
+function buildCatalogFns(): { parseHashCatalog: (hashes: Buffer, errors: string[]) => Map<string, string> } {
   const src = distSource();
   return new Function(
     `${take(src, "isSafeRelativeArtifactPath")}\n${take(src, "parseHashCatalog")}\nreturn { parseHashCatalog };`
   )();
 }
 
-function packFns(): {
+let packCache: ReturnType<typeof buildPackFns> | undefined;
+const packFns = () => (packCache ??= buildPackFns());
+function buildPackFns(): {
   packTurnTrees: (repository: string, states: { treeDigest: string }[]) => Promise<Buffer>;
   verifyTreesPack: (pack: Buffer, states: { treeDigest: string }[], errors: string[]) => Promise<void>;
 } {

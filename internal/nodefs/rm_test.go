@@ -139,9 +139,15 @@ func TestRemoveAllRetry(t *testing.T) {
 	setup := func() (dir, locked string) {
 		dir = t.TempDir()
 		locked = filepath.Join(dir, "d")
-		os.MkdirAll(locked, 0o755)
-		os.WriteFile(filepath.Join(locked, "f"), []byte("x"), 0o644)
-		os.Chmod(locked, 0o500)
+		if err := os.MkdirAll(locked, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(locked, "f"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(locked, 0o500); err != nil {
+			t.Fatal(err)
+		}
 		t.Cleanup(func() { os.Chmod(locked, 0o700) })
 		return dir, locked
 	}
@@ -162,17 +168,30 @@ func TestRemoveAllRetry(t *testing.T) {
 	if _, err := os.Stat(locked); !os.IsNotExist(err) {
 		t.Fatalf("directory remains: %v", err)
 	}
-	// A retryable failure (ENOTEMPTY from the final rmdir) is retried: the
-	// directory is made removable during the first sleep window.
-	dir := t.TempDir()
-	d := filepath.Join(dir, "d")
-	os.MkdirAll(filepath.Join(d, "sub"), 0o755)
-	if err := RemoveAllRetry(d, 3, 50*time.Millisecond); err != nil {
+	// The sleep branch: a retry code (EBUSY) twice, then success, sleeps
+	// 1*delay and 2*delay; the last try's error is returned as is; ENOENT
+	// ends the loop quietly.
+	r := remover{maxRetries: 2, retryDelay: 40 * time.Millisecond}
+	calls := 0
+	start := time.Now()
+	err := r.retryLoop(func() error {
+		calls++
+		if calls < 3 {
+			return &Error{Code: "EBUSY"}
+		}
+		return nil
+	})
+	if err != nil || calls != 3 || time.Since(start) < 120*time.Millisecond {
+		t.Fatalf("err %v calls %d after %v", err, calls, time.Since(start))
+	}
+	calls = 0
+	if err := r.retryLoop(func() error { calls++; return &Error{Code: "EPERM"} }); err == nil || calls != 3 {
+		t.Fatalf("err %v calls %d", err, calls)
+	}
+	if err := r.retryLoop(func() error { return &Error{Code: "ENOENT"} }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(d); !os.IsNotExist(err) {
-		t.Fatalf("directory remains: %v", err)
-	}
+	dir := t.TempDir()
 	if err := RemoveAllRetry(filepath.Join(dir, "missing"), 3, time.Millisecond); err != nil {
 		t.Fatal(err)
 	}

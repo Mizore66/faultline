@@ -43,7 +43,7 @@ func PackTurnTrees(repository string, treeDigests []string) ([]byte, error) {
 	if len(order) == 0 {
 		return nil, errors.New("Turn tree pack enumeration produced no Git objects.") // coverage gate: unreachable (rev-list --objects <tree> lists the tree)
 	}
-	stdin := []byte(strings.Join(canonical.SortLocale(order), "\n") + "\n")
+	stdin := []byte(jsstr.ToUTF8(strings.Join(canonical.SortLocale(order), "\n") + "\n"))
 	packed := gitinv.RunHardenedGit([]string{"pack-objects", "--stdout", "--compression=9"}, gitinv.HardenedOptions{Repository: repository, Stdin: stdin, HasStdin: true})
 	if packed.ExitCode == nil || *packed.ExitCode != 0 || packed.Error != "" || len(packed.Stdout) == 0 {
 		return nil, errors.New(jsexc.Concat("Could not pack turn trees: ", packed.Detail("Git failed.")))
