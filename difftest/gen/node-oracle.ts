@@ -775,6 +775,37 @@ export const handlers: Record<string, Handler> = {
     for (let i = 1; i < all.length; i++) ties += all[i - 1]!.localeCompare(all[i]!) === 0 ? "1" : "0";
     return { order: all.map((s) => s.codePointAt(0)), ties };
   },
+  // Slice 4c Task 6 (repair brief). createRepairEvidencePacket: canonicalJson
+  // of the packet, or "THREW:<message>". validateRepairBrief: JSON.stringify
+  // of the validation (key order kept). extractOpenAiResponseText: the text,
+  // or "THREW:<message>". Inputs are JSON texts so both sides parse the same.
+  createRepairEvidencePacket: async ({ text }: { text: string }) => {
+    const { createRepairEvidencePacket } = await import("../../src/repair-brief.js");
+    try { return canonicalJson(createRepairEvidencePacket(JSON.parse(text))); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  validateRepairBrief: async ({ packet, brief }: { packet: string; brief: string }) => {
+    const { validateRepairBrief } = await import("../../src/repair-brief.js");
+    try { return JSON.stringify(validateRepairBrief(JSON.parse(packet), JSON.parse(brief))); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  extractOpenAiResponseText: async ({ text }: { text: string }) => {
+    const { extractOpenAiResponseText } = await import("../../src/openai-response.js");
+    try { return extractOpenAiResponseText(JSON.parse(text)); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  // repairBriefJsonSchema is not exported: JSON.stringify of the request
+  // body's `text` member, recorded from proposeRepairBriefWithGpt with fetch
+  // stubbed (a 500 reply ends the call) for git-unbound's packet.
+  repairBriefJsonSchema: async () => {
+    const { createRepairEvidencePacket, proposeRepairBriefWithGpt } = await import("../../src/repair-brief.js");
+    const packet = createRepairEvidencePacket(JSON.parse(cwReadFile("difftest/testdata/bases/git-unbound/investigation.json", "utf8")));
+    const realFetch = globalThis.fetch;
+    let body = "";
+    globalThis.fetch = (async (_url: unknown, init?: { body?: unknown }) => {
+      body = String(init?.body);
+      return new Response("stub", { status: 500 });
+    }) as typeof fetch;
+    try { await proposeRepairBriefWithGpt(packet, { apiKey: "fl-test-key" }).catch(() => undefined); } finally { globalThis.fetch = realFetch; }
+    return JSON.stringify((JSON.parse(body) as { text: unknown }).text);
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
