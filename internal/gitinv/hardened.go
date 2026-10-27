@@ -26,8 +26,8 @@ const (
 // SetGitTimeoutForTest.
 var gitMaterializationTimeoutMs = 30_000
 
-// toGitPath ports src/git-materialization.ts:15 toGitPath.
-func toGitPath(path string) string { return strings.ReplaceAll(nodefs.Resolve(path), `\`, "/") }
+// ToGitPath ports src/git-materialization.ts:15 toGitPath.
+func ToGitPath(path string) string { return strings.ReplaceAll(nodefs.Resolve(path), `\`, "/") }
 
 // materializationSafeGitConfig ports src/git-materialization.ts:19
 // MATERIALIZATION_SAFE_GIT_CONFIG, in source order. TS freezes it; it stays
@@ -113,13 +113,13 @@ func HardenedGitEnvironment(o HardenedOptions) []string {
 		"GIT_ALLOW_PROTOCOL=none",
 	}
 	if o.GitDir != "" {
-		env = append(env, "GIT_DIR="+toGitPath(o.GitDir))
+		env = append(env, "GIT_DIR="+ToGitPath(o.GitDir))
 	}
 	if o.WorkTree != "" {
-		env = append(env, "GIT_WORK_TREE="+toGitPath(o.WorkTree))
+		env = append(env, "GIT_WORK_TREE="+ToGitPath(o.WorkTree))
 	}
 	if o.IndexFile != "" {
-		env = append(env, "GIT_INDEX_FILE="+toGitPath(o.IndexFile))
+		env = append(env, "GIT_INDEX_FILE="+ToGitPath(o.IndexFile))
 	}
 	if runtime.GOOS == "windows" {
 		for _, name := range []string{"SystemRoot", "ComSpec", "PATHEXT"} {
@@ -147,12 +147,12 @@ func boundedAppend(current, next []byte) []byte {
 func RunHardenedGit(args []string, o HardenedOptions) GitRun {
 	argv := append([]string{}, materializationSafeGitConfig...)
 	if o.GitDir != "" {
-		argv = append(argv, "--git-dir="+toGitPath(o.GitDir))
+		argv = append(argv, "--git-dir="+ToGitPath(o.GitDir))
 	}
 	if o.WorkTree != "" {
-		argv = append(argv, "--work-tree="+toGitPath(o.WorkTree))
+		argv = append(argv, "--work-tree="+ToGitPath(o.WorkTree))
 	}
-	argv = append(argv, "-C", toGitPath(o.Repository))
+	argv = append(argv, "-C", ToGitPath(o.Repository))
 	argv = append(argv, args...)
 
 	env := HardenedGitEnvironment(o)

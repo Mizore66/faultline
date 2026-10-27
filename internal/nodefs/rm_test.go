@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Expectations were captured from Node 22's rmSync(dir, { recursive: true,
@@ -128,5 +129,51 @@ func TestRemoveAllAsyncMatchesNodePromisesRm(t *testing.T) {
 	}
 	if _, err := os.Lstat(q); !os.IsNotExist(err) {
 		t.Fatalf("tree left behind: %v", err)
+	}
+}
+
+func TestRemoveAllRetry(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	setup := func() (dir, locked string) {
+		dir = t.TempDir()
+		locked = filepath.Join(dir, "d")
+		os.MkdirAll(locked, 0o755)
+		os.WriteFile(filepath.Join(locked, "f"), []byte("x"), 0o644)
+		os.Chmod(locked, 0o500)
+		t.Cleanup(func() { os.Chmod(locked, 0o700) })
+		return dir, locked
+	}
+	// No retry: the first error is returned.
+	_, locked := setup()
+	if err := RemoveAllRetry(locked, 0, 0); err == nil || !strings.Contains(err.Error(), "EACCES") {
+		t.Fatalf("got %v", err)
+	}
+	// Node's loop also retries a non-retry code at once until the last
+	// try, so a directory that is read-only for a short window is removed.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		os.Chmod(locked, 0o700)
+	}()
+	if err := RemoveAllRetry(locked, 100_000_000, 0); err != nil {
+		t.Fatalf("retry after the window: %v", err)
+	}
+	if _, err := os.Stat(locked); !os.IsNotExist(err) {
+		t.Fatalf("directory remains: %v", err)
+	}
+	// A retryable failure (ENOTEMPTY from the final rmdir) is retried: the
+	// directory is made removable during the first sleep window.
+	dir := t.TempDir()
+	d := filepath.Join(dir, "d")
+	os.MkdirAll(filepath.Join(d, "sub"), 0o755)
+	if err := RemoveAllRetry(d, 3, 50*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(d); !os.IsNotExist(err) {
+		t.Fatalf("directory remains: %v", err)
+	}
+	if err := RemoveAllRetry(filepath.Join(dir, "missing"), 3, time.Millisecond); err != nil {
+		t.Fatal(err)
 	}
 }

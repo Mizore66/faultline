@@ -71,3 +71,12 @@ func TestCompareUTF16(t *testing.T) {
 		t.Fatal("CompareUTF16 order wrong")
 	}
 }
+
+func TestTrimEnd(t *testing.T) {
+	if got := TrimEnd("a b \t\r\n \u2028\ufeff"); got != "a b" {
+		t.Fatalf("%q", got)
+	}
+	if got := TrimEnd("  x"); got != "  x" {
+		t.Fatalf("%q", got)
+	}
+}

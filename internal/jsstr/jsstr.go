@@ -141,6 +141,16 @@ func Trim(s string) string {
 	return FromUTF16(units[start:end])
 }
 
+// TrimEnd is String.prototype.trimEnd (the IsWhitespace set).
+func TrimEnd(s string) string {
+	units := ToUTF16(s)
+	end := len(units)
+	for end > 0 && IsWhitespace(units[end-1]) {
+		end--
+	}
+	return FromUTF16(units[:end])
+}
+
 // UTF16Len is the JS length of a WTF-8 string: one unit per code point
 // below U+10000 (including lone surrogates) and two for the rest.
 func UTF16Len(s string) int {
