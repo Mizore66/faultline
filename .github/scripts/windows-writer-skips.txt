@@ -415,3 +415,17 @@ TestWriterReplay/posix/incident-continue-unbound
 TestWriterReplay/posix/incident-status-foreign-proposal
 TestWriterReplay/posix/incident-continue-foreign-proposal
 TestWriterReplay/posix/harness-inv-mutation
+TestWriterReplay/posix/codex-snapshot-clean
+TestWriterReplay/posix/codex-snapshot-repo-flag
+TestWriterReplay/posix/codex-snapshot-twice
+TestWriterReplay/posix/codex-snapshot-dirty
+TestWriterReplay/posix/codex-snapshot-no-head
+TestWriterReplay/posix/codex-snapshot-no-head-empty
+TestWriterReplay/posix/codex-snapshot-not-a-repo
+TestWriterReplay/posix/codex-snapshot-nested-repo-flag
+TestWriterReplay/posix/codex-snapshot-recordings-is-file
+TestWriterReplay/posix/codex-snapshot-user-config
+TestWriterReplay/posix/codex-snapshot-untracked-flag-wins
+TestWriterReplay/posix/codex-gc-alternates-symlink
+TestWriterReplay/posix/codex-gc-alternates-dangling
+TestWriterReplay/posix/codex-gc-unreadable-faultline-dir
