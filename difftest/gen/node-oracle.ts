@@ -826,6 +826,33 @@ export const handlers: Record<string, Handler> = {
       return `THREW:${(error as Error).message}`;
     }
   },
+  // Slice 4c, Task 7: src/attestation.ts. Each op runs in `cwd` when given
+  // (relative stores resolve from it). create: canonicalJson of the receipt;
+  // write and the verifiers: JSON.stringify of the result; "THREW:<message>"
+  // on a throw. isCanonicalIsoDate: one 0/1 per string. Start seeded to
+  // compare issuedAt and the staging UUID.
+  createBundleAttestation: async ({ input }: { input: any }) => {
+    const { createBundleAttestation } = await import("../../src/attestation.js");
+    try { return canonicalJson(createBundleAttestation(input)); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  verifyBundleAttestation: async ({ record, expected }: { record: unknown; expected?: string }) => {
+    const { verifyBundleAttestation } = await import("../../src/attestation.js");
+    try { return JSON.stringify(verifyBundleAttestation(record, expected)); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  writeBundleAttestation: async ({ cwd, store, input, root }: { cwd?: string; store: string; input: any; root: string }) => {
+    const { writeBundleAttestation } = await import("../../src/attestation.js");
+    const saved = process.cwd();
+    if (cwd !== undefined) process.chdir(cwd);
+    try { return JSON.stringify(writeBundleAttestation(store, input, { attestationRoot: root })); } catch (error) { return `THREW:${(error as Error).message}`; } finally { process.chdir(saved); }
+  },
+  verifyStoredBundleAttestation: async ({ cwd, store, receiptId, expected, root }: { cwd?: string; store: string; receiptId: string; expected?: string; root: string }) => {
+    const { verifyStoredBundleAttestation } = await import("../../src/attestation.js");
+    const saved = process.cwd();
+    if (cwd !== undefined) process.chdir(cwd);
+    try { return JSON.stringify(verifyStoredBundleAttestation(store, receiptId, expected, { attestationRoot: root })); } catch (error) { return `THREW:${(error as Error).message}`; } finally { process.chdir(saved); }
+  },
+  isCanonicalIsoDate: ({ values }: { values: string[] }) =>
+    values.map((v) => { const d = new Date(v); return Number.isFinite(d.getTime()) && d.toISOString() === v ? "1" : "0"; }).join(""),
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });

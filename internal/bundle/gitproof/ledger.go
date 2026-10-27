@@ -1,12 +1,12 @@
 package gitproof
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/jsdate"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	s "github.com/Mizore66/faultline/internal/schema"
@@ -21,75 +21,12 @@ const (
 // Port of src/turn-snapshot.ts:54.
 const turnTreeSnapshotVersion = "faultline.turn-tree-snapshot.v1"
 
-var isoTimestamp = regexp.MustCompile(`^([+-]\d{6}|\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$`)
-
-const maxTimeMs = 8.64e15
-
-func daysInMonth(year, month int64) int64 {
-	switch month {
-	case 2:
-		if (year%4 == 0 && year%100 != 0) || year%400 == 0 {
-			return 29
-		}
-		return 28
-	case 4, 6, 9, 11:
-		return 30
-	}
-	return 31
-}
-
-// daysFromCivil is the proleptic Gregorian day number relative to 1970-01-01.
-func daysFromCivil(y, m, d int64) int64 {
-	if m <= 2 {
-		y--
-	}
-	era := y / 400
-	if y < 0 && y%400 != 0 {
-		era--
-	}
-	yoe := y - era*400
-	mp := (m + 9) % 12
-	doy := (153*mp+2)/5 + d - 1
-	doe := yoe*365 + yoe/4 - yoe/100 + doy
-	return era*146097 + doe - 719468
-}
-
 // canonicalTimestamp ports the refine in src/ledger.ts:40:
-// `new Date(value).toISOString() === value`. toISOString always emits this
-// regex's shape, so a string round-trips only when it has that shape, its
-// fields need no rollover, its year uses the form toISOString would choose,
-// and the time value is within ±8.64e15 ms.
-func canonicalTimestamp(value string) bool {
-	m := isoTimestamp.FindStringSubmatch(value)
-	if m == nil || m[1] == "-000000" {
-		return false
-	}
-	year, _ := strconv.ParseInt(m[1], 10, 64)
-	if len(m[1]) == 7 && year >= 0 && year <= 9999 {
-		return false // toISOString writes these years with four digits
-	}
-	month, _ := strconv.ParseInt(m[2], 10, 64)
-	day, _ := strconv.ParseInt(m[3], 10, 64)
-	hour, _ := strconv.ParseInt(m[4], 10, 64)
-	minute, _ := strconv.ParseInt(m[5], 10, 64)
-	second, _ := strconv.ParseInt(m[6], 10, 64)
-	ms, _ := strconv.ParseInt(m[7], 10, 64)
-	if month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month) || hour > 23 || minute > 59 || second > 59 {
-		return false
-	}
-	t := daysFromCivil(year, month, day)*86_400_000 + ((hour*60+minute)*60+second)*1000 + ms
-	return t >= -maxTimeMs && t <= maxTimeMs
-}
+// `new Date(value).toISOString() === value` (jsdate.IsCanonicalISO).
+func canonicalTimestamp(value string) bool { return jsdate.IsCanonicalISO(value) }
 
 // timestampMs is Date.parse for a value that already passed canonicalTimestamp.
-func timestampMs(value string) int64 {
-	m := isoTimestamp.FindStringSubmatch(value)
-	if m == nil {
-		return 0
-	}
-	n := func(i int) int64 { v, _ := strconv.ParseInt(m[i], 10, 64); return v }
-	return daysFromCivil(n(1), n(2), n(3))*86_400_000 + ((n(4)*60+n(5))*60+n(6))*1000 + n(7)
-}
+func timestampMs(value string) int64 { return jsdate.TimeValue(value) }
 
 func canonicalTimestampValue(v jsjson.Value) bool { return canonicalTimestamp(v.Str()) }
 
