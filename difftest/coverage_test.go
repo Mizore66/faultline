@@ -271,6 +271,10 @@ var unreachableLiterals = map[string]string{
 	// internal/bundle/prevention/repaired.go and repaired_runs.go (Task 13).
 	"Repaired worktree path is not a regular file:":     "race only: the walk keeps only entries readdirSync calls files, lstat'ed just after",
 	"Collected repaired run digests were not distinct.": "each run id digests its attempt number, so the three always differ (src/prevention-from-artifacts.ts:535)",
+	// Slice 4c Task 10: not an error text. repair.ProposeBrief parses
+	// redactValue's result with bundle.ParseValue, whose input the flow
+	// analysis counts as a message, so redactValue's returns become sites.
+	"<FAULTLINE_UNSUPPORTED_VALUE:undefined>": "redactValue's placeholder for an undefined value, not an error; only fl witness propose redacts a value that can be undefined (a missing incidentPacket), and no golden omits it",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),

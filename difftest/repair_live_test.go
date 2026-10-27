@@ -3,15 +3,25 @@
 package difftest
 
 import (
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"math/rand/v2"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/gen"
@@ -538,9 +548,447 @@ func TestLiveExtractOpenAiResponseText(t *testing.T) {
 func TestLiveRepairBriefJSONSchema(t *testing.T) {
 	c := oracle.Start(t)
 	defer c.Close()
-	want := jsjson.Stringify(jsjson.MustObject("format", jsjson.MustObject("type", jsjson.MakeString("json_schema"),
-		"name", jsjson.MakeString("faultline_repair_brief"), "strict", jsjson.MakeBool(true), "schema", repair.BriefJSONSchema())))
-	liveCheck(t, c, "repairBriefJsonSchema", "{}", want)
+	// The request body's `text` member, from the one builder ProposeBrief uses.
+	liveCheck(t, c, "repairBriefJsonSchema", "{}", jsjson.Stringify(repair.BriefTextFormat()))
+}
+
+// Slice 4c Task 10: proposeRepairBriefWithGpt against a scripted local
+// server, both sides in turn. Task 1's fake OpenAI server records only the
+// method, path, Authorization, Content-Type and body; this one also records
+// the five headers undici adds, so the Go client's explicit copies are
+// checked too, and it can redirect and compress, which the fake never does.
+
+type repairReply struct {
+	status   int
+	headers  [][2]string
+	body     []byte
+	redirect int // a 3xx status sent first, with Location /v1/final
+}
+
+type repairServer struct {
+	mu      sync.Mutex
+	reply   repairReply
+	records []string
+}
+
+func (s *repairServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	h := func(name string) string { return strings.Join(r.Header.Values(name), ",") }
+	s.records = append(s.records, strings.Join([]string{"openai", r.Method, r.URL.Path, h("Authorization"), h("Content-Type"),
+		h("Accept"), h("Accept-Language"), h("Sec-Fetch-Mode"), h("User-Agent"), h("Accept-Encoding"), string(body)}, "\x1f"))
+	if s.reply.redirect != 0 && r.URL.Path == "/v1/responses" {
+		w.Header().Set("Location", "/v1/final")
+		w.WriteHeader(s.reply.redirect)
+		return
+	}
+	for _, kv := range s.reply.headers {
+		w.Header().Set(kv[0], kv[1])
+	}
+	w.WriteHeader(s.reply.status)
+	w.Write(s.reply.body)
+}
+
+func (s *repairServer) run(reply repairReply, call func() string) (string, []string) {
+	s.mu.Lock()
+	s.reply, s.records = reply, nil
+	s.mu.Unlock()
+	out := call()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return out, s.records
+}
+
+// repairBriefFor returns a brief for packet citing ids, with digest as its
+// evidencePacketDigest.
+func repairBriefFor(digest string, statement string, ids ...string) jsjson.Value {
+	rec := func() jsjson.Value {
+		return jsjson.MustObject("statement", jsjson.MakeString(statement), "evidenceIds", repairStrings(ids...))
+	}
+	return jsjson.MustObject("schemaVersion", jsjson.MakeString(repair.BriefVersion), "evidencePacketDigest", jsjson.MakeString(digest),
+		"proposedInvariant", rec(), "repairDirections", jsjson.MakeArray([]jsjson.Value{rec()}),
+		"prevention", jsjson.MustObject("hardEnforcement", jsjson.MakeArray([]jsjson.Value{rec()}), "softGuidance", jsjson.MakeArray(nil)),
+		"uncertainties", repairStrings("u"))
+}
+
+func repairOutput(texts ...string) jsjson.Value {
+	parts := make([]jsjson.Value, len(texts))
+	for i, text := range texts {
+		parts[i] = jsjson.MustObject("type", jsjson.MakeString("output_text"), "text", jsjson.MakeString(text))
+	}
+	return jsjson.MakeArray([]jsjson.Value{jsjson.MustObject("type", jsjson.MakeString("message"), "content", jsjson.MakeArray(parts))})
+}
+
+func repairGzip(b []byte) []byte {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	w.Write(b)
+	w.Close()
+	return buf.Bytes()
+}
+
+func repairDeflate(b []byte, wrapped bool) []byte {
+	var buf bytes.Buffer
+	if wrapped {
+		w := zlib.NewWriter(&buf)
+		w.Write(b)
+		w.Close()
+	} else {
+		w, _ := flate.NewWriter(&buf, flate.DefaultCompression)
+		w.Write(b)
+		w.Close()
+	}
+	return buf.Bytes()
+}
+
+// randomRepairReply scripts one reply for packet; kind names it.
+func randomRepairReply(r *rand.Rand, packet jsjson.Value) (string, repairReply) {
+	digest := packet.Get("packetDigest").Str()
+	brief := repairText(repairBriefFor(digest, "keep the invariant", "E1", "E2"))
+	json200 := func(response jsjson.Value) repairReply {
+		return repairReply{status: 200, headers: [][2]string{{"Content-Type", "application/json"}}, body: []byte(repairText(response))}
+	}
+	ok := json200(jsjson.MustObject("id", jsjson.MakeString("resp_1"), "output", repairOutput(brief)))
+	switch k := r.IntN(30); k {
+	case 0:
+		return "valid", ok
+	case 1:
+		return "valid-fast-path", json200(jsjson.MustObject("output_text", jsjson.MakeString(brief)))
+	case 2:
+		return "valid-both", json200(jsjson.MustObject("output", repairOutput(brief), "output_text", jsjson.MakeString(brief)))
+	case 3:
+		return "wrong-citations", json200(jsjson.MustObject("output", repairOutput(repairText(repairBriefFor(digest, "s", "E1", "E99", "E1000")))))
+	case 4:
+		return "wrong-digest", json200(jsjson.MustObject("output", repairOutput(repairText(repairBriefFor("sha256:"+strings.Repeat("9", 64), "s", "E1")))))
+	case 5:
+		return "multiple-outputs", json200(jsjson.MustObject("output", repairOutput(brief, brief)))
+	case 6:
+		return "fast-path-disagrees", json200(jsjson.MustObject("output", repairOutput(brief), "output_text", jsjson.MakeString(brief+" ")))
+	case 7, 8, 9:
+		status := []int{400, 429, 500}[k-7]
+		body := []string{`{"error":{"message":"bad request","type":"invalid_request_error"}}`, "rate limited " + astralChar,
+			"upstream \xff\xfe down \xed\xa0\x80", "", "\xef\xbb\xbfwith a BOM"}[r.IntN(5)]
+		return "http-" + strconv.Itoa(status), repairReply{status: status, headers: [][2]string{{"Content-Type", "text/plain"}}, body: []byte(body)}
+	case 10:
+		return "not-json", repairReply{status: 200, headers: [][2]string{{"Content-Type", "text/html"}}, body: []byte([]string{"<html>oops</html>", "{", "[1,]", "{\"output\":tru}", "nul"}[r.IntN(5)])}
+	case 11:
+		ok.body = append([]byte("\xef\xbb\xbf"), ok.body...)
+		return "bom", ok
+	case 12:
+		ok.body = append([]byte("\xef\xbb\xbf\xef\xbb\xbf"), ok.body...)
+		return "double-bom", ok
+	case 13:
+		ok.body = append([]byte("\xef\xbb\xbf\xef\xbb\xbf\xef\xbb\xbf"), ok.body...)
+		return "triple-bom", ok
+	case 14:
+		// Bad bytes inside the brief's statement decode to U+FFFD.
+		text := strings.Replace(string(ok.body), "keep the invariant", "keep \xff the \xc3 invariant \xed\xa0\x80", 1)
+		ok.body = []byte(text)
+		return "invalid-utf8", ok
+	case 15:
+		return "empty-body", repairReply{status: 200, body: nil}
+	case 16:
+		return "text-not-json", json200(jsjson.MustObject("output_text", jsjson.MakeString([]string{"not json", "{'a':1}", brief[:40], "\ufeff{}"}[r.IntN(4)])))
+	case 17:
+		return "text-schema-invalid", json200(jsjson.MustObject("output_text", jsjson.MakeString([]string{"{}", "null", "[]", `{"schemaVersion":"faultline.repair-brief.v1"}`}[r.IntN(4)])))
+	case 18:
+		ok.headers = append(ok.headers, [2]string{"Content-Encoding", []string{"gzip", "x-gzip", "GZIP", " gzip "}[r.IntN(4)]})
+		ok.body = repairGzip(ok.body)
+		return "gzip", ok
+	case 19:
+		ok.headers = append(ok.headers, [2]string{"Content-Encoding", "deflate"})
+		ok.body = repairDeflate(ok.body, r.IntN(2) == 0)
+		return "deflate", ok
+	case 20:
+		ok.headers = append(ok.headers, [2]string{"Content-Encoding", "gzip"})
+		g := repairGzip(ok.body)
+		switch r.IntN(9) {
+		case 0:
+			ok.body = g[:len(g)/2] // truncated: what was decoded, no error
+		case 1:
+			g[len(g)-6] ^= 1 // a bad CRC
+			ok.body = g
+		case 2:
+			// not gzip at all: the body is sent as is
+		case 3:
+			ok.body = append(g, g...) // two members
+		case 4:
+			ok.body = []byte{[]byte{0x1f, 0x00, 'x'}[r.IntN(3)]}
+		case 5:
+			ok.body = g[:10] // the header alone
+		case 6:
+			ok.body = append(g, 0, 'x', 'y') // a 0x00 ends the stream
+		case 7:
+			ok.body = append(g, 'x', 'y') // garbage starts another member
+		default:
+			g[len(g)-2] ^= 1 // a bad length
+			ok.body = g
+		}
+		return "gzip-odd", ok
+	case 21:
+		ok.headers = append(ok.headers, [2]string{"Content-Encoding", []string{"identity", "br, identity", "gzip, , "}[r.IntN(3)]})
+		return "unknown-coding", ok
+	case 26:
+		ok.headers = append(ok.headers, [2]string{"Content-Encoding", "deflate"})
+		z := repairDeflate(ok.body, true)
+		switch r.IntN(5) {
+		case 0:
+			z[len(z)-1] ^= 1 // a bad Adler-32
+		case 1:
+			z = z[:1+r.IntN(len(z)-1)]
+		case 2:
+			z[1] ^= 1 // a bad header check
+		case 3:
+			z = append(z, 'x', 'y')
+		default:
+			z = nil
+		}
+		ok.body = z
+		return "deflate-odd", ok
+	case 27:
+		ok.headers = append(ok.headers, [2]string{"Content-Encoding", []string{"gzip, deflate", "deflate, gzip", "a,b,c,d,e,f", "gzip,gzip,gzip,gzip,gzip"}[r.IntN(4)]})
+		ok.body = repairDeflate(repairGzip(ok.body), true)
+		return "multi-coding", ok
+	case 22:
+		ok.redirect = []int{301, 302, 303, 307, 308}[r.IntN(5)]
+		return "redirect", ok
+	case 23:
+		return "status-" + strconv.Itoa(k), repairReply{status: []int{201, 204, 299, 300, 304, 199 + 1}[r.IntN(6)], body: ok.body}
+	case 24:
+		return "error-json", json200(jsjson.MustObject("error", jsjson.MakeString("x"), "output", jsjson.MakeString("o")))
+	case 25:
+		ok.body = []byte(strings.Replace(string(ok.body), `"resp_1"`, `"\ud800"`, 1))
+		return "escaped-surrogate", ok
+	}
+	return "valid", ok
+}
+
+// repairSecretPacket is a signed packet whose fact statements hold text
+// redactValue replaces before the POST.
+func repairSecretPacket(r *rand.Rand) jsjson.Value {
+	secrets := []string{"token=abcdef0123456789", "Authorization: Bearer abcdefghijklmnop", "password: 'hunter22hunter22'", "ok statement"}
+	facts := make([]jsjson.Value, 3)
+	for i := range facts {
+		facts[i] = jsjson.MustObject("id", jsjson.MakeString("E"+strconv.Itoa(i+1)), "kind", jsjson.MakeString("DERIVED"),
+			"statement", jsjson.MakeString("fact "+secrets[r.IntN(len(secrets))]))
+	}
+	packet := jsjson.MustObject(
+		"schemaVersion", jsjson.MakeString(repair.EvidencePacketVersion),
+		"investigationDigest", jsjson.MakeString("sha256:"+strings.Repeat("1", 64)),
+		"frozenWitnessDigest", jsjson.MakeString("sha256:"+strings.Repeat("2", 64)),
+		"recorder", jsjson.MakeString("git-commit-range-replay"),
+		"nativeCodexInterception", jsjson.MakeBool(false),
+		"facts", jsjson.MakeArray(facts),
+		"limitations", repairStrings("limit"),
+	)
+	repairSign(packet)
+	return packet
+}
+
+func TestLiveProposeRepairBrief(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	srv := &repairServer{}
+	hs := httptest.NewServer(srv)
+	defer hs.Close()
+	url := hs.URL + "/v1/responses"
+	t.Setenv("FAULTLINE_TEST_OPENAI_URL", url)
+	t.Setenv("OPENAI_API_KEY", "")
+
+	real, err := repair.CreateEvidencePacket(repairParse(t, seedTexts(t, "git-unbound/investigation.json")[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := []string{"gpt-5.6", "", "model " + astralChar, strings.Repeat("m", 300), "lone " + loneSurrogate}
+	r := rand.New(rand.NewPCG(46, 10))
+	reached := map[string]bool{}
+	for i := range 260 {
+		packet := repairClone(t, real)
+		if i%4 == 1 {
+			packet = repairSecretPacket(r)
+		}
+		key := jsjson.MakeString("fl-test-key")
+		var kind string
+		var reply repairReply
+		switch {
+		case i < 220:
+			kind, reply = randomRepairReply(r, packet)
+		case i < 240:
+			// Keys fetch sends after trimming, or refuses before connecting.
+			kind = "key"
+			_, reply = randomRepairReply(r, packet)
+			key = []jsjson.Value{jsjson.MakeNull(), jsjson.MakeString(""), jsjson.MakeString(" fl-test-key\t"), jsjson.MakeString("fl-tést-key"),
+				jsjson.MakeString("fl\ntest"), jsjson.MakeString("flĀ"), jsjson.MakeString(astralChar), jsjson.MakeString("fl\x7ftest"),
+				jsjson.MakeString("fl\x01test"), jsjson.MakeString("\n"), jsjson.MakeString("a\r"), jsjson.MakeString("fl\ttest")}[r.IntN(12)]
+		default:
+			// Packets refused before the key is read.
+			kind = "packet"
+			o := packet.Obj()
+			switch r.IntN(4) {
+			case 0:
+				o.Set("packetDigest", jsjson.MakeString("sha256:"+strings.Repeat("3", 64)))
+			case 1:
+				o.Set("zzExtra", jsjson.MakeNull())
+			case 2:
+				o.Set("facts", jsjson.MakeArray(nil))
+				repairSign(packet)
+			default:
+				o.Field("facts").Items()[0].Obj().Set("statement", jsjson.MakeString("changed"))
+			}
+		}
+		model := models[r.IntN(len(models))]
+		pt := repairText(packet)
+		if key.Kind() == jsjson.Null {
+			os.Unsetenv("OPENAI_API_KEY")
+		} else {
+			os.Setenv("OPENAI_API_KEY", key.Str())
+		}
+		got, goRecords := srv.run(reply, func() string {
+			var out string
+			if err := jsexc.Try(func() {
+				brief, err := repair.ProposeBrief(repairParse(t, pt), model)
+				if err != nil {
+					out = "THREW:" + jsexc.Message(err)
+					return
+				}
+				out = repairText(brief)
+			}); err != nil {
+				out = "THREW:" + jsexc.Message(err)
+			}
+			return out
+		})
+		args := `{"packet":` + jsjson.Quote(pt) + `,"model":` + jsjson.Quote(model) + `,"apiKey":` + repairText(key) + `,"url":` + jsjson.Quote(url) + "}"
+		want, tsRecords := srv.run(reply, func() string { return oracleText(t, c, "proposeRepairBriefWithGpt", args) })
+		if got != want {
+			t.Fatalf("case %d (%s, model %q, key %s):\ngot  %s\nwant %s", i, kind, model, repairText(key), got, want)
+		}
+		if !slices.Equal(goRecords, tsRecords) {
+			t.Fatalf("case %d (%s): requests differ:\ngo %q\nts %q", i, kind, goRecords, tsRecords)
+		}
+		outcome := got
+		if !strings.HasPrefix(got, "THREW:") {
+			outcome = "brief"
+		}
+		reached[kind+" -> "+outcome] = true
+	}
+	keys := make([]string, 0, len(reached))
+	for k := range reached {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	short := make([]string, len(keys))
+	for i, k := range keys {
+		short[i] = strconv.QuoteToGraphic(k[:min(len(k), 100)])
+	}
+	t.Logf("%d outcomes:\n%s", len(keys), strings.Join(short, "\n"))
+	for _, want := range []string{"Refusing to send a repair packet with an invalid digest.", "OPENAI_API_KEY is required", "OpenAI Responses request failed: 400",
+		"OpenAI Responses request failed: 429", "OpenAI Responses request failed: 500", "GPT-5.6 repair brief was rejected: repair brief cites",
+		"GPT-5.6 repair brief was rejected: repair brief references", "multiple output_text values", "fast path disagrees",
+		"Unexpected end of JSON input", "is not valid JSON", "terminated", "fetch failed", "Cannot convert argument to a ByteString", "is an invalid header value"} {
+		found := false
+		for _, k := range keys {
+			found = found || strings.Contains(k, want)
+		}
+		if !found {
+			t.Errorf("never reached %q", want)
+		}
+	}
+	if !reached["valid -> brief"] {
+		t.Error("never produced a brief")
+	}
+}
+
+// repairStreams are compressed inputs: every zlib level and strategy, as
+// gzip, zlib and raw deflate, over short, repetitive, random and
+// multi-byte texts.
+func repairStreams(r *rand.Rand) [][2]any {
+	random := make([]byte, 3000)
+	for i := range random {
+		random[i] = byte(r.IntN(256))
+	}
+	texts := [][]byte{[]byte(`{"output_text":"abc"}`), nil, []byte("a"), []byte(strings.Repeat("abcabcabc", 200)), random,
+		[]byte(strings.Repeat("é"+astralChar, 400))}
+	var out [][2]any
+	for _, text := range texts {
+		for _, level := range []int{flate.NoCompression, flate.BestSpeed, flate.DefaultCompression, flate.BestCompression, flate.HuffmanOnly} {
+			var g, z, d bytes.Buffer
+			gw, _ := gzip.NewWriterLevel(&g, level)
+			gw.Write(text)
+			gw.Close()
+			zw, _ := zlib.NewWriterLevel(&z, level)
+			zw.Write(text)
+			zw.Close()
+			dw, _ := flate.NewWriter(&d, level)
+			dw.Write(text)
+			dw.Close()
+			out = append(out, [2]any{"gzip", g.Bytes()}, [2]any{"deflate", z.Bytes()}, [2]any{"deflate", d.Bytes()})
+		}
+	}
+	return out
+}
+
+// TestLiveResponseDecoders checks the Go ports of the decoders undici runs
+// on a Content-Encoding (Node's zlib with Z_SYNC_FLUSH, which yields what a
+// truncated stream decoded) against Node's zlib: on truncations, bit
+// flips, trailing bytes and random block headers.
+func TestLiveResponseDecoders(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	r := rand.New(rand.NewPCG(46, 11))
+	check := func(kind string, b []byte) string {
+		out, err := repair.DecodeResponseBodyForTest(kind, b)
+		got := hex.EncodeToString(out)
+		if err != nil {
+			got = "E"
+		}
+		liveCheck(t, c, "responseDecode", `{"kind":"`+kind+`","hex":"`+hex.EncodeToString(b)+`"}`, got)
+		return got
+	}
+	errors, partial := 0, 0
+	for _, s := range repairStreams(r) {
+		kind, full := s[0].(string), s[1].([]byte)
+		for n := 0; n <= len(full); n += max(1, len(full)/40) {
+			if got := check(kind, full[:n]); got == "E" {
+				errors++
+			} else if n < len(full) && got != "" {
+				partial++
+			}
+		}
+		for range 25 {
+			b := slices.Clone(full)
+			if len(b) == 0 {
+				break
+			}
+			for range 1 + r.IntN(3) {
+				b[r.IntN(len(b))] ^= 1 << r.IntN(8)
+			}
+			if check(kind, b) == "E" {
+				errors++
+			}
+		}
+		check(kind, append(slices.Clone(full), 0, 1, 2))
+		check(kind, append(slices.Clone(full), 'x', 'y'))
+		check(kind, append(slices.Clone(full), full...))
+	}
+	// Random raw blocks: stored, fixed and dynamic headers (small HLIT and
+	// HDIST half the time, so the code tables complete).
+	for range 3000 {
+		b := make([]byte, 1+r.IntN(120))
+		for i := range b {
+			b[i] = byte(r.IntN(256))
+		}
+		b[0] = b[0]&^7 | []byte{0b101, 0b011, 0b100, 0b101}[r.IntN(4)]
+		if r.IntN(2) == 0 && len(b) > 1 {
+			b[1] &= 0x0f
+		}
+		check("deflate", b)
+		check("gzip", append([]byte{0x1f, 0x8b, 8, byte(r.IntN(32)), 0, 0, 0, 0, 0, 3}, b...))
+	}
+	t.Logf("%d errors, %d partial decodes", errors, partial)
+	if errors == 0 || partial == 0 {
+		t.Fatal("an outcome was never reached")
+	}
 }
 
 // --- Slice 4c Task 11: the repair worktree ---

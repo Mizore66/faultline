@@ -1037,6 +1037,40 @@ export const handlers: Record<string, Handler> = {
       return `THREW:${(error as Error).message}`;
     }
   },
+  // Slice 4c Task 10: proposeRepairBriefWithGpt({ model }) against a local
+  // test server. fetch of the fixed OpenAI URL goes to `url` instead (as
+  // difftest/gen/fetch-shim.mjs does); OPENAI_API_KEY is `apiKey`, or unset
+  // when null. JSON.stringify of the brief, or "THREW:<message>".
+  proposeRepairBriefWithGpt: async ({ packet, model, apiKey, url }: { packet: string; model: string; apiKey: string | null; url: string }) => {
+    const { proposeRepairBriefWithGpt } = await import("../../src/repair-brief.js");
+    const realFetch = globalThis.fetch;
+    const savedKey = process.env.OPENAI_API_KEY;
+    globalThis.fetch = ((input: unknown, init?: RequestInit) =>
+      realFetch(input === "https://api.openai.com/v1/responses" ? url : input as string, init)) as typeof fetch;
+    if (apiKey === null) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = apiKey;
+    try {
+      return JSON.stringify(await proposeRepairBriefWithGpt(JSON.parse(packet), { model }));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    } finally {
+      globalThis.fetch = realFetch;
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = savedKey;
+    }
+  },
+  // Slice 4c Task 10: undici's response decoders (fetch/index.js onHeaders):
+  // createGunzip, or InflateStream (zlib by the first byte's low nibble,
+  // else raw), with flush and finishFlush Z_SYNC_FLUSH. Hex of the bytes,
+  // or "E" when the stream errors.
+  responseDecode: async ({ kind, hex }: { kind: "gzip" | "deflate"; hex: string }) => {
+    const zlib = await import("node:zlib");
+    const b = Buffer.from(hex, "hex");
+    const opts = { flush: zlib.constants.Z_SYNC_FLUSH, finishFlush: zlib.constants.Z_SYNC_FLUSH };
+    try {
+      if (kind === "gzip") return zlib.gunzipSync(b, opts).toString("hex");
+      if (b.length === 0) return "";
+      return ((b[0]! & 15) === 8 ? zlib.inflateSync(b, opts) : zlib.inflateRawSync(b, opts)).toString("hex");
+    } catch { return "E"; }
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
