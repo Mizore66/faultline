@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/Mizore66/faultline/internal/boot"
 	"github.com/Mizore66/faultline/internal/jsstr"
@@ -30,12 +31,19 @@ type Result struct {
 }
 
 // output collects both streams against one maxBuffer budget, like
-// SyncProcessRunner::IncrementBufferSizeAndCheckOverflow.
+// SyncProcessRunner::IncrementBufferSizeAndCheckOverflow. runnerErr is the
+// runner's own error_ (ENOBUFS or ETIMEDOUT): SetError keeps the first.
+// stopped is set once SyncProcessRunner::Kill closed the pipes, after which
+// no read is kept; done is set once the run ended, after which the kill
+// timer does nothing (CloseKillTimer).
 type output struct {
 	mu        sync.Mutex
 	total     int
 	maxBuffer int
 	overflow  bool
+	stopped   bool
+	done      bool
+	runnerErr string
 	onOverrun func()
 }
 
@@ -59,7 +67,7 @@ func (s *stream) read(r *os.File, done *sync.WaitGroup) {
 		n, err := r.Read(chunk[:segment-len(s.buf)%segment])
 		if n > 0 {
 			s.out.mu.Lock()
-			if s.out.overflow {
+			if s.out.stopped {
 				s.out.mu.Unlock()
 				return
 			}
@@ -67,6 +75,10 @@ func (s *stream) read(r *os.File, done *sync.WaitGroup) {
 			s.out.total += n
 			if s.out.maxBuffer > 0 && s.out.total > s.out.maxBuffer {
 				s.out.overflow = true
+				s.out.stopped = true
+				if s.out.runnerErr == "" {
+					s.out.runnerErr = "ENOBUFS"
+				}
 				s.out.mu.Unlock()
 				s.out.onOverrun()
 				return
@@ -90,7 +102,7 @@ func SpawnSync(file string, args []string, maxBuffer int) Result {
 }
 
 // SpawnSyncOptions are the spawnSync options FaultLine's call sites use,
-// always with shell: false and windowsHide: true.
+// always with shell: false; windowsHide is true unless WindowsShow.
 type SpawnSyncOptions struct {
 	// Env is the env option as "KEY=value" pairs in object order, passed
 	// verbatim (callers encode JS strings with jsstr.ToUTF8 where Node
@@ -107,15 +119,23 @@ type SpawnSyncOptions struct {
 	// shared by stdout and stderr (SyncProcessRunner counts both against
 	// one total), as TestSpawnSyncMatchesNode pins.
 	MaxBuffer int
+	// Timeout is spawnSync's timeout option; 0 is none. When it fires the
+	// child gets SIGTERM (killSignal's default), Status is nil and Err is
+	// "spawnSync <file> ETIMEDOUT"; the output read so far is kept.
+	Timeout time.Duration
+	// WindowsShow is windowsHide: false, spawnSync's default, which
+	// src/git-snapshot.ts:18 keeps (no effect off Windows).
+	WindowsShow bool
 }
 
 // defaultMaxBuffer is child_process's MAX_BUFFER, spawnSync's default.
 const defaultMaxBuffer = 1024 * 1024
 
 // SpawnSyncWith is spawnSync(file, args, { encoding: "buffer", env, input,
-// cwd, maxBuffer, shell: false, windowsHide: true }). A failed write of
+// cwd, maxBuffer, timeout, shell: false, windowsHide }). A failed write of
 // Input (the child exited without reading it) is reported like Node's
-// pipe error ("spawnSync <file> EPIPE"), unless ENOBUFS is.
+// pipe error ("spawnSync <file> EPIPE"), unless the runner's own error
+// (ENOBUFS or ETIMEDOUT, whichever came first) is.
 func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	boot.BeforeSpawn() // the children must see Node's RLIMIT_NOFILE
 	argv := make([]string, 0, len(args)+1)
@@ -135,7 +155,7 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	if err != nil {
 		return Result{Err: spawnError(file, nodefs.SystemErrorName(err))}
 	}
-	proc, code := start(jsstr.ToUTF8(file), argv, env, io.child, jsstr.ToUTF8(o.Cwd), startOptions{})
+	proc, code := start(jsstr.ToUTF8(file), argv, env, io.child, jsstr.ToUTF8(o.Cwd), startOptions{show: o.WindowsShow})
 	io.closeChild()
 	if code != "" {
 		io.closeParent()
@@ -144,16 +164,38 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	var closeOnce sync.Once
 	closePipes := func() { closeOnce.Do(io.closeParent) }
 	out := &output{maxBuffer: maxBuffer}
-	var killed atomic.Bool
-	out.onOverrun = func() {
+	var killed, sent atomic.Bool
+	kill := func() {
 		killed.Store(true)
 		// SyncProcessRunner::Kill: send killSignal (SIGTERM), close the pipes.
 		if runtime.GOOS == "windows" {
-			proc.Kill()
+			// uv_process_kill records the signal it sent as the exit
+			// signal (exit_signal), so a terminated child has no status.
+			sent.Store(proc.Kill() == nil)
 		} else {
 			proc.Signal(syscall.SIGTERM)
 		}
 		closePipes()
+	}
+	out.onOverrun = kill
+	if o.Timeout > 0 {
+		// The uv timer TryInitializeAndRunLoop arms: OnKillTimerTimeout is
+		// SetError(UV_ETIMEDOUT) and Kill(), unless Kill already ran (an
+		// overflow closed the timer) or the run ended.
+		timer := time.AfterFunc(o.Timeout, func() {
+			out.mu.Lock()
+			if out.stopped || out.done {
+				out.mu.Unlock()
+				return
+			}
+			out.stopped = true
+			if out.runnerErr == "" {
+				out.runnerErr = "ETIMEDOUT"
+			}
+			out.mu.Unlock()
+			kill()
+		})
+		defer timer.Stop()
 	}
 	// SyncProcessStdioPipe::Start: uv_write the input, then uv_shutdown.
 	// Only the first pipe error is kept (SetPipeError).
@@ -176,6 +218,9 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	go stderr.read(io.stderr, &readers)
 	readers.Wait()
 	state, _ := proc.Wait()
+	out.mu.Lock()
+	out.done = true
+	out.mu.Unlock()
 	writer.Wait()
 	closePipes()
 	if state != nil && !killed.Load() {
@@ -185,11 +230,12 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	}
 	result := Result{Stdout: stdout.buf, Stderr: stderr.buf}
 	out.mu.Lock()
-	overflow := out.overflow
+	runnerErr := out.runnerErr
 	out.mu.Unlock()
-	// GetError: the runner's own error (ENOBUFS) wins over a pipe error.
-	if overflow {
-		result.Err = spawnError(file, "ENOBUFS")
+	// GetError: the runner's own error (ENOBUFS or ETIMEDOUT, the first
+	// SetError) wins over a pipe error.
+	if runnerErr != "" {
+		result.Err = spawnError(file, runnerErr)
 	} else if pipeErr != nil {
 		code, failsStart := inputWriteError(pipeErr, runtime.GOOS)
 		if failsStart {
@@ -202,7 +248,7 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	}
 	// Node reports the exit code whenever the child exited normally, even
 	// alongside ENOBUFS.
-	if state != nil && state.Exited() {
+	if state != nil && state.Exited() && !sent.Load() {
 		status := state.ExitCode()
 		result.Status = &status
 	}
