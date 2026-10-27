@@ -753,14 +753,19 @@ export const handlers: Record<string, Handler> = {
   // first (digestRepairPatchFile), then buildPreventionProofFromVerifiedArtifacts.
   // JSON.stringify of the input, {"reasons":[...]}, or "THREW:<message>".
   // Start the oracle seeded to compare the verifier's mkdtemp names.
-  buildPreventionProofFromVerifiedArtifacts: async ({ bundle, expectRoot, commit, tree, runs, patch, codexThreadId }: {
+  // repairBaseTree and hardGuardArtifactDigests (slice 4c) are passed only
+  // when given; the CLI passes neither.
+  buildPreventionProofFromVerifiedArtifacts: async ({ bundle, expectRoot, commit, tree, runs, patch, codexThreadId, repairBaseTree, hardGuardArtifactDigests }: {
     bundle: string; expectRoot: string; commit: string; tree: string; runs: unknown[]; patch: string; codexThreadId?: string;
+    repairBaseTree?: string; hardGuardArtifactDigests?: string[];
   }) => {
     const { buildPreventionProofFromVerifiedArtifacts, digestRepairPatchFile } = await import("../../src/prevention-from-artifacts.js");
     try {
       const built = buildPreventionProofFromVerifiedArtifacts({
         bundleDirectory: bundle, expectRoot, repaired: { commit, tree, runs: runs as never },
-        repairPatchDigest: digestRepairPatchFile(patch), ...(codexThreadId === undefined ? {} : { codexThreadId })
+        repairPatchDigest: digestRepairPatchFile(patch), ...(codexThreadId === undefined ? {} : { codexThreadId }),
+        ...(repairBaseTree === undefined ? {} : { repairBaseTree }),
+        ...(hardGuardArtifactDigests === undefined ? {} : { hardGuardArtifactDigests })
       });
       return JSON.stringify(built.ok ? built.input : { reasons: built.reasons });
     } catch (error) {
@@ -805,6 +810,21 @@ export const handlers: Record<string, Handler> = {
     }) as typeof fetch;
     try { await proposeRepairBriefWithGpt(packet, { apiKey: "fl-test-key" }).catch(() => undefined); } finally { globalThis.fetch = realFetch; }
     return JSON.stringify((JSON.parse(body) as { text: unknown }).text);
+  },
+  // Slice 4c Task 5: the hard-guard helpers (no src/ caller).
+  // hardGuardDigestsFromStrings: JSON.stringify of the digests.
+  hardGuardDigestsFromStrings: async ({ values }: { values: string[] }) => {
+    const { hardGuardDigestsFromStrings } = await import("../../src/prevention-from-artifacts.js");
+    return JSON.stringify(hardGuardDigestsFromStrings(values));
+  },
+  // writeHardGuardDigestSidecar: the returned digest, or "THREW:<message>".
+  writeHardGuardDigestSidecar: async ({ directory, digests }: { directory: string; digests: string[] }) => {
+    const { writeHardGuardDigestSidecar } = await import("../../src/prevention-from-artifacts.js");
+    try {
+      return writeHardGuardDigestSidecar(directory, digests);
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
   },
 };
 

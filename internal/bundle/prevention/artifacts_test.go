@@ -142,3 +142,46 @@ func TestDigestRepairPatchFile(t *testing.T) {
 		t.Fatal(d, err)
 	}
 }
+
+// firstBadTree is transitions[0].after.tree of the bundle's investigation.json.
+func firstBadTree(t *testing.T, bundleDir string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(bundleDir, "investigation.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := jsjson.Parse(string(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v.Get("transitions").Items()[0].Get("after", "tree").Str()
+}
+
+func TestRepairBaseTreeMustBeFirstBadTree(t *testing.T) {
+	o := gitUnbound(t)
+	o.RepairBaseTree, o.HasRepairBaseTree = strings.Repeat("0", 40), true
+	_, reasons := BuildFromArtifacts(o)
+	if len(reasons) != 1 || reasons[0] != "repairBaseTree must equal the first-bad state's tree (repair base)." {
+		t.Fatalf("%v", reasons)
+	}
+	o.HardGuardArtifactDigests, o.HasHardGuardArtifactDigests = []string{}, true
+	o.RepairBaseTree = firstBadTree(t, o.Bundle)
+	input, reasons := BuildFromArtifacts(o)
+	if reasons != nil || input.Get("hardGuardArtifactDigests").Kind() != jsjson.Array {
+		t.Fatalf("%v", reasons)
+	}
+	keys := input.Obj().Keys()
+	if keys[len(keys)-2] != "hardGuardArtifactDigests" || keys[len(keys)-1] != "repairedRunBindings" {
+		t.Fatalf("order %v", keys)
+	}
+	if got := jsjson.Stringify(input.Get("hardGuardArtifactDigests")); got != "[]" {
+		t.Fatal(got)
+	}
+	o.HasThreadID, o.CodexThreadID = true, "thread-1"
+	o.HardGuardArtifactDigests = []string{"sha256:" + strings.Repeat("a", 64)}
+	input, _ = BuildFromArtifacts(o)
+	keys = input.Obj().Keys()
+	if keys[len(keys)-3] != "codexThreadId" || keys[len(keys)-2] != "hardGuardArtifactDigests" {
+		t.Fatalf("order %v", keys)
+	}
+}

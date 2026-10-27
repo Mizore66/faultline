@@ -17,14 +17,19 @@ import (
 // `fl prevention write --from-bundle` passes them
 // (src/prevention-from-artifacts.ts:163, src/cli-app.ts:2603): RepairedRuns
 // is the --repaired-runs document's `runs` array (any JSON values), and
-// CodexThreadID is set only when HasThreadID. The CLI passes no
-// repairBaseTree and no hardGuardArtifactDigests.
+// CodexThreadID is set only when HasThreadID. RepairBaseTree and
+// HardGuardArtifactDigests are set only when their Has… field is true (false
+// is TS `undefined`); the CLI passes neither.
 type ArtifactOptions struct {
 	Bundle, ExpectedRoot         string
 	RepairedRuns                 jsjson.Value
 	RepairedCommit, RepairedTree string
 	PatchDigest, CodexThreadID   string
 	HasThreadID                  bool
+	RepairBaseTree               string
+	HasRepairBaseTree            bool
+	HardGuardArtifactDigests     []string
+	HasHardGuardArtifactDigests  bool
 }
 
 // verifyGitBundle is verifyGitInvestigationProofBundle; tests memoize it
@@ -137,8 +142,8 @@ func isString(v jsjson.Value, s string) bool { return v.Kind() == jsjson.String 
 //     order its commit/tree, its trust and verdict, its witness and its
 //     environment.
 //  8. A repaired commit distinct from the last-good and first-bad commits.
-//  9. repairBaseTree equal to the first-bad tree (always, as the CLI passes
-//     none and it defaults to that tree).
+//  9. repairBaseTree (options.repairBaseTree ?? the first-bad tree) equal to
+//     the first-bad tree.
 func BuildFromArtifacts(o ArtifactOptions) (jsjson.Value, []string) {
 	bundleDirectory := nodefs.Resolve(o.Bundle)
 	verification := verifyGitBundle(bundleDirectory, o.ExpectedRoot, true)
@@ -213,11 +218,13 @@ func BuildFromArtifacts(o ArtifactOptions) (jsjson.Value, []string) {
 	if o.RepairedCommit == before.Get("commit").Str() || o.RepairedCommit == after.Get("commit").Str() {
 		return jsjson.Value{}, []string{"Repaired commit must be distinct from last-good and first-bad commits."}
 	}
-	// options.repairBaseTree ?? introduction.after.tree: the CLI passes no
-	// repairBaseTree, so the TS check that it equals the first-bad tree
-	// ("repairBaseTree must equal the first-bad state's tree (repair
-	// base).") always passes and is not ported.
-	repairBaseTree := after.Get("tree")
+	repairBaseTree := after.Get("tree") // options.repairBaseTree ?? introduction.after.tree
+	if o.HasRepairBaseTree {
+		repairBaseTree = jsjson.MakeString(o.RepairBaseTree)
+	}
+	if !isString(after.Get("tree"), repairBaseTree.Str()) {
+		return jsjson.Value{}, []string{"repairBaseTree must equal the first-bad state's tree (repair base)."}
+	}
 
 	repaired := jsjson.NewObj()
 	repaired.Set("commit", jsjson.MakeString(o.RepairedCommit))
@@ -256,6 +263,13 @@ func BuildFromArtifacts(o ArtifactOptions) (jsjson.Value, []string) {
 	input.Set("grounding", jsjson.MakeString("VERIFIED"))
 	if o.HasThreadID {
 		input.Set("codexThreadId", jsjson.MakeString(o.CodexThreadID))
+	}
+	if o.HasHardGuardArtifactDigests {
+		digests := make([]jsjson.Value, len(o.HardGuardArtifactDigests))
+		for i, d := range o.HardGuardArtifactDigests {
+			digests[i] = jsjson.MakeString(d)
+		}
+		input.Set("hardGuardArtifactDigests", jsjson.MakeArray(digests))
 	}
 	input.Set("repairedRunBindings", jsjson.MakeArray(bindings))
 	return jsjson.MakeObject(input), nil
