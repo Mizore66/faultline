@@ -20,6 +20,7 @@ import (
 	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
 // describeTree lists every entry under root with its mode, and each regular
@@ -469,6 +470,12 @@ func (ac artifactCase) oracleArgs() string {
 	if ac.o.HasThreadID {
 		args.Set("codexThreadId", jsjson.MakeString(ac.o.CodexThreadID))
 	}
+	if ac.o.HasRepairBaseTree {
+		args.Set("repairBaseTree", jsjson.MakeString(ac.o.RepairBaseTree))
+	}
+	if ac.o.HasHardGuardArtifactDigests {
+		args.Set("hardGuardArtifactDigests", stringArray(ac.o.HardGuardArtifactDigests))
+	}
 	return jsjson.Stringify(jsjson.MakeObject(args))
 }
 
@@ -562,7 +569,9 @@ func reparseValue(v jsjson.Value) jsjson.Value {
 // from the slice 2 base bundle git-unbound (and a few other bases, whose
 // first refusal differs) with generated repaired runs and flag variations
 // (the repaired commit and tree, the expected root, the patch, the Codex
-// thread id, a tampered bundle copy) with frozen TS's
+// thread id, a tampered bundle copy), plus 60 that pass repairBaseTree
+// (equal, different, empty) and hardGuardArtifactDigests (absent, empty,
+// three digests, an invalid one), which the CLI never passes, with frozen TS's
 // buildPreventionProofFromVerifiedArtifacts (after digestRepairPatchFile,
 // as the CLI calls them) and the Go port, and compares the input object or
 // the reasons (or THREW:). TS verifies the bundle on every call (about a
@@ -636,6 +645,49 @@ func TestLivePreventionFromArtifacts(t *testing.T) {
 			cases = append(cases, ac)
 		}
 	}
+	// The options the CLI never passes: repairBaseTree and the hard-guard
+	// digests, on git-unbound (whose first-bad tree is a1d82cc…).
+	firstBad := "a1d82cc5cc0c3976e651069980545f9fc85b0f25"
+	for extra, attempts := 0, 0; extra < 60 && attempts < 1500; attempts++ {
+		o := gitUnboundOptions(t, "git-unbound")
+		o.RepairedRuns = reparseValue(o.RepairedRuns)
+		label := "git-unbound"
+		if r.IntN(4) == 0 {
+			o.RepairedRuns = mutateRepairedRuns(r, o.RepairedRuns, &label)
+		}
+		if r.IntN(3) == 0 {
+			o.HasThreadID, o.CodexThreadID = true, []string{"thread-1", ""}[r.IntN(2)]
+		}
+		switch r.IntN(4) {
+		case 0:
+			o.HasRepairBaseTree, o.RepairBaseTree = true, firstBad
+			label += " base-equal"
+		case 1:
+			o.HasRepairBaseTree, o.RepairBaseTree = true, strings.Repeat("0", 40)
+			label += " base-different"
+		case 2:
+			o.HasRepairBaseTree, o.RepairBaseTree = true, ""
+			label += " base-empty"
+		}
+		switch r.IntN(4) {
+		case 0:
+			o.HasHardGuardArtifactDigests, o.HardGuardArtifactDigests = true, []string{}
+			label += " guards-empty"
+		case 1:
+			o.HasHardGuardArtifactDigests = true
+			o.HardGuardArtifactDigests = prevention.HardGuardDigestsFromStrings([]string{"a", "b", strconv.Itoa(r.IntN(4))})
+			label += " guards-three"
+		case 2:
+			o.HasHardGuardArtifactDigests, o.HardGuardArtifactDigests = true, []string{"not-a-digest"}
+			label += " guards-invalid"
+		}
+		ac := artifactCase{o: o, patch: patch, label: label}
+		if args := ac.oracleArgs(); !seen[args] {
+			seen[args] = true
+			cases = append(cases, ac)
+			extra++
+		}
+	}
 
 	// TS results, over several oracles.
 	const workers = 8
@@ -687,4 +739,105 @@ func TestLivePreventionFromArtifacts(t *testing.T) {
 	}
 	liveSummary(t, "--from-bundle builds: %v", outcomes)
 	requireReached(t, "internal/bundle/prevention/artifacts.go", recordedOutputs(t))
+}
+
+// hardGuardString is one generated hard-guard recommendation: empty, ASCII,
+// astral, a lone surrogate, or a mix.
+func hardGuardString(r *rand.Rand) string {
+	pick := []func() string{
+		func() string { return "" },
+		func() string { return []string{"no force push", "block rm -rf", "a", "b"}[r.IntN(4)] },
+		func() string { return "\U0001F600 guard" },
+		func() string { return jsstr.FromUTF16([]uint16{uint16(0xD800 + r.IntN(0x800))}) },
+		func() string { return jsstr.FromUTF16([]uint16{'x', 0xDC00, 'y', 0xD83D}) },
+		func() string { return "é́ " + strconv.Itoa(r.IntN(5)) },
+	}
+	return pick[r.IntN(len(pick))]()
+}
+
+// TestLiveHardGuardDigests runs 500 generated recommendation lists (empty
+// strings, duplicates, astral and lone-surrogate characters) through frozen
+// TS's hardGuardDigestsFromStrings and writeHardGuardDigestSidecar and the
+// Go ports. The sidecar is written into fresh directories, a read-only
+// directory, a missing one, and one whose sidecar path is a directory; the
+// returned digest (or THREW: text) and the directory trees, modes
+// included, are compared.
+func TestLiveHardGuardDigests(t *testing.T) {
+	oracle.Skip(t)
+	c := oracle.Start(t)
+	defer c.Close()
+	work, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rand.New(rand.NewPCG(4, 5))
+	outcomes := map[string]int{}
+	for i := 0; i < 500; i++ {
+		values := make([]string, r.IntN(7))
+		for j := range values {
+			if j > 0 && r.IntN(4) == 0 {
+				values[j] = values[r.IntN(j)]
+			} else {
+				values[j] = hardGuardString(r)
+			}
+		}
+		args := jsjson.Stringify(jsjson.MustObject("values", stringArray(values)))
+		digests := prevention.HardGuardDigestsFromStrings(values)
+		want := oracleText(t, c, "hardGuardDigestsFromStrings", args)
+		recordOutput(t, want)
+		if got := jsjson.Stringify(stringArray(digests)); got != want {
+			t.Fatalf("case %d: %s\ngot  %s\nwant %s", i, args, got, want)
+		}
+		// The sidecar: the digests, or raw strings (the helper takes any).
+		if r.IntN(4) == 0 {
+			digests = values
+		}
+		ts, gs := filepath.Join(work, "ts", strconv.Itoa(i)), filepath.Join(work, "go", strconv.Itoa(i))
+		label := "fresh"
+		dir := func(root string) string { return filepath.Join(root, "d") }
+		setup := func(root string) { os.MkdirAll(dir(root), 0o755) }
+		switch r.IntN(10) {
+		case 0:
+			label = "read-only"
+			setup = func(root string) {
+				os.MkdirAll(dir(root), 0o755)
+				os.Chmod(dir(root), 0o555)
+			}
+		case 1:
+			label = "sidecar-is-directory"
+			setup = func(root string) { os.MkdirAll(filepath.Join(dir(root), "hard-guard-digests.json"), 0o755) }
+		case 2:
+			label = "missing"
+			setup = func(root string) { os.MkdirAll(root, 0o755) }
+		case 3:
+			label = "existing"
+			setup = func(root string) {
+				os.MkdirAll(dir(root), 0o755)
+				os.WriteFile(filepath.Join(dir(root), "hard-guard-digests.json"), []byte("old contents, longer than some\n"), 0o600)
+			}
+		}
+		setup(ts)
+		setup(gs)
+		sidecarArgs := jsjson.Stringify(jsjson.MustObject("directory", jsjson.MakeString(dir(ts)), "digests", stringArray(digests)))
+		want = strings.ReplaceAll(oracleText(t, c, "writeHardGuardDigestSidecar", sidecarArgs), ts, gs)
+		got, err := prevention.WriteHardGuardDigestSidecar(dir(gs), digests)
+		if err != nil {
+			got = "THREW:" + jsexc.Message(err)
+			outcomes["threw"]++
+		} else {
+			outcomes["written"]++
+		}
+		recordOutput(t, want)
+		if got != want {
+			t.Fatalf("case %d (%s): %s\ngot  %s\nwant %s", i, label, sidecarArgs, got, want)
+		}
+		a, b := describeTree(gs), describeTree(ts)
+		unlockTree(ts)
+		unlockTree(gs)
+		if a != b {
+			t.Fatalf("case %d (%s): trees differ:\ngo\n%s\nts\n%s", i, label, a, b)
+		}
+	}
+	liveSummary(t, "hard-guard sidecars: %v", outcomes)
+	requireReached(t, "internal/bundle/prevention/hardguard.go", recordedOutputs(t))
 }
