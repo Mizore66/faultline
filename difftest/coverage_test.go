@@ -267,6 +267,10 @@ var unreachableLiterals = map[string]string{
 	"git hash-object --stdin did not return a blob id for":                             "git hash-object -w --stdin prints a full object id or fails",
 	"Git did not return a valid tree object id for this turn tree snapshot.":           "git write-tree prints a full object id or fails",
 	"Git did not return a resolvable HEAD commit for this turn tree snapshot.":         "git rev-parse HEAD prints a full object id or fails (an unborn HEAD fails)",
+
+	// internal/bundle/prevention/repaired.go and repaired_runs.go (Task 13).
+	"Repaired worktree path is not a regular file:":     "race only: the walk keeps only entries readdirSync calls files, lstat'ed just after",
+	"Collected repaired run digests were not distinct.": "each run id digests its attempt number, so the three always differ (src/prevention-from-artifacts.ts:535)",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
@@ -1130,6 +1134,10 @@ var liveGatedFiles = map[string]string{
 	"internal/bundle/prevention/artifacts.go": "TestLivePreventionFromArtifacts",
 	// Slice 4c: the hard-guard helpers have no src/ caller.
 	"internal/bundle/prevention/hardguard.go": "TestLiveHardGuardDigests",
+	// Slice 4c Task 13: the repaired-state commit and run collection, on
+	// generated worktrees and scripted verifiers.
+	"internal/bundle/prevention/repaired.go":      "TestLiveCommitRepairedWorktreeState",
+	"internal/bundle/prevention/repaired_runs.go": "TestLiveCollectRepairedRuns",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally
