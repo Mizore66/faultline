@@ -1144,6 +1144,8 @@ var liveGatedFiles = map[string]string{
 	// Slice 4b Task 5: the turn hash catalog and the portable tree pack.
 	"internal/bundle/turnproof/catalog.go": "TestLiveTurnHashCatalog",
 	"internal/bundle/turnproof/pack.go":    "TestLiveTurnTreesPack",
+	// Slice 4b Task 3: turn states, reconstruction, transitions and attribution.
+	"internal/turninv/states.go": "TestLiveTurnStates",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally

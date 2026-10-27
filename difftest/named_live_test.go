@@ -19,6 +19,7 @@ import (
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/schema"
+	"github.com/Mizore66/faultline/internal/turninv"
 )
 
 // namedSchemas maps oracle names to Go schemas; later tasks add entries.
@@ -37,6 +38,11 @@ var namedSchemas = map[string]schema.Schema{
 	"GitProofSourceMetadataSchema":         gitproof.GitProofSourceMetadataSchema,
 	"GitProofBundleManifestSchema":         gitproof.GitProofBundleManifestSchema,
 	"CodexLifecycleLedgerSchema":           gitproof.CodexLifecycleLedgerSchema,
+	// Slice 4b Task 3.
+	"TurnInvestigationResultSchema":  turninv.ResultSchema,
+	"TurnInvestigationRunFactSchema": turninv.RunFactSchema,
+	"StableTurnTransitionSchema":     turninv.StableTransitionSchema,
+	"TurnStateSchema":                turninv.TurnStateSchema,
 }
 
 // namedSeeds lists base files (relative to difftest/testdata/bases) that satisfy each schema.
@@ -55,6 +61,12 @@ var namedSeeds = map[string][]string{
 	"EnvironmentFingerprintSchema":         {"git-unbound/investigation.json#environment.fingerprints.0.fingerprint"},
 	"MaterializedOverlaySchema":            {"git-unbound/investigation.json#runs.0.overlays.0"},
 	"CodexLifecycleLedgerSchema":           {"git-partially-bound/lifecycle/ledger.json", "git-fully-bound/lifecycle/ledger.json"},
+	// Slice 4b Task 3: inline JSON texts (turninv_live_test.go) until Task 2's
+	// turn-two-states and turn-non-monotonic bases replace them.
+	"TurnInvestigationResultSchema":  {turnTwoStatesText, turnNonMonotonicText},
+	"TurnInvestigationRunFactSchema": turnRunSeeds,
+	"StableTurnTransitionSchema":     {turnTransitionSeed},
+	"TurnStateSchema":                {turnStateSeed},
 }
 
 // firstRunArtifact returns base + "/runs/" + the first file name in that directory.
@@ -66,9 +78,13 @@ func firstRunArtifact(base string) string {
 	return base + "/runs/" + entries[0].Name()
 }
 
-// seedText reads a seed; "file#a.0.b" selects a sub-document by dotted path
+// seedText reads a seed (or returns an inline JSON text, one starting with
+// "{"); "file#a.0.b" selects a sub-document by dotted path
 // (numeric segments index arrays).
 func seedText(t *testing.T, bases, seed string) string {
+	if strings.HasPrefix(seed, "{") { // an inline JSON text
+		return seed
+	}
 	file, path, sub := strings.Cut(seed, "#")
 	raw, err := os.ReadFile(filepath.Join(bases, filepath.FromSlash(file)))
 	if err != nil {

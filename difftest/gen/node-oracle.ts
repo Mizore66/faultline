@@ -55,6 +55,7 @@ import type { TurnSnapshotGitRunner } from "../../src/turn-snapshot.js";
 import { existsSync as tsExists } from "node:fs";
 import { IncidentIntakeError, createNodeIncidentIntakeRunner, suggestIncidentRanges } from "../../src/incident-intake.js";
 import { turnproofOps } from "./oracle-turnproof.js";
+import { ops as turninvOps, StableTurnTransitionSchema, TurnInvestigationResultSchema, TurnInvestigationRunFactSchema, TurnStateSchema } from "./oracle-turninv.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -71,6 +72,11 @@ export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   GitProofSourceMetadataSchema,
   GitProofBundleManifestSchema,
   CodexLifecycleLedgerSchema,
+  // Slice 4b Task 3: the turn investigation schemas.
+  TurnInvestigationResultSchema,
+  TurnInvestigationRunFactSchema,
+  StableTurnTransitionSchema,
+  TurnStateSchema,
 };
 
 type Handler = (args: any) => unknown; // may return a Promise
@@ -785,6 +791,7 @@ export const handlers: Record<string, Handler> = {
   ...snapgcOps,
   ...sidecarOps,
   ...turnproofOps,
+  ...turninvOps,
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
