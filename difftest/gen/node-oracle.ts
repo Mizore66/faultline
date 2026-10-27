@@ -897,6 +897,25 @@ export const handlers: Record<string, Handler> = {
       return { stdout: null, error: (error as Error).message };
     }
   },
+  // resolveCodexRunner from the compiled dist/runners/codex-runner.js (pnpm
+  // build), run in a child node with the given cwd, PATH and
+  // FAULTLINE_CODEX_BIN (null: unset): the resolution, or the error message.
+  resolveCodexRunner: async ({ cwd, path, bin }: { cwd: string; path: string | null; bin: string | null }) => {
+    const { spawnSync } = await import("node:child_process");
+    const { pathToFileURL } = await import("node:url");
+    const env: Record<string, string | undefined> = { ...process.env, PATH: path ?? undefined, FAULTLINE_CODEX_BIN: bin ?? undefined };
+    for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
+    const script = [
+      "const { resolveCodexRunner } = await import(process.argv[1]);",
+      "let out;",
+      "try { out = { resolution: resolveCodexRunner() }; } catch (error) { out = { error: error.message }; }",
+      "process.stdout.write(JSON.stringify(out));"
+    ].join("\n");
+    const module = pathToFileURL(nodePath.join(process.cwd(), "dist", "runners", "codex-runner.js")).href;
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script, module], { cwd, env: env as NodeJS.ProcessEnv, encoding: "utf8" });
+    if (child.status !== 0) throw new Error(`resolveCodexRunner child failed: ${child.status} ${child.stderr}`);
+    return JSON.parse(child.stdout) as unknown;
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
