@@ -7,10 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
+	"github.com/Mizore66/faultline/internal/codexloop"
+	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
 // codexResolveCase is one environment for TestLiveResolveCodexRunner: the
@@ -117,7 +121,7 @@ func TestLiveResolveCodexRunner(t *testing.T) {
 	str := func(s string) *string { return &s }
 	type tcase struct {
 		name string
-		cwd  string
+		cwd  string // "" is root; cwd holds codex, sub/ and rel/
 		path *string
 		bin  *string
 	}
@@ -137,15 +141,15 @@ func TestLiveResolveCodexRunner(t *testing.T) {
 		{name: "override directory", path: str(sysPath), bin: str(dirBin)},
 		{name: "override symlink", path: str(sysPath), bin: str(link)},
 		{name: "override dangling symlink", path: str(sysPath), bin: str(dangling)},
-		{name: "override relative bare, on PATH", path: str(join(okDir, sysPath)), bin: str("codex")},
-		{name: "override relative bare, only in cwd", path: str(sysPath), bin: str("codex")},
-		{name: "override relative bare, empty PATH entry", path: str(join("", sysPath)), bin: str("codex")},
-		{name: "override relative missing", path: str(sysPath), bin: str("faultline-no-such-codex")},
-		{name: "override relative dot slash", path: str(sysPath), bin: str("./sub/codex")},
-		{name: "override relative with slash", path: str(sysPath), bin: str("sub/codex")},
-		{name: "override relative failing", path: str(sysPath), bin: str("sub/version-fail")},
-		{name: "override relative missing with slash", path: str(sysPath), bin: str("sub/nope")},
-		{name: "override relative padded", path: str(join(okDir, sysPath)), bin: str(" codex ")},
+		{name: "override relative bare, on PATH", cwd: cwd, path: str(join(okDir, sysPath)), bin: str("codex")},
+		{name: "override relative bare, only in cwd", cwd: cwd, path: str(sysPath), bin: str("codex")},
+		{name: "override relative bare, empty PATH entry", cwd: cwd, path: str(join("", sysPath)), bin: str("codex")},
+		{name: "override relative missing", cwd: cwd, path: str(sysPath), bin: str("faultline-no-such-codex")},
+		{name: "override relative dot slash", cwd: cwd, path: str(sysPath), bin: str("./sub/codex")},
+		{name: "override relative with slash", cwd: cwd, path: str(sysPath), bin: str("sub/codex")},
+		{name: "override relative failing", cwd: cwd, path: str(sysPath), bin: str("sub/version-fail")},
+		{name: "override relative missing with slash", cwd: cwd, path: str(sysPath), bin: str("sub/nope")},
+		{name: "override relative padded", cwd: cwd, path: str(join(okDir, sysPath)), bin: str(" codex ")},
 		{name: "override with PATH unset", bin: str(ok)},
 		// Probe results.
 		{name: "probe fails with stderr and stdout", path: str(sysPath), bin: str(failBoth)},
@@ -177,13 +181,13 @@ func TestLiveResolveCodexRunner(t *testing.T) {
 		{name: "PATH CRLF codex", path: str(pd("crlf"))},
 		{name: "PATH unicode directory", path: str(join(pd("é dir"), okDir))},
 		{name: "PATH backslash entry", path: str(join(pd(`back\`), okDir))},
-		{name: "PATH relative entry", path: str(join("rel", okDir))},
-		{name: "PATH dot entry", path: str(join(".", okDir))},
+		{name: "PATH relative entry", cwd: cwd, path: str(join("rel", okDir))},
+		{name: "PATH dot entry", cwd: cwd, path: str(join(".", okDir))},
 		{name: "PATH no codex: bare fallback", path: str(join(emptyDir, sysPath))},
-		{name: "PATH no codex, codex in cwd", path: str(join(emptyDir, sysPath))},
-		{name: "PATH no codex, empty entry finds cwd", path: str(join(emptyDir, "", sysPath))},
+		{name: "PATH no codex, codex in cwd", cwd: cwd, path: str(join(emptyDir, sysPath))},
+		{name: "PATH no codex, empty entry finds cwd", cwd: cwd, path: str(join(emptyDir, "", sysPath))},
 		{name: "PATH empty string", path: str("")},
-		{name: "PATH empty string, codex in cwd", path: str("")},
+		{name: "PATH empty string, codex in cwd", cwd: cwd, path: str("")},
 		{name: "PATH unset"},
 	}
 	if len(cases) != 60 {
@@ -191,9 +195,9 @@ func TestLiveResolveCodexRunner(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := codexResolveCase{Cwd: root, Path: tc.path, Bin: tc.bin}
-			if strings.Contains(tc.name, "cwd") || strings.Contains(tc.name, "relative") || strings.Contains(tc.name, "dot entry") {
-				c.Cwd = cwd
+			c := codexResolveCase{Cwd: tc.cwd, Path: tc.path, Bin: tc.bin}
+			if c.Cwd == "" {
+				c.Cwd = root
 			}
 			req, _ := json.Marshal(c)
 			want, err := o.Call("resolveCodexRunner", string(req))
@@ -219,6 +223,88 @@ func TestLiveResolveCodexRunner(t *testing.T) {
 			}
 			if string(got) != want {
 				t.Errorf("node %s\ngo   %s", want, got)
+			}
+		})
+	}
+}
+
+// TestLiveImplementCodexRunner runs implementWitnessWithCodex with the
+// runner witness implement --with-codex builds (frozen TS) and
+// codexloop.Implement with codexloop.CLIRunner, against a fake codex, and
+// compares the results with the overlay directory masked. The cases pin the
+// refusal without --allow-codex-full-auto, the exit-code notes, and the
+// ERR_INVALID_ARG_VALUE text for a NUL in the real multi-line prompt (from
+// the symptom or the behavior), which util.inspect splits per line and cuts
+// at 128 units.
+func TestLiveImplementCodexRunner(t *testing.T) {
+	o := oracle.Start(t)
+	defer o.Close()
+	dir := t.TempDir()
+	fake := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex-cli 0.0.1; exit 0; fi\n"+body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	ok := fake("codex-ok", "cat >/dev/null; exit 0\n")
+	exit3 := fake("codex-exit3", "cat >/dev/null; echo nope >&2; exit 3\n")
+	killed := fake("codex-killed", "kill -KILL $$\n")
+	type tcase struct {
+		name, bin, symptom, behavior string
+		allow                        bool
+	}
+	cases := []tcase{
+		{name: "refused without allow", bin: ok, symptom: "CI fails", behavior: "b", allow: false},
+		{name: "drafted", bin: ok, symptom: "CI fails", behavior: "b", allow: true},
+		{name: "exit 3", bin: exit3, symptom: "CI fails", behavior: "b", allow: true},
+		{name: "killed", bin: killed, symptom: "CI fails", behavior: "b", allow: true},
+		{name: "missing bin", bin: filepath.Join(dir, "nope"), symptom: "CI fails", behavior: "b", allow: true},
+		{name: "NUL in symptom", bin: ok, symptom: "x\x00y", behavior: "The human-reviewed predicate must hold.", allow: true},
+		{name: "NUL in behavior", bin: ok, symptom: "CI fails", behavior: "a\x00b", allow: true},
+		{name: "NUL, quotes and unicode", bin: ok, symptom: "it's \"bad\" é\x00 ", behavior: "b`${x}`", allow: true},
+		{name: "NUL refused without allow", bin: ok, symptom: "x\x00y", behavior: "b", allow: false},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			incident := jsjson.MustObject(
+				"symptom", jsjson.MakeString(tc.symptom),
+				"ciLog", jsjson.MakeString("log"),
+				"repositoryLanguage", jsjson.MakeString("go"),
+				"repositorySummary", jsjson.MakeString("summary"),
+			)
+			nodeOut := filepath.Join(dir, "node-"+strconv.Itoa(i))
+			goOut := filepath.Join(dir, "go-"+strconv.Itoa(i))
+			req := jsjson.MustObject(
+				"bin", jsjson.MakeString(tc.bin),
+				"allow", jsjson.MakeBool(tc.allow),
+				"proposalId", jsjson.MakeString("p1"),
+				"incident", incident,
+				"behavior", jsjson.MakeString(tc.behavior),
+				"overlayOut", jsjson.MakeString(nodeOut),
+				"repository", jsjson.MakeString(dir),
+			)
+			res, err := o.Call("implementWitnessCodexCli", jsjson.Stringify(req))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want string
+			if err := json.Unmarshal([]byte(res), &want); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("FAULTLINE_CODEX_BIN", tc.bin)
+			refusal := "Codex drafting requires explicit --allow-codex-full-auto in addition to --with-codex."
+			got, err := codexloop.Implement(codexloop.ImplementOptions{
+				ProposalID: "p1", Incident: incident, Behavior: tc.behavior, OverlayOut: goOut, Repository: dir,
+				Runner: codexloop.CLIRunner(tc.allow, refusal, 120*time.Second),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want = strings.ReplaceAll(want, nodeOut, "<OUT>")
+			gotText := strings.ReplaceAll(jsjson.Stringify(got), goOut, "<OUT>")
+			if gotText != want {
+				t.Errorf("node %s\ngo   %s", want, gotText)
 			}
 		})
 	}

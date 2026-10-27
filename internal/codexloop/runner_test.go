@@ -65,7 +65,7 @@ printf '%s|' "$@"; pwd -P; cat; printf 'err\377' >&2; exit 7
 		t.Fatal(err)
 	}
 	if r.ExitCode == nil || *r.ExitCode != 7 || r.Stdout != "exec|--full-auto|p é|"+cwd+"\np é\n" || r.Stderr != "err�" || r.ThreadID != nil {
-		t.Fatalf("%+v %v", r, *r.ExitCode)
+		t.Fatalf("%+v", r) // ExitCode prints as a pointer; the other fields say enough
 	}
 }
 

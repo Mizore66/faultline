@@ -916,6 +916,40 @@ export const handlers: Record<string, Handler> = {
     if (child.status !== 0) throw new Error(`resolveCodexRunner child failed: ${child.status} ${child.stderr}`);
     return JSON.parse(child.stdout) as unknown;
   },
+  // implementWitnessWithCodex with the runner object cli-app.ts:1181-1196
+  // builds for witness implement --with-codex (allow: whether
+  // --allow-codex-full-auto is given), with FAULTLINE_CODEX_BIN set to bin
+  // for the call: the result, JSON.stringify'd.
+  implementWitnessCodexCli: async ({ bin, allow, proposalId, incident, behavior, overlayOut, repository }: {
+    bin: string; allow: boolean; proposalId: string; incident: unknown; behavior: string; overlayOut: string; repository: string;
+  }) => {
+    const { implementWitnessWithCodex } = await import("../../src/codex-loop.js");
+    const saved = process.env.FAULTLINE_CODEX_BIN;
+    process.env.FAULTLINE_CODEX_BIN = bin;
+    try {
+      const result = await implementWitnessWithCodex({
+        proposalId, incident, behavior, overlayOut, repository,
+        runner: {
+          async run(codexArgs: readonly string[], options: { cwd: string; input?: string }) {
+            if (!allow) {
+              throw new Error("Codex drafting requires explicit --allow-codex-full-auto in addition to --with-codex.");
+            }
+            const { spawnCodex } = await import("../../src/runners/codex-runner.js");
+            const executed = spawnCodex([...codexArgs], { cwd: options.cwd, input: options.input, timeout: 120_000 });
+            return {
+              exitCode: executed.status,
+              stdout: typeof executed.stdout === "string" ? executed.stdout : "",
+              stderr: typeof executed.stderr === "string" ? executed.stderr : ""
+            };
+          }
+        }
+      });
+      return JSON.stringify(result);
+    } finally {
+      if (saved === undefined) delete process.env.FAULTLINE_CODEX_BIN;
+      else process.env.FAULTLINE_CODEX_BIN = saved;
+    }
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
