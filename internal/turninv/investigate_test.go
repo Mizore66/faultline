@@ -14,20 +14,17 @@ import (
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/canonical"
-	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/gitinv"
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/ledger"
 	"github.com/Mizore66/faultline/internal/sandbox"
 	"github.com/Mizore66/faultline/internal/turnsnap"
 	"github.com/Mizore66/faultline/internal/witnessresult"
 )
 
-// testLedger is the one place these tests build lifecycle ledgers: a
-// stand-in for 4a Task 4's ledger.Create / ledger.Append /
-// ledger.WriteAtomic (src/ledger.ts createCodexLifecycleLedger,
-// appendLifecycleEvent, writeCodexLifecycleLedgerAtomic) until that package
-// is on this branch; swap these three methods for it then. Each append
-// signs the event into the hash chain and the whole ledger must verify.
+// testLedger builds the tests' lifecycle ledgers with the ledger package
+// (src/ledger.ts createCodexLifecycleLedger, appendLifecycleEvent and
+// writeCodexLifecycleLedgerAtomic), as the TS test does.
 type testLedger struct {
 	t      *testing.T
 	ledger jsjson.Value
@@ -35,60 +32,25 @@ type testLedger struct {
 
 func newTestLedger(t *testing.T, sessionID string) *testLedger {
 	t.Helper()
-	ledger := jsjson.MustObject(
-		"schemaVersion", jsjson.MakeString(gitproof.CodexLifecycleLedgerVersion),
-		"ledgerId", jsjson.MakeString("ledger-"+sessionID),
-		"sessionId", jsjson.MakeString(sessionID),
-		"createdAt", jsjson.MakeString(clock.ISO(clock.Now())),
-		"events", jsjson.MakeArray(nil),
-	)
-	return &testLedger{t, ledger}
+	l, err := ledger.Create(ledger.CreateOptions{SessionID: sessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testLedger{t, l}
 }
 
 func (l *testLedger) append(eventType string, payload jsjson.Value) {
 	l.t.Helper()
-	events := l.ledger.Get("events").Items()
-	previous := ""
-	if len(events) > 0 {
-		previous = events[len(events)-1].Get("hash").Str()
-	} else {
-		genesis := jsjson.NewObj()
-		genesis.Set("kind", jsjson.MakeString("FAULTLINE_CODEX_LIFECYCLE_GENESIS"))
-		for _, k := range []string{"schemaVersion", "ledgerId", "sessionId", "createdAt"} {
-			genesis.Set(k, l.ledger.Get(k))
-		}
-		previous = bundle.Must(canonical.DigestJSON(jsjson.MakeObject(genesis)))
-	}
-	event := jsjson.NewObj()
-	for _, kv := range []struct {
-		k string
-		v jsjson.Value
-	}{
-		{"schemaVersion", l.ledger.Get("schemaVersion")},
-		{"ledgerId", l.ledger.Get("ledgerId")},
-		{"sessionId", l.ledger.Get("sessionId")},
-		{"sequence", jsjson.MakeNumber(float64(len(events) + 1))},
-		{"eventId", jsjson.MakeString("event-" + strconv.Itoa(len(events)+1))},
-		{"occurredAt", jsjson.MakeString(clock.ISO(clock.Now()))},
-		{"event", jsjson.MustObject("type", jsjson.MakeString(eventType), "payload", payload)},
-		{"previousHash", jsjson.MakeString(previous)},
-	} {
-		event.Set(kv.k, kv.v)
-	}
-	unsigned, err := bundle.ParseValue(jsjson.MakeObject(event), gitproof.UnsignedCodexLifecycleEventSchema)
+	next, err := ledger.Append(l.ledger, jsjson.MustObject("type", jsjson.MakeString(eventType), "payload", payload), ledger.AppendOptions{})
 	if err != nil {
 		l.t.Fatal(err)
 	}
-	event.Set("hash", jsjson.MakeString(bundle.Must(canonical.DigestJSON(unsigned))))
-	l.ledger.Obj().Set("events", jsjson.MakeArray(append(events, jsjson.MakeObject(event))))
-	if v := gitproof.VerifyCodexLifecycleLedger(l.ledger); !v.Valid {
-		l.t.Fatalf("test ledger does not verify: %v", v.Errors)
-	}
+	l.ledger = next
 }
 
 func (l *testLedger) write(path string) {
 	l.t.Helper()
-	if err := os.WriteFile(path, []byte(jsjson.StringifyIndent(l.ledger, "  ")+"\n"), 0o644); err != nil {
+	if _, err := ledger.WriteAtomic(path, l.ledger); err != nil {
 		l.t.Fatal(err)
 	}
 }
