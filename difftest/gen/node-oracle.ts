@@ -54,6 +54,7 @@ import { captureTurnTreeSnapshot, defaultTurnSnapshotGitRunner, planTurnSnapshot
 import type { TurnSnapshotGitRunner } from "../../src/turn-snapshot.js";
 import { existsSync as tsExists } from "node:fs";
 import { IncidentIntakeError, createNodeIncidentIntakeRunner, suggestIncidentRanges } from "../../src/incident-intake.js";
+import { turnproofOps } from "./oracle-turnproof.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -783,6 +784,7 @@ export const handlers: Record<string, Handler> = {
   ...ledgerOps,
   ...snapgcOps,
   ...sidecarOps,
+  ...turnproofOps,
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
