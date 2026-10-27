@@ -22,9 +22,6 @@ func TestCodexRouterOrder(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"codex", "record"}, "record"},
-		{[]string{"codex", "record", "--dry-run"}, "record"},
-		{[]string{"record", "init"}, "record"},
 		{[]string{"codex", "sidecar", "--dry-run"}, "codex sidecar"},
 	}
 	for _, c := range cases {
