@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { canonicalJson, digestJson, sha256 } from "../../src/canonical.js";
 import { PATH_OPS, applyMutation, expandRepeats, normalizeWriter, treeDigest, type Template } from "./cases.js";
-import { copyScenario, makeCaseRoots, refreshScenarioIndexes, resetModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
+import { copyScenario, makeCaseRoots, refreshScenarioIndexes, resetModes, restoreScenarioModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
 
 // input / inputHex: each invocation's stdin (text, where <WS>, <TMP>, <HOME>
 // and <REPEAT:c:n> are expanded; or hex bytes), null or a missing entry an
@@ -791,6 +791,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     const setup = mutations.filter((m) => m.inv === undefined);
     for (const m of setup) if (m.op !== "chmod") apply(m);
     resetModes(roots.ws);
+    restoreScenarioModes(t.scenario, roots.ws);
     refreshScenarioIndexes(t.scenario, roots.ws);
     // A read-only directory refuses writes only to a non-root user: a golden
     // generated as root would drift.

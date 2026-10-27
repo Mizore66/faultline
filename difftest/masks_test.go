@@ -123,3 +123,50 @@ func TestCreatedObjectNamesArePinned(t *testing.T) {
 		t.Error("without created objects, a loose object keeps its byte digest")
 	}
 }
+
+// TestTurnSidecarScenariosKeepRecordingModes checks the workspaces a writer
+// case really starts from (prepareWriterCase and scenarioWorkspace, i.e.
+// after copyScenario and resetModes), not the builder's temporary
+// directories: the recordings directories are 0700 as the sidecar makes
+// them, and every other directory is still 0755.
+func TestTurnSidecarScenariosKeepRecordingModes(t *testing.T) {
+	setWriterUmask(t)
+	repo := repoRoot(t)
+	check := func(label, name, ws string) {
+		t.Helper()
+		private := map[string]bool{"repo/.git/faultline": true, "repo/.git/faultline/recordings": true}
+		seen := 0
+		err := filepath.WalkDir(ws, func(path string, d os.DirEntry, err error) error {
+			if err != nil || !d.IsDir() || path == ws {
+				return err
+			}
+			rel, _ := filepath.Rel(ws, path)
+			rel = filepath.ToSlash(rel)
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			want := os.FileMode(0o755)
+			if private[rel] && name != "turn-two-states" {
+				want = 0o700
+				seen++
+			}
+			if got := info.Mode().Perm(); got != want {
+				t.Errorf("%s %s: %s is %04o, want %04o", label, name, rel, got, want)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wantSeen := map[bool]int{true: 2, false: 0}[name != "turn-two-states"]; seen != wantSeen {
+			t.Errorf("%s %s: %d private directories, want %d", label, name, seen, wantSeen)
+		}
+	}
+	for _, name := range []string{"turn-sidecar", "turn-latest-ambiguous", "turn-two-states"} {
+		r := makeWriterRoots(t)
+		prepareWriterCase(t, repo, writerTemplate{ID: "modes", Scenario: name}, r)
+		check("prepareWriterCase", name, r.ws)
+		check("scenarioWorkspace", name, scenarioWorkspace(t, name))
+	}
+}

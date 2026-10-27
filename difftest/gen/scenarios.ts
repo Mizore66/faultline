@@ -922,6 +922,21 @@ export function resetModes(root: string, rel = ""): void {
   }
 }
 
+// SCENARIO_DIR_MODES lists the directories a scenario's builder makes with a
+// mode other than 0755 (git records no directory modes, and copyScenario and
+// resetModes make every directory 0755). restoreScenarioModes sets them once
+// resetModes has run, so a case starts from the modes the builder made. The
+// Go twin is scenarioDirModes in difftest/scenarios_test.go.
+const RECORDINGS_DIRS = ["repo/.git/faultline", "repo/.git/faultline/recordings"];
+export const SCENARIO_DIR_MODES: Record<string, { dirs: string[]; mode: number }> = {
+  "turn-sidecar": { dirs: RECORDINGS_DIRS, mode: 0o700 },
+  "turn-latest-ambiguous": { dirs: RECORDINGS_DIRS, mode: 0o700 }
+};
+export function restoreScenarioModes(name: string, ws: string): void {
+  const entry = SCENARIO_DIR_MODES[name];
+  if (entry) for (const rel of entry.dirs) chmodSync(join(ws, rel), entry.mode);
+}
+
 // listDirs returns every directory under root, sorted; it refuses anything
 // but directories and regular files.
 function listDirs(root: string, rel = ""): string[] {
@@ -1262,8 +1277,8 @@ Object.assign(SCENARIOS, {
 //                          instead of ledger.json, for --latest
 //   turn-latest-ambiguous  two valid recordings (s-1, s-2) whose last
 //                          events share one occurredAt
-// The recordings directories are made 0700, as the sidecar makes them (a
-// case's resetModes sets them to 0755 again).
+// The recordings directories are made 0700, as the sidecar makes them
+// (SCENARIO_DIR_MODES; a case restores them after resetModes).
 type TurnSnapshotPlan = { ordinal: number; tree: number; treeDigest?: string };
 function turnLedger(built: BuiltRepo, plan: TurnSnapshotPlan[], sessionId = "s-1"): CodexLifecycleLedger {
   let ledger = createCodexLifecycleLedger({ ledgerId: `ledger-${sessionId}`, sessionId, createdAt: RECORD_AT(0) });
@@ -1301,7 +1316,8 @@ const turnLedgerFile = (plan: (repo: BuiltRepo) => TurnSnapshotPlan[]) => (repo:
 // (codex-sidecar.ts codexSidecarLedgerPath), making the directories 0700.
 function writeRecording(ws: string, ledger: CodexLifecycleLedger): void {
   const gitDir = join(ws, "repo", ".git");
-  for (const dir of [join(gitDir, "faultline"), join(gitDir, "faultline", "recordings")]) {
+  for (const rel of RECORDINGS_DIRS) {
+    const dir = join(ws, rel);
     if (!existsSync(dir)) mkdirSync(dir, { mode: 0o700 });
     chmodSync(dir, 0o700);
   }

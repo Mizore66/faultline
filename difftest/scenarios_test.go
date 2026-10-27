@@ -212,6 +212,30 @@ func checkScenarioDirs(t *testing.T, repo string) {
 	}
 }
 
+// scenarioDirModes lists the directories a scenario's builder makes with a
+// mode other than 0755 (scenarios.ts SCENARIO_DIR_MODES): git records no
+// directory modes, and copyScenario and resetModes make every directory
+// 0755. restoreScenarioModes sets them once resetModes has run.
+var scenarioDirModes = map[string]struct {
+	dirs []string
+	mode os.FileMode
+}{
+	"turn-sidecar":          {[]string{"repo/.git/faultline", "repo/.git/faultline/recordings"}, 0o700},
+	"turn-latest-ambiguous": {[]string{"repo/.git/faultline", "repo/.git/faultline/recordings"}, 0o700},
+}
+
+// restoreScenarioModes is scenarios.ts restoreScenarioModes.
+func restoreScenarioModes(t testing.TB, name, ws string) {
+	t.Helper()
+	if e, ok := scenarioDirModes[name]; ok {
+		for _, rel := range e.dirs {
+			if err := os.Chmod(filepath.Join(ws, filepath.FromSlash(rel)), e.mode); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
 // resetModes sets directories to 0755 and files to 0644 under root, once a
 // case's scenario and mutations are in place (scenarios.ts resetModes), so
 // the workspace fl starts from never depends on the checkout or on how the

@@ -1306,6 +1306,7 @@ func prepareWriterCase(t testing.TB, repo string, tpl writerTemplate, r writerRo
 	}
 	applyWriterMutations(t, tpl, r, setup(false))
 	resetModes(t, r.ws)
+	restoreScenarioModes(t, tpl.Scenario, r.ws)
 	refreshScenarioIndexes(t, repo, tpl.Scenario, r.ws)
 	// A read-only directory refuses writes only to a non-root user.
 	if os.Geteuid() == 0 && slices.ContainsFunc(tpl.Mutations, func(m template) bool { return m.str("op") == "chmod" }) {
@@ -1612,6 +1613,7 @@ func scenarioWorkspace(t *testing.T, name string) string {
 	r := makeWriterRoots(t)
 	copyScenario(t, repoRoot(t), name, r.ws)
 	resetModes(t, r.ws)
+	restoreScenarioModes(t, name, r.ws)
 	refreshScenarioIndexes(t, repoRoot(t), name, r.ws)
 	return r.ws
 }
