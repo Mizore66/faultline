@@ -705,6 +705,8 @@ const INCIDENT_GOOD_BAD = [incidentState("good"), incidentState("bad")];
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
 type Scenario = {
   bases?: Record<string, string>; files: Record<string, string>; setup?: (ws: string) => void; argv: string[][]; after?: (ws: string) => void;
+  // env is added to the environment of the scenario's own argv (read after setup).
+  env?: (ws: string) => Record<string, string>;
 };
 export const SCENARIOS: Record<string, Scenario> = {
   "empty": { files: {}, argv: [] },
@@ -931,7 +933,7 @@ async function buildScenario(name: string): Promise<void> {
     }
     scenario.setup?.(roots.ws);
     for (const argv of scenario.argv) {
-      const r = await runCli(roots, argv, writerEnv(roots, `scenario:${name}`, "pass-fail", {}));
+      const r = await runCli(roots, argv, writerEnv(roots, `scenario:${name}`, "pass-fail", scenario.env?.(roots.ws) ?? {}));
       if (r.exit !== 0) throw new Error(`scenario ${name}: fl ${argv.join(" ")} exited ${r.exit}\n${r.stdout}${r.stderr}`);
     }
     scenario.after?.(roots.ws);
@@ -1039,6 +1041,39 @@ SCENARIOS["attest-bundles"] = {
     "notjson/manifest.json": "{"
   },
   argv: []
+};
+
+// fl provenance (slice 4c Task 17). provenance-ci is the slice 2 base
+// git-unbound at bundle/ plus a repository at . with one commit (the tree
+// GITHUB_SHA names); sha.txt holds that commit id. provenance-signed adds
+// the TS-written .faultline/provenance/ci-receipt.json (created under the CI
+// env below), a trust.json whose trustedRootFile is the relative root.json,
+// root.json and attestation.sigstore.json (their content is only ever
+// handed to the fake gh).
+function provenanceRepository(ws: string): void {
+  const built = buildRepo(ws, ".", [state("good")]);
+  writeFileSync(join(ws, "sha.txt"), `${built.commits[0]}\n`);
+}
+function provenanceCiEnv(ws: string): Record<string, string> {
+  return {
+    GITHUB_ACTIONS: "true", GITHUB_SHA: readFileSync(join(ws, "sha.txt"), "utf8").trim(), GITHUB_REPOSITORY: "Mizore66/faultline",
+    GITHUB_WORKFLOW_REF: "Mizore66/faultline/.github/workflows/go.yml@refs/heads/main", GITHUB_REF: "refs/heads/main",
+    GITHUB_RUN_ID: "123", GITHUB_RUN_ATTEMPT: "1", GITHUB_EVENT_NAME: "push"
+  };
+}
+const PROVENANCE_FILES = {
+  "trust.json": jsonText({
+    schemaVersion: "faultline.github-artifact-attestation-trust.v1", repository: "Mizore66/faultline",
+    signerWorkflow: "Mizore66/faultline/.github/workflows/go.yml", sourceRef: "refs/heads/main", eventName: "push",
+    denySelfHostedRunners: true, trustedRootFile: "root.json"
+  }),
+  "root.json": jsonText({ mediaType: "application/vnd.dev.sigstore.trustedroot+json;version=0.1" }),
+  "attestation.sigstore.json": jsonText({ mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json" })
+};
+SCENARIOS["provenance-ci"] = { bases: { bundle: "git-unbound" }, files: PROVENANCE_FILES, setup: provenanceRepository, argv: [] };
+SCENARIOS["provenance-signed"] = {
+  bases: { bundle: "git-unbound" }, files: PROVENANCE_FILES, setup: provenanceRepository,
+  argv: [["provenance", "create", "--bundle", "bundle"]], env: provenanceCiEnv
 };
 
 // witness-implement: the incident packets `fl witness implement --incident`

@@ -303,6 +303,9 @@ func createFromView(view proofview.View, ciIdentity jsjson.Value, createdAt *str
 // CreateFromView ports createGithubProvenanceReceiptFromView
 // (src/github-provenance.ts:152) for an already verified view: the receipt,
 // or the thrown error. createdAt nil is undefined (the clock is read).
+// The view MUST already be verified (loadVerifiedGitProofView in TS): this
+// function trusts it completely and does no verification of its own. The
+// CLI goes through CreateReceipt; this export is for tests that edit views.
 func CreateFromView(view proofview.View, ci jsjson.Value, createdAt *string) (receipt jsjson.Value, err error) {
 	err = jsexc.Try(func() { receipt = createFromView(view, ci, createdAt) })
 	return receipt, err
