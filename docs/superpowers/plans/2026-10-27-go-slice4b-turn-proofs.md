@@ -527,3 +527,274 @@ git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com comm
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+### Task 3: `internal/turninv` schemas and state reconstruction, with their live oracle
+
+**Files:**
+- Create: `internal/turninv/schemas.go`, `internal/turninv/states.go`, `internal/turninv/states_test.go`, `difftest/turninv_live_test.go`, `difftest/gen/oracle-turninv.ts`
+- Modify:
+  - `internal/schema/composite.go`, `internal/schema/schema_test.go`: `RecordOf`.
+  - `difftest/gen/node-oracle.ts`: one import line and one spread line for `oracle-turninv.ts`; and the `namedSchemas` additions.
+  - `difftest/named_live_test.go`: the turn schemas in `namedSchemas` and `namedSeeds`.
+
+**Interfaces:**
+- Consumes: `gitproof.TurnTreeSnapshotSchema`, `gitproof.EnvironmentFingerprintSchema`, `gitproof.MaterializedOverlaySchema`, `gitproof.StableExecutionCount`; `evidence.TurnPathEvidenceGradeExperimental`, `evidence.TurnPathEvidenceGradeParityReserved`, `evidence.TurnPathEvidenceLabelExperimental`; `bundle.ParseValue`; `v8sort.Sort`.
+- Produces:
+
+```go
+// internal/schema
+// RecordOf is z.record(key, value): each own key is parsed with key (its
+// issues first, at path [..., key]), then its value with value (at the
+// same path). The parsed key replaces the original; __proto__ is dropped.
+func RecordOf(key, value Schema) Schema
+```
+
+```go
+package turninv // Port of src/turn-investigation.ts.
+
+const (
+	SchemaVersion        = "faultline.turn-investigation.v1" // :47
+	SessionBaselineTurnID = "session-baseline"               // :58
+	DuplicateOrdinalError = "Duplicate turnOrdinal in session baseline / TURN_TREE_SNAPSHOT sequence." // :383
+)
+
+// Schemas, exported for the bundle (Tasks 7, 8) and the live oracle.
+var (
+	TurnStateSchema       *schema.ObjectSchema // :60
+	RunFactSchema         *schema.ObjectSchema // :105 TurnInvestigationRunFactSchema
+	StableStateSchema     *schema.ObjectSchema // :161
+	StableTransitionSchema *schema.ObjectSchema // :175
+	IntroductionSchema    *schema.ObjectSchema // :186
+	ResultSchema          *schema.ObjectSchema // :204 TurnInvestigationResultSchema
+)
+
+// State ports TurnState (:60).
+type State struct {
+	Index, TurnOrdinal       int
+	TurnID, Role, TreeDigest, SnapshotDigest string
+	Dirty                    bool
+}
+// Value is the state in TS key order: index, turnId, turnOrdinal, role,
+// treeDigest, snapshotDigest, dirty.
+func (s State) Value() jsjson.Value
+// StatesFromValue reads result.states (already schema-parsed).
+func StatesFromValue(v jsjson.Value) []State
+
+// StatesFromLedger ports turnStatesFromLedger (:347). ledger is a parsed
+// CodexLifecycleLedger; a snapshot that fails TurnTreeSnapshotSchema
+// throws the ZodError (jsexc), as TS's .parse does.
+func StatesFromLedger(ledger jsjson.Value) ([]State, error)
+
+// DuplicateTurnOrdinal ports duplicateTurnOrdinalError (:379); "" is null.
+func DuplicateTurnOrdinal(states []State) string
+
+// ReconstructStable ports reconstructStableTurnStates (:467). runs are
+// schema-parsed run facts in array order; requireNative is
+// options.requireNativeExecutor === true. Each stable state is returned as
+// its JSON value in StableStateSchema key order.
+func ReconstructStable(states []State, runs []jsjson.Value, requireNative bool) []jsjson.Value
+
+// FindTransitions ports findStableTurnTransitions (:511).
+func FindTransitions(stable []jsjson.Value) []jsjson.Value
+
+// HasNonMonotonic ports hasNonMonotonicTransitions (:526).
+func HasNonMonotonic(transitions []jsjson.Value) bool
+
+// AttributeFailureIntroduction ports attributeFailureIntroduction (:393).
+// stable nil is the TS default [].
+func AttributeFailureIntroduction(states []State, transitions, stable []jsjson.Value) jsjson.Value
+
+// IsDecisiveRun ports isDecisiveRun (:454).
+func IsDecisiveRun(run jsjson.Value) bool
+```
+
+**Gotchas:**
+- **The schemas are not the Git ones.**
+  - `turn-investigation.ts:51-54` declares `DigestSchema` and `GitObjectIdSchema` with no regex message, so zod's text is `Invalid`. `gitproof`'s versions carry messages. Declare them here: `s.String(s.Regex(s.Pattern(src), ""))`.
+  - `TimestampSchema` is `z.string().datetime({ offset: true })`, which is `s.String(s.Datetime())`.
+  - `SandboxAuditSchema` (`:73-103`) and `WitnessVerificationSummarySchema` (`:195-202`) are local copies whose digests have no message. Declare them here; do not reuse `gitproof.SandboxAuditSchema`.
+  - `MaterializedOverlaySchema` and `EnvironmentFingerprintSchema` are the imported ones; reuse gitproof's.
+  - `executionAttempt` is `int().min(1).max(3)`: `s.Number(s.Int(), s.Gte(1), s.Lte(3))`.
+  - `stdoutPreview`/`stderrPreview` are `max(32768)` UTF-16 units.
+  - `executionIds`/`runIds` are `.length(3)`: `s.Array(…, s.Length(3))`.
+  - `runtimeMapping` is `RecordOf(DigestSchema, DigestPinnedImageSchema)` (correction 13). The image regex has no message either.
+  - `proof.evidenceGrade` is `z.enum(["TURN_PROOF", "EXPERIMENTAL_TURN", "NONE"])`, in that order (`:242-246`). The order shows in `invalid_enum_value`'s `options`.
+  - Every object is `.strict()`.
+- **`RecordOf` order.** zod 3's `ZodRecord._parse` (sync) builds one `{key, value}` pair per own key, keys from `ctx.data` in own-key order. Each key is parsed at path `[…, key]`, then each value at the same path, and `ParseStatus.mergeObjectSync` collects issues key by key: key issues, then value issues, per entry.
+  - A `__proto__` key is dropped from the output (zod's `mergeObjectSync` skips it).
+  - Unit-test `RecordOf` with a bad key and a bad value in the same entry. Check the issue order in `TestLiveNamedSchemas` (below).
+- **`StatesFromLedger`** (`:347-376`):
+  - Walk `ledger.events` in order. A `SESSION_BASELINE_SNAPSHOT` gives `{index: states.length, turnId: "session-baseline", turnOrdinal: 0, role: "SESSION_BASELINE", …}`; a `TURN_TREE_SNAPSHOT` gives `{…, turnId: payload.turnId, turnOrdinal: payload.turnOrdinal, role: "TURN", …}`.
+  - Each snapshot is parsed with `TurnTreeSnapshotSchema.parse` first. A failure throws.
+  - Then `states.sort((l, r) => l.turnOrdinal - r.turnOrdinal || l.index - r.index)`. That is V8's TimSort with a numeric comparator: use `v8sort.Sort` with `cmp = sign(l.TurnOrdinal - r.TurnOrdinal)`, then index.
+  - The sort keeps each state's original `index`. So after sorting, `index` need not equal the array position, which matters for `ReconstructStable`'s `stateIndex` and for the semantics in Task 7.
+- **`ReconstructStable`** (`:467-509`):
+  - For each state in array order: filter the runs with `run.stateIndex === state.index`, then sort by `executionAttempt` with a numeric comparator (V8 TimSort, stable).
+  - Skip unless there are exactly 3, with 3 distinct attempts and 3 distinct `executionId`s.
+  - `verdict` is `stateRuns[0].result.verdict`. It must be PASS or FAIL.
+  - Every run must match the state's `turnId`, `turnOrdinal`, `role`, `treeDigest` and `snapshotDigest` and share the verdict, and `IsDecisiveRun` must hold. With `requireNative`, every `result.executor` must be `NATIVE_DOCKER`.
+  - Push `{stateIndex: state.index, turnId, turnOrdinal, role, treeDigest, snapshotDigest, verdict, executionIds, runIds}` in that key order.
+- **`FindTransitions`** (`:511-524`) pairs neighbours in the stable list only when `after.stateIndex === before.stateIndex + 1` and the verdicts differ. `kind` is `PASS_TO_FAIL` when `before` is PASS. `before` and `after` are the stable state objects themselves.
+- **`AttributeFailureIntroduction`** (`:393-452`). The four `reason` texts are verbatim. The `→` is U+2192:
+  - `No PASS→FAIL transition is available to attribute.`
+  - `No SESSION_BASELINE_SNAPSHOT; cannot claim a turn introduced the failure.`
+  - `No stable passing session baseline; cannot claim a turn introduced the failure.`
+  - `The earliest PASS→FAIL transition crosses an observation gap or is not a stable adjacent pair.`
+
+  The success text is `` `Earliest recorded stable PASS→FAIL occurred at turn ${n}.` `` with `jsjson.FormatNumber`. The baseline lookup is `states.find(role === "SESSION_BASELINE" && turnOrdinal === 0)`, by array position after the sort. The output key order is `status, turnOrdinal, turnId, reason`.
+- **Numbers.** `turnOrdinal`, `index` and `stateIndex` come from parsed JSON. They are integers by schema, but `-0` can appear in a hostile bundle (Task 7 verifies hostile input). Keep them as `float64` inside comparisons (`jsjson.Value.Num()`), and convert to `int` only for the `State` struct after the schema accepted them. `-0 === 0` is true.
+
+**Live test** `TestLiveTurnStates` (`difftest/turninv_live_test.go`). The oracle ops in `oracle-turninv.ts` take canonical JSON and return `JSON.stringify` of `{value}` or `{threw, zod}`:
+- `turnStatesFromLedger({ledger})`
+- `duplicateTurnOrdinalError({states})`
+- `reconstructStableTurnStates({states, runs, requireNativeExecutor})`
+- `findStableTurnTransitions({stable})`
+- `attributeFailureIntroduction({states, transitions, stableStates})`
+
+The inputs (spec 2.5):
+- 1,500 generated ledgers. Start from `ledger-seed.ts`'s `richLedger` (it already holds both snapshot kinds) and from the `turn-*` scenario ledgers, then mutate:
+  - snapshot events reordered across turns;
+  - duplicated ordinals;
+  - `-0` and `1e0` ordinals;
+  - a snapshot's fields corrupted (`gen.CorruptLeaf` on the payload);
+  - baselines missing;
+  - up to 40 turns.
+
+  Ledgers are not re-verified: `turnStatesFromLedger` does not verify.
+- 2,000 generated `(states, runs)` pairs: 3 runs per state, with random drops, duplicate attempts, duplicate execution ids, mixed verdicts, `EXIT_ZERO`/`EXIT_NONZERO` reasons, `INJECTED_RUNNER` executors, mismatched tree digests and shuffled run order. Each with `requireNativeExecutor` true and false.
+- `findStableTurnTransitions` and `attributeFailureIntroduction` on every reconstructed list, plus 300 hand-shaped lists: gaps, baseline FAIL, baseline missing, `stableStates` empty.
+
+Go must give the same value or the same thrown message. `requireReached("internal/turninv/states.go", …)`. Task 11 adds the file to `liveGatedFiles`.
+
+`TestLiveNamedSchemas` gains:
+- `TurnInvestigationResultSchema`, seeded with `turn-two-states/investigation.json` and `turn-non-monotonic/investigation.json`;
+- `TurnInvestigationRunFactSchema`, seeded with the first run of each;
+- `StableTurnTransitionSchema`, seeded with `turn-two-states/transitions/0000.json`;
+- `TurnStateSchema`, seeded with `investigation.json#states.0`.
+
+The four names are added to `namedSchemas` on both sides. Until Task 2's bases merge, the seeds are inline JSON texts in the test file. Task 2's bases replace them.
+
+- [ ] **Step 1: Write the failing tests**
+
+```go
+// internal/turninv/states_test.go
+package turninv
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/Mizore66/faultline/internal/jsjson"
+)
+
+func mustJSON(t *testing.T, s string) jsjson.Value {
+	t.Helper()
+	v, err := jsjson.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func run(state State, attempt int, verdict, reason, executor string) jsjson.Value {
+	return jsjson.MustObject(
+		"stateIndex", jsjson.MakeNumber(float64(state.Index)),
+		"executionAttempt", jsjson.MakeNumber(float64(attempt)),
+		"executionId", jsjson.MakeString("sha256:"+strings.Repeat(string(rune('a'+state.Index)), 63)+string(rune('0'+attempt))),
+		"runId", jsjson.MakeString("sha256:"+strings.Repeat("f", 63)+string(rune('0'+attempt))),
+		"turnId", jsjson.MakeString(state.TurnID),
+		"turnOrdinal", jsjson.MakeNumber(float64(state.TurnOrdinal)),
+		"role", jsjson.MakeString(state.Role),
+		"treeDigest", jsjson.MakeString(state.TreeDigest),
+		"snapshotDigest", jsjson.MakeString(state.SnapshotDigest),
+		"result", jsjson.MustObject("kind", jsjson.MakeString("DOCKER_ISOLATED"), "executor", jsjson.MakeString(executor),
+			"verdict", jsjson.MakeString(verdict), "reason", jsjson.MakeString(reason)),
+	)
+}
+
+func states() []State {
+	return []State{
+		{Index: 0, TurnID: SessionBaselineTurnID, TurnOrdinal: 0, Role: "SESSION_BASELINE", TreeDigest: strings.Repeat("a", 40), SnapshotDigest: "sha256:" + strings.Repeat("1", 64)},
+		{Index: 1, TurnID: "turn-1", TurnOrdinal: 1, Role: "TURN", TreeDigest: strings.Repeat("b", 40), SnapshotDigest: "sha256:" + strings.Repeat("2", 64), Dirty: true},
+	}
+}
+
+func TestPassToFailIsAttributed(t *testing.T) {
+	s := states()
+	var runs []jsjson.Value
+	for a := 3; a >= 1; a-- { // unsorted on purpose
+		runs = append(runs, run(s[0], a, "PASS", "PREDICATE_PASS", "NATIVE_DOCKER"), run(s[1], a, "FAIL", "PREDICATE_FAIL", "NATIVE_DOCKER"))
+	}
+	stable := ReconstructStable(s, runs, true)
+	if len(stable) != 2 || stable[0].Get("executionIds").Items()[0].Str()[70:] != "1" {
+		t.Fatalf("%v", stable)
+	}
+	transitions := FindTransitions(stable)
+	if len(transitions) != 1 || transitions[0].Get("kind").Str() != "PASS_TO_FAIL" {
+		t.Fatal(transitions)
+	}
+	got := jsjson.StringifyIndent(AttributeFailureIntroduction(s, transitions, stable), "")
+	if got != `{"status":"ATTRIBUTED","turnOrdinal":1,"turnId":"turn-1","reason":"Earliest recorded stable PASS→FAIL occurred at turn 1."}` {
+		t.Fatal(got)
+	}
+}
+
+func TestLegacyExitReasonIsNotDecisive(t *testing.T) {
+	s := states()
+	var runs []jsjson.Value
+	for a := 1; a <= 3; a++ {
+		runs = append(runs, run(s[0], a, "PASS", "EXIT_ZERO", "NATIVE_DOCKER"))
+	}
+	if got := ReconstructStable(s, runs, false); len(got) != 0 {
+		t.Fatal(got)
+	}
+}
+
+func TestStatesFromLedgerSortsByOrdinalThenIndex(t *testing.T) {
+	if DuplicateTurnOrdinal([]State{{TurnOrdinal: 1}, {TurnOrdinal: 1}}) != DuplicateOrdinalError {
+		t.Fatal("duplicate not reported")
+	}
+	if DuplicateTurnOrdinal(states()) != "" {
+		t.Fatal("false duplicate")
+	}
+}
+```
+
+```go
+// internal/schema/schema_test.go
+func TestRecordOfKeyIssuesFirst(t *testing.T) {
+	r := RecordOf(String(Regex(Pattern(`^k$`), "")), String(MinLength(2)))
+	_, issues, ok := Parse(r, mustParse(t, `{"x":"y"}`))
+	if ok || len(issues) != 2 || ErrorMessage(issues[:1]) == ErrorMessage(issues[1:]) {
+		t.Fatalf("%v", issues)
+	}
+	if !strings.Contains(ErrorMessage(issues), `"validation": "regex"`) || strings.Index(ErrorMessage(issues), "regex") > strings.Index(ErrorMessage(issues), "too_small") {
+		t.Fatal(ErrorMessage(issues))
+	}
+}
+```
+
+(`mustParse` exists in `schema_test.go`; if not, add it as `jsjson.Parse` plus `t.Fatal`.)
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/turninv/ ./internal/schema/ -run 'TestPassToFail|TestLegacyExit|TestStatesFromLedger|TestRecordOf'`
+Expected: FAIL (the package does not exist; `RecordOf` is undefined).
+
+- [ ] **Step 3: Implement** by transcription. Every function carries its `src/turn-investigation.ts` line. Add `StatesFromLedger` tests ported from `tests/turn-investigation.test.ts` (the ordering, baseline and duplicate cases) and the oracle ops.
+
+- [ ] **Step 4: Run to verify the tests pass**
+
+Run: `go test ./internal/turninv/ ./internal/schema/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run 'TestLiveTurnStates|TestLiveNamedSchemas' -v > /tmp/s4b-t3.log 2>&1; tail -5 /tmp/s4b-t3.log` (in podman, under 280 s)
+Expected: PASS, with a `LIVE-SUMMARY` line.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/turninv internal/schema difftest/turninv_live_test.go difftest/gen/oracle-turninv.ts difftest/gen/node-oracle.ts difftest/named_live_test.go
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "feat(go): turn investigation schemas, state reconstruction and transitions
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
