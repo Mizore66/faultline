@@ -414,3 +414,9 @@ TestWriterReplay/posix/incident-status-unbound
 TestWriterReplay/posix/incident-continue-unbound
 TestWriterReplay/posix/incident-status-foreign-proposal
 TestWriterReplay/posix/incident-continue-foreign-proposal
+TestWriterReplay/posix/attest-create-git
+TestWriterReplay/posix/attest-create-git-with-digests
+TestWriterReplay/posix/attest-create-git-bad-source-digest
+TestWriterReplay/posix/attest-create-store-symlink
+TestWriterReplay/posix/attest-verify-symlink-receipt
+TestWriterReplay/posix/attest-create-git-invalid
