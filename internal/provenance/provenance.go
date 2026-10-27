@@ -298,10 +298,24 @@ func createFromView(view proofview.View, ciIdentity jsjson.Value, createdAt *str
 	return parse(jsjson.MakeObject(signed), receiptSchema)
 }
 
-// loadView is loadVerifiedGitProofView(bundleDirectory) with no expected
-// root and no attachment options; its throws propagate.
+// CreateFromView ports createGithubProvenanceReceiptFromView
+// (src/github-provenance.ts:152) for an already verified view: the receipt,
+// or the thrown error. createdAt nil is undefined (the clock is read).
+func CreateFromView(view proofview.View, ci jsjson.Value, createdAt *string) (receipt jsjson.Value, err error) {
+	err = jsexc.Try(func() { receipt = createFromView(view, ci, createdAt) })
+	return receipt, err
+}
+
+// loadVerifiedView is loadVerifiedGitProofView with no expected root and no
+// attachment options (SetViewLoaderForTest replaces it in test builds).
+var loadVerifiedView = func(bundleDirectory string) (proofview.View, error) {
+	return proofview.LoadVerifiedGitProofView(bundleDirectory, nil)
+}
+
+// loadView is loadVerifiedGitProofView(bundleDirectory); its throws
+// propagate.
 func loadView(bundleDirectory string) proofview.View {
-	return jsexc.Must(proofview.LoadVerifiedGitProofView(bundleDirectory, nil))
+	return jsexc.Must(loadVerifiedView(bundleDirectory))
 }
 
 // CreateReceipt ports createGithubProvenanceReceipt
@@ -434,8 +448,10 @@ func writeReceipt(outputFile string, receipt jsjson.Value, provenanceRoot string
 	// is rethrown as is.
 	body := jsexc.Concat(jsexc.Must(canonical.CanonicalJSON(parse(receipt, receiptSchema))), "\n")
 	if err := nodefs.WriteFileUTF8(output, body, 0o600, true); err != nil {
+		// existsSync is false for a dangling symlink, which the wx open
+		// then refuses with EEXIST; otherwise only a race reaches this.
 		if nodefs.IsExist(err) {
-			throw(jsexc.Concat("GitHub provenance receipt already exists and will not be replaced: ", output)) // coverage gate: race only
+			throw(jsexc.Concat("GitHub provenance receipt already exists and will not be replaced: ", output))
 		}
 		jsexc.Throw(err)
 	}
