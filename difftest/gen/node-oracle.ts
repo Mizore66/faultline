@@ -3,6 +3,7 @@
 import { createInterface } from "node:readline";
 import nodePath from "node:path";
 import { spawn } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { buildZod } from "./schema-dsl.js";
@@ -921,6 +922,16 @@ export const handlers: Record<string, Handler> = {
   verifyRepairBriefArtifact: async ({ directory, expected }: { directory: string; expected?: string }) => {
     const { verifyRepairBriefArtifact } = await import("../../src/repair-brief-store.js");
     try { return JSON.stringify(verifyRepairBriefArtifact(directory, expected)); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  // Slice 4c Task 4: cpSync(src, dest, { recursive: true, dereference: false,
+  // errorOnExist: true, force: false }) as repair-worktree.ts:111 calls it,
+  // run in a child node (umask 022, cwd) so a C++ abort inside cpSync does
+  // not take the oracle with it: "OK", "THREW:<message>" or "ABORT:<stderr>".
+  cpSyncTree: ({ src, dest, cwd }: { src: string; dest: string; cwd: string }) => {
+    const script = `try { require("node:fs").cpSync(process.argv[1], process.argv[2], { recursive: true, dereference: false, errorOnExist: true, force: false }); process.stdout.write("OK"); } catch (e) { process.stdout.write("THREW:" + e.message); }`;
+    const run = spawnSync(process.execPath, ["-e", script, src, dest], { cwd, encoding: "utf8", env: process.env });
+    if (run.signal !== null || run.status !== 0) return `ABORT:${run.stderr}`;
+    return run.stdout;
   },
 };
 
