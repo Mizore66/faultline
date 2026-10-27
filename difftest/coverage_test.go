@@ -280,6 +280,10 @@ var unreachableLiterals = map[string]string{
 	"Turn tree pack enumeration produced no Git objects.":               "rev-list --objects <tree> always lists the tree itself",
 	"Turn tree pack exceeds FaultLine's portable artifact limit.":       "pack-objects output past the 64 MiB runHardenedGit cap fails first, below the 128 MiB limit",
 	"Could not create temporary bare repository for pack verification:": "reached by Task 2 turn-git-fail-init golden; remove when it lands",
+
+	// turninv/investigate.go (TestLiveInvestigateTurns's requireReached):
+	"Missing prepared state or fingerprint at index": "phase 2 runs only after the fingerprint count check, so every state has a fingerprint",
+	"No resolved runtime image for fingerprint":      "buildEffectiveRuntimeMapping resolves an image for every distinct fingerprint digest or throws first",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
@@ -1073,6 +1077,8 @@ var gatedDirs = []string{
 	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
 	"internal/safegit", "internal/hostcmd", "internal/runtimeimage", "internal/doctor", "internal/allowlist", "internal/turnsnap",
 	"internal/incident",
+	// Slice 4b Task 6 (planned for Task 11): every file is live-gated.
+	"internal/turninv",
 }
 
 // gatedLiterals is errorLiterals over every gatedDirs package.
@@ -1146,6 +1152,9 @@ var liveGatedFiles = map[string]string{
 	"internal/bundle/turnproof/pack.go":    "TestLiveTurnTreesPack",
 	// Slice 4b Task 3: turn states, reconstruction, transitions and attribution.
 	"internal/turninv/states.go": "TestLiveTurnStates",
+	// Slice 4b Task 6: investigateTurnTrees on generated sessions.
+	"internal/turninv/investigate.go": "TestLiveInvestigateTurns",
+	"internal/turninv/schemas.go":     "TestLiveInvestigateTurns",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally
