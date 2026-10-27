@@ -248,7 +248,7 @@ difftest/testdata/writers.d/4b-*.json, golden/writers.d/4b-*.jsonl     one pair 
     - `turn-heterogeneous`: state 1 adds `package.json`, and `mapping.json` maps both fingerprints.
     - `turn-missing-tree`: `turn-two-states` whose turn snapshot names a tree id that is not in the repository: `"e".repeat(40)`, signed. Materializing it fails, which gives `EXECUTION_ERROR`.
     - `turn-sha256`: `turn-two-states` built with `objectFormat: "sha256"`, so its snapshots carry 64-hex trees (correction 3).
-    - `turn-sidecar`: `turn-two-states` with the ledger under `.git/faultline/recordings/codex-<sha256("s-1")>.json` instead of `ledger.json`, for `--latest`. Its `.gitignore` holds `.faultline/`.
+    - `turn-sidecar`: `turn-two-states` with the same ledger at `repo/.git/faultline/recordings/codex-<sha256("s-1")>.json` (session id `s-1`) instead of `ledger.json`, for `--latest`. The recordings directories are 0700, as the sidecar creates them.
     - `turn-latest-ambiguous`: two valid recordings whose last events share one `occurredAt`.
 
 **Gotchas:**
@@ -1984,6 +1984,109 @@ Expected: PASS. A mismatch is fixed in Go, never in the golden.
 ```bash
 git add internal/cli/turns.go internal/cli/turns_test.go internal/cli/investigate.go internal/cli/investigate_test.go difftest/coverage_test.go difftest/testdata/writers.d/4b-turns.json difftest/testdata/golden/writers.d/4b-turns.jsonl .github/scripts/windows-writer-skips.txt
 git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "feat(go): fl investigate turns with --latest and --minimize; writer goldens
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 10: `fl prove transition`
+
+**Files:**
+- Create: `internal/cli/prove.go`, `internal/cli/prove_test.go`, `difftest/testdata/writers.d/4b-prove.json`, `difftest/testdata/golden/writers.d/4b-prove.jsonl`
+- Modify: `internal/cli/cli.go` (one `case "prove"` line in the dispatch switch), `.github/scripts/windows-writer-skips.txt` (append only)
+
+**Interfaces:**
+- Consumes:
+  - Task 4: `minimizeFromTurnInvestigation`, `turnMinOptions`.
+  - Task 7: `turnproof.Verify`; `turninv.ResultSchema`.
+  - `witnessStore`, `requiredOption`, `option`, `fail`, `obj`, `e.printJSON`, `requireExpectDigestOrBinding`, `requireImageOrConfig`; `witness.{DefaultIncidentDraftStore,ResolveInheritedSessionFacts,WriteSessionBinding,ReadFrozen}`; `nodefs.{ReadText,Resolve,Join}`; `jsjson.Parse`; `bundle.ParseValue`.
+- Produces: `func proveCommand(e *env, args []string) error` (`cli-app.ts:3038-3044` with `proveTransitionCommand` at `:2294-2356`).
+
+**Gotchas:**
+- **Dispatch** (`:3038-3044`): `args[0] !== "transition"` throws the usage text. The usage is verbatim and is also thrown for a missing directory:
+
+  ```
+  Usage: fl prove transition <turn-proof-bundle-directory> --repo <directory> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--transition <index>] [--max-executions <count>] [--output <managed-result.json>]
+  ```
+
+  Then `proveTransitionCommand(args.slice(1))`. `args[0]` there is the directory; an empty string counts as missing.
+- **Order** (correction 6):
+  1. `directory = resolve(args[0])`. A flag in that position, `fl prove transition --repo x`, is taken as the directory. The `args[1]` check at `:2301-2303` has an empty body and is not ported (comment it).
+  2. `expectedRoot = option --expect-root`; it is "provided" when not undefined (correction 2).
+  3. `Verify(directory, expectedRoot, provided)`. Invalid gives `Turn proof bundle failed verification: <errors.join("; ") || "unknown error">`.
+  4. `JSON.parse(readFileSync(join(directory, "investigation.json"), "utf8"))` and `ResultSchema.parse`. A race between the two is out of scope; the read error is Node's text.
+  5. `store`, then `requiredOption --proposal`, then `repository = resolve(requiredOption --repo)`, then `draftStore`.
+  6. `inherited` with only `expectDigest` (no `ledgerPath` override, unlike `investigate turns`).
+  7. `expectedFrozenDigest = inherited.expectDigest ?? requireExpectDigestOrBinding(…)`.
+  8. `image = requireImageOrConfig`.
+  9. `WriteSessionBinding(draftStore, {proposalId, expectDigest})` with no `LedgerPath`, so a bound one is kept.
+  10. `ReadFrozen(store, proposalId)`.
+  11. `minimizeFromTurnInvestigation({repository, transitions: investigation.transitions, frozen, expectedFrozenDigest, image, transitionIndex: --transition, maxExecutions: --max-executions, output: --output})`.
+- **Output:** `{command: "prove transition", turnBundle: {directory, rootDigest: verification.rootDigest, externalRootStatus, evidenceGrade: investigation.proof.evidenceGrade}, minimization}`. Exit 0 whether the minimization was certified or not (spec 3.4); `exitCode` is never set.
+- **The frozen witness used is the store's, not the bundle's.** Its digest must match `expectedFrozenDigest` for the minimization to verify it. A bundle from another proposal still runs against the store's witness. The writer case `prove-other-witness` pins what TS does with it.
+
+**Writer cases** (`writers.d/4b-prove.json`; all `posixOnly`, `fakeDocker: "pass-fail"`; invocation 0 is `turns-proof`'s argv with `--output .faultline/turn-proof-bundles/b`, and `PROVE` below is `prove transition .faultline/turn-proof-bundles/b --repo repo --proposal demo-1 --image registry.example/faultline-node@sha256:<b×64>`):
+- `prove-transition` (turn-two-states: `PROVE`; the expect digest is inherited from the binding the first invocation wrote, and the minimization is under `.faultline/minimizations/turn-transition-0000-<ms>.json`).
+- `prove-transition-expect-root` (`PROVE --expect-root <FILE:.faultline/turn-proof-bundles/b/ROOT.sha256>`: `MATCH`).
+- `prove-transition-expect-root-bad` (`--expect-root sha256:0…0`: the verification refusal), `prove-transition-expect-root-empty` (`--expect-root ""`: refused, correction 2).
+- `prove-transition-output` (`--output elsewhere/r.json`), `prove-transition-output-exists`.
+- `prove-transition-index-1` (turn-non-monotonic: FAIL_TO_PASS refusal), `prove-transition-index-out-of-range`, `prove-transition-index-bad`.
+- `prove-transition-max-executions` (`--max-executions 1`: not certified, exit 0).
+- `prove-transition-tampered` (an `inv: 1` mutation flips a byte of `investigation.json` in the bundle: the refusal, nothing else read).
+- `prove-transition-missing-proposal` (the verification runs first, then `Missing required option: --proposal`).
+- `prove-transition-image-absent`, `prove-transition-no-expect-digest` (a `--draft-store` with no binding).
+- `prove-transition-bound-ledger-kept` (after `PROVE`, the binding file still holds the `ledgerPath` that invocation 0 wrote).
+- `prove-transition-repo-moved` (an `inv: 1` mutation renames `repo` to `repo2`, and `PROVE --repo repo2`: the trees still resolve, because the objects moved with the repository).
+- `prove-transition-repo-missing-trees` (`--repo other`, where `other` is an empty `git init` made by an `add-file` of `other/.git/HEAD` and friends. The bridge's `rev-parse --verify` prints `fatal: Needed a single revision`, which is the same in git 2.39 and 2.43, so it may stay unmasked (Global Constraints). The bridge's text is not a `GIT_LABELS` failure and is never masked).
+- `prove-other-witness` (a second proposal frozen in the store and `--proposal` naming it).
+- `prove-usage` (`prove`), `prove-usage-other` (`prove nope`), `prove-usage-no-directory` (`prove transition`), `prove-directory-missing` (`prove transition nowhere …`: `Turn proof bundle failed verification: Turn proof bundle directory does not exist`).
+- `prove-git-bundle` (`prove transition` on a Git proof bundle, from the `git-two-states-bundle` scenario: the turn verifier's refusal).
+
+- [ ] **Step 1: Write the failing test**
+
+```go
+// internal/cli/prove_test.go
+package cli
+
+import "testing"
+
+const proveUsage = "Usage: fl prove transition <turn-proof-bundle-directory> --repo <directory> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--transition <index>] [--max-executions <count>] [--output <managed-result.json>]"
+
+func TestProveUsage(t *testing.T) {
+	for _, args := range [][]string{{"prove"}, {"prove", "nope"}, {"prove", "transition"}, {"prove", "transition", ""}} {
+		_, stderr, code := run(args...)
+		if code != 1 || stderr != "FaultLine error: "+proveUsage+"\nNext: pnpm fl help\n" {
+			t.Errorf("%q: %d %q", args, code, stderr)
+		}
+	}
+}
+
+func TestProveMissingDirectory(t *testing.T) {
+	_, stderr, code := run("prove", "transition", t.TempDir()+"/nowhere")
+	if code != 1 || stderr != "FaultLine error: Turn proof bundle failed verification: Turn proof bundle directory does not exist\nNext: pnpm fl help\n" {
+		t.Fatalf("%d %q", code, stderr)
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/cli/ -run TestProve`
+Expected: FAIL (`not yet ported: prove`).
+
+- [ ] **Step 3: Implement; add the writer cases; generate the goldens** after Task 9 has merged (podman, `ONLY='^prove-'`; confirm that only `golden/writers.d/4b-prove.jsonl` changed).
+
+- [ ] **Step 4: Run to verify the replay passes**
+
+Run: `go test ./internal/cli/ && go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/(posix/)?prove-|TestWindowsWriterSkipsList|TestGoldensReachEveryErrorLiteral' > /tmp/s4b-t10.log 2>&1; grep -E '^(---|ok|FAIL)' /tmp/s4b-t10.log | tail -20`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/cli/prove.go internal/cli/prove_test.go internal/cli/cli.go difftest/testdata/writers.d/4b-prove.json difftest/testdata/golden/writers.d/4b-prove.jsonl .github/scripts/windows-writer-skips.txt
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "feat(go): fl prove transition; writer goldens
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
