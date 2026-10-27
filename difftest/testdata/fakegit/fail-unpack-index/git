@@ -5,17 +5,8 @@
 here=$(cd "$(dirname "$0")" && pwd)
 PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
 export PATH
-# The hardened runner puts -c pairs, --git-dir=<dir> and -C <dir> before the
-# subcommand.
-sub=; skip=
-for a do
-  if [ -n "$skip" ]; then skip=; continue; fi
-  case $a in
-    -c|-C) skip=1 ;;
-    -*) ;;
-    *) sub=$a; break ;;
-  esac
-done
+# The subcommand comes after the hardened runner's global options.
+. "$here/../lib/subcommand.sh"
 if [ "$sub" = unpack-objects ]; then { echo "fatal: planted unpack failure" >&2; exit 128; }; fi
 if [ "$sub" = index-pack ]; then { printf 'error: planted index-pack detail\nfatal: planted index-pack failure\n' >&2; exit 128; }; fi
 exec git "$@"

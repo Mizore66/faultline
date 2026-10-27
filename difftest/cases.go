@@ -469,12 +469,13 @@ func withoutKey(o *jsjson.Obj, key string) jsjson.Value {
 // renamed wherever stable states and transitions name it, then the run and
 // transition artifacts and the manifest's artifact index and investigation
 // digest are rewritten; the template's rehash then rewrites hashes.txt and
-// ROOT.sha256.
+// ROOT.sha256. Like TS, which throws, it panics (failing the test) when
+// investigation.json or manifest.json does not parse as an object.
 func resignTurnBundle(root string) {
 	investigationPath := filepath.Join(root, "investigation.json")
 	o, ok := parseObjectFile(investigationPath)
 	if !ok {
-		return
+		panic("resignTurn: investigation.json is not a JSON object")
 	}
 	investigation := jsjson.MakeObject(o)
 	renamed := map[string]string{}
@@ -541,8 +542,8 @@ func resignTurnBundle(root string) {
 	}
 	manifestPath := filepath.Join(root, "manifest.json")
 	manifest, ok := parseObjectFile(manifestPath)
-	if !ok {
-		return
+	if !ok || manifest.Field("artifacts").Kind() != jsjson.Object {
+		panic("resignTurn: manifest.json is not a JSON object with artifacts")
 	}
 	artifacts := manifest.Field("artifacts").Obj()
 	artifacts.Set("runs", jsjson.MakeArray(append([]jsjson.Value{}, runIndex...)))

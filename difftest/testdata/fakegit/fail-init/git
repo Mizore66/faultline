@@ -5,16 +5,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
 export PATH
 # The subcommand: the Git verifier runs `git init ...`; the turn verifier's
-# hardened runner puts -c pairs, --git-dir=<dir> and -C <dir> before it.
-sub=; skip=
-for a do
-  if [ -n "$skip" ]; then skip=; continue; fi
-  case $a in
-    -c|-C) skip=1 ;;
-    -*) ;;
-    *) sub=$a; break ;;
-  esac
-done
+# hardened runner puts its global options before it.
+. "$here/../lib/subcommand.sh"
 # Two diagnostic lines, so a port that drops or rewrites one shows.
 if [ "$sub" = init ]; then { printf 'error: planted detail\nfatal: planted failure\n' >&2; exit 128; }; fi
 exec git "$@"

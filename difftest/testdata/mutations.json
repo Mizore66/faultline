@@ -300,9 +300,13 @@
   {"id": "turn-label-commit", "op": "json-edit", "file": "investigation.json", "jsonPath": ["proof", "evidenceLabel"], "value": "Proven at commit granularity \u2014 portable and offline-verifiable", "resignTurn": true, "rehash": true, "bases": ["turn-two-states"]},
   {"id": "turn-strip-grade", "op": "json-edit", "file": "investigation.json", "jsonPath": ["proof", "evidenceGrade"], "delete": true, "resignTurn": true, "rehash": true, "bases": ["turn-two-states"]},
   {"id": "turn-schema-as-git", "op": "json-edit", "file": "manifest.json", "jsonPath": ["schemaVersion"], "value": "faultline.git-proof-bundle.v1", "rehash": true, "bases": ["turn-two-states"]},
-  {"id": "turn-deep-literal", "op": "replace-nested", "file": "manifest.json", "find": "\"integrityScope\":\"complete-declared-file-set\"", "prefix": "\"integrityScope\":", "depth": 3000, "rehash": true, "bases": ["turn-two-states"]},
+  {"id": "turn-deep-literal-shallow", "op": "replace-nested", "file": "manifest.json", "find": "\"integrityScope\":\"complete-declared-file-set\"", "prefix": "\"integrityScope\":", "depth": 500, "rehash": true, "bases": ["turn-two-states"]},
+  {"id": "turn-deep-literal-overflow", "op": "replace-nested", "file": "manifest.json", "find": "\"integrityScope\":\"complete-declared-file-set\"", "prefix": "\"integrityScope\":", "depth": 10000, "rehash": true, "bases": ["turn-two-states"]},
   {"id": "turn-ledger-hash", "op": "json-edit", "file": "lifecycle/ledger.json", "jsonPath": ["events", 2, "hash"], "value": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "rehash": true, "bases": ["turn-two-states"]},
   {"id": "turn-ledger-snapshot-edit", "op": "json-edit", "file": "lifecycle/ledger.json", "jsonPath": ["events", 1, "event", "payload", "snapshot", "dirty"], "value": true, "resignLedger": true, "rehash": true, "bases": ["turn-two-states"]},
   {"id": "turn-lifecycle-transport", "op": "json-edit", "file": "manifest.json", "jsonPath": ["lifecycle", "transport"], "value": "CODEX_CLI", "rehash": true, "bases": ["turn-two-states"]},
-  {"id": "turn-manifest-codex-thread", "op": "json-edit", "file": "manifest.json", "jsonPath": ["codex"], "value": {"repairThreadId": "t-1"}, "rehash": true, "bases": ["turn-two-states"]}
+  {"id": "turn-manifest-codex-thread", "op": "json-edit", "file": "manifest.json", "jsonPath": ["codex"], "value": {"repairThreadId": "t-1"}, "rehash": true, "bases": ["turn-two-states"]},
+  {"id": "turn-run-duplicate", "op": "json-edit", "file": "investigation.json", "jsonPath": ["runs", 1], "valueFrom": ["runs", 0], "resignTurn": true, "rehash": true, "bases": ["turn-two-states"]},
+  {"id": "turn-run-unsigned-edit", "op": "json-edit", "file": "investigation.json", "jsonPath": ["runs", 0, "durationMs"], "value": 1, "rehash": true, "bases": ["turn-two-states"]},
+  {"id": "turn-git-fail-index-pack", "op": "fake-git", "fakeGit": "fail-index-pack", "bases": ["turn-two-states"]}
 ]
