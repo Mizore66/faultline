@@ -2090,3 +2090,138 @@ git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com comm
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+### Task 11: Faults, end to end without Node, CI, coverage gate, KNOWN_DIFFERENCES, docs and the full regeneration
+
+**Files:**
+- Modify:
+  - Tests:
+    - `difftest/writerfault_live_test.go`: the 4b rows.
+    - `difftest/endtoend_test.go`: `TestEndToEndSlice4bWithoutNode`.
+  - Gates (`difftest/coverage_test.go`):
+    - `gatedDirs` gains `internal/turninv`; `internal/bundle/turnproof` is already under `internal/bundle`.
+    - `liveGatedFiles` gains:
+      - `internal/turninv/states.go` → `TestLiveTurnStates`;
+      - `internal/turninv/investigate.go` → `TestLiveInvestigateTurns`;
+      - `internal/bundle/turnproof/catalog.go` → `TestLiveTurnHashCatalog`;
+      - `internal/bundle/turnproof/pack.go` → `TestLiveTurnTreesPack`;
+      - `internal/bundle/turnproof/semantics.go` → `TestLiveTurnSemantics`;
+      - `internal/bundle/turnproof/write.go` → `TestLiveTurnProofWriter`;
+      - `internal/minimize/bridge.go` → `TestLiveTurnBridge`.
+
+      Move the local slices the tasks used into the map.
+    - The `not yet ported: %s` waiver drops `prove`.
+    - `unreachableLiterals` gains, each with the reason its task named:
+      - `Turn tree pack enumeration produced no Git objects.`
+      - `Turn tree pack exceeds FaultLine's portable artifact limit.`
+      - `Missing prepared state or fingerprint at index`
+      - `No resolved runtime image for fingerprint`
+      - `Cannot bind a lifecycle ledger that has no SESSION_STARTED observation.`
+      - `Turn proof bundle generated duplicate artifact:`
+      - `Unsafe generated artifact path:`
+      - `Turn proof writer did not produce the complete expected artifact set.`
+      - `Turn proof bundle output appeared during assembly and will not be replaced:`
+      - `Generated turn proof bundle failed verification:`
+      - `Transition index must be a non-negative integer (got`
+  - CI: `.github/workflows/go.yml`.
+  - Docs:
+    - `difftest/KNOWN_DIFFERENCES.md`;
+    - the slice 4 spec: the fourteen corrections above, each folded into its section;
+    - `docs/superpowers/specs/2026-09-25-go-migration-overview.md`: the slice 4 row gets PR 4b done;
+    - this plan: tick the boxes.
+
+**Fault matrix** (spec 2.6; Linux, strace, `ENOSPC`/`EIO`/`EACCES`; path discovery from a fault-free TS trace). Renames are faulted through their source path (spec 2.6: on x86_64, `strace -P` matches only `rename(2)`'s first argument).
+
+| Case | Label | Glob | Groups |
+| --- | --- | --- | --- |
+| `turns-proof` | `turn-root` | `ws/.faultline/turn-proof-bundles` | mkdir |
+| `turns-proof` | `turn-stage` | `ws/.faultline/turn-proof-bundles/.turns-*.staging-*` | mkdir, rename |
+| `turns-proof` | `turn-stage-manifest` | `ws/.faultline/turn-proof-bundles/.turns-*.staging-*/manifest.json` | open, write, close |
+| `turns-proof` | `turn-stage-pack` | `ws/.faultline/turn-proof-bundles/.turns-*.staging-*/source/trees.pack` | open, write, close |
+| `turns-proof` | `turn-stage-source-dir` | `ws/.faultline/turn-proof-bundles/.turns-*.staging-*/source` | mkdir |
+| `turns-proof` | `turn-stage-root` | `ws/.faultline/turn-proof-bundles/.turns-*.staging-*/ROOT.sha256` | open, write, close |
+| `turns-proof` | `turn-pack-verify-tmp` | `tmp/faultline-turn-proof-pack-*` | mkdir |
+| `turns-proof` | `turn-pack-index-file` | `tmp/faultline-turn-proof-pack-*/objects/pack/turn-trees.pack` | open, write |
+| `turns-proof` | `turn-binding` | `ws/repo/.faultline/incidents/bindings/*.json` | open, write, close |
+| `turns-minimize` | `turn-minimization-temp` | `ws/.faultline/minimizations/.*.faultline-git-minimization.tmp` | open, write, close, link, unlink |
+| `turns-minimize` | `turn-minimization-dir` | `ws/.faultline/minimizations` | mkdir |
+
+- The `turn-pack-index-file` group fires only on the `index-pack` fallback. Run it with the `fail-unpack` fake git on the case: the fault harness takes the template's `fakeGit`, or put the fake on `PATH` through the row's `env`.
+- A group that never fires is dropped from the table, not faked. Note which in the commit message.
+- Each faulted run must leave the same files as TS: a stage removed after a failure, or left when the `rmSync` itself is faulted.
+
+**End to end without Node** (`TestEndToEndSlice4bWithoutNode`, spec 2.6). It builds `fl` and runs it in a temporary repository whose `PATH` holds only the git directory and the `pass-fail` fake Docker (`nodelessPath(t, "pass-fail")`). There is no `node`.
+1. Set up a repository holding `state.txt` (`good\n`) and `.gitignore` (`.faultline/\n`). Commit it.
+2. Run `fl witness propose --input proposal.json`, `fl witness approve demo-1 --approved-by r@example.test` and `fl witness freeze demo-1 --repo .`. Use the `PROPOSAL_INPUT` text of `scenarios.ts`, written by the test.
+3. `fl record init --session e2e --repo .`: `RECORDING_STARTED`.
+4. Send hook events on stdin with `fl codex sidecar hook --quiet`:
+   - SessionStart (the baseline snapshot of `good`);
+   - UserPromptSubmit `t-1`;
+   - a workspace edit of `state.txt` to `bad\n` (committed, so the Stop's checkpoint is clean);
+   - Stop `t-1` (the turn snapshot of `bad`).
+
+   Each prints `{"continue":true}` and exits 0, and none prints `did not record`.
+5. `fl codex sidecar status --repo .`: `SIDECAR_RECORDINGS_READY`. Then `fl record verify --ledger <that ledgerPath>`: `valid: true`.
+6. `fl investigate turns --repo . --latest --proposal demo-1 --image registry.example/faultline-node@sha256:<b×64> --output .faultline/turn-proof-bundles/e2e`: exit 0. The output has a `ledger` member and `proofBundle.evidenceGrade: EXPERIMENTAL_TURN`.
+7. `fl verify .faultline/turn-proof-bundles/e2e --expect-root <rootDigest>`: `Integrity: VALID`, `Evidence grade: EXPERIMENTAL_TURN`, `External root: MATCH`, exit 0.
+8. `fl prove transition .faultline/turn-proof-bundles/e2e --repo . --proposal demo-1 --image …`: exit 0, with `minimization.bridge.beforeCommit` a 40-hex id whose tree is the baseline tree. Then `fl minimize verify <minimization.path>`: `valid: true`.
+
+**CI** (`.github/workflows/go.yml`):
+- **`go`** (six runners): the 4b writer cases and the turn corpus run in `TestWriterReplay` and `TestGoldenReplay`. Windows skips the `posixOnly` writer cases and the `posixOnly` mutation (`turn-hashes-drive-letter`). The allowed-skip pattern already covers `TestGoldenReplay/.+` on Windows.
+- **`difftest-goldens`:**
+  - Add `pnpm exec tsx difftest/gen/gen-bases.ts turn-two-states turn-non-monotonic` before `gen-goldens.ts`, so a drift in the turn bases fails the job (spec 4.1).
+  - The Git bases are committed snapshots that a rerun rewrites, but the turn bases are deterministic by construction (Task 2). Confirm it with two runs before adding the line.
+- **`difftest-live`:** the new `TestLiveTurnStates`, `TestLiveInvestigateTurns`, `TestLiveTurnHashCatalog`, `TestLiveTurnTreesPack`, `TestLiveTurnSemantics`, `TestLiveTurnProofWriter` and `TestLiveTurnBridge` join through the `-list 'TestLive'` derivation. Update the step comment with their measured durations, and re-check the job timeout against a podman measurement.
+- **`difftest-live-faults`:** the new rows' count in the comment.
+- **`difftest-live-replay`:** add `TestEndToEndSlice4bWithoutNode` to its `tests=` list.
+- **`stack-live`** (macOS and arm64): add `TestLiveInvestigateTurns`, which spec 4.1 calls "turn reconstruction", and the `turn` rows of `TestLiveStackThresholdsMatchNode` and `TestLiveSpreadLimitsMatchNode`. Put their measured arm64 and darwin values into `jsjson`'s models (correction 14), replacing the Git-site defaults.
+
+**KNOWN_DIFFERENCES** (add only what a task confirmed). Expected:
+- **The created-Git-object mask** (spec 2.2, 3.6). The bridge's commit ids carry the wall clock, so they are compared by content-addressed name. Write it as one entry shared with PR 4c.
+- **The turn pack bytes follow git and zlib** (correction 8). Extend the "Git bundle bytes across git versions" entry.
+- **SHA-256 turn bundles and bridge** (correction 3): a TS behaviour reproduced.
+- **`trimEnd` and the duplicate-key behaviour** of the turn catalog and manifest (corrections 1, 12): not differences, but TS behaviour reproduced on purpose. Put them under the corpus section, with the 15-row coverage note that the hostile-verifier spec's acceptance criterion 4 asks for.
+- **The turn stack and spread sites** (correction 14), with the platforms measured.
+
+- [ ] **Step 1: Add the fault rows and the end-to-end test; run them**
+
+Run: `go test -tags faultline_test ./difftest/ -run TestEndToEndSlice4bWithoutNode -v`. Then, in podman as uid 1000: `FAULTLINE_NODE_ORACLE=1 timeout 280 go test -tags faultline_test ./difftest/ -run 'TestLiveWriterFaults/turns-' > /tmp/s4b-t11.log 2>&1; grep -E '^(---|FAIL|ok)' /tmp/s4b-t11.log | head -60`
+Expected: PASS. Fix any mismatch in Go.
+
+- [ ] **Step 2: Apply the CI, gate and docs changes; run the gates**
+
+Run: `go test -tags faultline_test ./difftest/ -run 'TestGoldensReachEveryErrorLiteral|TestWindowsWriterSkipsList|TestNoDirectClockReads|TestTurnCorpusCoversEveryRow' -v 2>&1 | tail -5`. Then run the full gated replay in the background with `FAULTLINE_COVERAGE_GATE=1` (3a Task 13's report has the command), polling its log.
+Expected: PASS. The coverage gate reports no missed site in `internal/turninv`, `internal/bundle/turnproof`, `internal/minimize/bridge.go` or the new `internal/cli` files.
+
+- [ ] **Step 3: Full podman regeneration, no drift**
+
+Run the podman command from Global Constraints with no `ONLY` and no `BASES`, inside the container:
+1. `pnpm exec tsx difftest/gen/gen-bases.ts turn-two-states turn-non-monotonic`;
+2. `pnpm exec tsx difftest/gen/gen-goldens.ts`;
+3. the scenario and writer generation;
+4. `pnpm exec tsx difftest/gen/gen-corpus.ts`.
+
+This is what `difftest-goldens` runs. Then: `git status --porcelain difftest/testdata`
+Expected: empty output. Any drift is a nondeterminism bug to fix in the harness or Go, not a golden to commit.
+
+- [ ] **Step 4: Commit; hand back to the controller to push** (the controller pushes as Mizore66 and reads CI)
+
+```bash
+git add .github difftest docs internal
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "ci(go): slice 4b faults, end to end, coverage gate and docs
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+Done criteria (spec 4.2, PR 4b):
+1. `go test ./...` passes on all six runners. Every `turns-` and `prove-` writer case and every turn corpus case matches its golden.
+2. `difftest-live`, `difftest-live-faults` and `stack-live` pass. That includes the seven new live tests and the 4b fault rows.
+3. `TestEndToEndSlice4bWithoutNode` passes.
+4. Every turn bundle Go writes verifies under TS (`crossVerify` in the writer replay). Every minimization result Go writes is verified by Go's `minimize verify` in the end-to-end test and by TS's in `TestLiveTurnBridge`'s twin writes.
+5. The hostile-verifier turn corpus gives identical verdicts and error text in Go and TS: the uncapped catalog and the turn messages (corrections 1 and 2).
+6. `difftest/KNOWN_DIFFERENCES.md` lists every intentional difference.
+7. The overview marks PR 4b done in the slice 4 row.
+
+Adversarial review rounds of about 90 minutes each follow, until a round finds no P0 or P1.
