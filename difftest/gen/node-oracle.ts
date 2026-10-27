@@ -897,6 +897,31 @@ export const handlers: Record<string, Handler> = {
       return { stdout: null, error: (error as Error).message };
     }
   },
+  // Slice 4c Task 9 (repair brief store). writeRepairBriefArtifact runs in
+  // `cwd` under `umask` when given, with packet and brief as JSON texts:
+  // JSON.stringify of the written package, or "THREW:<message>". Start the
+  // oracle seeded to compare the stage UUID. verifyRepairBriefArtifact:
+  // JSON.stringify of the verification (an absent `expected` is undefined).
+  writeRepairBriefArtifact: async ({ cwd, output, packet, brief, source, umask }: {
+    cwd: string; output: string; packet: string; brief: string; source: any; umask?: number;
+  }) => {
+    const { writeRepairBriefArtifact } = await import("../../src/repair-brief-store.js");
+    const saved = process.cwd();
+    const savedUmask = umask === undefined ? undefined : process.umask(umask);
+    process.chdir(cwd);
+    try {
+      return JSON.stringify(writeRepairBriefArtifact(output, JSON.parse(packet), JSON.parse(brief), source));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    } finally {
+      process.chdir(saved);
+      if (savedUmask !== undefined) process.umask(savedUmask);
+    }
+  },
+  verifyRepairBriefArtifact: async ({ directory, expected }: { directory: string; expected?: string }) => {
+    const { verifyRepairBriefArtifact } = await import("../../src/repair-brief-store.js");
+    try { return JSON.stringify(verifyRepairBriefArtifact(directory, expected)); } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
