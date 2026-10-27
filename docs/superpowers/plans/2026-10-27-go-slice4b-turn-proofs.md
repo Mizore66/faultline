@@ -1293,3 +1293,170 @@ git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com comm
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+### Task 6: `investigateTurnTrees` (`internal/turninv/investigate.go`)
+
+**Files:**
+- Create: `internal/turninv/investigate.go`, `internal/turninv/investigate_test.go`
+- Modify: `difftest/turninv_live_test.go` (`TestLiveInvestigateTurns`, below Task 3's test), `difftest/gen/oracle-turninv.ts` (its `ops`)
+
+**Interfaces:**
+- Consumes:
+  - Task 3: the schemas and `StatesFromLedger`, `DuplicateTurnOrdinal`, `ReconstructStable`, `FindTransitions`, `HasNonMonotonic`, `AttributeFailureIntroduction`.
+  - `gitproof.VerifyFrozenWitnessRecord`, `gitproof.ReadVerifiedCodexLifecycleLedger` (4a's `ledger.ReadVerified` is the same function).
+  - `gitinv.{MaterializeGitTree,MaterializeFrozenOverlays,ComputeFingerprint,Homogeneity,MissingRuntimeMappingDigests,BuildEffectiveRuntimeMapping,MappingEntry,EnvironmentChangedProofMessage}`.
+  - `sandbox.{CreatePlan,AuditPlan,Execute,Runner,NativeRunner}`; `redaction.RedactText`; `evidence.TurnPathEvidence`; `clock.{NowMillis,NewUUID}`; `nodefs.{MkdtempAsync,RemoveAllAsync,Tmpdir,Join,Resolve}`; `canonical.DigestJSON`.
+- Produces:
+
+```go
+// Request is investigateTurnTrees' options (turn-investigation.ts:613).
+type Request struct {
+	Repository, LedgerPath, ExpectedFrozenDigest, Image string
+	FrozenWitness                                       jsjson.Value
+	RuntimeMapping                                      []gitinv.MappingEntry // nil is undefined ({})
+	Runner                                              sandbox.Runner        // nil: native
+	Injected                                            bool                  // options.runner !== undefined
+}
+
+// InvestigateTurnTrees ports investigateTurnTrees (:613); the result is the
+// ResultSchema-parsed value; an error is what the TS promise rejects with
+// (the ledger read, a schema parse, the temp root).
+func InvestigateTurnTrees(r Request) (jsjson.Value, error)
+
+// Digest ports turnInvestigationDigest (:866).
+func Digest(result jsjson.Value) string
+```
+
+**Gotchas:**
+- **Order** (`:627-664`):
+  1. `executionTrust` (`INJECTED_RUNNER` when injected).
+  2. `repository = resolve(r.Repository)`.
+  3. `VerifyFrozenWitnessRecord(frozen, expected, true)` and the witness summary: `{valid, errors, frozenDigest, witnessDigest: valid ? frozen.witnessDigest : null, externalDigestStatus, approval}`.
+  4. If the witness is invalid or does not MATCH: `baseResult("INVALID_WITNESS", verification.errors, {witness, executionTrust, proofReason: "Frozen witness digest mismatch."})`. The repository is `null` here, and there is no fallback text for an empty error list, unlike Git's.
+  5. `ReadVerifiedCodexLifecycleLedger(resolve(ledgerPath))`. Its error propagates (the CLI prints it).
+  6. `ledgerDigest = digestJson(ledger)`.
+  7. `StatesFromLedger`: a snapshot ZodError propagates.
+  8. Fewer than 2 states gives `NO_TURN_SNAPSHOTS`, with `[]` errors and the reason `Need at least two snapshot states (session baseline and/or TURN_TREE_SNAPSHOT events) for turn localization.`
+  9. A duplicate ordinal gives `DUPLICATE_TURN_SNAPSHOTS`, with `[DuplicateOrdinalError]` and the reason `Multiple snapshot events share a turnOrdinal; refuse ambiguous localization.`
+  10. `tempRoot = MkdtempAsync(Join(Tmpdir(), "faultline-turn-investigation-"))`.
+- **baseResult** (`:311-341`):
+  - It builds the full result object in the schema's key order and parses it.
+  - `introduction` is `{status: "NOT_APPLICABLE", turnOrdinal: null, turnId: null, reason: proofReason ?? errors[0] ?? "Turn investigation did not localize a transition."}`.
+  - `proof` is `emptyProof(proofReason ?? errors[0] ?? "Turn investigation did not produce proof.", trust)`, where `emptyProof` uses `TurnPathEvidence(false)`, which gives `"NONE"` and the experimental label.
+  - `dockerIsolated` is `trust === "NATIVE_DOCKER"`.
+- **Phase 1** (`:674-694`): for each state in sorted order:
+  1. Materialize `fp-<padStart(String(turnOrdinal), 4, "0")>-<treeDigest[0:12]>`.
+  2. Compute the fingerprint and push it.
+  3. Push a materialization error (`errorMessage`) and continue.
+  4. `finally`: run cleanup and push its message when it returns one.
+
+  Fingerprints are pushed in success order, so a failure leaves the list shorter.
+- **The checks after phase 1:**
+  - **Count mismatch:** `EXECUTION_ERROR` with `errors.length ? errors : ["Could not fingerprint every turn state."]`, `environmentFingerprints: fingerprints`, `environmentHomogeneity(fingerprints)`, `runtimeMapping: {}`, and the reason `Could not compute an environment fingerprint for every turn state.` This returns from inside the `try`, so the `finally` (`rm`) still runs before the value is returned.
+  - **Heterogeneous with missing mappings:** `ENVIRONMENT_CHANGED` with `[...errors, EnvironmentChangedProofMessage]` and that message as the reason.
+  - **A throw from `BuildEffectiveRuntimeMapping`:** `ENVIRONMENT_CHANGED` when the message is the environment-changed text, otherwise `EXECUTION_ERROR`, with `[...errors, message]` and the message as the reason. That covers a mapped image that is not digest-pinned (a ZodError message) and `No digest-pinned runtime image is available…`.
+- **Phase 2** (`:755-809`), by index:
+  1. A missing state or fingerprint pushes `Missing prepared state or fingerprint at index <i>`. This is unreachable after the count check (coverage gate reason).
+  2. Look up the image in the effective mapping. A missing one pushes `No resolved runtime image for fingerprint <digest>`, also unreachable.
+  3. Materialize `run-<pad4>-<tree12>`.
+  4. Run `MaterializeFrozenOverlays(worktree, frozen, tree)`.
+  5. `CreatePlan({witness: {digest: frozenDigest, command}, sourceDirectory: worktree, mode: "DOCKER_ISOLATED", image})`, in exactly that key order (`:776-781`). There are no `environment`, `allowedEnvironment` or `limits` keys: unlike Git, the witness's `timeoutSeconds` never reaches the sandbox.
+  6. `AuditPlan`.
+  7. For attempt 1..3:
+     1. `startedEpoch = NowMillis()`, `startedAt = ISO(startedEpoch)`;
+     2. `Execute(plan, runner, injected)`;
+     3. `finishedEpoch = NowMillis()`;
+     4. `runFact`, which reads `NewUUID()` first.
+
+  Any throw in the body pushes its message and moves to the next state. There is no `configurationError` break, unlike Git.
+- **runFact** (`:531-598`):
+  - `executionId = digestJson({schemaVersion, executionNonce, stateIndex: state.index, turnId, turnOrdinal, treeDigest, snapshotDigest, environmentFingerprintDigest, frozenDigest, executionAttempt})`.
+  - The previews use the location `$.turn-run.stdout`/`$.turn-run.stderr`, not Git's `$.run.`.
+  - The unsigned key order is `schemaVersion, executionId, executionNonce, stateIndex, executionAttempt, turnId, turnOrdinal, role, treeDigest, snapshotDigest, environmentFingerprintDigest, frozenDigest, witnessDigest, startedAt, finishedAt, durationMs, overlays, sandbox, result{…17 keys…}`.
+  - `runId = digestJson(unsigned)`, then parse `{...unsigned, runId}` with `RunFactSchema`. The parse reorders to the schema's order, where `runId` is second.
+- **After the loops:**
+  1. `finally`: `RemoveAllAsync(tempRoot)`. Its error replaces the result, as `rm` rejecting would.
+  2. `homogeneity` is recomputed.
+  3. `ReconstructStable(states, runs, false)`, then transitions, `classifyStatus` and attribution.
+  4. `isProof = dockerIsolated && status === "COMPLETED" && errors.length === 0 && transitions.length > 0`.
+  5. `reason` is the five-way choice at `:821-829`, verbatim; the INJECTED_RUNNER branch comes first.
+  6. `TurnPathEvidence(transitions.length > 0)`.
+  7. Build the final object in schema key order and parse it.
+- **classifyStatus** (`:600-605`):
+  - Any error gives `EXECUTION_ERROR`.
+  - Otherwise any `SANDBOX_UNAVAILABLE` reason gives `SANDBOX_UNAVAILABLE`.
+  - Otherwise any `ERROR` verdict gives `EXECUTION_ERROR`.
+  - Otherwise `COMPLETED`.
+- **Clock and UUID order across a run:** `mkdtemp` suffix, then per materialization the index file's `randomUUID` (`git-materialization.ts:288`), the sandbox container name's `randomUUID` (`sandbox.ts:464`), the overlay stage `randomUUID`s, then per attempt `Date.now()`, `Date.now()`, `randomUUID`. The existing Go helpers already read in TS's order; keep calling them in TS's sequence.
+
+**Live test** `TestLiveInvestigateTurns`. The oracle op `investigateTurnTrees({request, path, argvLog})` mirrors `investigateGitRange`'s op: same `withPath`, same argv log, `THREW:` on rejection. 120 generated sessions, each run on both sides under one seed with `clock.ResetForTest` aligned through `seededTick`:
+- 2 to 8 states;
+- a baseline or not;
+- dirty turns;
+- the verdict patterns all-pass, pass-to-fail, non-monotonic and all-fail;
+- a missing tree (materialization error);
+- the fake Dockers `pass-fail`, `broken-state`, `daemon-down` and `flaky-daemon`;
+- heterogeneous `package.json` with a complete, partial, invalid and absent mapping;
+- an invalid and a mismatched witness;
+- a ledger with a duplicate ordinal;
+- a ledger with one snapshot.
+
+Compare the result JSON and the argv log. `requireReached("internal/turninv/investigate.go", …)`.
+
+- [ ] **Step 1: Write the failing test**
+
+```go
+// internal/turninv/investigate_test.go
+//go:build unix
+
+package turninv
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/Mizore66/faultline/internal/gitinv"
+	"github.com/Mizore66/faultline/internal/jsjson"
+)
+
+func TestInvalidWitnessShortCircuits(t *testing.T) {
+	frozen := gitinv.FrozenWitnessForTest(t)
+	result, err := InvestigateTurnTrees(Request{
+		Repository: t.TempDir(), LedgerPath: "/nonexistent/ledger.json", FrozenWitness: frozen,
+		ExpectedFrozenDigest: "sha256:" + strings.Repeat("0", 64),
+		Image:                "registry.example/faultline-node@sha256:" + strings.Repeat("b", 64),
+	})
+	if err != nil {
+		t.Fatal(err) // the ledger is never read for an invalid witness
+	}
+	if result.Get("status").Str() != "INVALID_WITNESS" || result.Get("proof", "reason").Str() != "Frozen witness digest mismatch." ||
+		result.Get("repository").Kind() != jsjson.Null || result.Get("proof", "evidenceGrade").Str() != "NONE" {
+		t.Fatal(result)
+	}
+}
+```
+
+Port the remaining cases of `tests/turn-investigation.test.ts` with `gitinv.FakeDockerDirForTest(t, "pass-fail")` on `PATH` and ledgers built by 4a's `ledger.Create`/`ledger.Append` once 4a Task 4 has merged, or the frozen fixture JSON from Task 2's base until then. The cases: a baseline PASS→FAIL is `ATTRIBUTED` and `isProof` true with the native runner, the injected runner is never proof, a duplicate ordinal, fewer than two states, a heterogeneous refusal, a materialization error.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/turninv/ -run TestInvalidWitness`
+Expected: FAIL (undefined: `InvestigateTurnTrees`).
+
+- [ ] **Step 3: Implement** by transcription; extend the oracle ops.
+
+- [ ] **Step 4: Run to verify the tests pass**
+
+Run: `go test ./internal/turninv/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run TestLiveInvestigateTurns -v > /tmp/s4b-t6.log 2>&1; tail -5 /tmp/s4b-t6.log` (podman, under 280 s; lower the session count locally if needed and record it)
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/turninv difftest/turninv_live_test.go difftest/gen/oracle-turninv.ts
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "feat(go): investigateTurnTrees (fingerprint, replay three times per turn state)
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
