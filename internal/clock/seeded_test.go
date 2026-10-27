@@ -51,3 +51,26 @@ func TestRandReadIsASeparateStream(t *testing.T) {
 		t.Fatal("RandRead under the same seed differs")
 	}
 }
+
+// FAULTLINE_TEST_CLOCK_OFFSET_MS is added to the epoch when the seed is
+// loaded (seed.mjs); ResetForTest drops it.
+func TestClockOffset(t *testing.T) {
+	t.Setenv("FAULTLINE_TEST_SEED", "offset")
+	t.Setenv("FAULTLINE_TEST_CLOCK_OFFSET_MS", "3600000")
+	state.init = false
+	if got := NowMillis(); got != epochMillis+3600000 {
+		t.Fatalf("%d", got)
+	}
+	ResetForTest("x")
+	if got := NowMillis(); got != epochMillis {
+		t.Fatalf("reset keeps the offset: %d", got)
+	}
+}
+
+func TestClockOffsetParse(t *testing.T) {
+	for raw, want := range map[string]int64{"": 0, "0": 0, "7200000": 7200000, "-5": -5} {
+		if got := clockOffset(raw); got != want {
+			t.Errorf("clockOffset(%q) = %d, want %d", raw, got, want)
+		}
+	}
+}
