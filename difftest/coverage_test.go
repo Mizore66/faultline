@@ -269,16 +269,11 @@ var unreachableLiterals = map[string]string{
 
 	// turnproof/files.go: reached by Task 7/8 goldens; remove each row when
 	// they land (the gate then reports the row as stale).
-	"Turn proof bundle must be a real directory:":                         "reached by Task 7/8 goldens; remove when they land",
-	"Turn proof bundle contains a symbolic link or special file:":         "reached by Task 7/8 goldens; remove when they land",
-	"Turn proof bundle artifact exceeds FaultLine's read limit:":          "reached by Task 7/8 goldens; remove when they land",
-	"Turn proof bundle contains too many files to verify safely":          "reached by Task 7/8 goldens; remove when they land",
-	"Turn proof bundle exceeds FaultLine's total verification read limit": "reached by Task 7/8 goldens; remove when they land",
+	"Turn proof bundle artifact exceeds FaultLine's read limit:": "reached by Task 7/8 goldens; remove when they land",
 
 	// turnproof/pack.go (TestLiveTurnTreesPack's requireReached):
-	"Turn tree pack enumeration produced no Git objects.":               "rev-list --objects <tree> always lists the tree itself",
-	"Turn tree pack exceeds FaultLine's portable artifact limit.":       "pack-objects output past the 64 MiB runHardenedGit cap fails first, below the 128 MiB limit",
-	"Could not create temporary bare repository for pack verification:": "reached by Task 2 turn-git-fail-init golden; remove when it lands",
+	"Turn tree pack enumeration produced no Git objects.":         "rev-list --objects <tree> always lists the tree itself",
+	"Turn tree pack exceeds FaultLine's portable artifact limit.": "pack-objects output past the 64 MiB runHardenedGit cap fails first, below the 128 MiB limit",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
