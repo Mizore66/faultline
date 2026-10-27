@@ -414,3 +414,14 @@ TestWriterReplay/posix/incident-status-unbound
 TestWriterReplay/posix/incident-continue-unbound
 TestWriterReplay/posix/incident-status-foreign-proposal
 TestWriterReplay/posix/incident-continue-foreign-proposal
+TestWriterReplay/posix/witness-implement-codex-no-allow
+TestWriterReplay/posix/witness-implement-codex-ok
+TestWriterReplay/posix/witness-implement-codex-noop
+TestWriterReplay/posix/witness-implement-codex-exit-nonzero
+TestWriterReplay/posix/witness-implement-codex-killed
+TestWriterReplay/posix/witness-implement-codex-probe-fail
+TestWriterReplay/posix/witness-implement-codex-probe-empty
+TestWriterReplay/posix/witness-implement-codex-probe-crlf
+TestWriterReplay/posix/witness-implement-codex-missing-bin
+TestWriterReplay/posix/witness-implement-codex-on-path
+TestWriterReplay/posix/witness-implement-codex-not-on-path
