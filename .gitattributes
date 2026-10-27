@@ -13,3 +13,5 @@ difftest/testdata/fakegit/** text eol=lf
 difftest/testdata/recorder/** text eol=lf
 difftest/testdata/fakedocker/** text eol=lf
 difftest/testdata/fakebrowser/** text eol=lf
+difftest/testdata/fakecodex/** text eol=lf
+difftest/testdata/fakegh/** text eol=lf

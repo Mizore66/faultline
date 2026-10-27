@@ -1,0 +1,64 @@
+#!/bin/sh
+# Fake codex "probe-empty" (README.md): `--version` prints an empty line.
+# Writer replay fake: installFakeCodex (difftest/writer_test.go) and
+# writerEnv (difftest/gen/scenarios.ts) copy it to <HOME>/fakecodex/codex
+# with the case's argv.log written into the `log=` line: fl runs codex with
+# PATH as its only environment variable. Every call appends one record:
+# "codex " + the arguments joined by \037, then STDIN=<stdin bytes>,
+# PATH=<$PATH> and ENV=<the other variables' names, sorted, joined by ",">
+# (without PWD, OLDPWD, SHLVL and _, which sh sets on its own), terminated
+# by \036.
+self=$(cd "${0%/*}" && pwd -P)
+log=$FAULTLINE_ARGV_LOG
+# tool finds a helper on PATH, else in /usr/bin or /bin: a case may run with
+# a PATH that holds none (pathTools, the end to end without Node).
+tool() {
+  command -v "$1" 2>/dev/null && return
+  for dir in /usr/bin /bin; do
+    if [ -x "$dir/$1" ]; then echo "$dir/$1"; return; fi
+  done
+  echo "$1"
+}
+us=$(printf '\037')
+stdin=$("$(tool cat)"; printf x)
+stdin=${stdin%x}
+names=$("$(tool awk)" 'BEGIN {
+  n = 0
+  for (k in ENVIRON) {
+    if (k == "PATH" || k == "PWD" || k == "OLDPWD" || k == "SHLVL" || k == "_") continue
+    i = n++
+    while (i > 0 && names[i - 1] > k) { names[i] = names[i - 1]; i-- }
+    names[i] = k
+  }
+  s = ""
+  for (i = 0; i < n; i++) s = s (i ? "," : "") names[i]
+  printf "%s", s
+}')
+if [ -n "$log" ]; then
+  # One write per record.
+  record="codex "
+  sep=
+  for arg in "$@"; do record="$record$sep$arg"; sep=$us; done
+  printf '%s\036' "$record${us}STDIN=$stdin${us}PATH=$PATH${us}ENV=$names" >> "$log"
+fi
+# rep prints $1 repeated $2 times.
+rep() {
+  s=$1 n=$2 r=
+  while [ "$n" -gt 0 ]; do
+    if [ $((n % 2)) = 1 ]; then r=$r$s; fi
+    s=$s$s n=$((n / 2))
+  done
+  printf '%s' "$r"
+}
+if [ "$1" = --version ] && [ $# = 1 ]; then
+  printf '\n'
+  exit 0
+fi
+case "$1 $2 $#" in
+"exec --full-auto 3")
+  printf 'fake codex: nothing to do\n'
+  exit 0
+  ;;
+esac
+printf 'fake codex (probe-empty): unsupported command: %s\n' "$*" >&2
+exit 125

@@ -48,6 +48,15 @@ type writerTemplate struct {
 	Env       [][2]string
 	PosixOnly bool
 	Mutations []template
+	// Slice 4c fakes (gen-writers.ts WriterTemplate):
+	// difftest/testdata/fakecodex/<FakeCodex> as FAULTLINE_CODEX_BIN (or on
+	// PATH with FakeCodexOnPath), difftest/testdata/fakegh/<FakeGh> on PATH,
+	// and a fake OpenAI server answering from the workspace file FakeOpenAI.
+	FakeCodex, FakeGh, FakeOpenAI string
+	FakeCodexOnPath               bool
+	// openAIURL is the URL of the case's running fake OpenAI server
+	// (runWriterCaseWith sets it; not a writers.json key).
+	openAIURL string
 }
 
 // writerResult is one invocation, normalized like its golden line.
@@ -66,8 +75,9 @@ type writerResult struct {
 }
 
 var (
-	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations"}
-	writerIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations",
+		"fakeCodex", "fakeCodexOnPath", "fakeGh", "fakeOpenAI"}
+	writerIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	// fileEntry is a regular file's tree entry: its SHA-256, then its mode
 	// except on Windows.
 	fileEntry = regexp.MustCompile(`^[0-9a-f]{64}(?: [0-7]{1,4})?$`)
@@ -92,7 +102,9 @@ func loadWriterTemplates(t testing.TB, repo string) []writerTemplate {
 			}
 		}
 		tpl := writerTemplate{ID: o.Field("id").Str(), Scenario: o.Field("scenario").Str(), FakeDocker: o.Field("fakeDocker").Str(),
-			FakeTools: o.Field("fakeTools").Str(), PosixOnly: o.Field("posixOnly").Bool()}
+			FakeTools: o.Field("fakeTools").Str(), PosixOnly: o.Field("posixOnly").Bool(),
+			FakeCodex: o.Field("fakeCodex").Str(), FakeCodexOnPath: o.Field("fakeCodexOnPath").Bool(), FakeGh: o.Field("fakeGh").Str(),
+			FakeOpenAI: o.Field("fakeOpenAI").Str()}
 		if ids[tpl.ID] || !writerIDPattern.MatchString(tpl.ID) {
 			t.Fatalf("writer template id %q is duplicated or not lowercase kebab-case", tpl.ID)
 		}
@@ -239,11 +251,79 @@ func writeRecorders(t testing.TB, repo string, r writerRoots) {
 }
 
 // inheritedOut names the variables a writer case never inherits: git's own,
-// FaultLine's, and those src/ reads to detect CI or a live model
-// (difftest/gen/scenarios.ts inheritedOut).
+// FaultLine's, GitHub Actions' (provenance create reads GITHUB_SHA and the
+// rest: slice 4c correction 6), and those src/ reads to detect CI or a live
+// model (difftest/gen/scenarios.ts inheritedOut).
 func inheritedOut(name string) bool {
-	return strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "FAULTLINE_") ||
-		name == "CI" || name == "GITHUB_ACTIONS" || name == "OPENAI_API_KEY"
+	return strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "FAULTLINE_") || strings.HasPrefix(name, "GITHUB_") ||
+		name == "CI" || name == "OPENAI_API_KEY"
+}
+
+// installFakeCodex copies difftest/testdata/fakecodex/<name>/codex to
+// <HOME>/fakecodex/codex (mode 0755) with the case's argv log path written
+// into its `log=` line, as writeRecorders does: fl runs codex with PATH as
+// its only environment variable. It returns the copy's path
+// (scenarios.ts installFakeCodex).
+func installFakeCodex(t testing.TB, repo string, r writerRoots, name string) (bin string) {
+	t.Helper()
+	bin, err := installFakeCodexErr(repo, r, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// installFakeCodexErr is installFakeCodex for writerEnv, which has no
+// testing.TB.
+func installFakeCodexErr(repo string, r writerRoots, name string) (string, error) {
+	const line = "log=$FAULTLINE_ARGV_LOG\n"
+	template, err := os.ReadFile(filepath.Join(repo, "difftest", "testdata", "fakecodex", name, "codex"))
+	if err != nil {
+		return "", err
+	}
+	if !strings.Contains(string(template), line) || strings.Contains(r.argvLog, "'") {
+		return "", errors.New("fake codex " + name + " cannot take " + r.argvLog)
+	}
+	dir := filepath.Join(r.home, "fakecodex")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	bin := filepath.Join(dir, "codex")
+	if err := os.WriteFile(bin, []byte(strings.Replace(string(template), line, "log='"+r.argvLog+"'\n", 1)), 0o755); err != nil {
+		return "", err
+	}
+	return bin, os.Chmod(bin, 0o755)
+}
+
+// fakeCodexName is the fake codex a template installs ("" for none): its
+// fakeCodex, or edits for fakeCodexOnPath alone (scenarios.ts writerEnv).
+func fakeCodexName(tpl writerTemplate) string {
+	if tpl.FakeCodex == "" && tpl.FakeCodexOnPath {
+		return "edits"
+	}
+	return tpl.FakeCodex
+}
+
+// maskCodexPath masks, in a fake codex record's PATH= field, the inherited
+// PATH as <PATH>, then the case root as <ROOT> and the repository as <REPO>
+// (gen-writers.ts maskCodexPath): fl passes codex its whole PATH, which
+// differs between machines. Nothing else is touched.
+func maskCodexPath(record string, r writerRoots, repo, inheritedPath string) string {
+	if !strings.HasPrefix(record, "codex ") {
+		return record
+	}
+	args := strings.Split(record, "\x1f")
+	for i, a := range args {
+		value, ok := strings.CutPrefix(a, "PATH=")
+		if !ok {
+			continue
+		}
+		if inheritedPath != "" {
+			value = strings.ReplaceAll(value, inheritedPath, "<PATH>")
+		}
+		args[i] = "PATH=" + strings.ReplaceAll(strings.ReplaceAll(value, r.root, "<ROOT>"), repo, "<REPO>")
+	}
+	return strings.Join(args, "\x1f")
 }
 
 // writerEnv is difftest/gen/scenarios.ts writerEnv: the whole environment
@@ -270,10 +350,25 @@ func writerEnv(repo string, r writerRoots, seed string, tpl writerTemplate) []st
 			set(k, v)
 		}
 	}
-	// The recorders, the fake toolchain (difftest/testdata/faketools), the
-	// fake Docker, then the inherited PATH or only the template's
-	// pathTools (scenarios.ts writerEnv).
+	// The recorders, <HOME>/fakecodex (fakeCodexOnPath), the fake gh
+	// (difftest/testdata/fakegh), the fake toolchain
+	// (difftest/testdata/faketools), the fake Docker, then the inherited
+	// PATH or only the template's pathTools (scenarios.ts writerEnv). A
+	// failure panics, as in linkPathTools.
 	path := []string{r.recorder}
+	codex := ""
+	if name := fakeCodexName(tpl); name != "" {
+		var err error
+		if codex, err = installFakeCodexErr(repo, r, name); err != nil {
+			panic(err)
+		}
+		if tpl.FakeCodexOnPath {
+			path = append(path, filepath.Dir(codex))
+		}
+	}
+	if tpl.FakeGh != "" {
+		path = append(path, filepath.Join(repo, "difftest", "testdata", "fakegh", tpl.FakeGh))
+	}
 	if tpl.FakeTools != "" {
 		path = append(path, filepath.Join(repo, "difftest", "testdata", "faketools", tpl.FakeTools))
 	}
@@ -293,8 +388,21 @@ func writerEnv(repo string, r writerRoots, seed string, tpl writerTemplate) []st
 	} {
 		set(kv[0], kv[1])
 	}
+	if codex != "" && !tpl.FakeCodexOnPath {
+		set("FAULTLINE_CODEX_BIN", codex)
+	}
+	if tpl.openAIURL != "" {
+		set("FAULTLINE_TEST_OPENAI_URL", tpl.openAIURL)
+	}
+	// An env value that is exactly <FILE:rel> is the trimmed text of the
+	// workspace file rel when the invocation starts (gen-writers.ts
+	// invocationEnv).
 	for _, kv := range tpl.Env {
-		set(kv[0], substituteRoots(kv[1], r))
+		value, err := fileArgumentErr(substituteRoots(kv[1], r), r)
+		if err != nil {
+			panic(err)
+		}
+		set(kv[0], value)
 	}
 	out := make([]string, len(order))
 	for i, k := range order {
@@ -529,6 +637,27 @@ var worktreeDigestMember = regexp.MustCompile(`"worktreeDigest":\s*"sha256:([0-9
 
 // relocation ports gen-writers.ts relocation: the digests in the tree that
 // depend on the case paths, each named by where it was first derived.
+// openAIRequestInputs are the input strings of the request bodies the fake
+// OpenAI server recorded ("" for a body that is not JSON or has no string
+// input), in log order (gen-writers.ts openAIRequestInputs).
+func openAIRequestInputs(records []string) []string {
+	var out []string
+	for _, record := range records {
+		if !strings.HasPrefix(record, "openai\x1f") {
+			continue
+		}
+		fields := strings.SplitN(record, "\x1f", 6)
+		input := ""
+		if len(fields) == 6 {
+			if v, err := jsjson.Parse(fields[5]); err == nil && v.Get("input").Kind() == jsjson.String {
+				input = v.Get("input").Str()
+			}
+		}
+		out = append(out, input)
+	}
+	return out
+}
+
 func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 	t.Helper()
 	type file struct {
@@ -654,6 +783,12 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 			}
 		}
 	}
+	// The fake OpenAI server's records hold the request body, whose input
+	// is the evidence packet: its packetDigest covers the path-dependent
+	// investigationDigest, and a failed request leaves the packet in no
+	// file. Each is walked like a file's JSON as openai:<k>, without a file:
+	// name (gen-writers.ts relocation).
+	requests := openAIRequestInputs(records)
 	for frontier := seeds; len(frontier) > 0; {
 		found = nil
 		for _, f := range files {
@@ -663,6 +798,14 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 			add(canonical.SHA256HexBytes(f.bytes), "file:"+f.rel)
 			if v, err := jsjson.Parse(f.text); err == nil {
 				visit(v, f.rel, "")
+			}
+		}
+		for k, text := range requests {
+			if !slices.ContainsFunc(frontier, func(needle string) bool { return strings.Contains(text, needle) }) {
+				continue
+			}
+			if v, err := jsjson.Parse(text); err == nil {
+				visit(v, "openai:"+strconv.Itoa(k), "")
 			}
 		}
 		frontier = found
@@ -861,6 +1004,9 @@ type writerRun struct {
 func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writerRun) []writerResult {
 	r := makeWriterRoots(t)
 	busyPort := holdBusyPort(t, tpl)
+	if tpl.FakeOpenAI != "" {
+		tpl.openAIURL = startFakeOpenAI(t, r.ws, tpl.FakeOpenAI, r.argvLog)
+	}
 	prepareWriterCase(t, repo, tpl, r)
 	var out []writerResult
 	// The recorded paths accumulate over the case's invocations: a later
@@ -881,6 +1027,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		cmd := exec.Command(command[0], command[1:]...)
 		cmd.Dir = r.ws
 		cmd.Env = writerEnv(repo, r, tpl.ID, tpl)
+		inheritedPath := os.Getenv("PATH")
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		var exitErr *exec.ExitError
@@ -895,6 +1042,9 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 			outText, errText = run.mask(t, r, inv, outText, errText)
 		}
 		invocationRecords := readArgvLog(r.argvLog)
+		for i, record := range invocationRecords {
+			invocationRecords[i] = maskCodexPath(record, r, repo, inheritedPath)
+		}
 		records = append(records, invocationRecords...)
 		reloc := relocation(t, r, records)
 		after := treeEntries(t, r.ws, reloc.fileDigest)
@@ -912,6 +1062,12 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		if pkg, root, ok := writtenPrevention(outText); ok && !run.noVerify {
 			crossVerify(t, repo, inv, tpl.ID, pkg, root)
 		}
+		if pkg, root, ok := writtenRepairPrevention(outText); ok && !run.noVerify {
+			crossVerify(t, repo, inv, tpl.ID, pkg, root)
+		}
+		if !run.noVerify {
+			crossVerifyArtifacts(t, repo, r, inv, tpl.ID, outText, args)
+		}
 		for rel, entry := range res.Files {
 			if fileEntry.MatchString(entry) {
 				res.contents[rel], _ = os.ReadFile(filepath.Join(r.ws, filepath.FromSlash(rel)))
@@ -928,15 +1084,24 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 // invocation that must pass --expect-root reads it (gen-writers.ts
 // fileArgument).
 func fileArgument(t *testing.T, arg string, r writerRoots) string {
-	rel, ok := strings.CutPrefix(arg, "<FILE:")
-	if !ok || !strings.HasSuffix(rel, ">") || strings.Contains(rel[:len(rel)-1], ">") {
-		return arg
-	}
-	b, err := os.ReadFile(filepath.Join(r.ws, filepath.FromSlash(rel[:len(rel)-1])))
+	value, err := fileArgumentErr(arg, r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return jsstr.Trim(string(b))
+	return value
+}
+
+// fileArgumentErr is fileArgument for writerEnv, which has no testing.TB.
+func fileArgumentErr(arg string, r writerRoots) (string, error) {
+	rel, ok := strings.CutPrefix(arg, "<FILE:")
+	if !ok || !strings.HasSuffix(rel, ">") || strings.Contains(rel[:len(rel)-1], ">") {
+		return arg, nil
+	}
+	b, err := os.ReadFile(filepath.Join(r.ws, filepath.FromSlash(rel[:len(rel)-1])))
+	if err != nil {
+		return "", err
+	}
+	return jsstr.Trim(string(b)), nil
 }
 
 // stdoutArgument replaces an argv string that is exactly
@@ -1391,6 +1556,118 @@ func writtenPrevention(stdout string) (dir, root string, ok bool) {
 		return "", "", false
 	}
 	return d.Str(), r.Str(), true
+}
+
+// stdoutObject is stdout parsed as a JSON object (ok false otherwise).
+func stdoutObject(stdout string) (jsjson.Value, bool) {
+	v, err := jsjson.Parse(stdout)
+	return v, err == nil && v.Kind() == jsjson.Object
+}
+
+// writtenAttestation is the receipt an `fl attest create` run printed
+// (status ATTESTED): its path and receipt digest (gen-writers.ts
+// writtenAttestation).
+func writtenAttestation(stdout string) (path, receiptDigest string, ok bool) {
+	v, ok := stdoutObject(stdout)
+	p, d := v.Get("path"), v.Get("receiptDigest")
+	if !ok || v.Get("status").Str() != "ATTESTED" || v.Get("status").Kind() != jsjson.String || p.Kind() != jsjson.String || d.Kind() != jsjson.String {
+		return "", "", false
+	}
+	return p.Str(), d.Str(), true
+}
+
+// writtenRepairBrief is the package an `fl repair brief` run printed
+// (status PERSISTED): its directory and artifact digest (gen-writers.ts
+// writtenRepairBrief).
+func writtenRepairBrief(stdout string) (dir, artifactDigest string, ok bool) {
+	v, ok := stdoutObject(stdout)
+	d, a := v.Get("directory"), v.Get("artifactDigest")
+	if !ok || v.Get("status").Kind() != jsjson.String || v.Get("status").Str() != "PERSISTED" || d.Kind() != jsjson.String || a.Kind() != jsjson.String {
+		return "", "", false
+	}
+	return d.Str(), a.Str(), true
+}
+
+// writtenProvenanceReceipt is the receipt an `fl provenance create` run
+// printed (status AWAITING_GITHUB_ARTIFACT_ATTESTATION; gen-writers.ts
+// writtenProvenanceReceipt).
+func writtenProvenanceReceipt(stdout string) (path string, ok bool) {
+	v, ok := stdoutObject(stdout)
+	p := v.Get("path")
+	if !ok || v.Get("status").Kind() != jsjson.String || v.Get("status").Str() != "AWAITING_GITHUB_ARTIFACT_ATTESTATION" || p.Kind() != jsjson.String {
+		return "", false
+	}
+	return p.Str(), true
+}
+
+// writtenRepairPrevention is the prevention package an `fl repair
+// --bundle` run printed (preventionExport with ok: true): its directory and
+// root digest (gen-writers.ts writtenRepairPrevention).
+func writtenRepairPrevention(stdout string) (dir, rootDigest string, ok bool) {
+	v, ok := stdoutObject(stdout)
+	e := v.Get("preventionExport")
+	d, r := e.Get("directory"), e.Get("rootDigest")
+	if !ok || e.Kind() != jsjson.Object || e.Get("ok").Kind() != jsjson.Bool || !e.Get("ok").Bool() || d.Kind() != jsjson.String || r.Kind() != jsjson.String {
+		return "", "", false
+	}
+	return d.Str(), r.Str(), true
+}
+
+// crossVerifyArtifacts runs frozen TS's verifier on every attestation
+// receipt, repair brief and provenance receipt (with fake gh pass) Go
+// wrote, when FAULTLINE_NODE_ORACLE=1, as gen-writers.ts crossVerify does
+// on what TS wrote. args is the invocation's argv after substitution.
+func crossVerifyArtifacts(t *testing.T, repo string, r writerRoots, inv int, id, stdout string, args []string) {
+	t.Helper()
+	if os.Getenv("FAULTLINE_NODE_ORACLE") != "1" {
+		return
+	}
+	check := func(what string, ok func(out string) bool, tpl writerTemplate, argv ...string) {
+		out, code := runTSInCase(t, repo, r, id+":verify", tpl, argv...)
+		if code != 0 || !ok(out) {
+			t.Fatalf("%s|%d: TS %s Go wrote failed (exit %d)\n%s", id, inv, what, code, out)
+		}
+		tsCrossVerified.Add(1)
+	}
+	anyOutput := func(string) bool { return true }
+	if path, digest, ok := writtenAttestation(stdout); ok {
+		check("attest verify of the receipt", anyOutput, writerTemplate{}, "attest", "verify", strings.TrimSuffix(filepath.Base(path), ".json"),
+			"--store", filepath.Dir(path), "--expect-digest", digest)
+	}
+	if dir, digest, ok := writtenRepairBrief(stdout); ok {
+		check("repair verify of the brief", func(out string) bool { return strings.Contains(out, `"valid": true`) }, writerTemplate{},
+			"repair", "verify", dir, "--expect-digest", digest)
+	}
+	if path, ok := writtenProvenanceReceipt(stdout); ok {
+		bundle := ""
+		if i := slices.Index(args, "--bundle"); i >= 0 && i+1 < len(args) {
+			bundle = args[i+1]
+		} else {
+			t.Fatalf("%s|%d: a provenance receipt without --bundle in the argv", id, inv)
+		}
+		check("provenance verify of the receipt", anyOutput, writerTemplate{FakeGh: "pass"}, "provenance", "verify", "--bundle", bundle, "--receipt", path,
+			"--trust", filepath.Join(r.ws, "trust.json"), "--attestation-bundle", filepath.Join(r.ws, "attestation.sigstore.json"))
+	}
+}
+
+// runTSInCase runs frozen TS under the seed preload and the fetch shim in
+// the case workspace with the writer environment of tpl (gen-writers.ts
+// runCli), giving its stdout then stderr and its exit code.
+func runTSInCase(t *testing.T, repo string, r writerRoots, seed string, tpl writerTemplate, args ...string) (string, int) {
+	t.Helper()
+	gen := filepath.Join(repo, "difftest", "gen")
+	cmd := exec.Command("node", append([]string{"--import", "file://" + filepath.Join(gen, "seed.mjs"), "--import", "file://" + filepath.Join(gen, "fetch-shim.mjs"),
+		filepath.Join(repo, "dist", "cli.js")}, args...)...)
+	cmd.Dir = r.ws
+	tpl.ID = seed
+	cmd.Env = writerEnv(repo, r, seed, tpl)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	var exitErr *exec.ExitError
+	if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
+		t.Fatalf("running node: %v", err)
+	}
+	return stdout.String() + stderr.String(), cmd.ProcessState.ExitCode()
 }
 
 // proofDirectory is the bundle directory a successful investigate printed.
