@@ -7,24 +7,31 @@ import (
 
 const oDirectory = 0
 
-// direntMode is the type libuv's fs__scandir gives an entry from its
-// FILE_DIRECTORY_INFORMATION attributes: any reparse point is a link,
-// then a directory, else a file. The attributes are read again here
-// (GetFileAttributesW); a failure, a race only, gives no type.
-func direntMode(raw string) (fs.FileMode, bool) {
-	p, err := syscall.UTF16PtrFromString(raw)
+// fileAttributeDevice is FILE_ATTRIBUTE_DEVICE.
+const fileAttributeDevice = 0x40
+
+// direntTypeOf is the type libuv's fs__scandir gives an entry from the
+// FileAttributes of its FILE_DIRECTORY_INFORMATION record: a device is
+// UV__DT_CHAR, then any reparse point is a link, then a directory, else a
+// file. os.File.ReadDir reads the same attributes from its
+// FILE_ID_BOTH_DIR_INFO or FILE_FULL_DIR_INFO record, which Info returns
+// without another call.
+func direntTypeOf(e fs.DirEntry) uint8 {
+	info, err := e.Info()
 	if err != nil {
-		return 0, false
+		return 0
 	}
-	attrs, err := syscall.GetFileAttributes(p)
-	if err != nil {
-		return 0, false
+	data, ok := info.Sys().(*syscall.Win32FileAttributeData)
+	if !ok {
+		return 0
 	}
-	switch {
+	switch attrs := data.FileAttributes; {
+	case attrs&fileAttributeDevice != 0:
+		return dtCHR
 	case attrs&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0:
-		return fs.ModeSymlink, true
+		return dtLNK
 	case attrs&syscall.FILE_ATTRIBUTE_DIRECTORY != 0:
-		return fs.ModeDir, true
+		return dtDIR
 	}
-	return 0, true
+	return dtREG
 }

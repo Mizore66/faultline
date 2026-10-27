@@ -3,6 +3,7 @@
 package difftest
 
 import (
+	"bytes"
 	"errors"
 	"math/rand/v2"
 	"os"
@@ -884,25 +885,34 @@ exec git "$@"
 	return fake
 }
 
-// maskCommitTimes masks the author and committer timestamps of a
-// `git cat-file -p` commit.
-var commitTimePattern = regexp.MustCompile(`(?m)^((?:author|committer) .*) [0-9]+ [+-][0-9]{4}$`)
+// maskCommitTimes masks the author and committer seconds of a
+// `git cat-file -p` commit; the timezone offset is still compared.
+var commitTimePattern = regexp.MustCompile(`(?m)^((?:author|committer) .*) [0-9]+( [+-][0-9]{4})$`)
 
-func maskCommitTimes(s string) string { return commitTimePattern.ReplaceAllString(s, "$1 <TIME>") }
+func maskCommitTimes(s string) string {
+	return commitTimePattern.ReplaceAllString(s, "$1 <SECONDS>$2")
+}
 
 // TestLiveCommitRepairedWorktreeState runs frozen TS's
-// commitRepairedWorktreeState and the Go port on 120 generated worktrees,
-// one after the other on the same repository: executable bits, nested
-// directories, symlinks (skipped), empty files, nested .git entries and a
-// linked worktree (its .git file), CRLF files, names with leading spaces,
-// backslashes, a leading "..", non-UTF-8 bytes (where the filesystem takes
-// them), deleted tracked files, unreadable files and directories, no
-// identity (the machine's own fallback), an unknown base, SHA-256
-// repositories, and fake gits that print a non-object id or fail on one
-// subcommand. The THREW: texts must be equal; the tree ids must be equal,
-// and the commits equal or equal under `git cat-file -p` with the times
-// masked (the two runs may fall in different seconds). No temporary index
-// may be left behind.
+// commitRepairedWorktreeState and the Go port at once on 120 generated
+// worktrees, on the same repository (each side has its own temporary index).
+// The cases cover:
+//   - executable bits, nested directories, symlinks (skipped), empty files
+//     and CRLF files;
+//   - nested .git entries and a linked worktree (its .git file);
+//   - names with leading spaces, backslashes, a leading "..", and non-UTF-8
+//     bytes (where the filesystem takes them);
+//   - deleted tracked files;
+//   - unreadable files, unreadable directories (mode 0), and readable but
+//     unsearchable directories (0o644, typed from d_type);
+//   - no identity (the machine's own fallback), an unknown base, and SHA-256
+//     repositories;
+//   - fake gits that print a non-object id or fail on one subcommand.
+//
+// The THREW: texts and the tree ids must be equal. The commits must be
+// equal, or equal under `git cat-file -p` with the seconds masked. The
+// repository's own index must be unchanged, and no temporary index may be
+// left behind.
 func TestLiveCommitRepairedWorktreeState(t *testing.T) {
 	oracle.Skip(t)
 	work, err := filepath.EvalSymlinks(t.TempDir())
@@ -931,6 +941,7 @@ func TestLiveCommitRepairedWorktreeState(t *testing.T) {
 	}
 	sort.Strings(modes)
 	realPath := os.Getenv("PATH")
+	fakes := 0
 	t.Setenv("PATH", realPath) // restored after the test, whatever a case set
 	r := rand.New(rand.NewPCG(13, 4))
 	outcomes := map[string]int{}
@@ -1042,6 +1053,19 @@ func TestLiveCommitRepairedWorktreeState(t *testing.T) {
 			os.Chmod(filepath.Join(root, "locked"), 0)
 			locked = append(locked, filepath.Join(root, "locked"))
 			label = append(label, "unreadable-dir")
+		} else if r.IntN(10) == 0 {
+			// Readable but not searchable: readdirSync still types the
+			// entries (from d_type), so TS fails on the lstat of the
+			// file or the scandir of the subdirectory.
+			mutate("unsearchable/a", "a\n", 0o644)
+			if r.IntN(2) == 0 {
+				mutate("unsearchable/sub/b", "b\n", 0o644)
+				label = append(label, "unsearchable-dir-with-subdir")
+			} else {
+				label = append(label, "unsearchable-dir")
+			}
+			os.Chmod(filepath.Join(root, "unsearchable"), 0o644)
+			locked = append(locked, filepath.Join(root, "unsearchable"))
 		}
 		base := head
 		switch r.IntN(15) {
@@ -1057,8 +1081,9 @@ func TestLiveCommitRepairedWorktreeState(t *testing.T) {
 		}
 		var path string
 		switch r.IntN(8) {
-		case 0:
-			mode := modes[r.IntN(len(modes))]
+		case 0: // every mode in turn, so each failure is reached
+			mode := modes[fakes%len(modes)]
+			fakes++
 			path = writeRepairFakeGit(t, work, mode) + ":" + os.Getenv("PATH")
 			label = append(label, "fake:"+mode)
 		case 1:
@@ -1071,6 +1096,10 @@ func TestLiveCommitRepairedWorktreeState(t *testing.T) {
 		if path != "" {
 			args.Obj().Set("path", jsjson.MakeString(path))
 		}
+		// The repository's own index must not change: both sides build in a
+		// temporary one.
+		realIndex := git(root, "rev-parse", "--path-format=absolute", "--git-path", "index")
+		indexBefore, _ := os.ReadFile(realIndex)
 		// The two run at once on the same repository: each has its own
 		// temporary index, and Git writes objects atomically. The fake's
 		// PATH reaches Go through the process environment and TS through
@@ -1090,6 +1119,9 @@ func TestLiveCommitRepairedWorktreeState(t *testing.T) {
 		wg.Wait()
 		os.Setenv("PATH", realPath)
 		recordOutput(t, want)
+		if indexAfter, _ := os.ReadFile(realIndex); !bytes.Equal(indexBefore, indexAfter) {
+			t.Fatalf("case %d (%s): %s changed", i, strings.Join(label, " "), realIndex)
+		}
 		for _, l := range locked {
 			os.Chmod(l, 0o755)
 		}

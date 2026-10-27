@@ -9,13 +9,28 @@ import (
 
 const oDirectory = syscall.O_DIRECTORY
 
-// direntMode is the type libuv's scandir gives an entry where d_type is
-// not read here (macOS and the BSDs, whose d_type always names the type):
-// lstat's. A failure, a race only, gives no type.
-func direntMode(raw string) (fs.FileMode, bool) {
-	info, err := statRaw(raw, false)
-	if err != nil {
-		return 0, false
+// direntTypeOf is the d_type of an entry os.File.ReadDir read: its
+// FileMode type, which on darwin and the BSDs comes from the record's
+// d_type (os lstats only an entry whose d_type is DT_UNKNOWN, where libuv
+// would report UV_DIRENT_UNKNOWN and Node would lstat it by its decoded
+// name; KNOWN_DIFFERENCES: neither APFS nor UFS nor ZFS reports
+// DT_UNKNOWN).
+func direntTypeOf(e fs.DirEntry) uint8 {
+	switch t := e.Type(); {
+	case t&fs.ModeSymlink != 0:
+		return dtLNK
+	case t.IsDir():
+		return dtDIR
+	case t&fs.ModeNamedPipe != 0:
+		return dtFIFO
+	case t&fs.ModeSocket != 0:
+		return dtSOCK
+	case t&fs.ModeCharDevice != 0:
+		return dtCHR
+	case t&fs.ModeDevice != 0:
+		return dtBLK
+	case t.IsRegular():
+		return dtREG
 	}
-	return info.Mode(), true
+	return 0
 }
