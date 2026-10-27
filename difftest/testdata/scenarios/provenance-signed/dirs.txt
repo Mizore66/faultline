@@ -1,0 +1,15 @@
+.faultline
+.faultline/provenance
+.git
+.git/objects
+.git/objects/01
+.git/objects/08
+.git/objects/12
+.git/refs
+.git/refs/heads
+.git/refs/tags
+bundle
+bundle/runs
+bundle/source
+bundle/transitions
+bundle/witness
