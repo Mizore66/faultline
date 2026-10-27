@@ -1189,6 +1189,7 @@ func VerifyTreesPack(pack []byte, treeDigests []string, errs *[]string) error
 package turnproof
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -1196,17 +1197,12 @@ import (
 func TestCatalogHasNoCapAndOwnMessages(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 2100; i++ {
-		b.WriteString(strings.Repeat("0", 64) + "  extra/" + strings.Repeat("x", 1) + string(rune('a'+i%26)) + "/" + strings.Repeat("y", i%7+1) + ".json\n")
+		fmt.Fprintf(&b, "%s  extra/%05d.json\n", strings.Repeat("0", 64), i)
 	}
 	var errs []string
 	c := ParseHashCatalog([]byte(b.String()), &errs)
-	if len(c.Keys)+countPrefix(errs, "hashes.txt declares duplicate artifact: ") != 2100 {
-		t.Fatalf("keys %d errs %d", len(c.Keys), len(errs))
-	}
-	for _, e := range errs {
-		if strings.Contains(e, "too many") {
-			t.Fatal("turn catalog must not cap entries")
-		}
+	if len(c.Keys) != 2100 || len(errs) != 0 {
+		t.Fatalf("keys %d errs %q", len(c.Keys), errs)
 	}
 }
 
@@ -1226,15 +1222,6 @@ func TestCatalogLineRules(t *testing.T) {
 	}
 }
 
-func countPrefix(errs []string, p string) int {
-	n := 0
-	for _, e := range errs {
-		if strings.HasPrefix(e, p) {
-			n++
-		}
-	}
-	return n
-}
 ```
 
 ```go
@@ -1280,7 +1267,7 @@ func TestPackRoundTrip(t *testing.T) {
 ```go
 // internal/jsstr/jsstr_test.go
 func TestTrimEnd(t *testing.T) {
-	if got := TrimEnd("a b \t\r\n ﻿"); got != "a b" {
+	if got := TrimEnd("a b \t\r\n \u2028\ufeff"); got != "a b" {
 		t.Fatalf("%q", got)
 	}
 }
