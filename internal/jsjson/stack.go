@@ -67,13 +67,19 @@ func stackModelFor(goos, goarch string) stackModel {
 	switch {
 	case goos == "darwin" && goarch == "arm64":
 		return stackModel{budget: 60_894_500 + 23_333 + 10_000, array: 23_333, object: 10_000, slowObject: 24_444,
-			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 17_700, SiteGitProof: -9_800, SiteGitLedger: -21_600, SiteDemoWitness: -26_500, SiteCLI: 73_100}}
+			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 17_700, SiteGitProof: -9_800, SiteGitLedger: -21_600, SiteDemoWitness: -26_500, SiteCLI: 73_100,
+				SiteTurnProof: -9_800, // provisional (the SiteGitProof value); TestLiveStackThresholdsMatchNode/turn not yet measured
+			}}
 	case goarch == "arm64":
 		return stackModel{budget: 36_531_800 + 20_003 + 10_000, array: 20_003, object: 10_000, slowObject: 18_669,
-			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 5_800, SiteGitProof: -4_100, SiteGitLedger: -13_500, SiteDemoWitness: -16_700, SiteCLI: 45_000}}
+			sites: [siteCount]int{SiteDemo: 0, SitePrevention: 5_800, SiteGitProof: -4_100, SiteGitLedger: -13_500, SiteDemoWitness: -16_700, SiteCLI: 45_000,
+				SiteTurnProof: -4_100, // provisional (the SiteGitProof value); TestLiveStackThresholdsMatchNode/turn not yet measured
+			}}
 	}
 	return stackModel{budget: 41_667_000 + 18_667 + 10_000, array: 18_667, object: 10_000, slowObject: 18_664,
-		sites: [siteCount]int{SiteDemo: 0, SitePrevention: 7_000, SiteGitProof: -11_500, SiteGitLedger: -15_500, SiteDemoWitness: -19_000, SiteCLI: 39_000}}
+		sites: [siteCount]int{SiteDemo: 0, SitePrevention: 7_000, SiteGitProof: -11_500, SiteGitLedger: -15_500, SiteDemoWitness: -19_000, SiteCLI: 39_000,
+			SiteTurnProof: -11_500, // provisional (the SiteGitProof value); TestLiveStackThresholdsMatchNode/turn not yet measured
+		}}
 }
 
 // Site is a JS call site that reads a zod message; see stackModel.
@@ -88,6 +94,10 @@ const (
 	// SiteCLI is a ZodError that reaches the CLI uncaught: formatCliFailure
 	// (src/cli.ts:8) reads its message near the bottom of the JS stack.
 	SiteCLI
+	// SiteTurnProof is the turn proof verifier (src/turn-proof-bundle.ts:812),
+	// an async function, so the stack under its zod messages is its own
+	// (plan correction 14).
+	SiteTurnProof
 	siteCount
 )
 
@@ -130,18 +140,21 @@ func AtCallSite(site Site, f func() string) string {
 // The other spreads Go ports cannot reach the limit: the git walker is capped
 // at 2,048 files, witness errors at a few per overlay (at most 64 overlays),
 // prevention semantics at 15, and repaired-runs.json has exactly 3 runs.
-type spreadModel struct{ collect1, perCollectLevel, semantics, ledger int }
+type spreadModel struct{ collect1, perCollectLevel, semantics, ledger, turnSemantics int }
 
 var v8Spread = spreadModelFor(runtime.GOOS, runtime.GOARCH)
 
 func spreadModelFor(goos, goarch string) spreadModel {
 	switch {
 	case goarch == "arm64" && goos == "darwin":
-		return spreadModel{collect1: 110181, perCollectLevel: 32, semantics: 110193, ledger: 110167}
+		return spreadModel{collect1: 110181, perCollectLevel: 32, semantics: 110193, ledger: 110167,
+			turnSemantics: 110193} // provisional (the semantics value); unmeasured, see Task 7 report
 	case goarch == "arm64":
-		return spreadModel{collect1: 110189, perCollectLevel: 32, semantics: 110201, ledger: 110175}
+		return spreadModel{collect1: 110189, perCollectLevel: 32, semantics: 110201, ledger: 110175,
+			turnSemantics: 110201} // provisional (the semantics value); unmeasured, see Task 7 report
 	}
-	return spreadModel{collect1: 125576, perCollectLevel: 31, semantics: 125587, ledger: 125562}
+	return spreadModel{collect1: 125576, perCollectLevel: 31, semantics: 125587, ledger: 125562,
+		turnSemantics: 125587} // provisional (the semantics value); unmeasured, see Task 7 report
 }
 
 // SpreadSite is a spread call site whose limit was measured.
@@ -150,12 +163,19 @@ type SpreadSite int
 const (
 	SpreadGitSemantics SpreadSite = iota
 	SpreadGitLedger
+	// SpreadTurnSemantics is the turn verifier's
+	// errors.push(...validateTurnInvestigationProofSemantics(…))
+	// (turn-proof-bundle.ts:961), in an async function.
+	SpreadTurnSemantics
 )
 
 // SpreadFits reports whether V8 can spread n elements into the call at site.
 func SpreadFits(n int, site SpreadSite) bool {
-	if site == SpreadGitLedger {
+	switch site {
+	case SpreadGitLedger:
 		return n <= v8Spread.ledger
+	case SpreadTurnSemantics:
+		return n <= v8Spread.turnSemantics
 	}
 	return n <= v8Spread.semantics
 }

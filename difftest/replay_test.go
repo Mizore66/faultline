@@ -21,12 +21,12 @@ import (
 )
 
 // portedTypes gates golden replay per bundle type; verifier tasks add entries.
-var portedTypes = map[string]bool{"demo": true, "prevention": true, "git": true}
+var portedTypes = map[string]bool{"demo": true, "prevention": true, "git": true, "turn": true}
 
 // deferredTypes are bundle types whose bases and goldens exist before their
 // verifier is ported: the replay requires the golden and skips the base.
 // The verifier's task deletes the entry.
-var deferredTypes = map[string]string{"turn": "Task 7 ports the turn verifier"}
+var deferredTypes = map[string]string{}
 
 // flBinary is the fl command built for this test run; replay executes it so
 // that anything written outside cli.Run's writers, and the exit status of the

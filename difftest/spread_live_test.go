@@ -13,7 +13,11 @@ import (
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
+	"github.com/Mizore66/faultline/internal/bundle/gitproof"
+	"github.com/Mizore66/faultline/internal/bundle/turnproof"
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/schema"
+	"github.com/Mizore66/faultline/internal/turninv"
 )
 
 // V8 spreads call arguments on the machine stack, so a list spread into a
@@ -44,6 +48,7 @@ func TestLiveSpreadLimitsMatchNode(t *testing.T) {
 	}{
 		{"demo walker, depth 1", demoWalkerLimit(1), buildWalkerBundle},
 		{"git semantics", spreadLimit(func(n int) bool { return jsjson.SpreadFits(n, jsjson.SpreadGitSemantics) }), buildSemanticsBundle},
+		{"turn semantics", spreadLimit(func(n int) bool { return jsjson.SpreadFits(n, jsjson.SpreadTurnSemantics) }), buildTurnSemanticsBundle},
 		{"git ledger", spreadLimit(func(n int) bool { return jsjson.SpreadFits(n, jsjson.SpreadGitLedger) }), buildLedgerBundle},
 	}
 	for _, site := range sites {
@@ -126,6 +131,52 @@ func buildSemanticsBundle(dir string, n int) {
 	inv.Set("states", jsjson.MakeArray(states))
 	writeJSON(path, jsjson.MakeObject(inv))
 	rehash(dir, "git-two-states")
+}
+
+// turnSemanticsFixed is the number of semantic errors the extra
+// environment fingerprints do not add one-for-one (the length mismatch):
+// measured once from the Go port, whose errors the oracle matches in
+// TestLiveTurnSemantics.
+var turnSemanticsFixed = -1
+
+// buildTurnSemanticsBundle is turn-two-states with extra environment
+// fingerprints in investigation.json, rehashed: each has no runtimeMapping
+// entry and no state, so it adds exactly one semantic error ("runtimeMapping
+// is missing fingerprint"). (Extra states would each spawn git cat-file in
+// the pack check; extra runs would pass the 128 MiB artifact limit.)
+func buildTurnSemanticsBundle(dir string, n int) {
+	build := func(dir string, extra int) {
+		os.RemoveAll(dir)
+		copyTreeNoT(filepath.Join("testdata", "bases", "turn-two-states"), dir)
+		path := filepath.Join(dir, "investigation.json")
+		inv, _ := parseObjectFile(path)
+		fingerprints := inv.Field("environmentFingerprints").Items()
+		for i := range extra {
+			f := jsjson.NewObj()
+			f.Set("schemaVersion", jsjson.MakeString("faultline.environment-fingerprint.v2"))
+			f.Set("files", jsjson.MakeObject(jsjson.NewObj()))
+			f.Set("digest", jsjson.MakeString("sha256:"+strings.Repeat("0", 48)+fmt.Sprintf("%016x", i+1)))
+			fingerprints = append(fingerprints, jsjson.MakeObject(f))
+		}
+		inv.Set("environmentFingerprints", jsjson.MakeArray(fingerprints))
+		writeCanonical(path, jsjson.MakeObject(inv))
+		rehash(dir, "turn-two-states")
+	}
+	if turnSemanticsFixed < 0 {
+		probe := filepath.Join(os.TempDir(), "faultline-turn-spread-probe")
+		build(probe, 1)
+		inv, _ := parseObjectFile(filepath.Join(probe, "investigation.json"))
+		result, _, ok := schema.Parse(turninv.ResultSchema, jsjson.MakeObject(inv))
+		if !ok {
+			panic("probe investigation does not parse")
+		}
+		frozenText, _ := os.ReadFile(filepath.Join(probe, "witness", "frozen.json"))
+		frozenValue, _ := jsjson.Parse(string(frozenText))
+		frozen, _, _ := schema.Parse(gitproof.FrozenWitnessSchema, frozenValue)
+		turnSemanticsFixed = len(turnproof.ValidateProofSemantics(result, frozen)) - 1
+		os.RemoveAll(probe)
+	}
+	build(dir, n-turnSemanticsFixed)
 }
 
 // buildLedgerBundle is git-fully-bound with n copies of the SESSION_ENDED

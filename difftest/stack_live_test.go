@@ -76,6 +76,7 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 		{name: "witness", base: "demo-replay", file: "witness/witness.json", old: `"network": "disabled"`},
 		{name: "prevention", base: "prevention-verified", file: "prevention.json", old: `"schemaVersion":"faultline.prevention-proof.v1"`},
 		{name: "git", base: "git-fully-bound", file: "manifest.json", old: `"integrityScope":"complete-declared-file-set"`},
+		{name: "turn", base: "turn-two-states", file: "manifest.json", old: `"integrityScope":"complete-declared-file-set"`},
 		{name: "ledger", base: "git-fully-bound", file: "lifecycle/ledger.json", old: `"schemaVersion":"faultline.codex-lifecycle-ledger.v1"`},
 	}
 	shapes := map[string]func(n int) string{

@@ -4,7 +4,12 @@
 import { readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
+import { z, ZodError } from "zod";
 import { runHardenedGit, toGitPath } from "../../src/git-materialization.js";
+import { canonicalJson, digestJson } from "../../src/canonical.js";
+import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../src/ledger.js";
+import { turnStatesFromLedger } from "../../src/turn-investigation.js";
+import { validateTurnInvestigationProofSemantics } from "../../src/turn-proof-bundle.js";
 
 type Handler = (args: any) => unknown;
 
@@ -44,10 +49,42 @@ function buildPackFns(): {
   )(runHardenedGit, toGitPath, mkdtempSync, mkdirSync, writeFileSync, rmSync, tmpdir, nodePath.join);
 }
 
+let bindCache: ((ledger: unknown, result: unknown) => { binding: unknown; ledger: unknown }) | undefined;
+// bindTurnLifecycle is not exported: it is evaluated from dist with the
+// module-level names it reads (LifecycleBoundSchema and sameCanonical from
+// dist's own text).
+function bindFn() {
+  if (bindCache) return bindCache;
+  const src = distSource();
+  const sha = src.match(/const SHA256_DIGEST = [^;]+;/);
+  const digest = src.match(/const DigestSchema = [^;]+;/);
+  const bound = src.match(/const LifecycleBoundSchema = z\.object\(\{[\s\S]*?\}\)\.strict\(\);/);
+  const same = src.match(/function sameCanonical\(left, right\) \{[\s\S]*?\n\}/);
+  if (!sha || !digest || !bound || !same) throw new Error("bindTurnLifecycle dependencies not found in dist/turn-proof-bundle.js");
+  bindCache = new Function(
+    "z", "digestJson", "canonicalJson", "CodexLifecycleLedgerSchema", "verifyCodexLifecycleLedger", "turnStatesFromLedger",
+    `${sha[0]}\n${digest[0]}\n${bound[0]}\n${same[0]}\n${take(src, "bindTurnLifecycle")}\nreturn bindTurnLifecycle;`
+  )(z, digestJson, canonicalJson, CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger, turnStatesFromLedger);
+  return bindCache;
+}
 const states = (trees: string[]) => trees.map((treeDigest) => ({ treeDigest }));
 const leftovers = (): string[] => readdirSync(tmpdir()).filter((n) => n.startsWith("faultline-turn-proof-pack-")).sort();
 
+const outcome = (fn: () => unknown): string => {
+  try {
+    return JSON.stringify({ value: fn() });
+  } catch (error) {
+    return JSON.stringify({ threw: (error as Error).message, zod: error instanceof ZodError });
+  }
+};
+
 export const turnproofOps: Record<string, Handler> = {
+  // validateTurnInvestigationProofSemantics({result, frozen}): { value: errors } or { threw, zod }.
+  validateTurnSemantics: ({ result, frozen }: { result: any; frozen: any }) =>
+    outcome(() => validateTurnInvestigationProofSemantics(result, frozen)),
+  // bindTurnLifecycle(ledger, result): { value: { binding, ledger } } or { threw, zod }.
+  bindTurnLifecycle: ({ ledger, result }: { ledger: any; result: any }) =>
+    outcome(() => bindFn()(ledger, result)),
   // parseHashCatalog on the bytes in hex: JSON of { errors, entries: [[artifact, digest], ...] }.
   // Map iteration order is first insertion, as the Go Catalog.Keys.
   parseTurnHashCatalog: ({ hex }: { hex: string }) => {
