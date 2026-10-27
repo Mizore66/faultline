@@ -162,7 +162,7 @@ Tasks in one wave touch disjoint files, apart from the append-only shared files 
   - Task 1 (writer harness for 4b) joins this wave as soon as 4a Task 1 has merged; it needs no 4b task.
 - **Wave 2:**
   - Task 4: the bridge and `minimizeFromTurnInvestigation`; needs 3.
-  - Task 6: `investigateTurnTrees`; needs 3.
+  - Task 6: `investigateTurnTrees`; needs 3, and 4a Task 4 for its unit tests.
   - Task 7: turn proof semantics, the verifier and the `fl verify` turn branch; needs 2, 3 and 5.
 - **Wave 3:** Task 8, the turn proof bundle writer; needs 7.
 - **Wave 4:**
@@ -173,13 +173,19 @@ Tasks in one wave touch disjoint files, apart from the append-only shared files 
 Dependencies (`A → B`: B needs A):
 
 ```
-4a T1 → 1        4a T6 → 9        4a T7, T8 → 11
+4a T1 → 1        4a T4 → 6 (tests)    4a T6 → 9        4a T7, T8 → 11
 1 → 9, 10        2 → 7            3 → 4, 6, 7       5 → 7
 4 → 9, 10        6 → 9            7 → 8, 10         8 → 9
 9 → 10 (goldens only)             every task → 11
 ```
 
-Tasks that consume 4a packages: Task 1 (4a Task 1's harness), Task 9 (`sidecar.ResolveLatestLedgerPath`, `sidecar.Latest`) and Task 11 (the e2e uses `fl codex sidecar hook` and `fl record verify`). The `internal/ledger` writers are consumed only by test code in Tasks 6, 9 and 11 (`ledger.Create`, `ledger.Append`, `ledger.WriteAtomic`), which builds ledgers. Until 4a Task 4 merges, Tasks 3 and 6 build their test ledgers with the frozen TS through the oracle, or with `difftest/gen/ledger-seed.ts`.
+Tasks that consume 4a packages:
+- Task 1: 4a Task 1's harness.
+- Task 6: 4a Task 4's `ledger.Create`, `ledger.Append` and `ledger.WriteAtomic`, in its unit tests only, to build real ledgers. Its implementation reads ledgers through `gitproof`, which already exists.
+- Task 9: 4a Task 6's `sidecar.ResolveLatestLedgerPath` and `sidecar.Latest`.
+- Task 11: 4a Tasks 7 and 8, because the end-to-end test runs `fl record` and `fl codex sidecar`.
+
+Tasks 2, 3, 4, 5, 7, 8 and 10 consume no 4a package.
 
 ## File Structure
 
@@ -493,32 +499,34 @@ func TestTurnGitLabelsMasked(t *testing.T) {
 	}
 }
 
-func TestPadFileAndResignTurn(t *testing.T) {
+func TestPadFile(t *testing.T) {
 	repo := repoRoot(t)
 	work := t.TempDir()
 	copyTree(t, filepath.Join(repo, "difftest", "testdata", "bases", "turn-two-states"), work)
-	tpl := mustTemplate(t, `{"id":"x","op":"pad-file","file":"hashes.txt","total":4194304}`)
+	v, err := jsjson.Parse(`{"id":"x","op":"pad-file","file":"hashes.txt","total":4194304}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := &template{fields: v.Obj()}
 	if !applyMutation(work, testCase{id: "x", base: "turn-two-states", tpl: tpl, file: "hashes.txt"}) {
 		t.Fatal("not applied")
 	}
-	if info, _ := os.Stat(filepath.Join(work, "hashes.txt")); info.Size() != 4194304 {
-		t.Fatal(info.Size())
+	if info, err := os.Stat(filepath.Join(work, "hashes.txt")); err != nil || info.Size() != 4194304 {
+		t.Fatal(info, err)
 	}
 }
 ```
 
-(`mustTemplate` parses one template with the loader's own decoder; add it beside `loadTemplates` if it does not exist.)
-
 - [ ] **Step 2: Run to verify failure**
 
-Run: `go test -tags faultline_test ./difftest/ -run 'TestTurnGitLabelsMasked|TestPadFileAndResignTurn' -v`
+Run: `go test -tags faultline_test ./difftest/ -run 'TestTurnGitLabelsMasked|TestPadFile' -v`
 Expected: FAIL (the labels are unmasked; no base `turn-two-states`; unknown op `pad-file`).
 
 - [ ] **Step 3: Implement** the fixtures, both bases, both twins, the fake gits and the templates. Then generate the bases and the goldens in podman: `-e BASES=turn-two-states,turn-non-monotonic`, with the gen-bases line of the podman command. Run the base generation twice and `diff -r` the two outputs (they must be identical). Then run `git status --porcelain difftest/testdata`: only `bases/turn-*`, `golden/turn-*`, `fixtures/turn-*`, `fakegit/fail-unpack*` and `mutations.json` may change.
 
 - [ ] **Step 4: Run to verify the tests pass and no other base's golden moved**
 
-Run: `go test -tags faultline_test ./difftest/ -run 'TestTurnGitLabelsMasked|TestPadFileAndResignTurn|TestMaskGitDetail|TestGoldenReplay' > /tmp/s4b-t2.log 2>&1; grep -E '^(---|ok|FAIL)' /tmp/s4b-t2.log | tail` (TestGoldenReplay runs every other base and skips the deferred turn bases; in podman, under 280 s with `-run 'TestGoldenReplay/(git-two-states|demo-replay)'`)
+Run: `go test -tags faultline_test ./difftest/ -run 'TestTurnGitLabelsMasked|TestPadFile|TestMaskGitDetail|TestGoldenReplay' > /tmp/s4b-t2.log 2>&1; grep -E '^(---|ok|FAIL)' /tmp/s4b-t2.log | tail` (TestGoldenReplay runs every other base and skips the deferred turn bases; in podman, under 280 s with `-run 'TestGoldenReplay/(git-two-states|demo-replay)'`)
 Expected: PASS. Also run `grep -c '"case":"turn-two-states__' difftest/testdata/golden/turn-two-states.jsonl`: it prints the number of expanded cases (over 150).
 
 - [ ] **Step 5: Commit**
@@ -656,7 +664,7 @@ func IsDecisiveRun(run jsjson.Value) bool
 - `attributeFailureIntroduction({states, transitions, stableStates})`
 
 The inputs (spec 2.5):
-- 1,500 generated ledgers. Start from `ledger-seed.ts`'s `richLedger` (it already holds both snapshot kinds) and from the `turn-*` scenario ledgers, then mutate:
+- 1,500 generated ledgers. They come from `ledger-seed.ts`'s `richLedger` (it already holds both snapshot kinds) and from a new op in `oracle-turninv.ts`, `turnLedger({states: [{ordinal, tree, dirty}], baseline})`. That op builds a session with the frozen TS `createCodexLifecycleLedger`, `appendLifecycleEvent` and `signTurnTreeSnapshot`, with fixed ids and times. The generator then mutates them:
   - snapshot events reordered across turns;
   - duplicated ordinals;
   - `-0` and `1e0` ordinals;
@@ -778,7 +786,7 @@ func TestRecordOfKeyIssuesFirst(t *testing.T) {
 }
 ```
 
-(`mustParse` exists in `schema_test.go`; if not, add it as `jsjson.Parse` plus `t.Fatal`.)
+(`mustParse(t, text)` is the existing helper in `schema_test.go`.)
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -1438,7 +1446,7 @@ func TestInvalidWitnessShortCircuits(t *testing.T) {
 }
 ```
 
-Port the remaining cases of `tests/turn-investigation.test.ts` with `gitinv.FakeDockerDirForTest(t, "pass-fail")` on `PATH` and ledgers built by 4a's `ledger.Create`/`ledger.Append` once 4a Task 4 has merged, or the frozen fixture JSON from Task 2's base until then. The cases: a baseline PASS→FAIL is `ATTRIBUTED` and `isProof` true with the native runner, the injected runner is never proof, a duplicate ordinal, fewer than two states, a heterogeneous refusal, a materialization error.
+Port the remaining cases of `tests/turn-investigation.test.ts` with `gitinv.FakeDockerDirForTest(t, "pass-fail")` on `PATH`, and with ledgers built by 4a's `ledger.Create`, `ledger.Append` and `ledger.WriteAtomic` (snapshots from `turnsnap.Capture` on a real repository, as the TS test does). The cases: a baseline PASS→FAIL is `ATTRIBUTED` and `isProof` true with the native runner, the injected runner is never proof, a duplicate ordinal, fewer than two states, a heterogeneous refusal, a materialization error.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -1899,7 +1907,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - **`--minimize` after the bundle.** A bridge or minimization failure (a FAIL_TO_PASS first transition, `--transition 5`) throws after the bundle is published: exit 1 with the error, and the bundle stays on disk. The writer cases record that.
 - **Cross-verification.** The writer replay's `writtenBundle` already finds `proofBundle.directory` and `proofBundle.rootDigest`, so every bundle Go writes is also verified by TS `fl verify` (spec 4.2 point 4), and every TS bundle by TS.
 
-**Writer cases** (`writers.d/4b-turns.json`; every case runs git and the fake Docker, so all are `posixOnly`; the common argv is `investigate turns --repo repo --proposal demo-1 --expect-digest <the scenario's frozen digest> --image registry.example/faultline-node@sha256:<b×64>`, called BASE below; `fakeDocker` is `pass-fail` unless stated):
+**Writer cases** (`writers.d/4b-turns.json`; every case runs git and the fake Docker, so all are `posixOnly`; the common argv is `investigate turns --repo repo --proposal demo-1 --image registry.example/faultline-node@sha256:<b×64>`, called BASE below. It passes no `--expect-digest`: the scenario's `witness freeze --repo repo` wrote the binding into `repo/.faultline/incidents`, the default draft store, so the digest is inherited; `fakeDocker` is `pass-fail` unless stated):
 - **Proof:**
   - `turns-proof` (turn-two-states, `--ledger ledger.json`): a bundle under `.faultline/turn-proof-bundles/turns-<ms>`.
   - `turns-proof-output` (`--output .faultline/turn-proof-bundles/mine`).
@@ -1925,7 +1933,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
   - `turns-no-ledger` (empty draft store: the "requires --ledger" text).
   - `turns-ledger-missing` (ENOENT read error), `turns-ledger-tampered` (an event hash edited: the verified read's refusal).
 - **Options:**
-  - `turns-missing-proposal`, `turns-missing-repo`, `turns-no-expect-digest` (an empty draft store), `turns-expect-digest-inherited` (after `witness freeze --repo repo` wrote the binding).
+  - `turns-missing-proposal`, `turns-missing-repo`, `turns-no-expect-digest` (`--draft-store empty-store`: no binding, so the `Missing required option: --expect-digest (no local session binding for demo-1)…` text), `turns-expect-digest-flag` (`--expect-digest` given and equal to the bound one).
   - `turns-image-absent`, `turns-image-from-config`.
   - `turns-unknown-proposal` (the binding is written, then the frozen-witness read fails).
   - `turns-draft-store` (`--draft-store elsewhere`).
