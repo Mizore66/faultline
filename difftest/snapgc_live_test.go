@@ -236,8 +236,11 @@ func (g *snapgcTree) alternates() {
 	}
 	b.WriteString(g.pick("", "\n", "\r\n", "\n\n"))
 	g.file(rel, []byte(b.String()))
-	if g.r.IntN(15) == 0 {
+	switch g.r.IntN(15) {
+	case 0:
 		g.chmod(rel, 0o444) // the rewrite's open throws
+	case 1:
+		g.chmod("repo/.git/objects/info", 0o555) // removing it throws (rmSync's unlink)
 	}
 }
 
@@ -508,7 +511,7 @@ func TestLiveSnapshotGC(t *testing.T) {
 		}
 	}
 	if nonRoot {
-		for _, msg := range []string{"EACCES: permission denied, scandir", "EACCES: permission denied, open"} {
+		for _, msg := range []string{"EACCES: permission denied, scandir", "EACCES: permission denied, open", "EACCES: permission denied, unlink '<R>/repo/.git/objects/info/alternates'"} {
 			if !strings.Contains(outputs, msg) {
 				t.Errorf("no generated tree produced %q", msg)
 			}
