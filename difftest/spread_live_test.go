@@ -44,12 +44,17 @@ func TestLiveSpreadLimitsMatchNode(t *testing.T) {
 	sites := []struct {
 		name  string
 		limit int
-		build func(dir string, n int) // bundle whose spread at the site has n elements
+		// approximate marks an async site whose V8 edge is nondeterministic
+		// (identical input printed, overflowed and printed on pinned Node
+		// 22.22.2): both engines are only checked at the endpoints of the
+		// +/-20000 search window (KNOWN_DIFFERENCES.md).
+		approximate bool
+		build       func(dir string, n int) // bundle whose spread at the site has n elements
 	}{
-		{"demo walker, depth 1", demoWalkerLimit(1), buildWalkerBundle},
-		{"git semantics", spreadLimit(func(n int) bool { return jsjson.SpreadFits(n, jsjson.SpreadGitSemantics) }), buildSemanticsBundle},
-		{"turn semantics", spreadLimit(func(n int) bool { return jsjson.SpreadFits(n, jsjson.SpreadTurnSemantics) }), buildTurnSemanticsBundle},
-		{"git ledger", spreadLimit(func(n int) bool { return jsjson.SpreadFits(n, jsjson.SpreadGitLedger) }), buildLedgerBundle},
+		{"demo walker, depth 1", demoWalkerLimit(1), false, buildWalkerBundle},
+		{"git semantics", spreadLimit(func(n int) bool { return jsjson.SpreadFits(n, jsjson.SpreadGitSemantics) }), false, buildSemanticsBundle},
+		{"turn semantics", spreadLimit(func(n int) bool { return jsjson.SpreadFits(n, jsjson.SpreadTurnSemantics) }), true, buildTurnSemanticsBundle},
+		{"git ledger", spreadLimit(func(n int) bool { return jsjson.SpreadFits(n, jsjson.SpreadGitLedger) }), false, buildLedgerBundle},
 	}
 	for _, site := range sites {
 		t.Run(site.name, func(t *testing.T) {
@@ -59,6 +64,15 @@ func TestLiveSpreadLimitsMatchNode(t *testing.T) {
 				return overflows(argv, dir)
 			}
 			for name, argv := range engines {
+				if site.approximate {
+					lo, hi := site.limit-20000, site.limit+20000
+					loOver, hiOver := check(argv, lo), check(argv, hi)
+					if loOver || !hiOver {
+						t.Errorf("%s on %s/%s: window endpoints: %d overflows=%v (want false), %d overflows=%v (want true)",
+							name, runtime.GOOS, runtime.GOARCH, lo, loOver, hi, hiOver)
+					}
+					continue
+				}
 				if check(argv, site.limit) || !check(argv, site.limit+1) {
 					lo, hi := site.limit-20000, site.limit+20000
 					for hi-lo > 1 {
