@@ -92,6 +92,17 @@ var writerScenarios = map[string]bool{
 	"sidecar-worktree": true,
 	"sidecar-recorded": true,
 	"snapgc-repo":      true,
+	// Slice 4b: fl investigate turns, prove transition.
+	"turn-two-states":        true,
+	"turn-non-monotonic":     true,
+	"turn-pass-only":         true,
+	"turn-baseline-only":     true,
+	"turn-duplicate-ordinal": true,
+	"turn-heterogeneous":     true,
+	"turn-missing-tree":      true,
+	"turn-sha256":            true,
+	"turn-sidecar":           true,
+	"turn-latest-ambiguous":  true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is

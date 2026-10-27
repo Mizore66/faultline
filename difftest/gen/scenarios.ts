@@ -11,12 +11,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { deflateSync } from "node:zlib";
-import { canonicalJson, digestJson } from "../../src/canonical.js";
+import { canonicalJson, digestJson, sha256 } from "../../src/canonical.js";
 import { computeEnvironmentFingerprint } from "../../src/environment-fingerprint.js";
 import { appendLifecycleEvent, createCodexLifecycleLedger, GIT_CHECKPOINT_VERSION, signGitCheckpoint, type CodexLifecycleLedger } from "../../src/ledger.js";
 import { createIncidentDraft } from "../../src/incident.js";
 import { writeIncidentDraft } from "../../src/incident-store.js";
 import { proposeWitness } from "../../src/witness-lock.js";
+import { signTurnTreeSnapshot, TURN_TREE_SNAPSHOT_VERSION } from "../../src/turn-snapshot.js";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const cli = join(repo, "dist", "cli.js");
@@ -443,14 +444,17 @@ const witnessInput = (options: { overlays?: { path: string; text: string }[]; ti
 });
 const FREEZE_IN_REPO = ["witness", "freeze", PROPOSAL_ID, "--repo", "repo"];
 const repeat = (value: string, n: number): RepoState[] => Array.from({ length: n }, () => state(value));
+// edit, when given, runs after extra (with the built repository).
 function gitScenario(states: RepoState[], options: {
-  objectFormat?: "sha1" | "sha256"; proposal?: string; extra?: (repo: BuiltRepo) => Record<string, string>; hostile?: Hostile
+  objectFormat?: "sha1" | "sha256"; proposal?: string; extra?: (repo: BuiltRepo) => Record<string, string>; hostile?: Hostile;
+  edit?: (ws: string, repo: BuiltRepo) => void
 } = {}): Scenario {
   return {
     files: { "proposal.json": options.proposal ?? witnessInput() },
     setup: (ws) => {
       const repo = buildRepo(ws, "repo", states, options.objectFormat, options.hostile);
       for (const [path, text] of Object.entries(options.extra?.(repo) ?? {})) writeFileSync(join(ws, path), text);
+      options.edit?.(ws, repo);
     },
     argv: [PROPOSE, APPROVE, FREEZE_IN_REPO]
   };
@@ -1224,6 +1228,101 @@ Object.assign(SCENARIOS, {
   "sidecar-worktree": { files: {}, setup: initWorktree, argv: [], refreshIndex: ["main", "wt"] },
   "sidecar-recorded": { ...sidecarRepo(), fixedRoot: true, seeded: recordSidecarSession() },
   "snapgc-repo": sidecarRepo(writeQuarantine)
+} satisfies Record<string, Scenario>);
+
+// Slice 4b turn scenarios (fl investigate turns, prove transition). Each
+// is a Git scenario (gitScenario: repo/ with one commit per state and the
+// witness frozen into repo/.faultline/incidents, as git-two-states) plus a
+// lifecycle ledger built by the frozen TS ledger functions: ids ledger-<s>
+// and event-<k>, event k (from 1) at 2026-07-16T11:00:00.000Z plus k
+// seconds (RECORD_AT: before the seed epoch), workingDirectory and every
+// snapshot's repositoryRoot the literal /work/repo, so the bytes do not
+// depend on the case path. A snapshot of tree i is signTurnTreeSnapshot
+// with headCommit commits[0], treeDigest trees[i], capturedAt its event's
+// occurredAt, dirty i > 0 and statusDigest sha256:<sha256("status " + i)>.
+//   turn-two-states        good, bad: SESSION_STARTED, the baseline snapshot
+//                          of tree 0, turn-1 started and completed, its
+//                          TURN_TREE_SNAPSHOT of tree 1 (ledger.json)
+//   turn-non-monotonic     good, bad, good, bad: a baseline and three turns
+//   turn-pass-only         good, good (no transition)
+//   turn-baseline-only     the baseline snapshot only (NO_TURN_SNAPSHOTS)
+//   turn-duplicate-ordinal turn-two-states plus a second TURN_TREE_SNAPSHOT
+//                          with ordinal 1, of tree 0: each only has to match
+//                          the completed ordinal (ledger.ts:505), so the
+//                          ledger verifies and investigate turns reaches
+//                          DUPLICATE_TURN_SNAPSHOTS
+//   turn-heterogeneous     state 1 adds package.json; mapping.json maps both
+//                          environment fingerprints
+//   turn-missing-tree      turn-two-states whose turn snapshot names the
+//                          absent tree "e" x 40, signed (EXECUTION_ERROR)
+//   turn-sha256            turn-two-states with objectFormat sha256 (64-hex
+//                          trees and commits)
+//   turn-sidecar           turn-two-states with the ledger (session s-1) at
+//                          repo/.git/faultline/recordings/codex-<sha256("s-1")>.json
+//                          instead of ledger.json, for --latest
+//   turn-latest-ambiguous  two valid recordings (s-1, s-2) whose last
+//                          events share one occurredAt
+// The recordings directories are made 0700, as the sidecar makes them (a
+// case's resetModes sets them to 0755 again).
+type TurnSnapshotPlan = { ordinal: number; tree: number; treeDigest?: string };
+function turnLedger(built: BuiltRepo, plan: TurnSnapshotPlan[], sessionId = "s-1"): CodexLifecycleLedger {
+  let ledger = createCodexLifecycleLedger({ ledgerId: `ledger-${sessionId}`, sessionId, createdAt: RECORD_AT(0) });
+  let k = 0;
+  const add = (step: LedgerStep): string => {
+    k += 1;
+    ledger = appendLifecycleEvent(ledger, step, { occurredAt: RECORD_AT(k), eventId: `event-${k}` });
+    return RECORD_AT(k);
+  };
+  const snapshot = (entry: TurnSnapshotPlan) => signTurnTreeSnapshot({
+    schemaVersion: TURN_TREE_SNAPSHOT_VERSION, repositoryRoot: "/work/repo", headCommit: built.commits[0]!,
+    treeDigest: entry.treeDigest ?? built.trees[entry.tree]!, capturedAt: RECORD_AT(k + 1), dirty: entry.tree > 0,
+    statusDigest: `sha256:${sha256(`status ${entry.tree}`)}`
+  });
+  add({ type: "SESSION_STARTED", payload: { transport: "SIDE_CAR", workingDirectory: "/work/repo" } });
+  let completed = 0;
+  for (const entry of plan) {
+    if (entry.ordinal === 0) {
+      add({ type: "SESSION_BASELINE_SNAPSHOT", payload: { snapshot: snapshot(entry) } });
+      continue;
+    }
+    while (completed < entry.ordinal) {
+      completed += 1;
+      add(turnStarted(completed));
+      add(turnCompleted(completed));
+    }
+    add({ type: "TURN_TREE_SNAPSHOT", payload: { turnId: `turn-${entry.ordinal}`, turnOrdinal: entry.ordinal, snapshot: snapshot(entry) } });
+  }
+  return ledger;
+}
+// turnPlan is a baseline of tree 0 and turn i's snapshot of tree i.
+const turnPlan = (states: number): TurnSnapshotPlan[] => Array.from({ length: states }, (_, i) => ({ ordinal: i, tree: i }));
+const turnLedgerFile = (plan: (repo: BuiltRepo) => TurnSnapshotPlan[]) => (repo: BuiltRepo) => ({ "ledger.json": jsonText(turnLedger(repo, plan(repo))) });
+// writeRecording writes a session's ledger where the sidecar keeps it
+// (codex-sidecar.ts codexSidecarLedgerPath), making the directories 0700.
+function writeRecording(ws: string, ledger: CodexLifecycleLedger): void {
+  const gitDir = join(ws, "repo", ".git");
+  for (const dir of [join(gitDir, "faultline"), join(gitDir, "faultline", "recordings")]) {
+    if (!existsSync(dir)) mkdirSync(dir, { mode: 0o700 });
+    chmodSync(dir, 0o700);
+  }
+  writeFileSync(join(gitDir, "faultline", "recordings", `codex-${sha256(ledger.sessionId)}.json`), jsonText(ledger));
+}
+const TURN_GOOD_BAD = [state("good"), state("bad")];
+Object.assign(SCENARIOS, {
+  "turn-two-states": gitScenario(TURN_GOOD_BAD, { extra: turnLedgerFile(() => turnPlan(2)) }),
+  "turn-non-monotonic": gitScenario([state("good"), state("bad"), state("good"), state("bad")], { extra: turnLedgerFile(() => turnPlan(4)) }),
+  "turn-pass-only": gitScenario([state("good"), state("good")], { extra: turnLedgerFile(() => turnPlan(2)) }),
+  "turn-baseline-only": gitScenario(TURN_GOOD_BAD, { extra: turnLedgerFile(() => turnPlan(1)) }),
+  "turn-duplicate-ordinal": gitScenario(TURN_GOOD_BAD, { extra: turnLedgerFile(() => [...turnPlan(2), { ordinal: 1, tree: 0 }]) }),
+  "turn-heterogeneous": gitScenario([state("good"), state("bad", { "package.json": "{\"name\":\"demo\"}\n" })], {
+    extra: (repo) => ({ ...turnLedgerFile(() => turnPlan(2))(repo), "mapping.json": runtimeMapping(repo, [PINNED_IMAGE, OTHER_IMAGE]) })
+  }),
+  "turn-missing-tree": gitScenario(TURN_GOOD_BAD, { extra: turnLedgerFile(() => [{ ordinal: 0, tree: 0 }, { ordinal: 1, tree: 1, treeDigest: "e".repeat(40) }]) }),
+  "turn-sha256": gitScenario(TURN_GOOD_BAD, { objectFormat: "sha256", extra: turnLedgerFile(() => turnPlan(2)) }),
+  "turn-sidecar": gitScenario(TURN_GOOD_BAD, { edit: (ws, repo) => writeRecording(ws, turnLedger(repo, turnPlan(2))) }),
+  "turn-latest-ambiguous": gitScenario(TURN_GOOD_BAD, {
+    edit: (ws, repo) => { for (const session of ["s-1", "s-2"]) writeRecording(ws, turnLedger(repo, turnPlan(2), session)); }
+  })
 } satisfies Record<string, Scenario>);
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

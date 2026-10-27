@@ -7,8 +7,9 @@
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts && pnpm exec tsx difftest/gen/gen-writers.ts
 // (FAULTLINE_WRITERS_ONLY=<regex>: only the matching cases, see below.)
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { canonicalJson, digestJson, sha256 } from "../../src/canonical.js";
 import { PATH_OPS, applyMutation, expandRepeats, normalizeWriter, treeDigest, type Template } from "./cases.js";
@@ -198,7 +199,11 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 // generator verifies every bundle TS wrote against the root it printed, the
 // Go replay does the same, and TestWriterSameDirectory compares a subset
 // unmasked. The Go twin is relocation in difftest/writer_test.go.
-export type Relocation = { text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string };
+// objects, when given, are the Git objects the case created so far
+// (caseObjects): their ids are seeds like the case root, text() replaces
+// each with its <BLOB|TREE|COMMIT:h12> name, and fileDigest() applies the
+// loose-object and reflog rules (see "Created Git objects" below).
+export type Relocation = { text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string; objects?: CaseObjects };
 
 // A Git index (.git/index at any depth) holds stat data (times, inode,
 // device) that differs between the TS and the Go copy of a scenario, and
@@ -230,6 +235,264 @@ export function snapshotObjectDigest(rel: string): string | undefined {
   const m = SNAPSHOT_OBJECT.exec(rel);
   return m ? sha256(`git-object:${m[1]}${m[2]}`) : undefined;
 }
+
+// ---- Created Git objects (slice 4b Task 1; the same rule as slice 4c Task 2) ----
+// A command that writes Git objects into a workspace repository (the turn
+// minimization bridge's `commit-tree`, which takes its author and committer
+// time from the wall clock) gives ids that differ between runs, and so does
+// every file and digest that names them. The rule:
+//   Listing. For each .git directory of the workspace, `git cat-file
+//     --batch-all-objects --batch-check='%(objectname) %(objecttype)'` runs
+//     before the case's first invocation and after each one, with the
+//     harness's own git environment (no argv log, as gitIndexDigest). The
+//     new ids are the difference. An object whose loose file lies in the
+//     turn-snapshot store (.git/faultline/objects, which batch-all-objects
+//     reaches through objects/info/alternates) is not the repository's own:
+//     snapshotObjectDigest already compares it by name, and the ids fl
+//     prints for it stay as they are.
+//   Naming, from `git cat-file -p` on that side, blobs then trees then
+//     commits (a referenced created object is named first). Each object is
+//     named from text in which the case paths (text()) and every
+//     already-named id are masked:
+//       blob    <BLOB:h12>   sha256("blob\n" + content)
+//       tree    <TREE:h12>   sha256("tree\n" + the "<mode> <type> <id or
+//                            name>\t<name>" entries joined with "\n")
+//       commit  <COMMIT:h12> sha256("commit\n" + "tree <name>", each
+//                            "parent <name or id>", the author and committer
+//                            lines without their "<seconds> <zone>", "", the
+//                            message)
+//     h12 is the first 12 hex digits. A commit with a wrong tree, parent,
+//     identity or message gets a different name (spec 2.2).
+//   Unmasked ids. An id that existed before the case is never masked.
+//   Loose objects. A created object's loose file (<repo>/.git/objects/xx/…)
+//     is hashed as sha256("git-object:" + its name); loose objects that
+//     existed before keep their byte digest.
+//   Reflogs. A .git/**/logs/** file that is new or changed has each line's
+//     "<seconds> <zone>\t" replaced with "<TIME>\t" (and its text masked)
+//     before hashing.
+// The ids are also relocation seeds, so a file that holds one, and every
+// digest over it, gets a <PATHDIGEST:…> name. The Go twins are in
+// difftest/writer_test.go.
+const harnessGitEnv = (): NodeJS.ProcessEnv => ({ PATH: process.env.PATH ?? "", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" });
+function harnessGit(gitDir: string, args: string[]): Buffer {
+  return execFileSync("git", ["-c", "core.fsmonitor=false", `--git-dir=${gitDir}`, ...args], {
+    cwd: gitDir, env: harnessGitEnv(), stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 26
+  });
+}
+// objectListing is a repository's object ids and their types ({} when git
+// cannot read it), without the turn-snapshot store's objects.
+function objectListing(repoDir: string): Map<string, string> {
+  const gitDir = join(repoDir, ".git");
+  const out = new Map<string, string>();
+  let text: string;
+  try {
+    text = harnessGit(gitDir, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)"]).toString("utf8");
+  } catch {
+    return out;
+  }
+  for (const line of text.split("\n")) {
+    const [id, type] = line.split(" ");
+    if (id === undefined || type === undefined || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id)) continue;
+    if (existsSync(join(gitDir, "faultline", "objects", id.slice(0, 2), id.slice(2)))) continue;
+    out.set(id, type);
+  }
+  return out;
+}
+// objectSet is the id set of repository repoDir (the directory holding .git).
+export function objectSet(repoDir: string): Set<string> {
+  return new Set(objectListing(repoDir).keys());
+}
+// gitRepositories lists the workspace directories (relative, "." for ws
+// itself) that hold a .git directory; a .git directory is not entered.
+export function gitRepositories(ws: string): string[] {
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    const dir = rel === "." ? ws : join(ws, rel);
+    let entries: string[];
+    try { entries = readdirSync(dir); } catch { return; } // an unreadable directory holds no repository we can list
+    for (const name of entries.sort(byCodeUnit)) {
+      const stat = lstatSync(join(dir, name));
+      if (!stat.isDirectory()) continue;
+      if (name === ".git") out.push(rel);
+      else walk(rel === "." ? name : `${rel}/${name}`);
+    }
+  };
+  if (existsSync(ws)) walk(".");
+  return out;
+}
+// createdObjects maps each workspace repository to the objects it holds now
+// and did not hold in before (its set at case start; none for a repository
+// that did not exist), id → type.
+export function createdObjects(ws: string, before: Map<string, Set<string>>): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
+  for (const rel of gitRepositories(ws)) {
+    const had = before.get(rel) ?? new Set<string>();
+    const created = new Map<string, string>();
+    for (const [id, type] of objectListing(rel === "." ? ws : join(ws, rel))) if (!had.has(id)) created.set(id, type);
+    if (created.size > 0) out.set(rel, created);
+  }
+  return out;
+}
+const OBJECT_KINDS = ["blob", "tree", "commit"] as const;
+const IDENT_TIME = / [0-9]+ [+-][0-9]{4}$/;
+// objectNames names every created object of repository repoDir (see the rule
+// above); text masks the case paths.
+export function objectNames(repoDir: string, created: Map<string, string>, text: (s: string) => string): Map<string, string> {
+  const gitDir = join(repoDir, ".git");
+  const names = new Map<string, string>();
+  const masked = (s: string): string => {
+    let out = text(s);
+    for (const id of [...names.keys()].sort(byCodeUnit)) out = out.split(id).join(names.get(id)!);
+    return out;
+  };
+  const name = (kind: string, body: string) => `<${kind.toUpperCase()}:${sha256(`${kind}\n${body}`).slice(0, 12)}>`;
+  const visit = (id: string, path: Set<string>): void => {
+    if (names.has(id) || path.has(id)) return;
+    const type = created.get(id)!;
+    const content = harnessGit(gitDir, ["cat-file", "-p", id]).toString("utf8");
+    if (type === "tree") {
+      const entries = content.endsWith("\n") ? content.slice(0, -1) : content;
+      for (const line of entries.split("\n")) {
+        const ref = line.split("\t")[0]!.split(" ")[2];
+        if (ref !== undefined && created.has(ref)) visit(ref, new Set([...path, id]));
+      }
+      names.set(id, name("tree", masked(entries)));
+    } else if (type === "commit") {
+      const split = content.indexOf("\n\n");
+      const headers = (split < 0 ? content : content.slice(0, split)).split("\n");
+      const message = split < 0 ? "" : content.slice(split + 2);
+      const lines: string[] = [];
+      for (const header of headers) {
+        const [key, ...rest] = header.split(" ");
+        const value = rest.join(" ");
+        if (key === "tree" || key === "parent") {
+          if (created.has(value)) visit(value, new Set([...path, id]));
+          lines.push(`${key} ${value}`);
+        } else if (key === "author" || key === "committer") {
+          lines.push(`${key} ${value.replace(IDENT_TIME, "")}`);
+        }
+      }
+      names.set(id, name("commit", masked(`${[...lines, "", message].join("\n")}`)));
+    } else {
+      names.set(id, name(type, masked(content)));
+    }
+  };
+  for (const kind of OBJECT_KINDS) {
+    for (const id of [...created.keys()].filter((i) => created.get(i) === kind).sort(byCodeUnit)) visit(id, new Set());
+  }
+  // Any other type (a tag) last.
+  for (const id of [...created.keys()].sort(byCodeUnit)) visit(id, new Set());
+  return names;
+}
+// CaseObjects are the created objects' names (all repositories, for text),
+// per repository (for the loose-object rule), and the reflog digests the
+// case started from.
+export type CaseObjects = { names: Map<string, string>; byRepo: Map<string, Map<string, string>>; reflogs: Map<string, string> };
+export type CaseObjectsBefore = { sets: Map<string, Set<string>>; reflogs: Map<string, string> };
+const REFLOG = /(?:^|\/)\.git\/(?:[^\n]+\/)?logs\/[^\n]+$/;
+const LOOSE_OBJECT = /^(?:([^\n]*)\/)?\.git\/objects\/([0-9a-f]{2})\/([0-9a-f]{38}|[0-9a-f]{62})$/;
+// reflogDigests are the SHA-256s of every reflog file under ws.
+function reflogDigests(ws: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (rel: string) => {
+    let entries: string[];
+    try { entries = readdirSync(join(ws, rel)); } catch { return; }
+    for (const name of entries.sort(byCodeUnit)) {
+      const r = rel ? `${rel}/${name}` : name;
+      const stat = lstatSync(join(ws, r));
+      if (stat.isDirectory()) walk(r);
+      else if (stat.isFile() && REFLOG.test(r)) out.set(r, sha256(readFileSync(join(ws, r))));
+    }
+  };
+  if (existsSync(ws)) walk("");
+  return out;
+}
+// caseObjectsBefore records what the case starts from: each repository's
+// object set and the reflog digests (after the case setup, before the
+// first invocation).
+export function caseObjectsBefore(ws: string): CaseObjectsBefore {
+  return { sets: new Map(gitRepositories(ws).map((rel) => [rel, objectSet(rel === "." ? ws : join(ws, rel))])), reflogs: reflogDigests(ws) };
+}
+// caseObjects lists and names what the case created so far.
+export function caseObjects(roots: CaseRoots, before: CaseObjectsBefore): CaseObjects {
+  const names = new Map<string, string>();
+  const byRepo = new Map<string, Map<string, string>>();
+  for (const [rel, created] of createdObjects(roots.ws, before.sets)) {
+    const repoNames = objectNames(rel === "." ? roots.ws : join(roots.ws, rel), created, (s) => normalizeWriter(s, roots));
+    byRepo.set(rel, repoNames);
+    for (const [id, n] of repoNames) names.set(id, n);
+  }
+  return { names, byRepo, reflogs: before.reflogs };
+}
+// maskObjectIds replaces each created object id in text with its name.
+export function maskObjectIds(text: string, objects: CaseObjects | undefined): string {
+  if (objects === undefined) return text;
+  let out = text;
+  for (const id of [...objects.names.keys()].sort(byCodeUnit)) out = out.split(id).join(objects.names.get(id)!);
+  return out;
+}
+// createdObjectDigest is the loose-object and reflog rules' digest of a
+// workspace file, or undefined when neither applies.
+export function createdObjectDigest(rel: string, bytes: Buffer, objects: CaseObjects | undefined, text: (s: string) => string): string | undefined {
+  if (objects === undefined) return undefined;
+  const loose = LOOSE_OBJECT.exec(rel);
+  if (loose) {
+    const name = objects.byRepo.get(loose[1] ?? ".")?.get(`${loose[2]}${loose[3]}`);
+    return name === undefined ? undefined : sha256(`git-object:${name}`);
+  }
+  if (REFLOG.test(rel) && objects.reflogs.get(rel) !== sha256(bytes)) {
+    const lines = bytes.toString("utf8").split("\n").map((line) => line.replace(/[0-9]+ [+-][0-9]{4}\t/, "<TIME>\t"));
+    return sha256(text(lines.join("\n")));
+  }
+  return undefined;
+}
+// checkObjectNames is TestBridgeCommitNamesIgnoreTimeButNotTreeOrMessage's
+// twin, run on start-up: two bridge commits of one tree and message made at
+// different times get one name, another message another, and the tree that
+// existed before is not named.
+function checkObjectNames(): void {
+  const repoDir = mkdtempSync(join(tmpdir(), "faultline-object-names-"));
+  try {
+    const git = (args: string[], input = "", date = "1700000000 +0000"): string => execFileSync("git", ["-c", "user.name=FaultLine", "-c", "user.email=faultline@example.invalid", ...args], {
+      cwd: repoDir, input, env: { ...harnessGitEnv(), GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date }, stdio: ["pipe", "pipe", "ignore"]
+    }).toString("utf8").trim();
+    git(["init", "-q"]);
+    const blob = git(["hash-object", "-w", "--stdin"], "bad\n");
+    const tree = git(["mktree"], `100644 blob ${blob}\tstate.txt\n`);
+    const before = new Map([[".", objectSet(repoDir)]]);
+    const message = `faultline-turn-min after t1 (${tree.slice(0, 12)})`;
+    const c1 = git(["commit-tree", tree, "-m", message]);
+    const c2 = git(["commit-tree", tree, "-m", message], "", "1700000001 +0100");
+    const c3 = git(["commit-tree", tree, "-m", `faultline-turn-min before t0 (${tree.slice(0, 12)})`]);
+    const created = createdObjects(repoDir, before).get(".") ?? new Map<string, string>();
+    const names = objectNames(repoDir, created, (s) => s);
+    if (c1 === c2 || !names.get(c1)?.startsWith("<COMMIT:") || names.get(c1) !== names.get(c2)) throw new Error(`checkObjectNames: c1 ${names.get(c1)} c2 ${names.get(c2)}`);
+    if (names.get(c3) === names.get(c1)) throw new Error("checkObjectNames: a different message must give a different name");
+    if (names.has(tree) || names.has(blob)) throw new Error("checkObjectNames: an object that existed before the case is never masked");
+    // The pinned names (TestCreatedObjectNamesArePinned pins the same):
+    // every object created, the message holding a path text() masks.
+    const pinned = mkdtempSync(join(tmpdir(), "faultline-object-names-"));
+    try {
+      const pin = (args: string[], input = ""): string => execFileSync("git", ["-c", "user.name=FaultLine", "-c", "user.email=faultline@example.invalid", ...args], {
+        cwd: pinned, input, env: harnessGitEnv(), stdio: ["pipe", "pipe", "ignore"]
+      }).toString("utf8").trim();
+      pin(["init", "-q"]);
+      const empty = new Map([[".", objectSet(pinned)]]);
+      const b = pin(["hash-object", "-w", "--stdin"], "bad\n");
+      const tr = pin(["mktree"], `100644 blob ${b}\tstate.txt\n`);
+      const c = pin(["commit-tree", tr, "-m", `m ${pinned}`]);
+      const got = objectNames(pinned, createdObjects(pinned, empty).get(".") ?? new Map<string, string>(), (s) => s.split(pinned).join("<WS>"));
+      const want: [string, string][] = [[b, "<BLOB:bf9ddff4bbf5>"], [tr, "<TREE:b352e6817bf5>"], [c, "<COMMIT:c43d2f3c0662>"]];
+      for (const [id, name] of want) if (got.get(id) !== name) throw new Error(`checkObjectNames: ${id} is ${got.get(id)}, want ${name}`);
+    } finally {
+      rmSync(pinned, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+}
+// ---- end of the created Git objects rule ----
+
 const SELF_DIGEST = /^sha256:[0-9a-f]{64}$/;
 // A minimization run fact's worktreeDigest member, in canonical or indented
 // JSON (the Go twin is worktreeDigestMember).
@@ -257,7 +520,8 @@ export function loggedCasePaths(records: string[], roots: CaseRoots): string[] {
   return out;
 }
 
-export function relocation(roots: CaseRoots, records: string[] = []): Relocation {
+export function relocation(roots: CaseRoots, records: string[] = [], objects?: CaseObjects): Relocation {
+  const objectIds = objects === undefined ? [] : [...objects.names.keys()].sort(byCodeUnit);
   const files: [string, Buffer, string][] = [];
   const walk = (rel: string) => {
     for (const name of readdirSync(join(roots.ws, rel)).sort(byCodeUnit)) {
@@ -274,7 +538,7 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
   const names = new Map<string, string>();
   let found: string[] = [];
   const add = (hex: string, name: string) => { if (!names.has(hex)) { names.set(hex, name); found.push(hex); } };
-  const tainted = (text: string) => text.includes(roots.root) || [...names.keys()].some((d) => text.includes(d));
+  const tainted = (text: string) => text.includes(roots.root) || [...names.keys()].some((d) => text.includes(d)) || objectIds.some((id) => text.includes(id));
   const visit = (value: unknown, rel: string, pointer: string): void => {
     if (value === null || typeof value !== "object") return;
     if (!tainted(canonicalJson(value))) return;
@@ -291,7 +555,10 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
   };
   // A minimization run fact hashes its materialized worktree path, which
   // appears in no file: name those digests after the masked path.
-  const seeds = [roots.root];
+  // The ids of the Git objects the case created (a bridge commit's id holds
+  // the wall-clock time) are seeds too: a file that holds one, and every
+  // digest over it, gets a name.
+  const seeds = [roots.root, ...objectIds];
   for (const path of loggedCasePaths(records, roots)) {
     const digest = sha256(Buffer.from(path, "utf8"));
     add(digest, `path:${normalizeWriter(path, roots)}`);
@@ -319,7 +586,7 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
   }
   const sorted = [...names.keys()].sort(byCodeUnit);
   const text = (s: string): string => {
-    let out = normalizeWriter(s, roots);
+    let out = maskObjectIds(normalizeWriter(s, roots), objects);
     for (const d of sorted) out = out.split(d).join(`<PATHDIGEST:${names.get(d)}>`);
     // The proof page also prints a digest abbreviated (git-proof-view.ts
     // shortDigest: its first and last 8 hex digits).
@@ -328,10 +595,13 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
   };
   return {
     text,
+    ...(objects === undefined ? {} : { objects }),
     fileDigest: (rel, bytes) => {
       if (isGitIndex(rel)) return gitIndexDigest(dirname(join(roots.ws, rel)), bytes);
       const object = snapshotObjectDigest(rel);
       if (object !== undefined) return object;
+      const created = createdObjectDigest(rel, bytes, objects, text);
+      if (created !== undefined) return created;
       return names.has(sha256(bytes)) ? sha256(text(bytes.toString("utf8"))) : sha256(bytes);
     }
   };
@@ -533,6 +803,10 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     // wrote into a file (the Go twin is runWriterCase).
     const records: string[] = [];
     const stdouts: string[] = [];
+    // The Git objects the case starts from (the Go twin records them after
+    // prepareWriterCase too); objects are those it created so far.
+    const start = caseObjectsBefore(roots.ws);
+    let objects = caseObjects(roots, start);
     for (const [inv, argv] of t.argv.entries()) {
       // This invocation's mutations: the others, then the new entries' modes
       // reset, then the chmods (as at setup).
@@ -543,7 +817,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
         resetNewModes(roots.ws, existing);
         for (const m of due) if (m.op === "chmod") apply(m);
       }
-      const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
+      const before = treeEntries(roots.ws, relocation(roots, records, objects).fileDigest);
       rmSync(roots.argvLog, { force: true });
       const clock = invocationSeed(t, inv);
       const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)),
@@ -556,7 +830,8 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       const plans = planDigests(r.stdout);
       const invocationRecords = readArgvLog(roots.argvLog);
       records.push(...invocationRecords);
-      const reloc = relocation(roots, records);
+      objects = caseObjects(roots, start);
+      const reloc = relocation(roots, records, objects);
       const after = treeEntries(roots.ws, reloc.fileDigest);
       const tree = treeDigest(roots.ws, reloc.fileDigest);
       // After the tree and the argv log are read, like the Go replay.
@@ -593,6 +868,7 @@ export function restoreWritable(root: string): void {
 
 requireOracleNode();
 requireFreshBuild();
+checkObjectNames();
 // The oracle starts as process.execPath, an absolute path, so a template's
 // fake toolchain `node` (difftest/testdata/faketools) answers fl's own
 // `node --version` and never runs TS itself.
