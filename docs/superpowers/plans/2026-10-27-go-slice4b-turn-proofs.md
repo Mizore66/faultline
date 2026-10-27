@@ -212,3 +212,317 @@ difftest/gen/oracle-turninv.ts, oracle-turnproof.ts, oracle-bridge.ts   one op m
 difftest/turninv_live_test.go, turnproof_live_test.go, turnbridge_live_test.go   live tests               Tasks 3, 4, 5, 6, 7, 8
 difftest/testdata/writers.d/4b-*.json, golden/writers.d/4b-*.jsonl     one pair per CLI task              Tasks 1, 9, 10
 ```
+
+---
+
+### Task 1: Writer harness for 4b: created Git object names and turn scenarios
+
+**Files:**
+- Modify (TS side): `difftest/gen/gen-writers.ts` (`createdObjects`, `objectNames`, the loose-object and reflog rules, and the object seeds in `relocation`), `difftest/gen/scenarios.ts` (the `turn-*` scenarios)
+- Modify (Go side): `difftest/writer_test.go` (the twins), `difftest/scenarios_test.go` (`writerScenarios`)
+- Create: `difftest/masks_test.go`, the `turn-*` scenario trees under `difftest/testdata/scenarios/`
+
+**Interfaces:**
+- Consumes:
+  - 4a Task 1: `writers.d/`, the `advanceClock` and `inv` template keys, and `stdoutArgument` (`<STDOUT:n:/pointer>`).
+  - The slice 3 writer replay: `relocation`, `loggedCasePaths`, `normalizeWriter`, `buildRepo`.
+  - Frozen TS: `createCodexLifecycleLedger`, `appendLifecycleEvent` and `signTurnTreeSnapshot` (`src/turn-snapshot.ts:290`).
+- Produces (identical to PR 4c Task 2's Produces, minus its two repair seeds; the controller keeps whichever copy merges first):
+  - `createdObjects(t testing.TB, ws string, before map[string]map[string]bool) map[string]map[string]string`. The keys are repository directories relative to the workspace, then object ids, mapped to their type.
+  - `objectSet(t testing.TB, repoDir string) map[string]bool`.
+  - `objectNames(t testing.TB, repoDir string, created map[string]string, text func(string) string) map[string]string`. It maps an id to `<BLOB:h12>`, `<TREE:h12>` or `<COMMIT:h12>`.
+  - The TS twins `createdObjects`, `objectSet` and `objectNames` in `gen-writers.ts`.
+  - `relocation(…)` takes the created object ids as seeds. A file that holds one gets a `<PATHDIGEST:file:…>` name, and so does every digest over it.
+  - Scenarios (in `writerScenarios`, built by `scenarios.ts` with frozen TS functions and fixed times):
+    - `turn-two-states`: `gitScenario([state("good"), state("bad")])`, the witness frozen into `repo/.faultline/incidents` as `git-two-states` has it, plus `ledger.json`:
+      - `SESSION_STARTED` with `workingDirectory` `/work/repo`;
+      - `SESSION_BASELINE_SNAPSHOT` of tree 0;
+      - turn `turn-1` started and completed;
+      - `TURN_TREE_SNAPSHOT` of tree 1.
+
+      Each snapshot is `signTurnTreeSnapshot({schemaVersion, repositoryRoot: "/work/repo", headCommit: commits[0], treeDigest: trees[i], capturedAt, dirty: i > 0, statusDigest: "sha256:" + sha256("status " + i)})`. Ledger and event ids are fixed, and times are `2026-07-16T11:00:00.000Z` plus one second per event, before the seed epoch.
+    - `turn-non-monotonic`: states good, bad, good, bad (a baseline and three turns).
+    - `turn-pass-only`: good, good (no transition).
+    - `turn-baseline-only`: one snapshot (`NO_TURN_SNAPSHOTS`).
+    - `turn-duplicate-ordinal`: turn 1 completed, then two `TURN_TREE_SNAPSHOT`s with ordinal 1 (trees 1 and 0). The ledger verifier accepts this, because each snapshot only has to match the completed ordinal (`ledger.ts:505`), so `appendLifecycleEvent` builds it and `investigate turns` reaches `DUPLICATE_TURN_SNAPSHOTS`.
+    - `turn-heterogeneous`: state 1 adds `package.json`, and `mapping.json` maps both fingerprints.
+    - `turn-sidecar`: `turn-two-states` with the ledger under `.git/faultline/recordings/codex-<sha256("s-1")>.json` instead of `ledger.json`, for `--latest`. Its `.gitignore` holds `.faultline/`.
+    - `turn-latest-ambiguous`: two valid recordings whose last events share one `occurredAt`.
+
+**Gotchas:**
+- **The object rule is 4c Task 2's, word for word.**
+  - **Listing.** For each `.git` directory in the workspace, run `git cat-file --batch-all-objects --batch-check='%(objectname) %(objecttype)'`:
+    - before the first invocation, and after each one;
+    - with the harness's own git environment, not fl's;
+    - outside the argv log, as `gitIndexDigest` does.
+
+    The new ids are the difference.
+  - **Naming,** on each side, from `git cat-file -p` on that side, in dependency order (blobs, then trees, then commits). Each object is named from text in which the case paths and every already-named id are masked:
+    - **blob:** `<BLOB:` + the first 12 hex digits of `sha256("blob\n" + text(content))` + `>`.
+    - **tree:** each entry `<mode> <type> <id or its name>\t<name>`, joined with `\n`, hashed as `"tree\n" + …`.
+    - **commit:** the tree's name, then each parent's name (or its id when the parent existed before the case), the `author` and `committer` lines with their trailing `<seconds> <zone>` removed, and the message. Hashed as `"commit\n" + …`.
+
+    So a bridge commit with a wrong tree, identity or message gets a different name and fails, as spec 2.2 requires.
+  - **Unmasked ids.** An id that existed before the case is never masked. That covers every turn tree the scenario's commits hold, so `trees.pack`, `investigation.json` and the ledger keep their exact ids.
+  - **Loose objects.** A loose object new to the case, under `<repo>/.git/objects/xx/…`, is hashed as `sha256("git-object:" + its name)`. Loose objects that existed before keep their byte digest.
+  - **Reflogs.** A new or changed `.git/**/logs/**` file has each line's `<seconds> <zone>\t` replaced with `<TIME>\t` before hashing. No 4b command writes a reflog (`commit-tree` updates no ref), so this rule only keeps the twins identical to 4c's.
+- **Why 4b needs it.**
+  - The bridge's `commit-tree` (correction 4) takes its author and committer time from the wall clock: the inherited environment carries no `GIT_*_DATE`, and the harness drops every inherited `GIT_` name.
+  - So `beforeCommit`/`afterCommit`, the minimization run facts that name them, the result file and its `resultDigest` all vary between runs.
+  - The bridge writes two loose commit objects into `repo/.git/objects`.
+- **Existing goldens.** No existing case creates objects, so every existing golden stays byte-identical. Step 4 checks that.
+- **Scenario bytes are path-independent.** The ledger's `workingDirectory` and the snapshots' `repositoryRoot` are the literal `/work/repo`. Only `investigation.repository` (fl's `resolve(--repo)`) holds the case path, and `relocation` already masks it.
+
+**No writer cases.** A mutation cannot run a command, so the object rule is tested by `TestBridgeCommitNamesIgnoreTimeButNotTreeOrMessage` below and by `checkObjectNames()`, its TS twin, which `gen-writers.ts` runs on start-up. The bridge cases in Tasks 9 and 10 exercise the rule end to end. `TestTurnScenariosVerify` checks the scenario ledgers.
+
+- [ ] **Step 1: Write the failing tests**
+
+```go
+// difftest/masks_test.go
+//go:build faultline_test && unix
+
+package difftest
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Mizore66/faultline/internal/bundle/gitproof"
+	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/nodefs"
+)
+
+// gitIn runs the harness's git in dir (identity from the arguments only).
+func gitIn(t *testing.T, dir string, stdin string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "user.name=FaultLine", "-c", "user.email=faultline@example.invalid"}, args...)...)
+	cmd.Dir = dir
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestBridgeCommitNamesIgnoreTimeButNotTreeOrMessage(t *testing.T) {
+	repo := t.TempDir()
+	gitIn(t, repo, "", "init", "-q")
+	blob := gitIn(t, repo, "bad\n", "hash-object", "-w", "--stdin")
+	tree := gitIn(t, repo, "100644 blob "+blob+"\tstate.txt\n", "mktree")
+	before := map[string]map[string]bool{".": objectSet(t, repo)}
+	msg := "faultline-turn-min after t1 (" + tree[:12] + ")"
+	c1 := gitIn(t, repo, "", "commit-tree", tree, "-m", msg)
+	time.Sleep(1100 * time.Millisecond) // a different committer second
+	c2 := gitIn(t, repo, "", "commit-tree", tree, "-m", msg)
+	c3 := gitIn(t, repo, "", "commit-tree", tree, "-m", "faultline-turn-min before t0 ("+tree[:12]+")")
+	created := createdObjects(t, repo, before)["."]
+	names := objectNames(t, repo, created, func(s string) string { return s })
+	if c1 == c2 || names[c1] == "" || names[c1] != names[c2] || !strings.HasPrefix(names[c1], "<COMMIT:") {
+		t.Fatalf("c1 %q c2 %q", names[c1], names[c2])
+	}
+	if names[c3] == names[c1] {
+		t.Fatal("a different message must give a different name")
+	}
+	if _, ok := names[tree]; ok {
+		t.Fatal("a tree that existed before the case is never masked")
+	}
+}
+
+func TestTurnScenariosVerify(t *testing.T) {
+	repo := repoRoot(t)
+	for _, name := range []string{"turn-two-states", "turn-non-monotonic", "turn-pass-only", "turn-baseline-only", "turn-duplicate-ordinal", "turn-heterogeneous"} {
+		r := makeWriterRoots(t)
+		copyScenario(t, repo, name, r.ws)
+		text, err := nodefs.ReadText(filepath.Join(r.ws, "ledger.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := jsjson.Parse(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := gitproof.VerifyCodexLifecycleLedger(v); !got.Valid {
+			t.Errorf("%s: %v", name, got.Errors)
+		}
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test -tags faultline_test ./difftest/ -run 'TestBridgeCommitNames|TestTurnScenariosVerify' -v`
+Expected: FAIL (undefined `objectSet`, `createdObjects`, `objectNames`; unknown scenario `turn-two-states`).
+
+- [ ] **Step 3: Implement** both twins and the scenarios, and call the twins from `runCase` and `runWriterCaseWith`. Record the object sets after `prepareWriterCase` and before the first invocation. Every Go twin names its TS twin in a comment.
+
+- [ ] **Step 4: Regenerate in podman and check that no existing golden moved**
+
+Run the podman command from Global Constraints with no `ONLY`, in the background with a polled log (about 40 minutes). Then: `git status --porcelain difftest/testdata | grep -v 'scenarios/turn-'`
+Expected: empty output.
+
+- [ ] **Step 5: Run to verify the tests pass**
+
+Run: `go test -tags faultline_test ./difftest/ -run 'TestBridgeCommitNames|TestTurnScenariosVerify|TestNormalizeWriter|TestWindowsWriterSkipsList|TestNoDirectClockReads' -v > /tmp/s4b-t1.log 2>&1; grep -E '^(---|ok|FAIL)' /tmp/s4b-t1.log | tail`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add difftest
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "test(difftest): created Git object names and turn scenarios for slice 4b
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 2: Turn proof bases, the hostile-verifier turn corpus and the turn git masks
+
+**Files:**
+- Modify (TS side):
+  - `difftest/gen/fixtures.ts`: `createTurnRepository`, `turnLedger`, `nativeTurnFixture`, `createTurnFrozenWitness`.
+  - `difftest/gen/gen-bases.ts`: `turnBase` and two calls.
+  - `difftest/gen/cases.ts`:
+    - the `pad-file` and `replace-pack` ops (both take `file`, so neither joins `PATH_OPS`);
+    - the `resignTurn` and `posixOnly` template keys;
+    - `TURN_GIT_LABELS` in `maskGitOutput`;
+    - the `faultline-turn-proof-pack-` `<GITTMP>` marker;
+    - `canonicalText`, exported beside `canonicalDigest`.
+- Modify (Go side): `difftest/cases.go` (the twins), `difftest/cases_test.go`, `difftest/replay_test.go` (`deferredTypes`, and the `posixOnly` skip on Windows).
+- Append: `difftest/testdata/mutations.json`.
+- Create:
+  - `difftest/testdata/bases/turn-two-states/`, `difftest/testdata/bases/turn-non-monotonic/`;
+  - `difftest/testdata/golden/turn-two-states.jsonl`, `golden/turn-non-monotonic.jsonl`;
+  - `difftest/testdata/fixtures/turn-ancestor-only.pack`, `fixtures/turn-not-a-pack.bin`;
+  - `difftest/testdata/fakegit/fail-unpack/git`, `fakegit/fail-unpack-index/git`.
+
+**Interfaces:**
+- Consumes: frozen TS `investigateTurnTrees`, `writeTurnInvestigationProofBundle`, `createCodexLifecycleLedger`, `appendLifecycleEvent`, `signTurnTreeSnapshot`; `fixtures.ts`'s `createFrozenWitness`, `deterministicDockerRunner`, `pinnedImage`.
+- Produces:
+  - Bases (deterministic: a rerun of `gen-bases.ts turn-two-states turn-non-monotonic` gives byte-identical directories; Task 11 makes `difftest-goldens` check that):
+    - `turn-two-states`: states good and bad. 2 states, 6 runs, 1 `PASS_TO_FAIL` transition, `introduction.status` `ATTRIBUTED`. 14 declared artifacts, 16 physical files.
+    - `turn-non-monotonic`: good, bad and good. 3 states, 9 runs, 2 transitions, `nonMonotonic: true`.
+  - The mutation template keys and ops, on both twins:
+    - `{"op":"pad-file","file":f,"total":n}`: append `0x20` bytes until `f` is exactly `n` bytes; fails if it is already longer.
+    - `{"op":"replace-pack","file":"source/trees.pack","from":fixture}`: copy the fixture over the pack, then set `source/trees.metadata.json` `pack.digest` (`"sha256:" + sha256(bytes)`) and `pack.bytes`, writing it as `canonicalText(v) + "\n"`.
+    - `"resignTurn": true` runs after the template's edit and before `rehash`. See Gotchas.
+    - `"posixOnly": true`: the Go replay skips the case on Windows (`t.Skip("posixOnly mutation")`). TS generates it everywhere.
+  - Go `deferredTypes = map[string]string{"turn": "Task 7 ports the turn verifier"}`. `TestGoldenReplay` checks that a deferred base has its golden and then `continue`s without running it. Task 7 deletes the entry.
+
+**Gotchas:**
+- **Deterministic bases.** `nativeTurnFixture(observed)` rewrites what `investigateTurnTrees` reads from the clock, in this order:
+  1. For run `i` (in array order): `executionNonce = "00000000-0000-4000-8000-" + i.toString(16).padStart(12, "0")`, `startedAt = finishedAt = "2026-07-16T11:03:00.000Z"`, `durationMs = 0`, `result.executor = "NATIVE_DOCKER"`.
+  2. Recompute `executionId` with the turn formula (`turn-investigation.ts:544-555`) and `runId` as `digestJson(run without runId)`.
+  3. Set `repository` to the literal `/work/turn-repository`, since the writer packs from `options.repository`, never from `result.repository`.
+  4. Rebuild `stableStates`, `transitions`, `nonMonotonic` and `introduction` with the frozen TS `reconstructStableTurnStates`, `findStableTurnTransitions` and `attributeFailureIntroduction`.
+  5. Set `proof` to the native values with `reason: "Each listed transition has three distinct Docker-isolated executions on both adjacent turn-tree states."` and `evidenceGrade: "EXPERIMENTAL_TURN"`.
+  6. Parse with `TurnInvestigationResultSchema`.
+
+  Sandbox audits hold no path, and the fake runner's output is fixed text. The ledger uses fixed ids and times, and its snapshots have `repositoryRoot: "/work/turn-repository"`. The scratch repository uses `gen-bases.ts`'s fixed `GIT_*_DATE`. `generatedAt` is `"2026-07-16T11:04:00.000Z"`.
+- **The pack follows git** (correction 8). The bases are committed snapshots like the Git bases. Task 11's drift check regenerates them on ubuntu-24.04.
+- **The `resignTurn` key** is the editor who rewrites everything consistently, so that only the semantic checks can catch the edit. Apply it on both twins in this order:
+  1. Read `investigation.json`.
+  2. For each run, `runId = digestJson(run without runId)` (`executionId` is left alone), and keep the old→new map.
+  3. Replace old ids in `stableStates[].runIds` and in `transitions[].before.runIds`/`after.runIds`.
+  4. Write `investigation.json` as `canonicalText + "\n"`.
+  5. Delete every `runs/*.json`, then write `runs/<hex>.json` for each run.
+  6. Write `transitions/<NNNN>.json` from the investigation's transitions; delete extra ones.
+  7. Set `manifest.artifacts.runs` to `[{runId, path}]`, `manifest.artifacts.transitions` to `[{index, path}]` and `manifest.investigationDigest` to `canonicalDigest(investigation)`, then write the manifest.
+  8. The template's `rehash: true` then rewrites `hashes.txt` and `ROOT.sha256`.
+- **Git labels** (correction 10).
+  - `maskGitOutput` (both twins) applies `maskGitDetail` after each of these needles, up to the next `\n- ` (or the end):
+    - `Turn tree pack is not a valid Git pack: `
+    - `Could not create temporary bare repository for pack verification: `
+    - `Could not pack turn trees: `
+    - the regex `Could not enumerate objects for turn tree [0-9a-f]{40,64}: `
+  - The `<GITTMP>` loop also replaces `faultline-turn-proof-pack-` runs.
+  - With `maskGit` false (a fake-git case), nothing is masked, as before.
+  - `TestMaskGitDetail` gains a case for each.
+- **Fake gits.**
+  - `fail-unpack`: `unpack-objects` prints `fatal: planted unpack failure` and exits 128; everything else runs the real git. The verifier then falls back to `index-pack --strict <path>`, and the bundle is VALID.
+  - `fail-unpack-index`: `unpack-objects` and `index-pack` both fail with planted text. This gives `Turn tree pack is not a valid Git pack: <index-pack stderr>`, because the index-pack stderr wins (`turn-proof-bundle.ts:475-481`).
+- **Generic templates apply to the turn bases.** A template without `bases` runs on every base that is not `git-shape-*`. So flip, delete, make-dir, the symlinks, the strays, the JSON corruptions, the `hashes-*` path cases and `root-mismatch` all reach the turn bases with no new entry. The new templates below name `"bases": ["turn-two-states"]`, or both turn bases where stated.
+
+**The hostile-verifier corpus** (`docs/post-submission/hostile-verifier-turn-parity-e40b.md`). For each of its 15 cases: the templates that cover it, and what TS prints. The goldens pin the exact text.
+
+| # | Case | Templates (new ones in bold) | Verdict |
+| --- | --- | --- | --- |
+| 1 | missing manifest/hashes/ROOT | `delete` on each file; **`turn-rename-hashes`** is generic `rename-hashes` | INVALID: `Turn proof bundle verification failed safely: ENOENT…` for hashes/ROOT; `manifest JSON validation failed` for the manifest |
+| 2 | extra undeclared file | `add-root-stray`, `add-nested-stray`; **`turn-stray-declared`** (`add-file` `source/extra.bin` + `rehash`) | INVALID: `undeclared physical file…`, or `hashes.txt contains an unexpected artifact: source/extra.bin` |
+| 3 | traversal | `hashes-traversal`, `hashes-dotdot-escape`; **`turn-hashes-nested-traversal`** (`  manifest.json` → `  source/../../outside`) | INVALID: `hashes.txt contains an unsafe artifact path: <whole line>` |
+| 4 | absolute / Windows paths | `hashes-absolute`, `hashes-backslash`, `hashes-nul`; **`turn-hashes-drive-letter`** (`  C:/outside`, `posixOnly`) | INVALID; on POSIX the drive-letter path is safe and reads as ENOENT (correction 11) |
+| 5 | symlink / special file | `symlink-to-hashes`, `symlink-outside`, `root-symlink`, `make-dir`; **`turn-fifo`** (`fifo` at `source/extra.fifo`) | INVALID: `Turn proof bundle contains a symbolic link or special file: …` or `must be a real directory` |
+| 6 | duplicate JSON keys | **`turn-dup-key-last-valid`** (`"integrityScope":"x","integrityScope":"complete-declared-file-set"`, rehash), **`turn-dup-key-last-invalid`** (the reverse), **`turn-dup-schema-version-git`** (a second `schemaVersion` of `faultline.git-proof-bundle.v1` last) | VALID; INVALID with `manifest schema validation failed`; routed to the Git verifier (correction 12) |
+| 7 | oversized `hashes.txt` | **`turn-hashes-at-read-limit`** (`pad-file` 4,194,304), **`turn-hashes-one-over`** (4,194,305) | the first INVALID only for the missing final newline; the second `hashes.txt exceeds FaultLine's 4194304 byte read limit` |
+| 8 | catalog entries over the cap | **`turn-catalog-at-2048`** (`append-catalog-lines` 2,034), **`turn-catalog-over-2048`** (2,035), **`turn-catalog-2100`** (2,100); **`turn-files-at-limit`** (`many-files` 2,032), **`turn-files-one-over`** (2,033); **`turn-declared-total-one-over`** (`pad-total` 536,870,913, declared) | no cap: one `declared artifact cannot be read safely` and one `unexpected artifact` per extra line (correction 1); the physical cap throws `too many files` |
+| 9 | root mismatch | `root-mismatch`; the base's `root-bad`, `root-malformed` and `root-empty` invocations | INVALID; `root-empty` is MISMATCH with `not a sha256 digest` (correction 2) |
+| 10 | run-id reuse / metadata contradiction | **`turn-run-id-reuse`** (`runs[1].runId` from `runs[0]`, `resignTurn` off, rehash), **`turn-metadata-tree-swap`** (`trees[0].treeDigest` from `trees[1]`, rehash), **`turn-run-tree-swap`** (`runs[0].treeDigest` from state 1, `resignTurn`, rehash) | INVALID with `duplicate runId`/`runId does not match`, `source tree metadata does not match investigation states`, `run state does not match the state sequence` |
+| 11 | contradictory outcomes | **`turn-flip-verdict`** (`runs[3].result` verdict PASS, reason `PREDICATE_PASS`, exitCode 0, `resignTurn`), **`turn-transition-kind`** (`transitions[0].kind` `FAIL_TO_PASS`, `resignTurn`), **`turn-proof-bit`** (`proof.isProof` false, `resignTurn`), **`turn-non-monotonic-flag`** (on `turn-non-monotonic`: `nonMonotonic` false, `resignTurn`) | INVALID with only the reconstruction errors (`persisted stable states contradict…` and the rest) |
+| 12 | pack tampering | `flip-first`/`flip-last` on `source/trees.pack`; **`turn-pack-wrong-trees`** (`replace-pack` `turn-ancestor-only.pack`, rehash), **`turn-pack-garbage`** (`replace-pack` `turn-not-a-pack.bin`, rehash), **`turn-git-fail-init`** (`fake-git` `fail-init`), **`turn-git-fail-unpack`**, **`turn-git-fail-unpack-index`** | `digest or size does not match`; `Turn tree object missing or wrong type in portable pack: <tree>`; `Turn tree pack is not a valid Git pack: <GIT-STDERR>`; the planted texts; VALID via `index-pack` |
+| 13 | downgrade / grade confusion | **`turn-grade-turn-proof`** (`evidenceGrade` `TURN_PROOF`), **`turn-grade-none`** (`NONE`), **`turn-label-legacy`** (the legacy label), **`turn-label-commit`** (the COMMIT_PROOF label), **`turn-strip-grade`** (delete `evidenceGrade`), all with `resignTurn`; **`turn-schema-as-git`** (manifest `schemaVersion` `faultline.git-proof-bundle.v1`, rehash) | the `TURN_PROOF is reserved…` text; `must remain graded EXPERIMENTAL_TURN`; VALID; the `must carry evidenceLabel` text; `investigation schema validation failed`; the Git verifier's refusal |
+| 14 | archive / compression bombs | none: the verifier takes a directory, never an archive. The pack is unpacked by git with `--strict` under the 64 MiB output cap. **`turn-deep-literal`** (`replace-nested` depth 3,000 in `manifest.json`) stands in as the parser-bomb analogue | the zod message at `SiteTurnProof` (correction 14) |
+| 15 | malformed JSON | `truncate-json`, `bom-json`, `invalid-utf8-json`, `retype-first`, `drop-first`, `add-unknown-key`, `add-proto-key` on every JSON file | INVALID: `<label> JSON validation failed: <V8 text>` or a schema failure |
+
+Also turn-specific: **`turn-ledger-hash`** (`lifecycle/ledger.json` `events[2].hash`, rehash), **`turn-ledger-resigned`** (a snapshot's `dirty` flipped with `resignLedger`, rehash), **`turn-lifecycle-transport`** (`manifest.lifecycle.transport` `CODEX_CLI`, rehash) and **`turn-manifest-codex-thread`** (`manifest.codex.repairThreadId` `t-1`, rehash, VALID: the `codex` section is not cross-checked). The test file header (Task 7's `difftest/turnproof_corpus_test.go`) lists these 15 rows and the N/A reason for row 14.
+
+- [ ] **Step 1: Write the failing tests**
+
+```go
+// difftest/cases_test.go
+func TestTurnGitLabelsMasked(t *testing.T) {
+	in := "- Turn tree pack is not a valid Git pack: fatal: early EOF\nfatal: index-pack failed\n- next"
+	if got := maskGitOutput(in, true); got != "- Turn tree pack is not a valid Git pack: <GIT-STDERR>\n- next" {
+		t.Fatalf("%q", got)
+	}
+	in = "x /tmp/faultline-turn-proof-pack-Ab12Cd/objects y"
+	if got := maskGitOutput(in, true); got != "x <GITTMP>/objects y" {
+		t.Fatalf("%q", got)
+	}
+	in = "Could not enumerate objects for turn tree " + strings.Repeat("a", 40) + ": fatal: bad object"
+	if got := maskGitOutput(in, true); !strings.HasSuffix(got, ": <GIT-STDERR>") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestPadFileAndResignTurn(t *testing.T) {
+	repo := repoRoot(t)
+	work := t.TempDir()
+	copyTree(t, filepath.Join(repo, "difftest", "testdata", "bases", "turn-two-states"), work)
+	tpl := mustTemplate(t, `{"id":"x","op":"pad-file","file":"hashes.txt","total":4194304}`)
+	if !applyMutation(work, testCase{id: "x", base: "turn-two-states", tpl: tpl, file: "hashes.txt"}) {
+		t.Fatal("not applied")
+	}
+	if info, _ := os.Stat(filepath.Join(work, "hashes.txt")); info.Size() != 4194304 {
+		t.Fatal(info.Size())
+	}
+}
+```
+
+(`mustTemplate` parses one template with the loader's own decoder; add it beside `loadTemplates` if it does not exist.)
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test -tags faultline_test ./difftest/ -run 'TestTurnGitLabelsMasked|TestPadFileAndResignTurn' -v`
+Expected: FAIL (the labels are unmasked; no base `turn-two-states`; unknown op `pad-file`).
+
+- [ ] **Step 3: Implement** the fixtures, both bases, both twins, the fake gits and the templates. Then generate the bases and the goldens in podman: `-e BASES=turn-two-states,turn-non-monotonic`, with the gen-bases line of the podman command. Run the base generation twice and `diff -r` the two outputs (they must be identical). Then run `git status --porcelain difftest/testdata`: only `bases/turn-*`, `golden/turn-*`, `fixtures/turn-*`, `fakegit/fail-unpack*` and `mutations.json` may change.
+
+- [ ] **Step 4: Run to verify the tests pass and no other base's golden moved**
+
+Run: `go test -tags faultline_test ./difftest/ -run 'TestTurnGitLabelsMasked|TestPadFileAndResignTurn|TestMaskGitDetail|TestGoldenReplay' > /tmp/s4b-t2.log 2>&1; grep -E '^(---|ok|FAIL)' /tmp/s4b-t2.log | tail` (TestGoldenReplay runs every other base and skips the deferred turn bases; in podman, under 280 s with `-run 'TestGoldenReplay/(git-two-states|demo-replay)'`)
+Expected: PASS. Also run `grep -c '"case":"turn-two-states__' difftest/testdata/golden/turn-two-states.jsonl`: it prints the number of expanded cases (over 150).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add difftest
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "test(difftest): turn proof bases, hostile-verifier turn corpus and turn git masks
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
