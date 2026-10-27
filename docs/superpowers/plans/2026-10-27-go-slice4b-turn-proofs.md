@@ -246,6 +246,8 @@ difftest/testdata/writers.d/4b-*.json, golden/writers.d/4b-*.jsonl     one pair 
     - `turn-baseline-only`: one snapshot (`NO_TURN_SNAPSHOTS`).
     - `turn-duplicate-ordinal`: turn 1 completed, then two `TURN_TREE_SNAPSHOT`s with ordinal 1 (trees 1 and 0). The ledger verifier accepts this, because each snapshot only has to match the completed ordinal (`ledger.ts:505`), so `appendLifecycleEvent` builds it and `investigate turns` reaches `DUPLICATE_TURN_SNAPSHOTS`.
     - `turn-heterogeneous`: state 1 adds `package.json`, and `mapping.json` maps both fingerprints.
+    - `turn-missing-tree`: `turn-two-states` whose turn snapshot names a tree id that is not in the repository: `"e".repeat(40)`, signed. Materializing it fails, which gives `EXECUTION_ERROR`.
+    - `turn-sha256`: `turn-two-states` built with `objectFormat: "sha256"`, so its snapshots carry 64-hex trees (correction 3).
     - `turn-sidecar`: `turn-two-states` with the ledger under `.git/faultline/recordings/codex-<sha256("s-1")>.json` instead of `ledger.json`, for `--latest`. Its `.gitignore` holds `.faultline/`.
     - `turn-latest-ambiguous`: two valid recordings whose last events share one `occurredAt`.
 
@@ -795,6 +797,221 @@ Expected: PASS, with a `LIVE-SUMMARY` line.
 ```bash
 git add internal/turninv internal/schema difftest/turninv_live_test.go difftest/gen/oracle-turninv.ts difftest/gen/node-oracle.ts difftest/named_live_test.go
 git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "feat(go): turn investigation schemas, state reconstruction and transitions
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 4: The turn-minimization bridge and `minimizeFromTurnInvestigation`
+
+**Files:**
+- Create: `internal/minimize/bridge.go`, `internal/minimize/bridge_test.go`, `internal/cli/turnmin.go`, `internal/cli/turnmin_test.go`, `difftest/turnbridge_live_test.go`, `difftest/gen/oracle-bridge.ts`
+- Modify: `difftest/gen/node-oracle.ts` (one import line and one spread line)
+
+**Interfaces:**
+- Consumes:
+  - Task 3: `turninv.StableTransitionSchema`.
+  - `nodeproc.SpawnSyncWith` (nil `Env`, so it inherits; `MaxBuffer: 16 << 20`).
+  - `minimize.MinimizeGitDiff`, `minimize.WriteResult`; `sandbox.NativeRunner()`; `jsjson.ToNumber`, `jsjson.FormatNumber`; `bundle.ParseValue`; `clock.NowMillis`; `nodefs.Resolve`, `nodefs.Join`.
+- Produces:
+
+```go
+package minimize
+
+// BridgeNote is SyntheticTurnCommits.note (turn-minimization-bridge.ts:118).
+const BridgeNote = "Synthetic orphan commits were created from turn tree digests so Git-path counterfactual minimization can run. They are not Codex history and do not promote EXPERIMENTAL_TURN to TURN_PROOF / COMMIT_PROOF."
+
+// SyntheticTurnCommits ports SyntheticTurnCommits (:11).
+type SyntheticTurnCommits struct {
+	BeforeCommit, AfterCommit, BeforeTree, AfterTree string
+	TransitionIndex                                  float64 // as the caller passed it (-0 stays -0)
+	Transition                                       jsjson.Value
+	Note                                             string
+}
+
+// SelectTurnTransition ports selectTurnTransition (:38).
+func SelectTurnTransition(transitions []jsjson.Value, index float64) (jsjson.Value, error)
+
+// SyntheticCommitsForTurnTransition ports :79.
+func SyntheticCommitsForTurnTransition(repository string, transition jsjson.Value, index float64) (SyntheticTurnCommits, error)
+
+// BridgeTurnTransition ports bridgeTurnTransitionToMinimizationCommits (:123).
+func BridgeTurnTransition(repository string, transitions []jsjson.Value, index float64) (SyntheticTurnCommits, error)
+```
+
+```go
+// internal/cli/turnmin.go
+// turnMinOptions are minimizeFromTurnInvestigation's options
+// (cli-app.ts:2239); nil pointers are undefined.
+type turnMinOptions struct {
+	repository, expectedFrozenDigest, image string
+	transitions                             []jsjson.Value
+	frozenWitness                           jsjson.Value
+	transitionIndex, maxExecutions, output  *string
+}
+
+// minimizeFromTurnInvestigation ports cli-app.ts:2239-2288: the returned
+// value is the object TS returns, in its key order.
+func minimizeFromTurnInvestigation(o turnMinOptions) (jsjson.Value, error)
+```
+
+**Gotchas:**
+- **runGit** (`turn-minimization-bridge.ts:21-32`): `SpawnSyncWith("git", ["-C", repository, ...args], {MaxBuffer: 16 << 20})`.
+  - Leave `Env` nil, so the whole environment is inherited (correction 4). Set no cwd and no timeout. Windows already gets `windowsHide: true`.
+  - Decode stdout and stderr with `jsstr.DecodeUTF8`.
+  - `r.Err != nil` returns `r.Err` itself. Its message is `spawnSync git ENOENT`, or `ENOBUFS` past 16 MiB, which `rev-parse` and `commit-tree` cannot reach (coverage gate reason).
+  - `r.Status == nil || *r.Status != 0` returns `errors.New(jsstr.Trim(stderr) || "git " + strings.Join(args, " ") + " failed")`.
+  - Success returns `jsstr.Trim(stdout)`.
+- **Call order and messages** (`:84-120`):
+  1. `kind !== "PASS_TO_FAIL"` gives `Counterfactual minimization from a turn package currently requires PASS→FAIL (got <kind>).`
+  2. A wrong verdict pair gives `Turn transition endpoints are not a stable PASS→FAIL pair.`
+  3. `rev-parse --verify --end-of-options <before.treeDigest>^{tree}`, then the same for `after`. Each output is parsed with `/^[a-f0-9]{40}$/`, which has no message, so a ZodError (`Invalid`) at the root, thrown through `jsexc`. A SHA-256 tree hits this (correction 3).
+  4. `commitTree(beforeTree, "faultline-turn-min before t<before.turnOrdinal> (<before.treeDigest[0:12]>)")`, which runs `rev-parse` of `<tree>^{tree}` again, then `-c user.name=FaultLine -c user.email=faultline@example.invalid commit-tree <tree> -m <message>`, each parsed with the same schema.
+  5. The same for `after`.
+
+  The message interpolates `turnOrdinal` with `jsjson.FormatNumber` and slices the original `treeDigest`, not the resolved tree.
+- **SelectTurnTransition** (`:38-52`):
+  - `!Number.isInteger(i) || i < 0` gives `Transition index must be a non-negative integer (got <FormatNumber(i)>).` The CLI checks first, so this is unreachable from `fl` (coverage gate reason).
+  - `transitions[i]` absent gives `Turn investigation has no transition at index <i> (<len> available).`
+  - Then `StableTransitionSchema.parse`, which succeeds for every verified input; reach the failure in the unit test.
+  - `-0` indexes element 0, and `FormatNumber(-0)` is `0`.
+- **minimizeFromTurnInvestigation** (`cli-app.ts:2239-2288`), in order:
+  1. `transitionIndex = o.transitionIndex == nil ? 0 : ToNumber(*o.transitionIndex)`. `--transition ""` is `0`, and `" 1 "`, `"1e0"` and `"0x1"` are `1`.
+  2. `!isInteger || < 0` gives `--transition must be a non-negative integer.` (`-0` passes).
+  3. Run the bridge.
+  4. `MinimizeGitDiff(request, sandbox.NativeRunner(), false)`. The request keys, in order: `repository` (`o.repository`, already resolved), `before: bridge.BeforeCommit`, `after: bridge.AfterCommit`, `frozenWitness`, `expectedFrozenDigest`, `sandbox: {mode: "DOCKER_ISOLATED", image}`, and `budget: {maxExecutions: ToNumber(*o.maxExecutions)}` only when given. A minimization that throws propagates.
+  5. Only now, with `o.output` nil, read `clock.NowMillis()` for `turn-transition-<pad4(FormatNumber(i))>-<ms>.json` under `.faultline/minimizations`. `padStart(4, "0")` pads the formatted number, so 12345 stays `12345`. Then `resolve` it.
+  6. `minimize.WriteResult(output, result)`. It is not `safeManagedFileOutput` (correction 5), so any path is accepted, and an existing file gives `Git minimization result already exists and will not be replaced: <path>`.
+  7. Return `{bridge: {transitionIndex, beforeTree, afterTree, beforeCommit, afterCommit, note}, result, path, resultDigest, evidenceGradeNote: "Counterfactual minimization from a turn boundary reuses Git-path machinery on synthetic commits. The parent turn package remains EXPERIMENTAL_TURN until TURN_PROOF promotion criteria are met."}`. `result` is the minimization as `MinimizeGitDiff` returned it, and `transitionIndex` is the number.
+- **Clock order.** The minimization reads the clock and UUIDs first, then the output name reads `Date.now()`. Swapping them moves every later seeded value.
+
+**Live test** `TestLiveTurnBridge` (`difftest/turnbridge_live_test.go`). The oracle op `bridgeTurnTransition({repository, transitions, transitionIndex, env})` in `oracle-bridge.ts` sets `process.env` from `env` for the call and restores it after. It returns `JSON.stringify` of the result, or `{threw, zod}`, plus the sorted ids of the loose objects the call created.
+
+The Go side sets the same variables with `t.Setenv`. `GIT_AUTHOR_DATE` and `GIT_COMMITTER_DATE` are fixed on both sides, so the commit ids are deterministic and comparable. That also proves the bridge inherits the environment: a hardened git would drop the dates and give different ids.
+
+300 cases on two copies of the same generated repository:
+- PASS_TO_FAIL, FAIL_TO_PASS, PASS_TO_FAIL with the verdicts swapped;
+- a tree id, a commit id (peeled to its tree), an annotated tag id, a missing id, an abbreviated id, a `-`-prefixed string;
+- a SHA-256 repository;
+- indices 0, 1, -0, 2.5, 99;
+- a `GIT_CONFIG_GLOBAL` holding `[commit]\n\tgpgSign = true\n[gpg]\n\tprogram = false\n` (git's own failure text, same machine);
+- `PATH` without git (`spawnSync git ENOENT`).
+
+`requireReached("internal/minimize/bridge.go", …)`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```go
+// internal/minimize/bridge_test.go
+package minimize
+
+import (
+	"os/exec"
+	"strings"
+	"testing"
+
+	"github.com/Mizore66/faultline/internal/jsjson"
+)
+
+func bridgeRepo(t *testing.T) (dir, goodTree, badTree string) {
+	t.Helper()
+	dir = t.TempDir()
+	run := func(stdin string, args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("", "init", "-q")
+	good := run("good\n", "hash-object", "-w", "--stdin")
+	bad := run("bad\n", "hash-object", "-w", "--stdin")
+	return dir, run("100644 blob "+good+"\tstate.txt\n", "mktree"), run("100644 blob "+bad+"\tstate.txt\n", "mktree")
+}
+
+func transition(kind, beforeVerdict, afterVerdict, beforeTree, afterTree string) jsjson.Value {
+	state := func(i int, verdict, tree string) jsjson.Value {
+		ids := jsjson.MakeArray([]jsjson.Value{jsjson.MakeString("sha256:" + strings.Repeat("1", 64)), jsjson.MakeString("sha256:" + strings.Repeat("2", 64)), jsjson.MakeString("sha256:" + strings.Repeat("3", 64))})
+		return jsjson.MustObject("stateIndex", jsjson.MakeNumber(float64(i)), "turnId", jsjson.MakeString("turn"), "turnOrdinal", jsjson.MakeNumber(float64(i)),
+			"role", jsjson.MakeString("TURN"), "treeDigest", jsjson.MakeString(tree), "snapshotDigest", jsjson.MakeString("sha256:"+strings.Repeat("4", 64)),
+			"verdict", jsjson.MakeString(verdict), "executionIds", ids, "runIds", ids)
+	}
+	return jsjson.MustObject("kind", jsjson.MakeString(kind), "before", state(0, beforeVerdict, beforeTree), "after", state(1, afterVerdict, afterTree))
+}
+
+func TestBridgeCommitsBothTrees(t *testing.T) {
+	t.Setenv("GIT_AUTHOR_DATE", "2026-07-16T10:00:00Z")
+	t.Setenv("GIT_COMMITTER_DATE", "2026-07-16T10:00:00Z")
+	dir, good, bad := bridgeRepo(t)
+	b, err := BridgeTurnTransition(dir, []jsjson.Value{transition("PASS_TO_FAIL", "PASS", "FAIL", good, bad)}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.BeforeTree != good || b.AfterTree != bad || len(b.BeforeCommit) != 40 || b.BeforeCommit == b.AfterCommit || b.Note != BridgeNote {
+		t.Fatalf("%+v", b)
+	}
+	out, _ := exec.Command("git", "-C", dir, "cat-file", "-p", b.AfterCommit).Output()
+	if !strings.Contains(string(out), "committer FaultLine <faultline@example.invalid>") || !strings.HasSuffix(string(out), "faultline-turn-min after t1 ("+bad[:12]+")\n") {
+		t.Fatalf("%s", out)
+	}
+}
+
+func TestBridgeRefusals(t *testing.T) {
+	dir, good, bad := bridgeRepo(t)
+	if _, err := BridgeTurnTransition(dir, []jsjson.Value{transition("FAIL_TO_PASS", "FAIL", "PASS", good, bad)}, 0); err == nil ||
+		err.Error() != "Counterfactual minimization from a turn package currently requires PASS→FAIL (got FAIL_TO_PASS)." {
+		t.Fatal(err)
+	}
+	if _, err := BridgeTurnTransition(dir, []jsjson.Value{transition("PASS_TO_FAIL", "FAIL", "FAIL", good, bad)}, 0); err == nil ||
+		err.Error() != "Turn transition endpoints are not a stable PASS→FAIL pair." {
+		t.Fatal(err)
+	}
+	if _, err := BridgeTurnTransition(dir, nil, 3); err == nil || err.Error() != "Turn investigation has no transition at index 3 (0 available)." {
+		t.Fatal(err)
+	}
+	missing := strings.Repeat("e", 40)
+	if _, err := BridgeTurnTransition(dir, []jsjson.Value{transition("PASS_TO_FAIL", "PASS", "FAIL", missing, bad)}, 0); err == nil || !strings.HasPrefix(err.Error(), "fatal: ") {
+		t.Fatal(err)
+	}
+}
+```
+
+```go
+// internal/cli/turnmin_test.go
+package cli
+
+import "testing"
+
+func TestTurnMinRejectsBadTransitionIndex(t *testing.T) {
+	for _, v := range []string{"-1", "1.5", "abc", "Infinity"} {
+		_, err := minimizeFromTurnInvestigation(turnMinOptions{transitionIndex: &v})
+		if err == nil || err.Error() != "--transition must be a non-negative integer." {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/minimize/ ./internal/cli/ -run 'TestBridge|TestTurnMin'`
+Expected: FAIL (undefined: `BridgeTurnTransition`, `minimizeFromTurnInvestigation`).
+
+- [ ] **Step 3: Implement** by transcription, with the TS line on every function, and the oracle op.
+
+- [ ] **Step 4: Run to verify the tests pass**
+
+Run: `go test ./internal/minimize/ ./internal/cli/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run TestLiveTurnBridge -v > /tmp/s4b-t4.log 2>&1; tail -5 /tmp/s4b-t4.log`
+Expected: PASS, with a `LIVE-SUMMARY` line.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/minimize/bridge.go internal/minimize/bridge_test.go internal/cli/turnmin.go internal/cli/turnmin_test.go difftest/turnbridge_live_test.go difftest/gen/oracle-bridge.ts difftest/gen/node-oracle.ts
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "feat(go): turn-minimization bridge (unhardened commit-tree) and minimizeFromTurnInvestigation
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
