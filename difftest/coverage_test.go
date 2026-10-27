@@ -267,6 +267,11 @@ var unreachableLiterals = map[string]string{
 	"git hash-object --stdin did not return a blob id for":                             "git hash-object -w --stdin prints a full object id or fails",
 	"Git did not return a valid tree object id for this turn tree snapshot.":           "git write-tree prints a full object id or fails",
 	"Git did not return a resolvable HEAD commit for this turn tree snapshot.":         "git rev-parse HEAD prints a full object id or fails (an unborn HEAD fails)",
+
+	// Slice 4c Task 10: not an error text. repair.ProposeBrief parses
+	// redactValue's result with bundle.ParseValue, whose input the flow
+	// analysis counts as a message, so redactValue's returns become sites.
+	"<FAULTLINE_UNSUPPORTED_VALUE:undefined>": "redactValue's placeholder for an undefined value, not an error; only fl witness propose redacts a value that can be undefined (a missing incidentPacket), and no golden omits it",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
