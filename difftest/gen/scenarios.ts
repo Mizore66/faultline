@@ -1029,6 +1029,17 @@ SCENARIOS["prevention-input"] = {
   argv: []
 };
 SCENARIOS["prevention-from-bundle"] = { bases: { bundle: "git-unbound" }, files: { "repaired-runs.json": preventionRepairedRuns() }, argv: [] };
+// fl attest (slice 4c Task 15): one directory per proof bundle kind. turn is
+// the smallest directory whose manifest.json names the turn bundle schema;
+// notjson/manifest.json is not JSON.
+SCENARIOS["attest-bundles"] = {
+  bases: { git: "git-unbound", demo: "demo-replay", prevention: "prevention-verified" },
+  files: {
+    "turn/manifest.json": `${JSON.stringify({ schemaVersion: "faultline.turn-proof-bundle.v1" }, null, 2)}\n`,
+    "notjson/manifest.json": "{"
+  },
+  argv: []
+};
 
 // witness-implement: the incident packets `fl witness implement --incident`
 // reads (raw readFileSync + JSON.parse).

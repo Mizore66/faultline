@@ -88,6 +88,8 @@ func dispatch(e *env, args []string) error {
 		return incidentCommand(e, rest)
 	case command == "prevention":
 		return preventionCommand(e, rest)
+	case command == "attest":
+		return attestCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:

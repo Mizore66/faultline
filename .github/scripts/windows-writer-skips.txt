@@ -425,3 +425,9 @@ TestWriterReplay/posix/witness-implement-codex-probe-crlf
 TestWriterReplay/posix/witness-implement-codex-missing-bin
 TestWriterReplay/posix/witness-implement-codex-on-path
 TestWriterReplay/posix/witness-implement-codex-not-on-path
+TestWriterReplay/posix/attest-create-git
+TestWriterReplay/posix/attest-create-git-with-digests
+TestWriterReplay/posix/attest-create-git-bad-source-digest
+TestWriterReplay/posix/attest-create-store-symlink
+TestWriterReplay/posix/attest-verify-symlink-receipt
+TestWriterReplay/posix/attest-create-git-invalid
