@@ -981,12 +981,12 @@ process.stdout.write(JSON.stringify(outs));`;
 // provenanceModule is dist/github-provenance.js with its
 // loadVerifiedGitProofView import replaced by a per-directory memo (the
 // view, or the error it threw), written next to it as
-// dist/.difftest-github-provenance-memo.js (dist/ is git-ignored) and
-// imported once.
+// dist/.difftest-github-provenance-memo-<pid>.js (dist/ is git-ignored),
+// imported once and removed.
 let provenanceMemo: Promise<any> | undefined;
 function provenanceModule(): Promise<any> {
   provenanceMemo ??= (async () => {
-    const { writeFileSync } = await import("node:fs");
+    const { unlinkSync, writeFileSync } = await import("node:fs");
     const { pathToFileURL } = await import("node:url");
     const dist = nodePath.join(process.cwd(), "dist");
     const source = cwReadFile(nodePath.join(dist, "github-provenance.js"), "utf8");
@@ -1002,9 +1002,9 @@ function loadVerifiedGitProofView(directory) {
   if (entry.error !== undefined) throw entry.error;
   return entry.view;
 }`;
-    const file = nodePath.join(dist, ".difftest-github-provenance-memo.js");
+    const file = nodePath.join(dist, `.difftest-github-provenance-memo-${process.pid}.js`);
     writeFileSync(file, source.replace(line, memo));
-    return import(pathToFileURL(file).href);
+    try { return await import(pathToFileURL(file).href); } finally { unlinkSync(file); }
   })();
   return provenanceMemo;
 }

@@ -231,6 +231,7 @@ func createFromView(view proofview.View, ciIdentity jsjson.Value, createdAt *str
 	for _, run := range view.Investigation.Get("runs").Items() {
 		if run.Get("result", "executor").Str() != "NATIVE_DOCKER" || run.Get("sandbox", "kind").Str() != "DOCKER_ISOLATED" ||
 			run.Get("sandbox", "runtime", "image").Kind() == jsjson.Null {
+			// Unreachable from the CLI: the bundle verifier refuses such a run first.
 			throw("GitHub provenance requires a verified native-Docker proof bundle.")
 		}
 		binding := parse(jsjson.MustObject(
@@ -250,6 +251,7 @@ func createFromView(view proofview.View, ciIdentity jsjson.Value, createdAt *str
 	}
 
 	if len(runIDs) == 0 {
+		// Unreachable from the CLI: a verified bundle has three runs per state.
 		throw("GitHub provenance requires at least one recorded execution.")
 	}
 	// Each binding's canonicalJson is its Map key, so sorting the keys
@@ -407,6 +409,7 @@ func ensureRealDirectoryTree(directory string) {
 	if nodefs.Exists(current) {
 		safe, ok := safeSegment(current)
 		if !ok {
+			// The filesystem root is always a real directory.
 			throw(jsexc.Concat("Provenance root must be a real directory: ", current))
 		}
 		current = safe
@@ -565,6 +568,9 @@ func VerifyBinding(bundleDirectory string, receiptInput, trustInput jsjson.Value
 	var errs []string
 	receipt, receiptIssues, receiptOK := s.Parse(receiptSchema, receiptInput)
 	trust, trustIssues, trustOK := s.Parse(trustSchema, trustInput)
+	// From the CLI the receipt was parsed by readReceipt already, and the
+	// trust by ReadTrust (only a resolved trustedRootFile past 4,096 units
+	// fails here).
 	if !receiptOK {
 		errs = append(errs, jsexc.Concat("GitHub provenance receipt schema validation failed: ", s.ErrorMessage(receiptIssues)))
 	}
