@@ -1460,3 +1460,214 @@ git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com comm
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+### Task 7: Turn proof semantics, the verifier and `fl verify`'s turn branch
+
+**Files:**
+- Create:
+  - `internal/bundle/turnproof/schemas.go`, `semantics.go`, `verify.go`;
+  - `internal/bundle/turnproof/semantics_test.go`, `verify_test.go`;
+  - `difftest/turnproof_corpus_test.go` (the header that maps the 15 hostile-corpus rows to their templates, and `TestTurnCorpusCoversEveryRow`).
+- Modify:
+  - `internal/cli/verify.go` and `internal/cli/cli_test.go` (the turn branch);
+  - `internal/jsjson/stack.go` and `internal/jsjson/jsjson_test.go` (`SiteTurnProof`, `SpreadTurnSemantics`);
+  - `difftest/replay_test.go` (delete the `deferredTypes` entry for `turn`; add `"turn": true` to `portedTypes`);
+  - `difftest/stack_live_test.go` (the `turn` site), `difftest/spread_live_test.go` (the `turn semantics` site);
+  - `difftest/coverage_test.go` (drop only the `not yet ported: turn proof bundle verification` entry);
+  - `difftest/turnproof_live_test.go` (`TestLiveTurnSemantics`), `difftest/gen/oracle-turnproof.ts` (its `ops`).
+
+**Interfaces:**
+- Consumes:
+  - Task 3: `turninv.ResultSchema`, `RunFactSchema`, `StableTransitionSchema`, `StatesFromLedger`, `StatesFromValue`, `ReconstructStable`, `FindTransitions`, `SchemaVersion`.
+  - Task 5: `ParseHashCatalog`, the file-walk helpers, `VerifyTreesPack`.
+  - `gitproof.{CodexLifecycleLedgerSchema,VerifyCodexLifecycleLedger,FrozenWitnessSchema,VerifyFrozenWitnessRecord,ValidateSandboxPlanAudit,CommandDigest}`; `evidence.{TurnPathEvidenceGradeExperimental,TurnPathEvidenceGradeParityReserved,TurnPathEvidenceLabelExperimental,TurnPathEvidenceLabelsExperimental}`; `bundle.{Result,SameCanonical,Without,ParseValue}`; `schema.{Parse,ErrorMessage}`.
+- Produces:
+
+```go
+package turnproof
+
+var (
+	SourceMetadataSchema *schema.ObjectSchema // :98
+	ManifestSchema       *schema.ObjectSchema // :113
+	LifecycleBoundSchema *schema.ObjectSchema // :90
+)
+
+// RunArtifactPath ports :303; TransitionArtifactPath ports :307.
+func RunArtifactPath(run jsjson.Value) string
+func TransitionArtifactPath(index int) string
+// RequiredArtifactPaths ports :311 (localeCompare-sorted).
+func RequiredArtifactPaths(result jsjson.Value) []string
+// ExpectedManifestArtifacts ports :325.
+func ExpectedManifestArtifacts(result jsjson.Value) jsjson.Value
+
+// BindTurnLifecycle ports bindTurnLifecycle (:497): the binding and the
+// parsed ledger, or what TS throws.
+func BindTurnLifecycle(ledgerInput, result jsjson.Value) (binding, ledger jsjson.Value, err error)
+
+// ValidateProofSemantics ports validateTurnInvestigationProofSemantics (:533).
+func ValidateProofSemantics(result, frozenWitness jsjson.Value) []string
+
+// Verification ports TurnProofBundleVerification (:166).
+type Verification struct {
+	bundle.Result              // Valid, CheckedFiles, Errors, RootDigest, ExternalRootStatus
+	Manifest      jsjson.Value // Undefined when absent
+}
+
+// Verify ports verifyTurnInvestigationProofBundle (:812); rootProvided is
+// expectedRoot !== undefined (correction 2).
+func Verify(directory, expectedRoot string, rootProvided bool) Verification
+```
+
+```go
+// internal/jsjson
+const SiteTurnProof Site = …  // appended before siteCount
+const SpreadTurnSemantics SpreadSite = …
+```
+
+**Gotchas:**
+- **Schemas** (`:62-136`).
+  - Here `DigestSchema` has the message `expected sha256:<64 lowercase hex characters>`, unlike `turninv`'s.
+  - `ArtifactPathSchema` is `z.string().min(1).max(1024).refine(isSafe, "artifact path must be a safe POSIX-relative path")`. zod runs the refine only when `min` and `max` passed (a dirty status still runs refinements in zod 3; check `s.Refine`'s behaviour against `TestLiveNamedSchemas`).
+  - `trees` is `.min(2)`. `pack.bytes` is `int().positive()`.
+  - `codex` is optional with two optional identifiers (`min(1).max(160).regex(…)`, no message).
+  - `lifecycle` is `LifecycleBoundSchema`: `status` is the literal `BOUND`, `path` the literal `lifecycle/ledger.json`, and `transport` the four-value enum.
+  - Every literal under `artifacts` is a `z.literal`.
+- **`validateTurnInvestigationProofSemantics`** (`:533-690`). Transcribe line by line. The error texts and their order are the golden contract.
+  - `→` and `—` do not occur here, but the `"…"` quotes in the evidence-label message are ASCII `"`.
+  - The fingerprint loop indexes `result.states[index]` by position, not by `index`.
+  - `run.sandbox.commandDigest` is compared with `"sha256:" + sha256(Buffer.from(command, "utf8"))`, which is `gitproof.CommandDigest`.
+  - The locked runtime check is the seven-way `||` at `:632-633`, with one message.
+  - `[1, 2, 3].every((a) => attempts.has(a))` is checked per state after the size check.
+  - `ReconstructStable(states, runs, true)`, then `sameCanonical` against the persisted lists.
+  - The `TURN_PROOF is reserved…` text is one line, verbatim from `:678`.
+  - The label message interpolates `TURN_PATH_EVIDENCE_LABEL_EXPERIMENTAL` and the legacy label (`:686`).
+- **`expectedRunId`/`expectedExecutionId`** (`:338-356`): the turn formula, with the keys listed at `:339-350`. It is not gitproof's.
+- **`bindTurnLifecycle`** (`:497-527`), in order:
+  1. `CodexLifecycleLedgerSchema.parse`; a throw propagates.
+  2. Verify. Invalid, or `headHash === null`: `Cannot bind an invalid Codex lifecycle ledger: <errors.join("; ")>`.
+  3. `ledgerDigest === null` or `digestJson(ledger) !==` it: `Lifecycle ledger digest does not match the turn investigation ledgerDigest.`
+  4. `turnStatesFromLedger(ledger)` against `result.states` (canonical): `Lifecycle ledger turn states do not canonically match the investigation state sequence.`
+  5. No `SESSION_STARTED`: `Cannot bind a lifecycle ledger that has no SESSION_STARTED observation.` This is unreachable after a successful verification (coverage gate reason).
+  6. Parse the binding `{status: "BOUND", path, ledgerDigest: result.ledgerDigest, headHash, transport}` with `LifecycleBoundSchema`.
+- **The verifier** (`:812-972`). The order that matters:
+  1. `!existsSync(root)` returns at once with `["Turn proof bundle directory does not exist"]` and `checkedFiles: 0`, before any other check.
+  2. `assertNoLinksOrSpecialFiles(root)`.
+  3. Then `assertRegularFile(hashes, …, 4 MiB)` and `assertRegularFile(ROOT.sha256, …, 1024)`, both before either is read.
+  4. `storedRoot` is JS-trimmed.
+  5. The external root check (correction 2).
+  6. The catalog loop: `declaredBytes +=` before the cap check; `break` after pushing `declared artifacts exceed FaultLine's total verification read limit`. Per artifact, errors are `artifact digest mismatch: <a>` or `declared artifact cannot be read safely (<a>): <msg>`.
+  7. Four `parseJsonFile`s, labelled `manifest`, `investigation`, `frozen witness` and `source metadata`, each with `<label> JSON validation failed: <msg>`. `JSON.parse` of an undefined payload is not reached: a missing file is the read error.
+  8. Four `safeParse`s, in the order manifest, result, frozen, metadata; each failure is `<x> schema validation failed: <zod message>`. Read the zod messages at `SiteTurnProof`: `defer jsjson.UseCallSite(jsjson.SiteTurnProof)()` at the top of `Verify`, like gitproof's.
+  9. Only when all four parsed, the remaining checks in source order:
+     - digests;
+     - the artifact index;
+     - required/unexpected catalog entries;
+     - `collectFiles` (it can throw `too many files`, which lands in the outer `catch`);
+     - the run artifacts, keyed by `runId` with `Map` semantics: a duplicate `runId` in the investigation keeps the last run;
+     - the transition artifacts, where `result.transitions[index]` may be undefined;
+     - the ledger: its own parse, then `bindTurnLifecycle` in a `try` whose message is prefixed `lifecycle ledger cannot bind to the investigation: `;
+     - the tree metadata;
+     - the pack: `readBoundedFile` outside any inner `try`, so a missing pack throws to the outer `catch`;
+     - `VerifyTreesPack`;
+     - `verifyFrozenWitnessRecord`;
+     - `errors.push(...semantics)`, guarded with `SpreadFits(len, SpreadTurnSemantics)`.
+  10. Return `valid: errors.length === 0` with `manifest` only when the manifest parsed. Otherwise `valid: false`. `checkedFiles` is `catalog.size`.
+  11. The outer `catch` pushes `Turn proof bundle verification failed safely: <msg>` and returns `checkedFiles: 0` with whatever `rootDigest` and `externalRootStatus` were set.
+- **The CLI branch** (`cli-app.ts:2927-2939`), in `internal/cli/verify.go`:
+
+  ```go
+  case turnproof.BundleSchemaVersion:
+  	r := turnproof.Verify(root, expectedRoot, rootProvided)
+  	first := "Integrity"
+  	if r.ExternalRootStatus == "NOT_PROVIDED" {
+  		first = "Turn proof self-consistency"
+  	}
+  	e.out(first + ": " + verdictWord(r.Valid) + "\n")
+  	e.out(fmt.Sprintf("Evidence grade: EXPERIMENTAL_TURN\nDeclared files checked: %d\nBundle root: %s\nExternal root: %s\n", r.CheckedFiles, orUnavailable(r.RootDigest), r.ExternalRootStatus))
+  	e.printErrorsAndExit(r.Result)
+  	return nil
+  ```
+
+  The schema sniff (`JSON.parse`, last key wins) is the existing one (correction 12).
+- **Stack and spread sites** (correction 14).
+  - Add `SiteTurnProof` to every `stackModelFor` branch with the `SiteGitProof` value and a `// measured by TestLiveStackThresholdsMatchNode/turn` comment. Add the row `{name: "turn", base: "turn-two-states", file: "manifest.json", old: \`"integrityScope":"complete-declared-file-set"\`}` to the stack test. Then put the linux/amd64 value you measure in podman (the test logs the bisected depth) into the model. The arm64 and darwin values come from `stack-live` in Task 11.
+  - Do the same for `SpreadTurnSemantics`, with `buildTurnSemanticsBundle`: `turn-two-states` whose `investigation.json` gets `n` extra runs that each produce one semantic error, rehashed.
+
+**Live test** `TestLiveTurnSemantics`. The oracle ops are `validateTurnInvestigationProofSemantics({result, frozen})` and `bindTurnLifecycle`, the latter evaluated from `dist/turn-proof-bundle.js` because it is not exported. The inputs are 3,000 mutations of Task 2's two bases: `investigation.json` with `gen.CorruptLeaf`, `gen.SwapLeaf`, run and state reorders, re-signed run ids, and the frozen witness edited. Each is parsed with `ResultSchema` first, and only parsing inputs are compared. `requireReached` on `semantics.go` and `verify.go`.
+
+**Golden replay.** With the `turn` type ported, `TestGoldenReplay` runs every Task 2 case against the Go verifier.
+
+- [ ] **Step 1: Write the failing tests**
+
+```go
+// internal/bundle/turnproof/verify_test.go
+package turnproof
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+// base is difftest/testdata/bases/turn-two-states, found from this file.
+func base(t *testing.T) string {
+	t.Helper()
+	_, here, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(here), "..", "..", "..", "difftest", "testdata", "bases", "turn-two-states")
+}
+
+func TestVerifyBaseIsValid(t *testing.T) {
+	root, err := os.ReadFile(filepath.Join(base(t), "ROOT.sha256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Verify(base(t), strings.TrimSpace(string(root)), true)
+	if !v.Valid || v.ExternalRootStatus != "MATCH" || v.CheckedFiles != 14 {
+		t.Fatalf("%+v", v.Result)
+	}
+}
+
+func TestEmptyExpectedRootIsProvided(t *testing.T) {
+	v := Verify(base(t), "", true)
+	if v.Valid || v.ExternalRootStatus != "MISMATCH" || v.Errors[0] != "externally supplied turn proof root is not a sha256 digest" {
+		t.Fatalf("%+v", v.Result)
+	}
+}
+```
+
+```go
+// internal/cli/cli_test.go
+func TestVerifyTurnBundleLines(t *testing.T) {
+	_, here, _, _ := runtime.Caller(0)
+	stdout, _, code := run("verify", filepath.Join(filepath.Dir(here), "..", "..", "difftest", "testdata", "bases", "turn-two-states"))
+	if code != 0 || !strings.HasPrefix(stdout, "Turn proof self-consistency: VALID\nEvidence grade: EXPERIMENTAL_TURN\nDeclared files checked: 14\nBundle root: sha256:") ||
+		!strings.HasSuffix(stdout, "\nExternal root: NOT_PROVIDED\n") {
+		t.Fatalf("%d %q", code, stdout)
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/bundle/turnproof/ ./internal/cli/ -run 'TestVerifyBase|TestEmptyExpectedRoot|TestVerifyTurnBundleLines'`
+Expected: FAIL (undefined: `Verify`; `not yet ported: turn proof bundle verification`).
+
+- [ ] **Step 3: Implement** by transcription, the oracle ops, the stack and spread rows, and `turnproof_corpus_test.go`. Its `TestTurnCorpusCoversEveryRow` loads `mutations.json` and requires every new template id named in Task 2's table to exist with a `turn-` base. Its header lists the 15 rows, the N/A reason for row 14, and correction 11's platform note.
+
+- [ ] **Step 4: Run to verify the tests pass and the corpus matches TS**
+
+Run: `go test ./internal/bundle/turnproof/ ./internal/cli/ ./internal/jsjson/ && go test -tags faultline_test ./difftest/ -run 'TestGoldenReplay/turn-|TestTurnCorpusCoversEveryRow' > /tmp/s4b-t7.log 2>&1; grep -E '^(---|ok|FAIL)' /tmp/s4b-t7.log | tail; FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run 'TestLiveTurnSemantics|TestLiveStackThresholdsMatchNode/turn|TestLiveSpreadLimitsMatchNode/turn' -v 2>&1 | tail -5` (podman; split the golden replay by base when it runs past 280 s)
+Expected: PASS. Every corpus case has identical stdout, stderr and exit status in Go and TS (spec 4.2 point 5).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/bundle/turnproof internal/cli/verify.go internal/cli/cli_test.go internal/jsjson difftest
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "feat(go): turn proof bundle verifier and fl verify's turn branch; hostile turn corpus replays
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
