@@ -656,6 +656,10 @@ func cppLexicallyNormal(p string) string {
 // remaining elements, an empty one for a trailing "/" included, are appended
 // and the result is lexically normalized. p is absolute.
 func cppWeaklyCanonical(p string) string {
+	// libstdc++'s first step: if (exists(status(p))) return canonical(p);
+	if _, found := cppStatus(p); found {
+		return cppCanonical(p)
+	}
 	elems := strings.Split(p, "/")[1:] // p starts with "/"
 	prefix := ""
 	i := 0

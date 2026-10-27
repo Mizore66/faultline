@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -67,6 +68,49 @@ func buildCpTree(r *rand.Rand, dir, root string, depth int, special bool) {
 	}
 }
 
+// cpFixedCases are the deterministic cases run after the random ones. Each
+// builds its fixture under root; the source is root/s and the destination
+// root/out. They pin libstdc++'s weakly_canonical fast path (canonical() of a
+// path that exists drops a trailing "/", "." and ".."), and the abort text
+// when status() itself throws.
+var cpFixedCases = []struct {
+	name  string
+	setup func(root string)
+}{
+	{"link to dir with slash", func(root string) {
+		s := filepath.Join(root, "s")
+		os.Mkdir(filepath.Join(s, "d"), 0o755)
+		os.WriteFile(filepath.Join(s, "d", "f"), []byte("f\n"), 0o644)
+		os.Symlink("d/", filepath.Join(s, "a"))
+	}},
+	{"link ./", func(root string) { os.Symlink("./", filepath.Join(root, "s", "a")) }},
+	{"link d/./", func(root string) {
+		s := filepath.Join(root, "s")
+		os.Mkdir(filepath.Join(s, "d"), 0o755)
+		os.Symlink("d/./", filepath.Join(s, "a"))
+	}},
+	{"link e/ where e -> d", func(root string) {
+		s := filepath.Join(root, "s")
+		os.Mkdir(filepath.Join(s, "d"), 0o755)
+		os.Symlink("d", filepath.Join(s, "e"))
+		os.Symlink("e/", filepath.Join(s, "a"))
+	}},
+	{"absolute link to dir with slash", func(root string) {
+		s := filepath.Join(root, "s")
+		os.Mkdir(filepath.Join(s, "d"), 0o755)
+		os.Symlink(filepath.Join(s, "d")+"/", filepath.Join(s, "a"))
+	}},
+	{"abort through a self-loop", func(root string) {
+		os.Symlink("loop", filepath.Join(root, "loop"))
+		os.Symlink("../loop/x", filepath.Join(root, "s", "a"))
+	}},
+	{"permission denied under a non-searchable dir", func(root string) {
+		os.MkdirAll(filepath.Join(root, "nos", "in"), 0o755)
+		os.Chmod(filepath.Join(root, "nos"), 0)
+		os.Symlink("../nos/in/x", filepath.Join(root, "s", "a"))
+	}},
+}
+
 func describeCp(root string) string {
 	var lines []string
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -107,7 +151,16 @@ func TestLiveCpSyncTree(t *testing.T) {
 	defer func() { nodefs.CpAbort = oldAbort }()
 	nodefs.CpAbort = func(what string) { panic(cpAbort{what}) }
 	counts := map[string]int{}
-	for i := 0; i < 400; i++ {
+	cases := 400
+	if v := os.Getenv("FAULTLINE_CP_CASES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			t.Fatalf("FAULTLINE_CP_CASES: %v", err)
+		}
+		cases = n
+	}
+	for i := 0; i < cases+len(cpFixedCases); i++ {
+		fixed := i - cases
 		seed := uint64(i)
 		var roots [2]string
 		for j := range roots {
@@ -117,6 +170,15 @@ func TestLiveCpSyncTree(t *testing.T) {
 			r := rand.New(rand.NewPCG(seed, 77))
 			s := filepath.Join(roots[j], "s")
 			os.Mkdir(s, 0o755)
+			if fixed >= 0 {
+				if cpFixedCases[fixed].name == "permission denied under a non-searchable dir" && os.Geteuid() == 0 {
+					roots[j] = roots[j] + "\x00" + filepath.Join(roots[j], "out")
+					continue // root searches every directory
+				}
+				cpFixedCases[fixed].setup(roots[j])
+				roots[j] = roots[j] + "\x00" + filepath.Join(roots[j], "out")
+				continue
+			}
 			depth := r.IntN(5)
 			buildCpTree(r, s, roots[j], depth, r.IntN(2) == 0)
 			if r.IntN(3) == 0 && i%7 == 0 {
@@ -225,6 +287,9 @@ func TestLiveCpSyncTree(t *testing.T) {
 			}
 		}
 		counts[kind]++
+		if fixed >= 0 {
+			t.Logf("fixed %q: %.60q", cpFixedCases[fixed].name, want)
+		}
 		if got != want {
 			t.Fatalf("case %d: message\n go:   %q\n node: %q\n%s", i, got, want, describeCp(nodeRoot))
 		}
