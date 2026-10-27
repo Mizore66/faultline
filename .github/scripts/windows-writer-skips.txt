@@ -414,3 +414,4 @@ TestWriterReplay/posix/incident-status-unbound
 TestWriterReplay/posix/incident-continue-unbound
 TestWriterReplay/posix/incident-status-foreign-proposal
 TestWriterReplay/posix/incident-continue-foreign-proposal
+TestWriterReplay/posix/harness-inv-mutation

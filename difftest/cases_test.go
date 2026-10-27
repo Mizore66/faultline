@@ -3,11 +3,13 @@
 package difftest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/jsjson"
@@ -159,5 +161,195 @@ func TestChmodMutationAfterResetModes(t *testing.T) {
 	restoreWritable(r.root)
 	if info, err := os.Lstat(filepath.Join(r.ws, "ro")); err != nil || info.Mode().Perm() != 0o755 {
 		t.Errorf("restoreWritable left ro at %v (%v)", info.Mode().Perm(), err)
+	}
+}
+
+// Slice 4a masks: a sidecar receipt stage's key and pid (<STAGEKEY>), after
+// the .<pid>.<uuid>.tmp mask, and sidecar status's lock age (<LOCKAGE>).
+func TestSlice4aMasks(t *testing.T) {
+	r := writerRoots{ws: "/c/ws", tmp: "/c/tmp", home: "/c/home"}
+	in := "rename '/c/ws/.git/faultline/recordings/.0123456789abcdef01234567.4242.tmp' -> 'x'\n" +
+		`"lock": {"state": "ACTIVE", "ageMilliseconds": 17}`
+	want := "rename '<WS>/.git/faultline/recordings/.<STAGEKEY>.<pid>.tmp' -> 'x'\n" +
+		`"lock": {"state": "ACTIVE", "ageMilliseconds": "<LOCKAGE>"}`
+	if got := normalizeWriter(in, r); got != want {
+		t.Fatalf("%q", got)
+	}
+	// The ledger's own stage keeps the slice 2 mask.
+	ledger := "/c/ws/.l.json.48213.00000000-0000-4000-8000-000000000001.tmp"
+	if got := normalizeWriter(ledger, r); got != "<WS>/.l.json.<pid>.00000000-0000-4000-8000-000000000001.tmp" {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestWriterTemplateInputs(t *testing.T) {
+	repo := repoRoot(t)
+	for _, tpl := range loadWriterTemplates(t, repo) {
+		if len(tpl.Input) > len(tpl.Argv) {
+			t.Errorf("%s: %d inputs for %d invocations", tpl.ID, len(tpl.Input), len(tpl.Argv))
+		}
+	}
+}
+
+// writers.d: the templates load after writers.json, each from its file, and
+// every template's goldens are in the golden file named after its template
+// file (none elsewhere).
+func TestWriterTemplateFiles(t *testing.T) {
+	repo := repoRoot(t)
+	files := writerTemplateFiles(t, repo)
+	if files[0] != "writers.json" || !slices.IsSorted(files[1:]) {
+		t.Fatalf("%q", files)
+	}
+	if got := writerGoldenPath("writers.d/4a-harness.json"); got != "writers.d/4a-harness.jsonl" {
+		t.Fatal(got)
+	}
+	inFile := map[string]string{}
+	for _, tpl := range loadWriterTemplates(t, repo) {
+		inFile[tpl.ID] = writerGoldenPath(tpl.File)
+	}
+	for _, file := range append([]string{writerGoldenFile}, func() []string {
+		var out []string
+		for _, f := range files[1:] {
+			out = append(out, writerGoldenPath(f))
+		}
+		return out
+	}()...) {
+		b, err := os.ReadFile(filepath.Join(repo, "difftest", "testdata", "golden", filepath.FromSlash(file)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if line == "" {
+				continue
+			}
+			v, err := jsjson.Parse(line)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if id := v.Get("case").Str(); inFile[id] != file {
+				t.Errorf("%s: golden of %s, whose template is in %s", file, id, inFile[id])
+			}
+		}
+	}
+}
+
+// A template id repeated in another template file fails the loader, and
+// input with inputHex, a malformed inputHex and a mutation inv past the
+// last invocation fail too (gen-writers.ts checkTemplates).
+func TestWriterTemplateLoaderRefuses(t *testing.T) {
+	for name, tc := range map[string]struct{ main, extra, want string }{
+		"duplicate across files": {`[{"id":"a","scenario":"empty","argv":[["help"]]}]`, `[{"id":"a","scenario":"empty","argv":[["help"]]}]`, "duplicated"},
+		"input and inputHex":     {`[]`, `[{"id":"b","scenario":"empty","argv":[["help"]],"input":["x"],"inputHex":["00"]}]`, "both input and inputHex"},
+		"bad hex":                {`[]`, `[{"id":"b","scenario":"empty","argv":[["help"]],"inputHex":["zz"]}]`, "inputHex"},
+		"inv past the end":       {`[]`, `[{"id":"b","scenario":"empty","argv":[["help"]],"mutations":[{"op":"add-file","path":"x","content":"","inv":1}]}]`, "not one of its invocations"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := t.TempDir()
+			dir := filepath.Join(repo, "difftest", "testdata")
+			if err := os.MkdirAll(filepath.Join(dir, writerGoldenDir), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			os.WriteFile(filepath.Join(dir, "writers.json"), []byte(tc.main), 0o644)
+			os.WriteFile(filepath.Join(dir, writerGoldenDir, "x.json"), []byte(tc.extra), 0o644)
+			ft := &fatalRecorder{TB: t}
+			func() {
+				defer func() { recover() }()
+				loadWriterTemplates(ft, repo)
+			}()
+			if !strings.Contains(ft.msg, tc.want) {
+				t.Errorf("loader said %q, want %q", ft.msg, tc.want)
+			}
+		})
+	}
+}
+
+// fatalRecorder records a Fatalf instead of ending the test.
+type fatalRecorder struct {
+	testing.TB
+	msg string
+}
+
+func (f *fatalRecorder) Fatalf(format string, args ...any) {
+	f.msg = fmt.Sprintf(format, args...)
+	panic(f)
+}
+
+func (f *fatalRecorder) Fatal(args ...any) {
+	f.msg = fmt.Sprint(args...)
+	panic(f)
+}
+
+// <REPEAT:c:n> expands to n copies of c, at most maxRepeat.
+func TestExpandRepeats(t *testing.T) {
+	if got, ok := expandRepeats("{\"p\":\"<REPEAT:a:3>\",\"q\":\"<REPEAT:é:2><REPEAT:\n:1><REPEAT:ab:1>\"}"); !ok || got != "{\"p\":\"aaa\",\"q\":\"éé\n<REPEAT:ab:1>\"}" {
+		t.Fatalf("%q %v", got, ok)
+	}
+	if got, ok := expandRepeats("<REPEAT:a:8388608>"); !ok || len(got) != maxRepeat {
+		t.Fatal(len(got), ok)
+	}
+	if _, ok := expandRepeats("<REPEAT:a:8388609>"); ok {
+		t.Fatal("over the bound")
+	}
+}
+
+// add-symlink replaces a file or a dangling link and makes a missing path;
+// set-mtime sets a symbolic link's own times, not its target's.
+func TestSymlinkAndMtimeMutations(t *testing.T) {
+	if windows {
+		t.Skip("symbolic links")
+	}
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "target.txt"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(root, "file.txt"), []byte("y"), 0o644)
+	apply := func(js string) bool {
+		v, err := jsjson.Parse(js)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := template{v.Obj()}
+		return applyMutation(root, testCase{id: "x", base: "writer", file: m.str("path"), tpl: &m})
+	}
+	for _, p := range []string{"file.txt", "dir/new-link", "dangling"} {
+		if !apply(`{"op":"add-symlink","path":"` + p + `","target":"target.txt"}`) {
+			t.Fatalf("add-symlink %s", p)
+		}
+		if got, err := os.Readlink(filepath.Join(root, p)); err != nil || got != "target.txt" {
+			t.Fatalf("%s -> %q %v", p, got, err)
+		}
+	}
+	os.Mkdir(filepath.Join(root, "adir"), 0o755)
+	if apply(`{"op":"add-symlink","path":"adir","target":"target.txt"}`) {
+		t.Error("add-symlink replaced a directory")
+	}
+	if !apply(`{"op":"set-mtime","path":"file.txt","iso":"2000-01-01T00:00:00.000Z"}`) {
+		t.Fatal("set-mtime")
+	}
+	link, _ := os.Lstat(filepath.Join(root, "file.txt"))
+	target, _ := os.Stat(filepath.Join(root, "target.txt"))
+	if want := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC); !link.ModTime().Equal(want) || target.ModTime().Equal(want) {
+		t.Errorf("link %v, target %v", link.ModTime(), target.ModTime())
+	}
+}
+
+// Relocation walks a .git's faultline/recordings, and nothing else of it.
+func TestRelocationWalksSidecarRecordings(t *testing.T) {
+	r := makeWriterRoots(t)
+	for rel, text := range map[string]string{
+		".git/faultline/recordings/codex-x.json":  `{"workingDirectory": "` + r.ws + `"}`,
+		".git/faultline/turn-snapshot-cache.json": `{"repositoryRoot": "` + r.ws + `"}`,
+		".git/config": r.ws,
+	} {
+		path := filepath.Join(r.ws, filepath.FromSlash(rel))
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		os.WriteFile(path, []byte(text), 0o644)
+	}
+	reloc := relocation(t, r, nil)
+	var names []string
+	for _, n := range reloc.names {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	if want := []string{"file:.git/faultline/recordings/codex-x.json", "json:.git/faultline/recordings/codex-x.json#"}; !slices.Equal(names, want) {
+		t.Errorf("%q", names)
 	}
 }

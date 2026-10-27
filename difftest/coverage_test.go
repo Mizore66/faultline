@@ -1149,6 +1149,12 @@ func goldenText(t *testing.T, repo string) string {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no goldens: %v", err)
 	}
+	// The writer replay's per-task goldens (writer_test.go writerGoldenDir).
+	perTask, err := filepath.Glob(filepath.Join(repo, "difftest", "testdata", "golden", writerGoldenDir, "*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = append(files, perTask...)
 	var goldens strings.Builder
 	for _, f := range files {
 		b, err := os.ReadFile(f)

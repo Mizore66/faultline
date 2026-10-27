@@ -38,6 +38,9 @@ import { realpathSync } from "node:fs";
 import { redactText, redactValue } from "../../src/redaction.js";
 import { classifyFromWitnessResult, resolveWitnessResultFromStdout, witnessResultConsistentWithExitCode } from "../../src/witness-result.js";
 import { DOCTOR_SAFE_GIT_CONFIG, HOST_COMMAND_SAFE_GIT_CONFIG } from "../../src/doctor.js";
+import { ops as ledgerOps } from "./oracle-ledger.js";
+import { ops as snapgcOps } from "./oracle-snapgc.js";
+import { ops as sidecarOps } from "./oracle-sidecar.js";
 import {
   CuratedRuntimeResolutionError, ProjectRuntimeImagePreparationError, describeProjectRuntimeImageBuild, prepareCuratedRuntime, prepareProjectRuntimeImage,
   resolveCuratedRuntime, resolveProjectRuntimeImage
@@ -775,6 +778,11 @@ export const handlers: Record<string, Handler> = {
     for (let i = 1; i < all.length; i++) ties += all[i - 1]!.localeCompare(all[i]!) === 0 ? "1" : "0";
     return { order: all.map((s) => s.codePointAt(0)), ties };
   },
+  // Slice 4a's per-area ops (oracle-ledger.ts, oracle-snapgc.ts,
+  // oracle-sidecar.ts).
+  ...ledgerOps,
+  ...snapgcOps,
+  ...sidecarOps,
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });

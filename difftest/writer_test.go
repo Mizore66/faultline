@@ -5,6 +5,7 @@ package difftest
 import (
 	"bufio"
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"maps"
@@ -30,15 +31,21 @@ import (
 )
 
 // writerGoldenFile is the writer replay's golden in difftest/testdata/golden
-// (difftest/gen/gen-writers.ts writes it).
-const writerGoldenFile = "writers.jsonl"
+// (difftest/gen/gen-writers.ts writes it). The templates of
+// difftest/testdata/writers.d/<name>.json have theirs in
+// golden/writers.d/<name>.jsonl (writerGoldenDir), one pair per task.
+const (
+	writerGoldenFile = "writers.jsonl"
+	writerGoldenDir  = "writers.d"
+)
 
 var windows = runtime.GOOS == "windows"
 
 func repoRoot(t *testing.T) string { return oracle.RepoRoot(t) }
 
-// writerTemplate is one entry of difftest/testdata/writers.json: argv runs
-// in order in one workspace built from Scenario and then Mutations.
+// writerTemplate is one entry of difftest/testdata/writers.json (or of a
+// writers.d/*.json file): argv runs in order in one workspace built from
+// Scenario and then Mutations.
 type writerTemplate struct {
 	ID, Scenario, FakeDocker, FakeTools string
 	// PathTools, when set, replaces the inherited PATH with links to
@@ -48,6 +55,48 @@ type writerTemplate struct {
 	Env       [][2]string
 	PosixOnly bool
 	Mutations []template
+	// Input is each invocation's stdin (template keys input and inputHex);
+	// an invocation past its end, or a null entry, gets an empty, closed
+	// stdin.
+	Input []writerInput
+	// AdvanceClock runs invocation n >= 1 under seed <id>/<n> with the clock
+	// n hours later (FAULTLINE_TEST_CLOCK_OFFSET_MS), so each fl process
+	// writes times after the previous one's.
+	AdvanceClock bool
+	// File is the template file the entry came from, relative to
+	// difftest/testdata ("writers.json", "writers.d/4a-harness.json").
+	File string
+}
+
+// writerInput is one invocation's stdin: text (input, where <WS>, <TMP>,
+// <HOME> and <REPEAT:c:n> are expanded when the case runs) or raw bytes
+// (inputHex); neither set is an empty stdin.
+type writerInput struct {
+	text  *string
+	bytes []byte
+}
+
+// stdin is the invocation's stdin bytes (gen-writers.ts invocationInput):
+// text is substituted, its repeats expanded, then encoded as UTF-8 the way
+// Buffer.from(text, "utf8") does.
+func (in writerInput) stdin(t testing.TB, r writerRoots) []byte {
+	if in.text == nil {
+		return in.bytes
+	}
+	text, ok := expandRepeats(substituteRoots(*in.text, r))
+	if !ok {
+		t.Fatalf("input %q: a <REPEAT> count is over %d", *in.text, maxRepeat)
+	}
+	return []byte(jsstr.ToUTF8(text))
+}
+
+// mutationInv is the invocation a mutation is applied just before (its inv
+// key), or -1 for one applied at case setup.
+func mutationInv(m template) int {
+	if v, ok := m.fields.Get("inv"); ok {
+		return int(v.Num())
+	}
+	return -1
 }
 
 // writerResult is one invocation, normalized like its golden line.
@@ -66,24 +115,62 @@ type writerResult struct {
 }
 
 var (
-	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations"}
+	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations", "input", "inputHex", "advanceClock"}
 	writerIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	// fileEntry is a regular file's tree entry: its SHA-256, then its mode
 	// except on Windows.
 	fileEntry = regexp.MustCompile(`^[0-9a-f]{64}(?: [0-7]{1,4})?$`)
 )
 
+// writerTemplateFiles are the template files, relative to difftest/testdata:
+// writers.json, then each writers.d/*.json in byte order (gen-writers.ts
+// templateFiles).
+func writerTemplateFiles(t testing.TB, repo string) []string {
+	files := []string{"writers.json"}
+	names, err := nodefs.ReadDirNames(filepath.Join(repo, "difftest", "testdata", writerGoldenDir))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if strings.HasSuffix(name, ".json") {
+			files = append(files, writerGoldenDir+"/"+name)
+		}
+	}
+	return files
+}
+
+// writerGoldenPath is the golden file, relative to difftest/testdata/golden,
+// that holds the lines of the templates in template file file:
+// writers.json's in writers.jsonl, writers.d/<name>.json's in
+// writers.d/<name>.jsonl (gen-writers.ts goldenFileFor).
+func writerGoldenPath(file string) string {
+	if file == "writers.json" {
+		return writerGoldenFile
+	}
+	return strings.TrimSuffix(file, ".json") + ".jsonl"
+}
+
 func loadWriterTemplates(t testing.TB, repo string) []writerTemplate {
-	text, err := os.ReadFile(filepath.Join(repo, "difftest", "testdata", "writers.json"))
+	var out []writerTemplate
+	ids := map[string]bool{}
+	for _, file := range writerTemplateFiles(t, repo) {
+		out = append(out, loadWriterTemplateFile(t, repo, file, ids)...)
+	}
+	return out
+}
+
+// loadWriterTemplateFile loads one template file; ids are the ids seen so
+// far, so an id repeated across files fails too.
+func loadWriterTemplateFile(t testing.TB, repo, file string, ids map[string]bool) []writerTemplate {
+	text, err := os.ReadFile(filepath.Join(repo, "difftest", "testdata", filepath.FromSlash(file)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	v, err := jsjson.Parse(string(text))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%s: %v", file, err)
 	}
 	var out []writerTemplate
-	ids := map[string]bool{}
 	for _, item := range v.Items() {
 		o := item.Obj()
 		for _, k := range o.Keys() {
@@ -92,7 +179,7 @@ func loadWriterTemplates(t testing.TB, repo string) []writerTemplate {
 			}
 		}
 		tpl := writerTemplate{ID: o.Field("id").Str(), Scenario: o.Field("scenario").Str(), FakeDocker: o.Field("fakeDocker").Str(),
-			FakeTools: o.Field("fakeTools").Str(), PosixOnly: o.Field("posixOnly").Bool()}
+			FakeTools: o.Field("fakeTools").Str(), PosixOnly: o.Field("posixOnly").Bool(), AdvanceClock: o.Field("advanceClock").Bool(), File: file}
 		if ids[tpl.ID] || !writerIDPattern.MatchString(tpl.ID) {
 			t.Fatalf("writer template id %q is duplicated or not lowercase kebab-case", tpl.ID)
 		}
@@ -117,19 +204,84 @@ func loadWriterTemplates(t testing.TB, repo string) []writerTemplate {
 		}
 		for _, m := range o.Field("mutations").Items() {
 			tpl.Mutations = append(tpl.Mutations, template{m.Obj()})
+			if inv, ok := m.Obj().Get("inv"); ok {
+				if n := inv.Num(); inv.Kind() != jsjson.Number || n != float64(int(n)) || n < 0 || int(n) >= len(tpl.Argv) {
+					t.Fatalf("writer template %s: mutation inv %s is not one of its invocations", tpl.ID, jsjson.Stringify(inv))
+				}
+			}
 		}
+		tpl.Input = loadWriterInputs(t, tpl.ID, o)
 		out = append(out, tpl)
 	}
 	return out
 }
 
+// loadWriterInputs reads a template's input (strings) or inputHex (hex
+// bytes) list, one entry per invocation, null for an empty stdin
+// (gen-writers.ts checkTemplates refuses the same).
+func loadWriterInputs(t testing.TB, id string, o *jsjson.Obj) []writerInput {
+	text, hasText := o.Get("input")
+	hexes, hasHex := o.Get("inputHex")
+	if hasText && hasHex {
+		t.Fatalf("writer template %s has both input and inputHex", id)
+	}
+	list := text
+	if hasHex {
+		list = hexes
+	}
+	if !hasText && !hasHex {
+		return nil
+	}
+	if list.Kind() != jsjson.Array {
+		t.Fatalf("writer template %s: input is not an array", id)
+	}
+	var out []writerInput
+	for _, item := range list.Items() {
+		switch {
+		case item.Kind() == jsjson.Null:
+			out = append(out, writerInput{})
+		case item.Kind() != jsjson.String:
+			t.Fatalf("writer template %s: an input entry is neither a string nor null", id)
+		case hasHex:
+			b, err := hex.DecodeString(item.Str())
+			if err != nil {
+				t.Fatalf("writer template %s: inputHex %q: %v", id, item.Str(), err)
+			}
+			out = append(out, writerInput{bytes: b})
+		default:
+			s := item.Str()
+			out = append(out, writerInput{text: &s})
+		}
+	}
+	return out
+}
+
+// loadWriterGoldens reads golden/writers.jsonl and every
+// golden/writers.d/*.jsonl; a key in two files fails.
 func loadWriterGoldens(t *testing.T, repo string) map[string]*jsjson.Obj {
-	f, err := os.Open(filepath.Join(repo, "difftest", "testdata", "golden", writerGoldenFile))
+	out := map[string]*jsjson.Obj{}
+	files := []string{writerGoldenFile}
+	names, err := nodefs.ReadDirNames(filepath.Join(repo, "difftest", "testdata", "golden", writerGoldenDir))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if strings.HasSuffix(name, ".jsonl") {
+			files = append(files, writerGoldenDir+"/"+name)
+		}
+	}
+	for _, file := range files {
+		loadWriterGoldenFile(t, repo, file, out)
+	}
+	return out
+}
+
+func loadWriterGoldenFile(t *testing.T, repo, file string, out map[string]*jsjson.Obj) {
+	f, err := os.Open(filepath.Join(repo, "difftest", "testdata", "golden", filepath.FromSlash(file)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	out := map[string]*jsjson.Obj{}
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1<<20), 1<<26)
 	for scanner.Scan() {
@@ -138,18 +290,17 @@ func loadWriterGoldens(t *testing.T, repo string) map[string]*jsjson.Obj {
 			t.Fatal(err)
 		}
 		if err := checkWriterGolden(v); err != "" {
-			t.Fatalf("%s line %q: %s", writerGoldenFile, scanner.Text(), err)
+			t.Fatalf("%s line %q: %s", file, scanner.Text(), err)
 		}
 		key := v.Get("case").Str() + "|" + itoa(int64(v.Get("inv").Num()))
 		if out[key] != nil {
-			t.Fatalf("%s: duplicate golden %s", writerGoldenFile, key)
+			t.Fatalf("%s: duplicate golden %s", file, key)
 		}
 		out[key] = v.Obj()
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
-	return out
 }
 
 // writerGoldenKinds is the shape of a golden line (gen-writers.ts runCase).
@@ -554,10 +705,14 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 				t.Fatal(err)
 			}
 			switch {
-			case info.IsDir():
-				if name != ".git" {
-					walk(rr)
+			case info.IsDir() && name == ".git":
+				// Only the sidecar recordings of a .git are walked: they hold
+				// the case path (gen-writers.ts relocation).
+				if isRealDir(filepath.Join(path, "faultline")) && isRealDir(filepath.Join(path, "faultline", "recordings")) {
+					walk(rr + "/faultline/recordings")
 				}
+			case info.IsDir():
+				walk(rr)
 			case info.Mode().IsRegular():
 				b, err := os.ReadFile(path)
 				if err != nil {
@@ -669,6 +824,12 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 	}
 	rel.sorted = slices.Sorted(maps.Keys(rel.names))
 	return rel
+}
+
+// isRealDir is lstat(path).isDirectory().
+func isRealDir(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir()
 }
 
 // text masks the case paths, then every path-dependent digest by its name
@@ -868,6 +1029,14 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 	// wrote into a file (gen-writers.ts runCase).
 	var records, stdouts []string
 	for inv, argv := range tpl.Argv {
+		// This invocation's mutations: the others, then the new entries'
+		// modes reset, then the chmods (gen-writers.ts runCase).
+		if slices.ContainsFunc(tpl.Mutations, func(m template) bool { return mutationInv(m) == inv }) {
+			existing := pathsUnder(t, r.ws)
+			applyWriterMutations(t, tpl, r, func(m template) bool { return mutationInv(m) == inv && m.str("op") != "chmod" })
+			resetNewModes(t, r.ws, existing)
+			applyWriterMutations(t, tpl, r, func(m template) bool { return mutationInv(m) == inv && m.str("op") == "chmod" })
+		}
 		before := treeEntries(t, r.ws, relocation(t, r, records).fileDigest)
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
@@ -880,7 +1049,11 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		}
 		cmd := exec.Command(command[0], command[1:]...)
 		cmd.Dir = r.ws
-		cmd.Env = writerEnv(repo, r, tpl.ID, tpl)
+		cmd.Env = invocationEnv(repo, r, tpl, inv)
+		// An empty or given stdin, written to a pipe that is then closed
+		// (gen-writers.ts runCase; runCli ends the child's stdin the same
+		// way). exec ignores EPIPE when fl exits without reading it.
+		cmd.Stdin = bytes.NewReader(invocationInput(t, tpl, inv, r))
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		var exitErr *exec.ExitError
@@ -920,6 +1093,28 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		out = append(out, res)
 	}
 	return out
+}
+
+// invocationEnv is writerEnv for invocation inv: with AdvanceClock, an
+// invocation n >= 1 runs under seed <id>/<n> with the clock n hours on
+// (FAULTLINE_TEST_CLOCK_OFFSET_MS); invocation 0, and every invocation of
+// any other case, under seed <id> (gen-writers.ts invocationEnv).
+func invocationEnv(repo string, r writerRoots, tpl writerTemplate, inv int) []string {
+	if !tpl.AdvanceClock || inv == 0 {
+		return writerEnv(repo, r, tpl.ID, tpl)
+	}
+	return append(writerEnv(repo, r, tpl.ID+"/"+strconv.Itoa(inv), tpl), "FAULTLINE_TEST_CLOCK_OFFSET_MS="+strconv.Itoa(inv*3_600_000))
+}
+
+// invocationInput is invocation inv's stdin bytes: its input entry, or none.
+func invocationInput(t testing.TB, tpl writerTemplate, inv int, r writerRoots) []byte {
+	if inv >= len(tpl.Input) {
+		return []byte{}
+	}
+	if b := tpl.Input[inv].stdin(t, r); b != nil {
+		return b
+	}
+	return []byte{}
 }
 
 // fileArgument replaces an argv string that is exactly <FILE:rel> with the
@@ -1066,33 +1261,21 @@ func holdBusyPort(t *testing.T, tpl writerTemplate) string {
 }
 
 // prepareWriterCase fills the case's workspace: the scenario, then the
-// template's mutations (with <WS>, <TMP>, <HOME> substituted), then
-// resetModes, then the chmod mutations, which resetModes would undo
-// (gen-writers.ts runCase). A cleanup makes every directory writable
-// again, so the case directory can be removed.
+// template's setup mutations (those without inv, with <WS>, <TMP>, <HOME>
+// substituted), then resetModes, then the setup chmod mutations, which
+// resetModes would undo (gen-writers.ts runCase). A mutation with inv is
+// applied just before that invocation (runWriterCaseWith) and never reset.
+// A cleanup makes every directory writable again, so the case directory
+// can be removed.
 func prepareWriterCase(t testing.TB, repo string, tpl writerTemplate, r writerRoots) {
 	t.Helper()
 	copyScenario(t, repo, tpl.Scenario, r.ws)
-	apply := func(chmod bool) {
-		for _, raw := range tpl.Mutations {
-			m := template{substituteDeep(jsjson.MakeObject(raw.fields), r).Obj()}
-			if (m.str("op") == "chmod") != chmod {
-				continue
-			}
-			file := m.str("file")
-			if pathOps[m.str("op")] {
-				file = "."
-				if p, ok := m.fields.Get("path"); ok {
-					file = p.Str()
-				}
-			}
-			if !applyMutation(r.ws, testCase{id: tpl.ID, base: "writer", file: file, tpl: &m}) {
-				t.Fatalf("could not apply mutation %s", m.str("op"))
-			}
-		}
+	setup := func(chmod bool) func(template) bool {
+		return func(m template) bool { return mutationInv(m) < 0 && (m.str("op") == "chmod") == chmod }
 	}
-	apply(false)
+	applyWriterMutations(t, tpl, r, setup(false))
 	resetModes(t, r.ws)
+	refreshScenarioIndexes(t, repo, tpl.Scenario, r.ws)
 	// A read-only directory refuses writes only to a non-root user.
 	if os.Geteuid() == 0 && slices.ContainsFunc(tpl.Mutations, func(m template) bool { return m.str("op") == "chmod" }) {
 		t.Fatalf("%s: chmod cases must run as a non-root user", tpl.ID)
@@ -1100,7 +1283,76 @@ func prepareWriterCase(t testing.TB, repo string, tpl writerTemplate, r writerRo
 	// Registered first, so a chmod that leaves a directory read-only and then
 	// fails the case is still undone before t.TempDir's cleanup.
 	t.Cleanup(func() { restoreWritable(r.root) })
-	apply(true)
+	applyWriterMutations(t, tpl, r, setup(true))
+}
+
+// pathsUnder lists every entry under root, not following links
+// (gen-writers.ts pathsUnder).
+func pathsUnder(t testing.TB, root string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path != root {
+			rel, _ := filepath.Rel(root, path)
+			out[filepath.ToSlash(rel)] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// resetNewModes gives the entries a mutation made before an invocation the
+// modes resetModes gives (0755 directories, 0644 files); entries that
+// existed keep theirs (gen-writers.ts resetNewModes).
+func resetNewModes(t testing.TB, root string, before map[string]bool) {
+	t.Helper()
+	for rel := range pathsUnder(t, root) {
+		if before[rel] {
+			continue
+		}
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case info.IsDir():
+			err = os.Chmod(path, 0o755)
+		case info.Mode().IsRegular():
+			err = os.Chmod(path, 0o644)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// applyWriterMutations applies, in template order, the mutations of tpl
+// that pick selects (gen-writers.ts applyMutations).
+func applyWriterMutations(t testing.TB, tpl writerTemplate, r writerRoots, pick func(template) bool) {
+	t.Helper()
+	for _, raw := range tpl.Mutations {
+		if !pick(raw) {
+			continue
+		}
+		m := template{substituteDeep(jsjson.MakeObject(raw.fields), r).Obj()}
+		file := m.str("file")
+		if pathOps[m.str("op")] {
+			file = "."
+			if p, ok := m.fields.Get("path"); ok {
+				file = p.Str()
+			}
+		}
+		if !applyMutation(r.ws, testCase{id: tpl.ID, base: "writer", file: file, tpl: &m}) {
+			t.Fatalf("could not apply mutation %s", m.str("op"))
+		}
+	}
 }
 
 // restoreWritable makes every directory under root writable again (a chmod
@@ -1329,6 +1581,7 @@ func scenarioWorkspace(t *testing.T, name string) string {
 	r := makeWriterRoots(t)
 	copyScenario(t, repoRoot(t), name, r.ws)
 	resetModes(t, r.ws)
+	refreshScenarioIndexes(t, repoRoot(t), name, r.ws)
 	return r.ws
 }
 

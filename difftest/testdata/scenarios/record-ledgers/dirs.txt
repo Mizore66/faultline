@@ -1,0 +1,11 @@
+events
+repo
+repo/.git
+repo/.git/objects
+repo/.git/objects/12
+repo/.git/objects/31
+repo/.git/objects/4a
+repo/.git/objects/b6
+repo/.git/refs
+repo/.git/refs/heads
+repo/.git/refs/tags
