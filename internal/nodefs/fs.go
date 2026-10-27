@@ -479,6 +479,67 @@ func ReadDirNames(path string) ([]string, error) {
 	return sorted, nil
 }
 
+// Dirent is a readdirSync withFileTypes entry: its name (decoded as UTF-8
+// with replacement) and what isDirectory() and isFile() answer.
+type Dirent struct {
+	Name          string
+	IsDir, IsFile bool
+}
+
+// ReadDirTypes is readdirSync(path, { withFileTypes: true }): the entries
+// in ReadDirNames' order with their types. On Linux the type is d_type,
+// and an entry whose type libuv cannot name is lstat'ed by Node (by its
+// decoded name), the first failure thrown; a symlink is neither a
+// directory nor a file. Elsewhere scandir here reads no type, so it is
+// read per entry by its raw name (direntMode): lstat on macOS and the
+// BSDs, the file attributes on Windows. The error is Node's scandir text.
+func ReadDirTypes(path string) ([]Dirent, error) {
+	raw := sysPath(path)
+	names, types, err := scandir(raw)
+	if err != nil {
+		return nil, wrap(err, "scandir", path)
+	}
+	order := make([]int, len(names))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool { return names[order[i]] < names[order[j]] })
+	out := make([]Dirent, len(names))
+	for i, k := range order {
+		out[i].Name = DecodeUTF8([]byte(names[k]))
+	}
+	for i, k := range order {
+		var mode fs.FileMode
+		switch {
+		case types == nil:
+			sep := "/"
+			if isWindows {
+				sep = "\\"
+			}
+			m, ok := direntMode(raw + sep + names[k])
+			if !ok {
+				continue
+			}
+			mode = m
+		case !direntTypeKnown(types[k]):
+			info, err := Lstat(Join(path, out[i].Name))
+			if err != nil {
+				return nil, err
+			}
+			mode = info.Mode()
+		case types[k] == 4: // DT_DIR
+			mode = fs.ModeDir
+		case types[k] == 8: // DT_REG
+			mode = 0
+		default:
+			mode = fs.ModeIrregular
+		}
+		out[i].IsDir = mode.IsDir()
+		out[i].IsFile = mode.IsRegular()
+	}
+	return out, nil
+}
+
 // Tmpdir is os.tmpdir().
 func Tmpdir() string {
 	if isWindows {

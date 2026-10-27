@@ -2,6 +2,7 @@ package nodefs
 
 import (
 	"encoding/binary"
+	"io/fs"
 	"syscall"
 )
 
@@ -109,4 +110,14 @@ func scandirOnce(path string) ([]string, []uint8, error) {
 type rawDirent struct {
 	name string
 	typ  uint8
+}
+
+// direntMode is lstat's type for an entry; on Linux scandir always reads
+// d_type, so ReadDirTypes never asks.
+func direntMode(raw string) (fs.FileMode, bool) {
+	info, err := statRaw(raw, false)
+	if err != nil {
+		return 0, false
+	}
+	return info.Mode(), true
 }

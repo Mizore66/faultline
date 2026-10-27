@@ -396,3 +396,28 @@ func TestOpenWriteCodeByPlatform(t *testing.T) {
 		}
 	}
 }
+
+// ReadDirTypes is readdirSync withFileTypes: byte order, and a symlink is
+// neither a directory nor a file.
+func TestReadDirTypes(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "b"), nil, 0o644)
+	os.Mkdir(filepath.Join(dir, "a"), 0o755)
+	if err := os.Symlink("b", filepath.Join(dir, "c")); err != nil {
+		t.Skip(err)
+	}
+	got, err := ReadDirTypes(dir)
+	want := []Dirent{{Name: "a", IsDir: true}, {Name: "b", IsFile: true}, {Name: "c"}}
+	if err != nil || len(got) != len(want) {
+		t.Fatalf("%v %v", got, err)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ReadDirTypes = %v", got)
+		}
+	}
+	missing := filepath.Join(dir, "missing")
+	if _, err := ReadDirTypes(missing); err == nil || err.Error() != "ENOENT: no such file or directory, scandir '"+missing+"'" {
+		t.Fatalf("ReadDirTypes error = %v", err)
+	}
+}
