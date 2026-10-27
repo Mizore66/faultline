@@ -560,8 +560,12 @@ func TestLiveAttestationStore(t *testing.T) {
 		"Attestation store cannot traverse a symbolic link or non-directory: ", "Attestation store directory must be non-empty.",
 		"Attestation store must be inside the managed root: ", "Attestation receipt already exists and cannot be overwritten: ",
 		"attestation receipt does not exist", "attestation receipt is a symbolic link or non-regular file",
-		"attestation verification failed safely: ", "EACCES: permission denied, open ",
+		"attestation verification failed safely: ",
 		"externally supplied receipt digest does not match", `"externalDigestStatus":"MATCH"`)
+	// root ignores the read-only store's mode, so the open succeeds there.
+	if os.Getuid() != 0 {
+		requireAttestReached(t, outputs.String(), "EACCES: permission denied, open ")
+	}
 	liveSummary(t, "attestation store: %d written, %d refused", written, refused)
 }
 
@@ -590,7 +594,7 @@ func TestLiveCanonicalISO(t *testing.T) {
 				year = fmt.Sprintf("%04d", r.IntN(10000))
 			}
 			ms := fmt.Sprintf("%03d", []int{0, 1, 999, r.IntN(1000)}[r.IntN(4)])
-			values[i] = year + "-" + two([]int{0, 1, 2, 4, 9, 11, 12, 13, 99}, 100) + "-" + two([]int{0, 1, 28, 29, 30, 31, 32, 99}, 100) +
+			values[i] = year + "-" + two([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 99}, 100) + "-" + two([]int{0, 1, 28, 29, 30, 31, 32, 99}, 100) +
 				"T" + two([]int{0, 23, 24, 25, 99}, 100) + ":" + two([]int{0, 59, 60, 61, 99}, 100) + ":" + two([]int{0, 59, 60, 61, 99}, 100) + "." + ms + "Z"
 			if year == "+275760" && r.IntN(2) == 0 {
 				values[i] = "+275760-09-13T00:00:00." + ms + "Z"

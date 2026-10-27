@@ -48,6 +48,18 @@ func IsCanonicalISO(s string) bool {
 	return t >= -maxTimeMs && t <= maxTimeMs
 }
 
+// TimeValue is Date.parse(s) for a string that IsCanonicalISO accepts: its
+// time value in milliseconds since the epoch. A string without
+// toISOString's shape gives 0.
+func TimeValue(s string) int64 {
+	m := isoShape.FindStringSubmatch(s)
+	if m == nil {
+		return 0
+	}
+	n := func(i int) int64 { v, _ := strconv.ParseInt(m[i], 10, 64); return v }
+	return daysFromCivil(n(1), n(2), n(3))*86_400_000 + ((n(4)*60+n(5))*60+n(6))*1000 + n(7)
+}
+
 func daysInMonth(year, month int64) int64 {
 	switch month {
 	case 2:

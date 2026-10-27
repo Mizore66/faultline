@@ -31,7 +31,7 @@ const (
 func str(v string) jsjson.Value { return jsjson.MakeString(v) }
 
 // Port of the IdentifierSchema refines (src/attestation.ts:37-38).
-func untrimmed(v jsjson.Value) bool { return v.Str() == jsstr.Trim(v.Str()) }
+func isTrimmed(v jsjson.Value) bool { return v.Str() == jsstr.Trim(v.Str()) }
 
 func noControlCharacters(v jsjson.Value) bool {
 	for i := 0; i < len(v.Str()); i++ {
@@ -50,7 +50,7 @@ var (
 	digestSchema     = s.String(s.Regex(s.Pattern(`^sha256:[a-f0-9]{64}$`), "must be a sha256:<64-lowercase-hex> digest"))
 	receiptIDSchema  = s.String(s.Regex(s.Pattern(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`), "must use only letters, numbers, underscores, or hyphens and cannot be a path"))
 	identifierSchema = s.Refine(s.Refine(s.String(s.MinLength(1), s.MaxLength(512)),
-		untrimmed, "cannot start or end with whitespace"),
+		isTrimmed, "cannot start or end with whitespace"),
 		noControlCharacters, "cannot contain control characters")
 	timestampSchema = s.Refine(s.String(s.Regex(s.Pattern(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`), "must be a canonical UTC ISO-8601 timestamp")),
 		func(v jsjson.Value) bool { return jsdate.IsCanonicalISO(v.Str()) }, "must be a valid canonical UTC ISO-8601 timestamp")
