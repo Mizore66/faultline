@@ -853,6 +853,50 @@ export const handlers: Record<string, Handler> = {
   },
   isCanonicalIsoDate: ({ values }: { values: string[] }) =>
     values.map((v) => { const d = new Date(v); return Number.isFinite(d.getTime()) && d.toISOString() === v ? "1" : "0"; }).join(""),
+  // spawnSync with a timeout, as the Codex runner and
+  // commitRepairedWorktreeState call it: status, signal, error message and
+  // output lengths. input is latin1 (one char per byte).
+  spawnSyncTimeout: async ({ file, args, timeout, maxBuffer, input }: {
+    file: string; args: string[]; timeout: number; maxBuffer?: number; input?: string;
+  }) => {
+    const { spawnSync } = await import("node:child_process");
+    const result = spawnSync(file, args, {
+      encoding: "buffer",
+      shell: false,
+      windowsHide: true,
+      timeout,
+      ...(maxBuffer === undefined ? {} : { maxBuffer }),
+      ...(input === undefined ? {} : { input: Buffer.from(input, "latin1") })
+    });
+    return {
+      status: result.status,
+      signal: result.signal,
+      error: result.error?.message ?? null,
+      stdoutLength: result.stdout?.length ?? null,
+      stderrLength: result.stderr?.length ?? null
+    };
+  },
+  // execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe",
+  // "pipe"], windowsHide: true }) as github-provenance.ts calls it: the
+  // stdout, or the thrown error's message.
+  execFileSyncError: async ({ file, args, cwd, timeout, maxBuffer }: {
+    file: string; args: string[]; cwd?: string; timeout?: number; maxBuffer?: number;
+  }) => {
+    const { execFileSync } = await import("node:child_process");
+    try {
+      const stdout = execFileSync(file, args, {
+        ...(cwd === undefined ? {} : { cwd }),
+        encoding: "utf8",
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        ...(timeout === undefined ? {} : { timeout }),
+        ...(maxBuffer === undefined ? {} : { maxBuffer })
+      });
+      return { stdout, error: null };
+    } catch (error) {
+      return { stdout: null, error: (error as Error).message };
+    }
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
