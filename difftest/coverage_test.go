@@ -1128,6 +1128,8 @@ var liveGatedFiles = map[string]string{
 	"internal/bundle/prevention/write.go":     "TestLivePreventionWrite",
 	"internal/bundle/prevention/agentsmd.go":  "TestLiveAgentsMd",
 	"internal/bundle/prevention/artifacts.go": "TestLivePreventionFromArtifacts",
+	// Slice 4c: the hard-guard helpers have no src/ caller.
+	"internal/bundle/prevention/hardguard.go": "TestLiveHardGuardDigests",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally

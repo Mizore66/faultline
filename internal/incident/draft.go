@@ -18,9 +18,14 @@ type RangeError struct{ Code, Message string }
 
 func (e *RangeError) Error() string { return e.Message }
 
-// DraftInput is createIncidentDraft's input (src/incident.ts:88). An
-// Undefined jsjson.Value (the zero value, "nil") is an absent member; any
-// other value, null included, is validated as TS validates it.
+// DraftInput is createIncidentDraft's input (src/incident.ts:88,
+// IncidentDraftInputSchema): the members createIncidentDraft reads are
+// draftId (ID), createdAt, repository, command, range, localHead, runtime
+// and proposal. An Undefined jsjson.Value (the zero value, "nil") is an
+// absent member; any other value, null included, is validated as TS
+// validates it. The symptom, language, behavior and timeout of `incident
+// start` are not draft members: the command passes them to the witness
+// proposal directly (cli-app.ts:630-646).
 type DraftInput struct {
 	ID, Repository, Command string
 	// CreatedAt is the draft's createdAt. "" reads clock.Now() once, inside
@@ -42,11 +47,6 @@ type DraftInput struct {
 	// Runtime is {requested, image}; Proposal is the proposal binding
 	// {proposalId, proposalDigest, incidentPacketDigest, commandDigest}.
 	Runtime, Proposal jsjson.Value
-	// Symptom, Language, Behavior and TimeoutSeconds are not draft members:
-	// `incident start` sends them to the witness proposal only
-	// (cli-app.ts:630-646). CreateDraft ignores them.
-	Symptom, Language, Behavior string
-	TimeoutSeconds              float64
 }
 
 func throw(message string) { jsexc.Throw(errors.New(message)) }
