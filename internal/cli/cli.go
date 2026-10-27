@@ -22,6 +22,7 @@ var topLevelCommands = map[string]bool{
 }
 
 type env struct {
+	stdin          io.Reader // nil: os.Stdin
 	stdout, stderr io.Writer
 	exitCode       int
 }
@@ -41,9 +42,16 @@ func (c *cliError) Error() string { return c.message }
 
 func fail(format string, a ...any) error { return &cliError{fmt.Sprintf(format, a...)} }
 
-// Run executes the fl command line and returns the process exit code.
+// Run executes the fl command line and returns the process exit code. It
+// reads the process's stdin.
 func Run(args []string, stdout, stderr io.Writer) int {
-	e := &env{stdout: stdout, stderr: stderr}
+	return RunWithStdin(args, nil, stdout, stderr)
+}
+
+// RunWithStdin is Run with the process's stdin replaced (tests); a nil
+// stdin is os.Stdin.
+func RunWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	e := &env{stdin: stdin, stdout: stdout, stderr: stderr}
 	var err error
 	if thrown := jsexc.Try(func() { err = dispatch(e, args) }); thrown != nil {
 		err = thrown // a JS exception escaping the command reaches the CLI's catch
@@ -88,6 +96,10 @@ func dispatch(e *env, args []string) error {
 		return incidentCommand(e, rest)
 	case command == "prevention":
 		return preventionCommand(e, rest)
+	case command == "codex":
+		return codexCommand(e, rest)
+	case command == "record":
+		return recordCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:
