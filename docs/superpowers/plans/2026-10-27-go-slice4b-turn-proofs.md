@@ -1671,3 +1671,174 @@ git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com comm
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+### Task 8: The turn proof bundle writer
+
+**Files:**
+- Create: `internal/bundle/turnproof/write.go`, `internal/bundle/turnproof/write_test.go`
+- Modify:
+  - `internal/bundle/gitproof/write.go`: export `AssertSafeProofOutput` as a one-line wrapper over the existing `assertSafeProofOutput`; nothing else changes.
+  - `difftest/turnproof_live_test.go`: `TestLiveTurnProofWriter`.
+  - `difftest/gen/oracle-turnproof.ts`: its `ops`.
+
+**Interfaces:**
+- Consumes:
+  - Tasks 5 and 7: `writeArtifact`, `safeArtifactPath`, `assertNoLinksOrSpecialFiles`, `PackTurnTrees`, `BindTurnLifecycle`, `ValidateProofSemantics`, `RequiredArtifactPaths`, `ExpectedManifestArtifacts`, `RunArtifactPath`, `TransitionArtifactPath`, `ManifestSchema`, `SourceMetadataSchema`, `Verify`.
+  - `turninv.ResultSchema`, `turninv.Digest`; `gitproof.FrozenWitnessSchema`, `gitproof.AssertSafeProofOutput`; `safedir.{ResolveSafeDirectorySegment,RelativeTrustedSystemPath}`; `clock.{Now,ISO,NewUUID}`; `nodefs.{Mkdir,Exists,Rename,RemoveAll,Resolve,Dirname,Relative,Join,ParseRoot}`.
+- Produces:
+
+```go
+// WriteOptions ports TurnProofBundleWriteOptions (:142); "" is undefined
+// for ProofRoot, nil for GeneratedAt and Codex.
+type WriteOptions struct {
+	ProofRoot       string
+	GeneratedAt     *string
+	LifecycleLedger jsjson.Value
+	Repository      string
+	Codex           *gitproof.CodexThreadIDs
+}
+
+// Written ports WrittenTurnProofBundle (:159).
+type Written struct {
+	Directory, ManifestDigest, RootDigest string
+	Manifest                              jsjson.Value
+}
+
+// DefaultProofRoot ports defaultTurnProofRoot (:175).
+func DefaultProofRoot() string
+
+// Write ports writeTurnInvestigationProofBundle (:723).
+func Write(outputDirectory string, investigation, frozenWitness jsjson.Value, o WriteOptions) (Written, error)
+```
+
+**Gotchas:**
+- **Order** (`:723-806`):
+  1. `ResultSchema.parse(investigation)`, then `FrozenWitnessSchema.parse`. Each throws a ZodError.
+  2. Semantics: non-empty gives `Cannot write semantically inconsistent turn proof bundle: <errors.join("; ")>`.
+  3. `BindTurnLifecycle(o.LifecycleLedger, result)`; its throw propagates.
+  4. `generatedAt = o.GeneratedAt ?? ISO(Now())`, the clock read only when absent. Then `TimestampSchema.parse(generatedAt)`.
+  5. `proofRoot = o.ProofRoot || DefaultProofRoot()`.
+  6. `prepareFreshOutput(outputDirectory, proofRoot)`:
+     1. `root = resolve(proofRoot)`, `output = resolve(outputDirectory)`.
+     2. `isNested` via `RelativeTrustedSystemPath`; failure gives `Turn proof bundle output must be a child directory of <root>`.
+     3. `ensureRealDirectoryTree(root)`, then `ensureRealDirectoryTree(dirname(output))`. Each walks from the filesystem root, does `mkdirSync(0o700)` for each missing part, and runs `ResolveSafeDirectorySegment`. Its texts are `Turn proof root is not a real directory: <p>` and `Turn proof root cannot traverse a symbolic link or non-directory: <p>`.
+     4. `existsSync(output)` gives `Turn proof bundle output already exists and will not be replaced: <output>`.
+     5. `assertSafeProofOutput(output, root)` (proof-bundle.ts's, with its own texts), through `gitproof.AssertSafeProofOutput`.
+  7. `stage = join(dirname(output), "." + relative(dirname(output), output) + ".staging-" + NewUUID())`.
+- **Inside the `try`** (`:743-801`):
+  1. `mkdirSync(stage, {recursive: false, mode: 0o700})`, then `assertNoLinksOrSpecialFiles(stage)`.
+  2. `PackTurnTrees(resolve(o.Repository), treeDigests in state order)`.
+  3. Metadata `{schemaVersion, trees: [{stateIndex: state.index, turnOrdinal, treeDigest, snapshotDigest}], pack: {path, digest, bytes}}`, parsed with `SourceMetadataSchema`.
+  4. `makeManifest`:
+     - `codex` only when `o.Codex` is non-nil and its section has a key. The section holds `witnessDraftThreadId` and then `repairThreadId`, each only when defined.
+     - The key order is `schemaVersion, generatedAt, integrityScope, investigationDigest, frozenDigest, witnessDigest, lifecycle, codex?, artifacts`, then the schema parse.
+     - No CLI passes `codex` (`cli-app.ts:2120-2124`), so the `codex` branch is reached only by the unit and live tests (coverage gate reason for the CLI goldens).
+  5. The artifacts map, in insertion order:
+     - `manifest.json`, `investigation.json`, `witness/frozen.json`, `source/trees.metadata.json`, `source/trees.pack`, `VERIFY.md`, `lifecycle/ledger.json`;
+     - each run's `runs/<hex>.json`;
+     - each `transitions/<NNNN>.json`.
+
+     JSON artifacts are `canonicalJson + "\n"`. The ledger written is the parsed ledger from `BindTurnLifecycle`.
+  6. `put` refuses an unsafe path (`Unsafe generated artifact path: <p>`) and a duplicate (`Turn proof bundle generated duplicate artifact: <p>`). A duplicate `runId` is refused earlier by the semantics (`duplicate runId`), so it is unreachable (coverage gate reason).
+  7. If the expected and actual sorted path lists differ: `Turn proof writer did not produce the complete expected artifact set.` This is unreachable (coverage gate reason).
+  8. `writeArtifact` each, in insertion order.
+  9. `hashes` is the artifacts sorted with `localeCompare`, each line `<sha256 hex>  <path>`, joined with `\n`, plus `\n`. `rootDigest = "sha256:" + sha256(hashes)`. Then write `hashes.txt` and `ROOT.sha256` (`<root>\n`).
+  10. `Verify(stage, rootDigest, true)`. Invalid gives `Refusing to publish an invalid turn proof bundle: <errors.join("; ")>`.
+  11. `existsSync(output)` gives `Turn proof bundle output appeared during assembly and will not be replaced: <output>`, a race (coverage gate reason).
+  12. `renameSync(stage, output)`.
+  13. Return `{directory: output, manifestDigest: digestJson(manifest), rootDigest, manifest}`.
+- **`catch`:** `if (existsSync(stage)) rmSync(stage, {recursive: true, force: true})`, which is `nodefs.RemoveAll` with no retries, then rethrow. A failed `mkdirSync(stage)` leaves nothing. A failure after the stage exists removes it, so a refused bundle leaves no `.staging-*` directory (fault matrix, Task 11).
+- **VERIFY.md** (`:358-378`) is the 15 lines joined with `\n`, with no trailing newline. Its third block interpolates `TurnPathEvidenceLabelExperimental` and `` (`EXPERIMENTAL_TURN`) ``, backticks included.
+- **Clock and UUID order.** The writer reads: `generatedAt`'s clock (only without the option), then the stage UUID. After that come the two verifications (the stage and, in the CLI, the published bundle), each with one `mkdtempSync` suffix and the git calls. No clock read follows.
+
+**Live test** `TestLiveTurnProofWriter`. The oracle op `writeTurnInvestigationProofBundle({output, result, frozen, options, path, argvLog})` mirrors the Git writer's op. Inputs: 80 generated investigations, from `TestLiveInvestigateTurns`'s generator promoted with a `nativeTurnFixture` twin, written by both sides into twin directories under one seed. The cases:
+- `isProof` and not;
+- with and without `codex`;
+- a `generatedAt` and none;
+- an existing output;
+- an output outside the root, through a symlink, or under a file;
+- a ledger that does not bind (another ledger's digest, a reordered snapshot);
+- a repository missing a tree (pack failure: the stage is removed).
+
+Compare the result or error, the tree written (bytes and modes), and the argv log. `requireReached("internal/bundle/turnproof/write.go", …)`.
+
+- [ ] **Step 1: Write the failing test**
+
+```go
+// internal/bundle/turnproof/write_test.go
+package turnproof
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/Mizore66/faultline/internal/jsjson"
+)
+
+func readBase(t *testing.T, rel string) jsjson.Value {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(base(t), filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := jsjson.Parse(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestWriteRefusesInjectedRunnerResult(t *testing.T) {
+	result := readBase(t, "investigation.json")
+	proof := result.Get("proof").Obj()
+	proof.Set("executionTrust", jsjson.MakeString("INJECTED_RUNNER"))
+	proofRoot := t.TempDir()
+	_, err := Write(filepath.Join(proofRoot, "x"), result, readBase(t, "witness/frozen.json"),
+		WriteOptions{ProofRoot: proofRoot, LifecycleLedger: readBase(t, "lifecycle/ledger.json"), Repository: t.TempDir()})
+	if err == nil || !strings.HasPrefix(err.Error(), "Cannot write semantically inconsistent turn proof bundle: ") ||
+		!strings.Contains(err.Error(), "Turn proof bundle requires native Docker executor provenance") {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(proofRoot); len(entries) != 0 {
+		t.Fatal("nothing may be written before the semantics pass")
+	}
+}
+
+func TestVerifyMarkdownHasNoTrailingNewline(t *testing.T) {
+	b := verificationReadme()
+	if strings.HasSuffix(string(b), "\n") || !strings.Contains(string(b), "Experimental turn-level evidence — not yet a portable proof (`EXPERIMENTAL_TURN`).") {
+		t.Fatalf("%q", b)
+	}
+	raw, _ := os.ReadFile(filepath.Join(base(t), "VERIFY.md"))
+	if string(raw) != string(b) {
+		t.Fatal("VERIFY.md differs from the base")
+	}
+}
+```
+
+The base's `investigation.json` names `/work/turn-repository`, which does not exist. A full write therefore needs a real repository holding the base's trees. The happy path is covered by Task 9's writer cases and `TestLiveTurnProofWriter`, not by this unit test.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/bundle/turnproof/ -run 'TestWriteRefuses|TestVerifyMarkdown'`
+Expected: FAIL (undefined: `Write`, `verificationReadme`).
+
+- [ ] **Step 3: Implement** by transcription; extend the oracle ops.
+
+- [ ] **Step 4: Run to verify the tests pass**
+
+Run: `go test ./internal/bundle/turnproof/ ./internal/bundle/gitproof/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run TestLiveTurnProofWriter -v > /tmp/s4b-t8.log 2>&1; tail -5 /tmp/s4b-t8.log`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/bundle/turnproof internal/bundle/gitproof/write.go difftest/turnproof_live_test.go difftest/gen/oracle-turnproof.ts
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "feat(go): write-once turn proof bundle writer (stage, pack, self-verify, rename)
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
