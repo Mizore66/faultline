@@ -26,8 +26,11 @@ const (
 // SetGitTimeoutForTest.
 var gitMaterializationTimeoutMs = 30_000
 
-// toGitPath ports src/git-materialization.ts:15 toGitPath.
-func toGitPath(path string) string { return strings.ReplaceAll(nodefs.Resolve(path), `\`, "/") }
+// ToGitPath ports src/git-materialization.ts:15 toGitPath.
+func ToGitPath(path string) string { return strings.ReplaceAll(nodefs.Resolve(path), `\`, "/") }
+
+// toGitPath is the package-internal alias of ToGitPath.
+func toGitPath(path string) string { return ToGitPath(path) }
 
 // materializationSafeGitConfig ports src/git-materialization.ts:19
 // MATERIALIZATION_SAFE_GIT_CONFIG, in source order. TS freezes it; it stays
