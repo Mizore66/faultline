@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+  "ledgerId": "ledger-s-1",
+  "sessionId": "s-1",
+  "createdAt": "2026-07-16T11:00:00.000Z",
+  "events": [
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-s-1",
+      "sessionId": "s-1",
+      "sequence": 0,
+      "eventId": "event-1",
+      "occurredAt": "2026-07-16T11:00:01.000Z",
+      "event": {
+        "type": "SESSION_STARTED",
+        "payload": {
+          "transport": "SIDE_CAR",
+          "workingDirectory": "/work/repo"
+        }
+      },
+      "previousHash": "sha256:535cc28a1f27b98fc9288d2748fe33e6fe5fdaaebb0051f0955c63f8b98cba3f",
+      "hash": "sha256:c26eeadf245f62d3e834c7060fd4379b629ce29a1d25e316192736f4acd01559"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-s-1",
+      "sessionId": "s-1",
+      "sequence": 2,
+      "eventId": "event-2",
+      "occurredAt": "2026-07-16T11:00:02.000Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "promptDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "previousHash": "sha256:c26eeadf245f62d3e834c7060fd4379b629ce29a1d25e316192736f4acd01559",
+      "hash": "sha256:f598fbd7c771482a8a43764a6a6e85f569b3d6c6db4b79ad6fe368dc8940c3ee"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-s-1",
+      "sessionId": "s-1",
+      "sequence": 3,
+      "eventId": "event-3",
+      "occurredAt": "2026-07-16T11:00:03.000Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "outcome": "COMPLETED",
+          "outputDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "previousHash": "sha256:f598fbd7c771482a8a43764a6a6e85f569b3d6c6db4b79ad6fe368dc8940c3ee",
+      "hash": "sha256:3ea4d6cb7178f97dab1007ffe6a46115e62ea0f97ad0f5744f694e6b1ff248a0"
+    }
+  ]
+}

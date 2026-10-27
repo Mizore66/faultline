@@ -1,0 +1,2 @@
+{"type":"TURN_STARTED","payload":{"turnId":"turn-2","turnOrdinal":2,"promptDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}
+{"type":"TURN_COMPLETED","payload":{"turnId":"turn-2","turnOrdinal":2,"outcome":"COMPLETED","outputDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}

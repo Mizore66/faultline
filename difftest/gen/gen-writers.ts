@@ -1,23 +1,30 @@
 // Regenerates difftest/testdata/golden/writers.jsonl from frozen TS: every
 // writer template (difftest/testdata/writers.json) runs its invocations in
 // one workspace under the seed preload; each invocation gives one line
-// (slice 2 spec 2.3). The Go twin is difftest/writer_test.go.
+// (slice 2 spec 2.3). The templates of difftest/testdata/writers.d/<name>.json
+// write their lines to golden/writers.d/<name>.jsonl instead (one pair per
+// task, slice 4a). The Go twin is difftest/writer_test.go.
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts && pnpm exec tsx difftest/gen/gen-writers.ts
 // (FAULTLINE_WRITERS_ONLY=<regex>: only the matching cases, see below.)
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { canonicalJson, digestJson, sha256 } from "../../src/canonical.js";
-import { PATH_OPS, applyMutation, normalizeWriter, treeDigest, type Template } from "./cases.js";
-import { copyScenario, makeCaseRoots, resetModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
+import { PATH_OPS, applyMutation, expandRepeats, normalizeWriter, treeDigest, type Template } from "./cases.js";
+import { copyScenario, makeCaseRoots, refreshScenarioIndexes, resetModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
 
+// input / inputHex: each invocation's stdin (text, where <WS>, <TMP>, <HOME>
+// and <REPEAT:c:n> are expanded; or hex bytes), null or a missing entry an
+// empty one. advanceClock: invocation n >= 1 runs under seed <id>/<n> with
+// the clock n hours on. A mutation's inv: the invocation it is applied just
+// before (default: case setup).
 export type WriterTemplate = {
   id: string; scenario: string; argv: string[][]; fakeDocker?: string; fakeTools?: string; pathTools?: string[]; env?: Record<string, string>;
-  posixOnly?: boolean; mutations?: Template[];
+  posixOnly?: boolean; mutations?: Template[]; input?: (string | null)[]; inputHex?: (string | null)[]; advanceClock?: boolean;
 };
 
-const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations"]);
+const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations", "input", "inputHex", "advanceClock"]);
 
 // TMPDIR_FAKE_DOCKERS are the fake Dockers that keep state in $TMPDIR on
 // purpose (difftest/testdata/fakedocker/README.md).
@@ -37,7 +44,9 @@ export function tmpLeftovers(roots: CaseRoots): string[] {
 }
 
 // checkTemplates rejects what the Go loader rejects too: unknown keys,
-// duplicate ids and cases without invocations.
+// duplicate ids (across every template file), cases without invocations,
+// both input and inputHex, a malformed input entry and a mutation inv that
+// names no invocation.
 function checkTemplates(templates: WriterTemplate[]): void {
   const ids = new Set<string>();
   for (const t of templates) {
@@ -45,7 +54,57 @@ function checkTemplates(templates: WriterTemplate[]): void {
     if (ids.has(t.id)) throw new Error(`duplicate writer template ${t.id}`);
     if (!/^[a-z0-9][a-z0-9-]*$/.test(t.id)) throw new Error(`writer template id ${t.id} is not lowercase kebab-case`);
     if (t.argv.length === 0) throw new Error(`writer template ${t.id} has no invocation`);
+    if (t.input !== undefined && t.inputHex !== undefined) throw new Error(`writer template ${t.id} has both input and inputHex`);
+    const inputs = t.input ?? t.inputHex;
+    if (inputs !== undefined && (!Array.isArray(inputs) || inputs.some((i) => i !== null && typeof i !== "string"))) throw new Error(`writer template ${t.id}: an input entry is neither a string nor null`);
+    for (const hex of t.inputHex ?? []) if (hex !== null && !/^(?:[0-9a-fA-F]{2})*$/.test(hex)) throw new Error(`writer template ${t.id}: inputHex ${hex} is not hex`);
+    for (const m of t.mutations ?? []) {
+      if (m.inv !== undefined && !(Number.isInteger(m.inv) && m.inv >= 0 && m.inv < t.argv.length)) throw new Error(`writer template ${t.id}: mutation inv ${JSON.stringify(m.inv)} is not one of its invocations`);
+    }
     ids.add(t.id);
+  }
+}
+
+// invocationInput is invocation inv's stdin bytes: its input text
+// (substituted, repeats expanded, as UTF-8) or inputHex bytes, else none.
+// The Go twin is invocationInput in difftest/writer_test.go.
+export function invocationInput(t: WriterTemplate, inv: number, roots: CaseRoots): Buffer {
+  const text = t.input?.[inv];
+  if (typeof text === "string") return Buffer.from(expandRepeats(substitute(text, roots)), "utf8");
+  const hex = t.inputHex?.[inv];
+  return typeof hex === "string" ? Buffer.from(hex, "hex") : Buffer.alloc(0);
+}
+
+// invocationSeed is the seed and extra environment of invocation inv: with
+// advanceClock, invocation n >= 1 runs under seed <id>/<n> with the clock n
+// hours on (seed.mjs FAULTLINE_TEST_CLOCK_OFFSET_MS), since the seeded clock
+// restarts in every process. The Go twin is invocationEnv.
+export function invocationSeed(t: WriterTemplate, inv: number): { seed: string; env: Record<string, string> } {
+  if (!t.advanceClock || inv === 0) return { seed: t.id, env: {} };
+  return { seed: `${t.id}/${inv}`, env: { FAULTLINE_TEST_CLOCK_OFFSET_MS: String(inv * 3_600_000) } };
+}
+
+// pathsUnder lists every entry under root (lstat; not following links).
+function pathsUnder(root: string, rel = "", out = new Set<string>()): Set<string> {
+  for (const name of readdirSync(join(root, rel))) {
+    const r = rel ? `${rel}/${name}` : name;
+    out.add(r);
+    if (lstatSync(join(root, r)).isDirectory()) pathsUnder(root, r, out);
+  }
+  return out;
+}
+
+// resetNewModes gives the entries a mutation applied before an invocation
+// created the modes resetModes gives (0755 directories, 0644 files): the
+// harness's own writes (Node's 0o666/0o777 under umask 0, Go's 0o644/0o755)
+// would otherwise differ, and no later resetModes runs. Entries that existed
+// keep their modes. The Go twin is resetNewModes in difftest/writer_test.go.
+export function resetNewModes(root: string, before: Set<string>): void {
+  for (const rel of [...pathsUnder(root)].sort(byCodeUnit)) {
+    if (before.has(rel)) continue;
+    const stat = lstatSync(join(root, rel));
+    if (stat.isDirectory()) chmodSync(join(root, rel), 0o755);
+    else if (stat.isFile()) chmodSync(join(root, rel), 0o644);
   }
 }
 
@@ -130,7 +189,8 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 // A file is derived from when it holds a case path or a digest found in the
 // previous pass (files sorted by code unit, JSON members in document order,
 // .git directories skipped); passes repeat until nothing new is found, and
-// the first name a digest gets is kept. text() masks the case paths
+// the first name a digest gets is kept; of a .git directory only
+// faultline/recordings is walked. text() masks the case paths
 // (normalizeWriter) and then each such digest as <PATHDIGEST:name> (its
 // abbreviated page form, <8 hex>...<8 hex>, as <PATHDIGEST:name:short>);
 // fileDigest() hashes a path-dependent file's masked text and any other
@@ -203,7 +263,10 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
     for (const name of readdirSync(join(roots.ws, rel)).sort(byCodeUnit)) {
       const r = rel ? `${rel}/${name}` : name;
       const stat = lstatSync(join(roots.ws, r));
-      if (stat.isDirectory()) { if (name !== ".git") walk(r); }
+      // Only the sidecar recordings of a .git are walked: they hold the case
+      // path (workingDirectory, repositoryRoot) and digests over it.
+      if (stat.isDirectory() && name === ".git") { if (isRealDir(join(roots.ws, r, "faultline")) && isRealDir(join(roots.ws, r, "faultline", "recordings"))) walk(`${r}/faultline/recordings`); }
+      else if (stat.isDirectory()) walk(r);
       else if (stat.isFile()) { const bytes = readFileSync(join(roots.ws, r)); files.push([r, bytes, bytes.toString("utf8")]); }
     }
   };
@@ -273,6 +336,8 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
     }
   };
 }
+
+const isRealDir = (path: string): boolean => { try { return lstatSync(path).isDirectory(); } catch { return false; } };
 
 // readArgvLog splits the recorders' log into records ("git a\x1fb").
 export function readArgvLog(path: string): string[] {
@@ -449,15 +514,18 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
   try {
     copyScenario(t.scenario, roots.ws);
     // chmod mutations run after resetModes, which would undo them (the Go
-    // twin is prepareWriterCase).
+    // twin is prepareWriterCase). A mutation with inv runs just before that
+    // invocation instead, and only setup mutations are reset.
     const mutations = (t.mutations ?? []).map((template) => substituteDeep(template, roots) as Template);
     const apply = (m: Template) => applyMutation(roots.ws, { id: t.id, base: "writer", template: m, file: PATH_OPS.has(m.op) ? m.path ?? "." : m.file! });
-    for (const m of mutations) if (m.op !== "chmod") apply(m);
+    const setup = mutations.filter((m) => m.inv === undefined);
+    for (const m of setup) if (m.op !== "chmod") apply(m);
     resetModes(roots.ws);
+    refreshScenarioIndexes(t.scenario, roots.ws);
     // A read-only directory refuses writes only to a non-root user: a golden
     // generated as root would drift.
     if (mutations.some((m) => m.op === "chmod") && process.getuid?.() === 0) throw new Error(`${t.id}: chmod cases must be generated by a non-root user`);
-    for (const m of mutations) if (m.op === "chmod") apply(m);
+    for (const m of setup) if (m.op === "chmod") apply(m);
     const env = Object.fromEntries(Object.entries(t.env ?? {}).map(([k, v]) => [k, substitute(v, roots)]));
     const lines: string[] = [];
     // The recorded paths accumulate over the case's invocations: a later
@@ -466,9 +534,20 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     const records: string[] = [];
     const stdouts: string[] = [];
     for (const [inv, argv] of t.argv.entries()) {
+      // This invocation's mutations: the others, then the new entries' modes
+      // reset, then the chmods (as at setup).
+      const due = mutations.filter((m) => m.inv === inv);
+      if (due.length > 0) {
+        const existing = pathsUnder(roots.ws);
+        for (const m of due) if (m.op !== "chmod") apply(m);
+        resetNewModes(roots.ws, existing);
+        for (const m of due) if (m.op === "chmod") apply(m);
+      }
       const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
       rmSync(roots.argvLog, { force: true });
-      const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)), writerEnv(roots, t.id, t.fakeDocker, env, t.fakeTools, t.pathTools));
+      const clock = invocationSeed(t, inv);
+      const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)),
+        writerEnv(roots, clock.seed, t.fakeDocker, { ...env, ...clock.env }, t.fakeTools, t.pathTools), invocationInput(t, inv, roots));
       // Temporary files fl makes (mkdtemp roots, the snapshot index, the
       // doctor --security fixture) must be gone, as in Go.
       const leftovers = checksTmpdir(t) ? tmpLeftovers(roots) : [];
@@ -522,19 +601,39 @@ if (!isAbsolute(process.execPath)) throw new Error(`the oracle node ${process.ex
 // disk: a 0o666 (Node's default) and a 0o644 do not collapse (Go: difftest/umask_unix.go).
 process.umask(0);
 const repo = resolve(".");
-const templates = JSON.parse(readFileSync(join(repo, "difftest/testdata/writers.json"), "utf8")) as WriterTemplate[];
+const testdata = join(repo, "difftest", "testdata");
+// templateFiles are the template files, relative to difftest/testdata:
+// writers.json, then each writers.d/*.json in byte order. goldenFileFor is
+// the golden (relative to testdata/golden) that holds a file's lines. The Go
+// twins are writerTemplateFiles and writerGoldenPath.
+const templateFiles = ["writers.json", ...(existsSync(join(testdata, "writers.d"))
+  ? readdirSync(join(testdata, "writers.d")).filter((n) => n.endsWith(".json")).sort(byCodeUnit).map((n) => `writers.d/${n}`) : [])];
+const goldenFileFor = (file: string): string => (file === "writers.json" ? "writers.jsonl" : `${file.slice(0, -".json".length)}.jsonl`);
+const templates: WriterTemplate[] = [];
+const fileOf: string[] = [];
+for (const file of templateFiles) {
+  for (const t of JSON.parse(readFileSync(join(testdata, file), "utf8")) as WriterTemplate[]) {
+    templates.push(t);
+    fileOf.push(file);
+  }
+}
 checkTemplates(templates);
 const results: string[][] = new Array(templates.length);
 // FAULTLINE_WRITERS_ONLY=<regex> regenerates only the cases whose id
-// matches and keeps every other case's lines from the committed golden
-// (local iteration; CI regenerates everything).
+// matches and keeps every other case's lines from the committed goldens,
+// whichever golden file holds them (local iteration; CI regenerates
+// everything).
 const only = process.env.FAULTLINE_WRITERS_ONLY ? new RegExp(process.env.FAULTLINE_WRITERS_ONLY) : undefined;
 const pending: number[] = [];
 if (only) {
   const kept = new Map<string, string[]>();
-  for (const line of readFileSync(join(repo, "difftest/testdata/golden/writers.jsonl"), "utf8").split("\n").filter(Boolean)) {
-    const id = (JSON.parse(line) as { case: string }).case;
-    kept.set(id, [...(kept.get(id) ?? []), line]);
+  for (const golden of new Set(templateFiles.map(goldenFileFor))) {
+    const path = join(testdata, "golden", golden);
+    if (!existsSync(path)) continue;
+    for (const line of readFileSync(path, "utf8").split("\n").filter(Boolean)) {
+      const id = (JSON.parse(line) as { case: string }).case;
+      kept.set(id, [...(kept.get(id) ?? []), line]);
+    }
   }
   for (const [index, t] of templates.entries()) {
     if (only.test(t.id) || !kept.has(t.id)) pending.push(index);
@@ -554,5 +653,16 @@ if (tmpFailures.length > 0) {
   console.error(tmpFailures.sort(byCodeUnit).join("\n"));
   process.exit(1);
 }
-writeFileSync(join(repo, "difftest/testdata/golden/writers.jsonl"), `${results.flat().join("\n")}\n`);
+// Each template file's lines go to its own golden, in template order; a
+// golden whose template file is gone is removed.
+const byGolden = new Map<string, string[]>(templateFiles.map((file) => [goldenFileFor(file), []]));
+for (const [index, lines] of results.entries()) byGolden.get(goldenFileFor(fileOf[index]!))!.push(...lines);
+const goldenDir = join(testdata, "golden", "writers.d");
+for (const name of existsSync(goldenDir) ? readdirSync(goldenDir) : []) {
+  if (!byGolden.has(`writers.d/${name}`)) rmSync(join(goldenDir, name), { force: true });
+}
+for (const [golden, lines] of byGolden) {
+  mkdirSync(dirname(join(testdata, "golden", golden)), { recursive: true });
+  writeFileSync(join(testdata, "golden", golden), lines.length === 0 ? "" : `${lines.join("\n")}\n`);
+}
 console.log(`writers: ${templates.length} cases, ${results.flat().length} invocations`);

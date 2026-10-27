@@ -1,0 +1,2 @@
+{"eventId":"event-envelope-1","occurredAt":"2026-07-16T12:30:00.000Z","event":{"type":"TURN_STARTED","payload":{"turnId":"turn-2","turnOrdinal":2,"promptDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}}}
+{"eventId":"event-envelope-2","occurredAt":"2026-07-16T12:30:01.000Z","event":{"type":"TURN_COMPLETED","payload":{"turnId":"turn-2","turnOrdinal":2,"outcome":"COMPLETED","outputDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}}}

@@ -6,7 +6,15 @@ import { syncBuiltinESMExports } from "node:module";
 
 const seed = process.env.FAULTLINE_TEST_SEED;
 if (seed) {
-  const EPOCH = 1784203200000;
+  // FAULTLINE_TEST_CLOCK_OFFSET_MS moves the epoch: a writer case with
+  // advanceClock runs invocation n an hour later per n (gen-writers.ts). The
+  // Go twin is clockOffset in internal/clock/seeded.go.
+  const offset = process.env.FAULTLINE_TEST_CLOCK_OFFSET_MS ?? "";
+  if (offset !== "" && !/^-?[0-9]+$/.test(offset)) {
+    process.stderr.write("bad FAULTLINE_TEST_CLOCK_OFFSET_MS\n");
+    process.exit(1);
+  }
+  const EPOCH = 1784203200000 + (offset === "" ? 0 : Number(offset));
   const ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let tick = 0, uuid = 0, tmp = 0;
   const hash = (kind, n) => createHash("sha256").update(`${seed}\0${kind}\0${n}`, "utf8").digest();

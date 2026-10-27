@@ -206,9 +206,10 @@ func TestGoldenReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range goldenEntries {
-		// writers.jsonl holds the writer replay's goldens (writer_test.go).
-		// secret-corpus.jsonl is the secret-scanner corpus golden (corpus_test.go).
-		if e.Name() != writerGoldenFile && e.Name() != corpusGoldenFile {
+		// writers.jsonl and the writers.d directory hold the writer replay's
+		// goldens (writer_test.go). secret-corpus.jsonl is the
+		// secret-scanner corpus golden (corpus_test.go).
+		if e.Name() != writerGoldenFile && e.Name() != writerGoldenDir && e.Name() != corpusGoldenFile {
 			goldens = append(goldens, strings.TrimSuffix(e.Name(), ".jsonl"))
 		}
 	}

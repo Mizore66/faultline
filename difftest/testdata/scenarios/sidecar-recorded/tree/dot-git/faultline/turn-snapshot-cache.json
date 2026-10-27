@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "faultline.turn-snapshot-cache.v2",
+  "headCommit": "4a3b6e6041ed70f4585b6319d210f23e200eff6d",
+  "treeDigest": "3109f3921c25ab4af791c84824da7b28e520f59a",
+  "policyDigest": "sha256:e0c8ecf21d069f6c44999467ad5549ba8cb642b31f5babac5d5c556989e1a2b0",
+  "allowlistDigest": "sha256:c5edaf730c99ce840a0a5377628298f685f20c4d6948caa506b0e5274d188649",
+  "contentFingerprint": "sha256:4090fb0ea99c9711b1c6d29d98c6ecdb7f8cdad1b8f02f29340fa69c4ffd9688",
+  "deletedPaths": [],
+  "paths": {},
+  "pathDigests": {},
+  "capturedAt": "2026-07-16T12:00:00.009Z"
+}

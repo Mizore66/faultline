@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/canonical"
@@ -241,7 +242,8 @@ func fixturesDir() string {
 }
 
 // pathOps target a path in the bundle (or the bundle itself), not an existing file.
-var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "remove-root": true, "fifo": true, "sparse-file": true, "many-files": true, "fake-git": true, "pad-total": true}
+var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "remove-root": true, "fifo": true, "sparse-file": true, "many-files": true, "fake-git": true, "pad-total": true,
+	"add-symlink": true, "set-mtime": true}
 
 // latin1 is Buffer.from(s, "latin1") for the ASCII find/replace strings.
 func latin1(s string) []byte {
@@ -612,7 +614,30 @@ func applyMutation(root string, c testCase) bool {
 		}
 	case "add-file":
 		os.MkdirAll(filepath.Dir(path), 0o755)
-		os.WriteFile(path, []byte(t.str("content")), 0o644)
+		content, ok := expandRepeats(t.str("content"))
+		if !ok {
+			return false
+		}
+		os.WriteFile(path, []byte(jsstr.ToUTF8(content)), 0o644)
+	case "add-symlink":
+		// path becomes a symbolic link to target whether or not it exists;
+		// an existing file or link is replaced, a directory refused
+		// (cases.ts applyMutation).
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		if info, err := os.Lstat(path); err == nil {
+			if info.IsDir() || os.Remove(path) != nil {
+				return false
+			}
+		}
+		if err := os.Symlink(t.str("target"), path); err != nil {
+			return false
+		}
+	case "set-mtime":
+		// atime and mtime, without following a symbolic link (lutimesSync).
+		at, err := time.Parse("2006-01-02T15:04:05.000Z", t.str("iso"))
+		if err != nil || lutimes(path, at) != nil {
+			return false
+		}
 	case "chmod":
 		// A writer case applies chmod after resetModes (prepareWriterCase),
 		// which would otherwise undo it.
@@ -650,6 +675,29 @@ func applyMutation(root string, c testCase) bool {
 		rehash(root, c.base)
 	}
 	return true
+}
+
+// repeatMarker is <REPEAT:c:n> in a writer input or add-file content: the
+// single character c repeated n times, n at most maxRepeat (cases.ts
+// expandRepeats).
+var repeatMarker = regexp.MustCompile(`(?s)<REPEAT:(.):([0-9]+)>`)
+
+const maxRepeat = 8_388_608
+
+// expandRepeats expands every <REPEAT:c:n>; ok is false when an n is over
+// maxRepeat (TS throws).
+func expandRepeats(s string) (string, bool) {
+	ok := true
+	out := repeatMarker.ReplaceAllStringFunc(s, func(m string) string {
+		sub := repeatMarker.FindStringSubmatch(m)
+		n, err := strconv.Atoi(sub[2])
+		if err != nil || n > maxRepeat {
+			ok = false
+			return m
+		}
+		return strings.Repeat(sub[1], n)
+	})
+	return out, ok
 }
 
 // caseEnv adds a fake-git case's PATH to the base environment.
@@ -842,6 +890,8 @@ func normalizeWriter(text string, roots writerRoots) string {
 		return "127.0.0.1:<PORT>"
 	})
 	out = stagedPID.ReplaceAllString(out, ".<pid>.$1.tmp")
+	out = stageKey.ReplaceAllString(out, ".<STAGEKEY>.<pid>.tmp")
+	out = lockAge.ReplaceAllString(out, `"ageMilliseconds": "<LOCKAGE>"`)
 	out = maskGitOutput(out, true)
 	if runtime.GOOS == "windows" {
 		for _, m := range masks {
@@ -856,6 +906,15 @@ var loopbackPort = regexp.MustCompile(`127\.0\.0\.1:[0-9]+`)
 // stagedPID masks the process id in an atomic write's staged name
 // (.<name>.<pid>.<uuid>.tmp), which a failed rename prints.
 var stagedPID = regexp.MustCompile(`\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp`)
+
+// stageKey masks a sidecar receipt stage (.<sha256(receipt path)[0:24]>.<pid>.tmp,
+// codex-sidecar.ts writeJsonAtomic): its key hashes the absolute receipt
+// path, its pid is the process's.
+var stageKey = regexp.MustCompile(`\.([0-9a-f]{24})\.([0-9]+)\.tmp`)
+
+// lockAge masks sidecar status's lock.ageMilliseconds (codex-sidecar.ts
+// sidecarLockHealth), which a seed cannot fix.
+var lockAge = regexp.MustCompile(`"ageMilliseconds": [0-9]+`)
 
 // maskGitOutput replaces git's temporary verifier directories with <GITTMP>
 // and, with maskGit, git's own diagnostics after each gitLabels failure.
