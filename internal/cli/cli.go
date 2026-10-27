@@ -90,6 +90,8 @@ func dispatch(e *env, args []string) error {
 		return preventionCommand(e, rest)
 	case command == "attest":
 		return attestCommand(e, rest)
+	case command == "repair":
+		return repairCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:

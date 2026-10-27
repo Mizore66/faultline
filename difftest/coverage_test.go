@@ -271,10 +271,9 @@ var unreachableLiterals = map[string]string{
 	// internal/bundle/prevention/repaired.go and repaired_runs.go (Task 13).
 	"Repaired worktree path is not a regular file:":     "race only: the walk keeps only entries readdirSync calls files, lstat'ed just after",
 	"Collected repaired run digests were not distinct.": "each run id digests its attempt number, so the three always differ (src/prevention-from-artifacts.ts:535)",
-	// Slice 4c Task 10: not an error text. repair.ProposeBrief parses
-	// redactValue's result with bundle.ParseValue, whose input the flow
-	// analysis counts as a message, so redactValue's returns become sites.
-	"<FAULTLINE_UNSUPPORTED_VALUE:undefined>": "redactValue's placeholder for an undefined value, not an error; only fl witness propose redacts a value that can be undefined (a missing incidentPacket), and no golden omits it",
+	// Slice 4c Task 18 (internal/cli/repair.go).
+	"Repair evidence packet changed during redaction and cannot be safely correlated to the verified investigation.": "src/cli-app.ts:2770: the packet holds only digests, fixed statements and counts, which redactValue never rewrites (a changed digest needs a secret-shaped packet field)",
+	"not yet ported: repair --bundle": "Task 20 replaces this stub with the Codex path (src/cli-app.ts:2678), which runs for real in TS; drop this row there",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
@@ -1142,6 +1141,10 @@ var liveGatedFiles = map[string]string{
 	// generated worktrees and scripted verifiers.
 	"internal/bundle/prevention/repaired.go":      "TestLiveCommitRepairedWorktreeState",
 	"internal/bundle/prevention/repaired_runs.go": "TestLiveCollectRepairedRuns",
+	// Slice 4c Task 18: every Git bundle the verifier accepts is a completed,
+	// Docker-isolated proof with a transition and a witness digest, so the
+	// packet refusal is not reachable through the CLI.
+	"internal/repair/brief.go": "TestLiveRepairEvidencePacket",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally

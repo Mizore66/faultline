@@ -72,6 +72,13 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 		{name: "allowlist", scenario: "init-fresh", file: ".faultline-secret-allowlist.json", old: `"schemaVersion":"faultline.secret-allowlist.v1"`,
 			content: `{"schemaVersion":"faultline.secret-allowlist.v1","entries":[]}`,
 			argv:    []string{"init", "--yes"}, unstable: true},
+		// repair: `fl repair verify` of a package the repair-package scenario
+		// holds (Task 18). VerifyBriefArtifact reads its zod messages at
+		// SiteGitProof, measured equal to the git row on darwin/arm64 and
+		// linux/arm64 (Task 9); linux/amd64 is first measured by this site in CI.
+		{name: "repair", scenario: "repair-package", file: ".faultline/repair-briefs/pkg/manifest.json", old: `"schemaVersion":"faultline.repair-brief-artifact.v1"`,
+			content: `{"schemaVersion":"faultline.repair-brief-artifact.v1"}`,
+			argv:    []string{"repair", "verify", ".faultline/repair-briefs/pkg"}},
 		{name: "demo", base: "demo-replay", file: "analysis.json", old: `"schemaVersion": "faultline.demo.v1"`},
 		{name: "witness", base: "demo-replay", file: "witness/witness.json", old: `"network": "disabled"`},
 		{name: "prevention", base: "prevention-verified", file: "prevention.json", old: `"schemaVersion":"faultline.prevention-proof.v1"`},
