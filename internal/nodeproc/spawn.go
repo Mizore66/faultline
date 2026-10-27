@@ -13,18 +13,20 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/Mizore66/faultline/internal/boot"
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
 	"github.com/Mizore66/faultline/internal/sigexit"
 )
 
-// Result mirrors spawnSync's { status, stdout, stderr, error }.
+// Result mirrors spawnSync's { status, signal, stdout, stderr, error }.
 type Result struct {
-	Status         *int // nil is JS null: killed by a signal, or never started
+	Status         *int   // nil is JS null: killed by a signal, or never started
+	Signal         string // signal: the name of the signal that ended the child ("SIGTERM"), or ""
 	Stdout, Stderr []byte
 	Err            error // "spawnSync <file> <CODE>", as Node's ErrnoException
 }
@@ -107,15 +109,25 @@ type SpawnSyncOptions struct {
 	// shared by stdout and stderr (SyncProcessRunner counts both against
 	// one total), as TestSpawnSyncMatchesNode pins.
 	MaxBuffer int
+	// Timeout is the timeout option; 0 is none. When it runs out the child
+	// gets killSignal (SIGTERM; TerminateProcess on Windows), the pipes are
+	// closed, and the error is "spawnSync <file> ETIMEDOUT" unless ENOBUFS
+	// was recorded first.
+	Timeout time.Duration
+
+	// ignoreStdin is stdio[0] "ignore" (execFileSync's call sites): the
+	// child's stdin is the null device instead of a pipe.
+	ignoreStdin bool
 }
 
 // defaultMaxBuffer is child_process's MAX_BUFFER, spawnSync's default.
 const defaultMaxBuffer = 1024 * 1024
 
 // SpawnSyncWith is spawnSync(file, args, { encoding: "buffer", env, input,
-// cwd, maxBuffer, shell: false, windowsHide: true }). A failed write of
-// Input (the child exited without reading it) is reported like Node's
-// pipe error ("spawnSync <file> EPIPE"), unless ENOBUFS is.
+// cwd, maxBuffer, timeout, shell: false, windowsHide: true }). A failed
+// write of Input (the child exited without reading it) is reported like
+// Node's pipe error ("spawnSync <file> EPIPE"), unless ENOBUFS or ETIMEDOUT
+// is.
 func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	boot.BeforeSpawn() // the children must see Node's RLIMIT_NOFILE
 	argv := make([]string, 0, len(args)+1)
@@ -131,7 +143,7 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	if maxBuffer == 0 {
 		maxBuffer = defaultMaxBuffer
 	}
-	io, err := newStdio(o.HasInput)
+	io, err := newStdio(o.HasInput, o.ignoreStdin)
 	if err != nil {
 		return Result{Err: spawnError(file, nodefs.SystemErrorName(err))}
 	}
@@ -143,28 +155,58 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	}
 	var closeOnce sync.Once
 	closePipes := func() { closeOnce.Do(io.closeParent) }
-	out := &output{maxBuffer: maxBuffer}
-	var killed atomic.Bool
-	out.onOverrun = func() {
-		killed.Store(true)
-		// SyncProcessRunner::Kill: send killSignal (SIGTERM), close the pipes.
+	run := &syncRunner{}
+	// SyncProcessRunner::Kill, after SetError(code): only the first error
+	// is kept, the child is killed once, with killSignal (SIGTERM), and the
+	// pipes are closed. Once the loop is over (finished) the timer is
+	// closed and can no longer fire.
+	kill := func(code string) {
+		run.mu.Lock()
+		if run.finished {
+			run.mu.Unlock()
+			return
+		}
+		if run.err == "" {
+			run.err = code
+		}
+		if run.killed {
+			run.mu.Unlock()
+			return
+		}
+		run.killed = true
+		run.mu.Unlock()
+		var sent bool
 		if runtime.GOOS == "windows" {
-			proc.Kill()
+			sent = proc.Kill() == nil
 		} else {
 			proc.Signal(syscall.SIGTERM)
 		}
+		run.mu.Lock()
+		run.sent = sent
+		run.mu.Unlock()
 		closePipes()
+	}
+	out := &output{maxBuffer: maxBuffer, onOverrun: func() { kill("ENOBUFS") }}
+	// The kill timer runs from the spawn (uv_timer_start, then uv_spawn);
+	// the input is written on its own goroutine, so a child that never
+	// reads it still times out.
+	var timer *time.Timer
+	if o.Timeout > 0 {
+		timer = time.AfterFunc(o.Timeout, func() { kill("ETIMEDOUT") })
 	}
 	// SyncProcessStdioPipe::Start: uv_write the input, then uv_shutdown.
 	// Only the first pipe error is kept (SetPipeError).
 	var pipeErr error
+	pipeErrAfterKill := false
 	var writer sync.WaitGroup
 	if o.HasInput {
 		writer.Add(1)
 		go func() {
 			defer writer.Done()
 			if _, err := io.stdin.Write(o.Input); err != nil {
-				pipeErr = err
+				run.mu.Lock()
+				pipeErr, pipeErrAfterKill = err, run.killed
+				run.mu.Unlock()
 			}
 			endInput(io.stdin)
 		}()
@@ -177,36 +219,88 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	readers.Wait()
 	state, _ := proc.Wait()
 	writer.Wait()
+	run.mu.Lock()
+	run.finished = true
+	runnerErr, killed, sent := run.err, run.killed, run.sent
+	run.mu.Unlock()
+	if timer != nil {
+		timer.Stop()
+	}
 	closePipes()
-	if state != nil && !killed.Load() {
-		if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			sigexit.ChildKilled(ws.Signal())
-		}
+	var ws syscall.WaitStatus
+	signaled := false
+	if state != nil {
+		ws, signaled = state.Sys().(syscall.WaitStatus)
+		signaled = signaled && ws.Signaled()
+	}
+	if signaled && !killed {
+		sigexit.ChildKilled(ws.Signal())
 	}
 	result := Result{Stdout: stdout.buf, Stderr: stderr.buf}
-	out.mu.Lock()
-	overflow := out.overflow
-	out.mu.Unlock()
-	// GetError: the runner's own error (ENOBUFS) wins over a pipe error.
-	if overflow {
-		result.Err = spawnError(file, "ENOBUFS")
-	} else if pipeErr != nil {
+	// GetError: the runner's own error (ENOBUFS, ETIMEDOUT) wins over a
+	// pipe error.
+	if pipeErr != nil {
 		code, failsStart := inputWriteError(pipeErr, runtime.GOOS)
-		if failsStart {
+		if failsStart && (runnerErr == "" || runnerErr == "ETIMEDOUT" && !pipeErrAfterKill) {
 			// SyncProcessRunner::TryInitializeAndRunLoop returns as soon
 			// as a pipe fails to start, before uv_run: no exit status and
-			// no output (status, stdout and stderr are null).
+			// no output (status, stdout and stderr are null), and no timer
+			// fires.
 			return Result{Err: spawnError(file, code)}
 		}
 		result.Err = spawnError(file, code)
 	}
-	// Node reports the exit code whenever the child exited normally, even
-	// alongside ENOBUFS.
-	if state != nil && state.Exited() {
+	if runnerErr != "" {
+		result.Err = spawnError(file, runnerErr)
+	}
+	switch {
+	case runtime.GOOS == "windows" && sent && runnerErr == "ETIMEDOUT":
+		// uv_process_kill records the signal it sent as exit_signal,
+		// which the exit callback reports in place of the exit code.
+		// (An ENOBUFS kill keeps its earlier report, exit code 1.)
+		result.Signal = "SIGTERM"
+	case signaled:
+		result.Signal = waitSignalName(ws)
+	case state != nil && state.Exited():
+		// Node reports the exit code whenever the child exited normally,
+		// even alongside ENOBUFS or ETIMEDOUT.
 		status := state.ExitCode()
 		result.Status = &status
 	}
 	return result
+}
+
+// syncRunner is the SyncProcessRunner state the kill paths share.
+type syncRunner struct {
+	mu       sync.Mutex
+	err      string // error_: the first runner error code (ENOBUFS, ETIMEDOUT)
+	killed   bool   // killed_: Kill ran (fl's own kill, not reported to sigexit)
+	sent     bool   // on Windows, TerminateProcess succeeded
+	finished bool   // the loop is over: the timer is closed
+}
+
+// ExecFileSync is execFileSync(file, args, { encoding, stdio: ["ignore",
+// "pipe", "pipe"], windowsHide: true }) with o's env, cwd, maxBuffer and
+// timeout, as checkExecSyncError reports a failure (Node 22
+// lib/child_process.js): a spawn error (ENOENT, ENOBUFS, ETIMEDOUT) as is,
+// "spawnSync <file> <CODE>"; a non-zero status or a signal as "Command
+// failed: <file> <args joined by " ">", followed by "\n" and stderr
+// (decoded as UTF-8) when stderr is not empty. stdout is returned as
+// captured in every case.
+func ExecFileSync(file string, args []string, o SpawnSyncOptions) ([]byte, error) {
+	o.ignoreStdin, o.HasInput, o.Input = true, false, nil
+	r := SpawnSyncWith(file, args, o)
+	if r.Err != nil {
+		return r.Stdout, r.Err
+	}
+	if r.Status == nil || *r.Status != 0 {
+		msg := jsexc.Concat("Command failed: ", jsexc.Join(append([]string{file}, args...), " "))
+		if len(r.Stderr) > 0 {
+			msg = jsexc.Concat(msg, "\n", jsstr.DecodeUTF8(r.Stderr))
+		}
+		return r.Stdout, errors.New(msg)
+	}
+	return r.Stdout, nil
 }
 
 // errorNoData is Windows' ERROR_NO_DATA.
@@ -252,7 +346,9 @@ func (s *stdio) closeChild() {
 }
 
 func (s *stdio) closeParent() {
-	s.stdin.Close()
+	if s.stdin != nil { // nil: stdin "ignore"
+		s.stdin.Close()
+	}
 	s.stdout.Close()
 	s.stderr.Close()
 }
