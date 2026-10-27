@@ -79,6 +79,7 @@ var writerScenarios = map[string]bool{
 	"incident-ledger-full":       true,
 	"prevention-input":           true,
 	"prevention-from-bundle":     true,
+	"witness-implement":          true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is

@@ -1030,6 +1030,19 @@ SCENARIOS["prevention-input"] = {
 };
 SCENARIOS["prevention-from-bundle"] = { bases: { bundle: "git-unbound" }, files: { "repaired-runs.json": preventionRepairedRuns() }, argv: [] };
 
+// witness-implement: the incident packets `fl witness implement --incident`
+// reads (raw readFileSync + JSON.parse).
+const IMPLEMENT_INCIDENT = { symptom: "The repository state must not be bad.", ciLog: "state.txt became bad", repositoryLanguage: "Text", repositorySummary: "Temporary repository for the writer replay." };
+SCENARIOS["witness-implement"] = {
+  files: {
+    "incident.json": jsonText(IMPLEMENT_INCIDENT),
+    "incident-bad.json": jsonText({ symptom: IMPLEMENT_INCIDENT.symptom, repositoryLanguage: "Text", repositorySummary: IMPLEMENT_INCIDENT.repositorySummary }),
+    "incident-extra.json": jsonText({ ...IMPLEMENT_INCIDENT, extra: true }),
+    "not-json.json": "this is not json\n"
+  },
+  argv: []
+};
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // Umask 0, like gen-writers.ts: fl's modes reach the files as requested.
   process.umask(0);
