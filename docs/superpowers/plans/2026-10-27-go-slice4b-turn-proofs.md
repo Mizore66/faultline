@@ -1842,3 +1842,148 @@ git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com comm
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+### Task 9: `fl investigate turns` (with `--latest` and `--minimize`)
+
+**Files:**
+- Create: `internal/cli/turns.go`, `internal/cli/turns_test.go`, `difftest/testdata/writers.d/4b-turns.json`, `difftest/testdata/golden/writers.d/4b-turns.jsonl`
+- Modify:
+  - `internal/cli/investigate.go`: the `first == "turns"` line calls `turnsCommand(e, args)`.
+  - `internal/cli/investigate_test.go`: drop the `not yet ported: investigate turns` row.
+  - `difftest/coverage_test.go`: drop only the `not yet ported: investigate turns` entry.
+  - `.github/scripts/windows-writer-skips.txt`: append only.
+
+**Interfaces:**
+- Consumes:
+  - 4a Task 6: `sidecar.ResolveLatestLedgerPath(cwd string) (sidecar.Latest, error)` and `sidecar.Latest.JSON()`.
+  - Task 4: `minimizeFromTurnInvestigation`, `turnMinOptions`.
+  - Task 6: `turninv.InvestigateTurnTrees`, `turninv.Request`.
+  - Tasks 7 and 8: `turnproof.Write`, `turnproof.DefaultProofRoot`, `turnproof.Verify`.
+  - `witnessStore`, `requiredOption`, `option`, `hasFlag`, `fail`, `obj`, `e.printJSON`, `requireExpectDigestOrBinding`, `requireImageOrConfig`, `readRuntimeMapping`; `witness.{DefaultIncidentDraftStore,ResolveInheritedSessionFacts,WriteSessionBinding,ReadFrozen}`; `gitproof.ReadVerifiedCodexLifecycleLedger`; `gitinv.MappingEntry`; `sandbox.NativeRunner`; `clock.NowMillis`.
+- Produces: `func turnsCommand(e *env, args []string) error` (`cli-app.ts:2045-2160`).
+
+**Gotchas:**
+- **Order** (correction 7). Transcribe `:2052-2093` line for line:
+  1. `store = witnessStore(args)`.
+  2. `proposalId = requiredOption --proposal`.
+  3. `repository = resolve(requiredOption --repo)`.
+  4. `draftStore = resolve(option --draft-store ?? DefaultIncidentDraftStore(repository))`.
+  5. `latest = hasFlag --latest`; `ledgerOption = option --ledger`; `expectDigestFlag = option --expect-digest`.
+  6. `inherited = ResolveInheritedSessionFacts({draftStore, proposalId, expectDigest?, ledgerPath?})`. A broken binding throws here.
+  7. Both `--latest` and a `--ledger` value: `fl investigate turns accepts only one of --ledger <ledger.json> or --latest.` A `--ledger` that is last (`option` undefined) does not conflict.
+  8. Choose the ledger path:
+     - `latest`: `resolve(ResolveLatestLedgerPath(repository).ledgerPath)`. Its error propagates; the `CodexSidecarError` rethrow at `:2074` is a no-op.
+     - else `ledgerOption`;
+     - else `inherited.ledgerPath`;
+     - else `fl investigate turns requires --ledger <ledger.json>, --latest, or a local session binding ledger path.`
+  9. `expectedFrozenDigest = inherited.expectDigest ?? requireExpectDigestOrBinding(…)`.
+  10. `image = requireImageOrConfig(repository, args)`.
+  11. `WriteSessionBinding(draftStore, {proposalId, expectDigest, ledgerPath})`, with the resolved ledger path. This happens before the witness is read (spec 3.4).
+  12. `ReadFrozen(store, proposalId)`.
+  13. `--runtime-mapping`: `readRuntimeMapping` (raw Node messages).
+  14. `InvestigateTurnTrees` with the native runner, `Injected: false`.
+- **Not proof** (`:2108-2117`):
+  - Print `{investigation, ledger?, proofBundle: null, note}` with exit 1. `ledger` is `latestResolution.JSON()` only with `--latest`.
+  - The note is verbatim: `No portable turn proof bundle was written because the investigation did not establish Docker-isolated turn proof eligibility. Evidence grade remains experimental even when transitions are present.`
+  - This is also the path for every non-COMPLETED status.
+- **Proof** (`:2118-2158`):
+  1. `proofRoot = DefaultProofRoot()`, which is `resolve(".faultline", "turn-proof-bundles")` from the cwd, not the repository.
+  2. `output = resolve(option --output ?? join(proofRoot, "turns-" + NowMillis()))`.
+  3. `lifecycleLedger = ReadVerifiedCodexLifecycleLedger(ledgerPath)`. This is a second read; a ledger changed in between fails the binding.
+  4. `Write(output, result, frozen, {ProofRoot: proofRoot, LifecycleLedger, Repository: repository})`.
+  5. `Verify(bundle.Directory, bundle.RootDigest, true)`. Invalid gives `Generated turn proof bundle failed verification: <errors.join("; ")>`, unreachable after the writer's own check (coverage gate reason).
+  6. With `--minimize`: `minimizeFromTurnInvestigation({repository, transitions: result.transitions, frozenWitness, expectedFrozenDigest, image, transitionIndex: option --transition, maxExecutions: option --max-executions, output: option --minimization-output})`.
+  7. Print `{investigation, ledger?, proofBundle: {directory, rootDigest, evidenceGrade, evidenceLabel, externalRootStatus, note: "Turn package is experimentally graded (EXPERIMENTAL_TURN), not COMMIT_PROOF."}, minimization}`. `minimization` is `null` without `--minimize`. Exit 0.
+- **`--minimize` after the bundle.** A bridge or minimization failure (a FAIL_TO_PASS first transition, `--transition 5`) throws after the bundle is published: exit 1 with the error, and the bundle stays on disk. The writer cases record that.
+- **Cross-verification.** The writer replay's `writtenBundle` already finds `proofBundle.directory` and `proofBundle.rootDigest`, so every bundle Go writes is also verified by TS `fl verify` (spec 4.2 point 4), and every TS bundle by TS.
+
+**Writer cases** (`writers.d/4b-turns.json`; every case runs git and the fake Docker, so all are `posixOnly`; the common argv is `investigate turns --repo repo --proposal demo-1 --expect-digest <the scenario's frozen digest> --image registry.example/faultline-node@sha256:<b×64>`, called BASE below; `fakeDocker` is `pass-fail` unless stated):
+- **Proof:**
+  - `turns-proof` (turn-two-states, `--ledger ledger.json`): a bundle under `.faultline/turn-proof-bundles/turns-<ms>`.
+  - `turns-proof-output` (`--output .faultline/turn-proof-bundles/mine`).
+  - `turns-output-outside-root` (`--output elsewhere/b`: the child-directory refusal, after the investigation ran).
+  - `turns-output-existing` (two invocations with the same `--output`, `advanceClock`).
+  - `turns-output-through-symlink` (a symlinked `.faultline/turn-proof-bundles/linked`).
+  - `turns-non-monotonic` (turn-non-monotonic: two transitions, `nonMonotonic: true`).
+- **Not proof:**
+  - `turns-pass-only` (turn-pass-only: no transition, exit 1).
+  - `turns-baseline-only` (`NO_TURN_SNAPSHOTS`).
+  - `turns-duplicate-ordinal`.
+  - `turns-missing-tree` (`EXECUTION_ERROR`).
+  - `turns-daemon-down` (`SANDBOX_UNAVAILABLE`).
+  - `turns-heterogeneous` (no mapping: `ENVIRONMENT_CHANGED`), `turns-heterogeneous-mapped` (`--runtime-mapping mapping.json`: proof), `turns-runtime-mapping-missing` (ENOENT text), `turns-runtime-mapping-invalid`.
+  - `turns-sha256` (turn-sha256: proof is reached, then the stage verifier refuses: `Refusing to publish an invalid turn proof bundle: … Turn tree pack is not a valid Git pack: <GIT-STDERR>`, and no stage is left; correction 3).
+  - `turns-invalid-witness` (`--expect-digest sha256:0…0`: `INVALID_WITNESS`, exit 1, and the binding is written first).
+- **Ledger selection:**
+  - `turns-latest` (turn-sidecar, `--latest`: the `ledger` member in the output).
+  - `turns-latest-and-ledger` (the refusal), `turns-latest-ledger-last` (`--latest --ledger` with `--ledger` last: no conflict).
+  - `turns-latest-none` (turn-two-states, `--latest`: the "No valid Codex sidecar ledger" text).
+  - `turns-latest-ambiguous`.
+  - `turns-bound-ledger`: invocation 0 is `turns-proof`'s argv; invocation 1 is BASE without `--ledger` and with `--output .faultline/turn-proof-bundles/second`, so the ledger is inherited.
+  - `turns-no-ledger` (empty draft store: the "requires --ledger" text).
+  - `turns-ledger-missing` (ENOENT read error), `turns-ledger-tampered` (an event hash edited: the verified read's refusal).
+- **Options:**
+  - `turns-missing-proposal`, `turns-missing-repo`, `turns-no-expect-digest` (an empty draft store), `turns-expect-digest-inherited` (after `witness freeze --repo repo` wrote the binding).
+  - `turns-image-absent`, `turns-image-from-config`.
+  - `turns-unknown-proposal` (the binding is written, then the frozen-witness read fails).
+  - `turns-draft-store` (`--draft-store elsewhere`).
+- **Minimize** (all `fakeDocker: "pass-fail"`):
+  - `turns-minimize`: `--minimize` on turn-two-states. A bundle plus a minimization of the one-file change under `.faultline/minimizations/turn-transition-0000-<ms>.json`; the bridge commits are named `<COMMIT:…>` by Task 1's rule.
+  - `turns-minimize-output` (`--minimization-output elsewhere/m.json`: accepted anywhere, correction 5).
+  - `turns-minimize-output-exists` (two invocations with the same `--minimization-output` and different `--output`: the second refuses after its bundle is written).
+  - `turns-minimize-transition-1` (turn-non-monotonic, `--transition 1`: FAIL_TO_PASS refusal, after the bundle).
+  - `turns-minimize-transition-out-of-range` (`--transition 5`), `turns-minimize-transition-bad` (`--transition -1`, `1.5`, `abc` as three invocations with distinct `--output`), `turns-minimize-transition-forms` (`--transition 0x0`, `" 0 "`, `-0`: all accepted; distinct outputs).
+  - `turns-minimize-max-executions` (`--max-executions 1`: an exhausted budget, still exit 0).
+  - `turns-minimize-not-proof` (turn-pass-only with `--minimize`: no bundle, no minimization, exit 1).
+  - `turns-minimize-user-config` (a `user.gitconfig` with `[user]\n\tname = Someone\n` and `GIT_CONFIG_GLOBAL=<WS>/user.gitconfig` in `env`: the bridge's `-c` identity still wins, and the inherited config is read, which shows the git is unhardened).
+
+- [ ] **Step 1: Write the failing test**
+
+```go
+// internal/cli/turns_test.go
+package cli
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestTurnsLatestAndLedgerConflict(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := run("investigate", "turns", "--proposal", "p", "--repo", dir, "--latest", "--ledger", "l.json")
+	if code != 1 || stderr != "FaultLine error: fl investigate turns accepts only one of --ledger <ledger.json> or --latest.\nNext: pnpm fl help\n" {
+		t.Fatalf("%d %q", code, stderr)
+	}
+}
+
+func TestTurnsRequiresALedger(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := run("investigate", "turns", "--proposal", "p", "--repo", dir)
+	if code != 1 || !strings.Contains(stderr, "fl investigate turns requires --ledger <ledger.json>, --latest, or a local session binding ledger path.") {
+		t.Fatalf("%d %q", code, stderr)
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/cli/ -run TestTurns`
+Expected: FAIL (`not yet ported: investigate turns`).
+
+- [ ] **Step 3: Implement; add the writer cases; generate the goldens** (podman, `ONLY='^turns-'`; confirm that only `golden/writers.d/4b-turns.jsonl` changed). Drop the two waivers.
+
+- [ ] **Step 4: Run to verify the replay passes**
+
+Run: `go test ./internal/cli/ && go test -tags faultline_test ./difftest/ -run 'TestWriterReplay/(posix/)?turns-|TestWindowsWriterSkipsList|TestGoldensReachEveryErrorLiteral' > /tmp/s4b-t9.log 2>&1; grep -E '^(---|ok|FAIL)' /tmp/s4b-t9.log | tail -20` (in podman; split the filter if it runs past 280 s)
+Expected: PASS. A mismatch is fixed in Go, never in the golden.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/cli/turns.go internal/cli/turns_test.go internal/cli/investigate.go internal/cli/investigate_test.go difftest/coverage_test.go difftest/testdata/writers.d/4b-turns.json difftest/testdata/golden/writers.d/4b-turns.jsonl .github/scripts/windows-writer-skips.txt
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "feat(go): fl investigate turns with --latest and --minimize; writer goldens
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
