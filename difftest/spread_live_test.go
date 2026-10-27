@@ -163,7 +163,12 @@ func buildTurnSemanticsBundle(dir string, n int) {
 		rehash(dir, "turn-two-states")
 	}
 	if turnSemanticsFixed < 0 {
-		probe := filepath.Join(os.TempDir(), "faultline-turn-spread-probe")
+		parent, err := os.MkdirTemp("", "faultline-turn-spread-probe-")
+		if err != nil {
+			panic(err)
+		}
+		defer os.RemoveAll(parent)
+		probe := filepath.Join(parent, "b")
 		build(probe, 1)
 		inv, _ := parseObjectFile(filepath.Join(probe, "investigation.json"))
 		result, _, ok := schema.Parse(turninv.ResultSchema, jsjson.MakeObject(inv))
@@ -174,7 +179,6 @@ func buildTurnSemanticsBundle(dir string, n int) {
 		frozenValue, _ := jsjson.Parse(string(frozenText))
 		frozen, _, _ := schema.Parse(gitproof.FrozenWitnessSchema, frozenValue)
 		turnSemanticsFixed = len(turnproof.ValidateProofSemantics(result, frozen)) - 1
-		os.RemoveAll(probe)
 	}
 	build(dir, n-turnSemanticsFixed)
 }

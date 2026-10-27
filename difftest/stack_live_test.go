@@ -102,109 +102,113 @@ func TestLiveStackThresholdsMatchNode(t *testing.T) {
 			return open.String() + "0" + closing.String()
 		},
 	}
-	var report []string
 	for _, site := range sites {
-		var tsLasts []int
-		var shapeFns []func(int) string
-		siteDiffers := false
-		for _, shape := range []string{"arr", "obj", "idx", "alt"} {
-			prints := func(argv []string, n int) bool {
-				dir := filepath.Join(t.TempDir(), "b")
-				switch {
-				case site.scenario != "":
-					copyScenario(t, repo, site.scenario, dir)
-					if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, filepath.FromSlash(site.file))), 0o755); err != nil {
-						t.Fatal(err)
+		t.Run(site.name, func(t *testing.T) {
+			var report []string
+			var tsLasts []int
+			var shapeFns []func(int) string
+			siteDiffers := false
+			for _, shape := range []string{"arr", "obj", "idx", "alt"} {
+				t.Run(shape, func(t *testing.T) {
+					prints := func(argv []string, n int) bool {
+						dir := filepath.Join(t.TempDir(), "b")
+						switch {
+						case site.scenario != "":
+							copyScenario(t, repo, site.scenario, dir)
+							if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, filepath.FromSlash(site.file))), 0o755); err != nil {
+								t.Fatal(err)
+							}
+							if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(site.file)), []byte(site.content), 0o644); err != nil {
+								t.Fatal(err)
+							}
+						case site.argv != nil:
+							if err := os.MkdirAll(dir, 0o755); err != nil {
+								t.Fatal(err)
+							}
+							b, err := os.ReadFile(filepath.Join("testdata", site.base, site.file))
+							if err != nil {
+								t.Fatal(err)
+							}
+							if err := os.WriteFile(filepath.Join(dir, site.file), b, 0o644); err != nil {
+								t.Fatal(err)
+							}
+						default:
+							copyTree(t, filepath.Join("testdata", "bases", site.base), dir)
+						}
+						path := filepath.Join(dir, filepath.FromSlash(site.file))
+						b, err := os.ReadFile(path)
+						if err != nil || !strings.Contains(string(b), site.old) {
+							t.Fatalf("%s: %s lacks %s", site.base, site.file, site.old)
+						}
+						key, _, _ := strings.Cut(site.old, ":")
+						os.WriteFile(path, []byte(strings.Replace(string(b), site.old, key+":"+shapes[shape](n), 1)), 0o644)
+						var out []byte
+						var expected bool
+						if site.argv != nil {
+							// The zod message (on stderr, or JSON-quoted in init's
+							// snapshotPrewarm.reason, where its quotes are escaped),
+							// or the overflow (TS's uncaught RangeError report, Go's
+							// FaultLine error line, or the reason).
+							cmd := exec.Command(argv[0], append(argv[1:], site.argv...)...)
+							cmd.Dir = dir
+							out, _ = cmd.CombinedOutput()
+							expected = strings.Contains(string(out), `"received"`) || strings.Contains(string(out), `\"received\"`) ||
+								strings.Contains(string(out), "Maximum call stack size exceeded")
+						} else {
+							out, _ = exec.Command(argv[0], append(argv[1:], "verify", dir)...).Output()
+							expected = strings.Contains(string(out), "self-consistency")
+						}
+						if !expected {
+							t.Fatalf("%s %s depth %d: unexpected output %.300q", site.name, shape, n, out)
+						}
+						return !strings.Contains(string(out), "Maximum call stack size exceeded")
 					}
-					if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(site.file)), []byte(site.content), 0o644); err != nil {
-						t.Fatal(err)
+					bisect := func(argv ...string) int {
+						lo, hi := 500, 12000
+						for hi-lo > 1 {
+							m := (lo + hi) / 2
+							if prints(argv, m) {
+								lo = m
+							} else {
+								hi = m
+							}
+						}
+						return lo
 					}
-				case site.argv != nil:
-					if err := os.MkdirAll(dir, 0o755); err != nil {
-						t.Fatal(err)
+					var ts, goLast int
+					var wg sync.WaitGroup
+					wg.Add(2)
+					go func() { defer wg.Done(); ts = bisect(node, filepath.Join(repo, "dist", "cli.js")) }()
+					go func() { defer wg.Done(); goLast = bisect(flBinary) }()
+					wg.Wait()
+					line := fmt.Sprintf("%s/%s %-10s %s: TS %d, Go %d", runtime.GOOS, runtime.GOARCH, site.name, shape, ts, goLast)
+					t.Log(line)
+					tsLasts, shapeFns = append(tsLasts, ts), append(shapeFns, shapes[shape])
+					if site.unstable {
+						if goLast < ts-unstableTolerance || goLast > ts+unstableTolerance {
+							report = append(report, line+fmt.Sprintf(" (unstable site: more than %d levels apart)", unstableTolerance))
+						}
+						return
 					}
-					b, err := os.ReadFile(filepath.Join("testdata", site.base, site.file))
-					if err != nil {
-						t.Fatal(err)
+					if ts != goLast {
+						report = append(report, line)
+						siteDiffers = true
 					}
-					if err := os.WriteFile(filepath.Join(dir, site.file), b, 0o644); err != nil {
-						t.Fatal(err)
-					}
-				default:
-					copyTree(t, filepath.Join("testdata", "bases", site.base), dir)
-				}
-				path := filepath.Join(dir, filepath.FromSlash(site.file))
-				b, err := os.ReadFile(path)
-				if err != nil || !strings.Contains(string(b), site.old) {
-					t.Fatalf("%s: %s lacks %s", site.base, site.file, site.old)
-				}
-				key, _, _ := strings.Cut(site.old, ":")
-				os.WriteFile(path, []byte(strings.Replace(string(b), site.old, key+":"+shapes[shape](n), 1)), 0o644)
-				var out []byte
-				var expected bool
-				if site.argv != nil {
-					// The zod message (on stderr, or JSON-quoted in init's
-					// snapshotPrewarm.reason, where its quotes are escaped),
-					// or the overflow (TS's uncaught RangeError report, Go's
-					// FaultLine error line, or the reason).
-					cmd := exec.Command(argv[0], append(argv[1:], site.argv...)...)
-					cmd.Dir = dir
-					out, _ = cmd.CombinedOutput()
-					expected = strings.Contains(string(out), `"received"`) || strings.Contains(string(out), `\"received\"`) ||
-						strings.Contains(string(out), "Maximum call stack size exceeded")
+				})
+			}
+			// The cli offset is the one still estimated on some platforms: when
+			// Go misses TS there, report the offsets that would reproduce TS's
+			// depths (internal/jsjson/stack.go SiteCLI).
+			if site.argv != nil && siteDiffers {
+				if lo, hi, ok := jsjson.FitSiteOffsetForTest(shapeFns, tsLasts); ok {
+					t.Logf("%s/%s %s refit: site offsets %d to %d reproduce TS", runtime.GOOS, runtime.GOARCH, site.name, lo, hi)
 				} else {
-					out, _ = exec.Command(argv[0], append(argv[1:], "verify", dir)...).Output()
-					expected = strings.Contains(string(out), "self-consistency")
+					t.Logf("%s/%s %s refit: no site offset reproduces TS on all four shapes", runtime.GOOS, runtime.GOARCH, site.name)
 				}
-				if !expected {
-					t.Fatalf("%s %s depth %d: unexpected output %.300q", site.name, shape, n, out)
-				}
-				return !strings.Contains(string(out), "Maximum call stack size exceeded")
 			}
-			bisect := func(argv ...string) int {
-				lo, hi := 500, 12000
-				for hi-lo > 1 {
-					m := (lo + hi) / 2
-					if prints(argv, m) {
-						lo = m
-					} else {
-						hi = m
-					}
-				}
-				return lo
+			if len(report) > 0 {
+				t.Errorf("stack thresholds differ from Node:\n%s", strings.Join(report, "\n"))
 			}
-			var ts, goLast int
-			var wg sync.WaitGroup
-			wg.Add(2)
-			go func() { defer wg.Done(); ts = bisect(node, filepath.Join(repo, "dist", "cli.js")) }()
-			go func() { defer wg.Done(); goLast = bisect(flBinary) }()
-			wg.Wait()
-			line := fmt.Sprintf("%s/%s %-10s %s: TS %d, Go %d", runtime.GOOS, runtime.GOARCH, site.name, shape, ts, goLast)
-			t.Log(line)
-			tsLasts, shapeFns = append(tsLasts, ts), append(shapeFns, shapes[shape])
-			if site.unstable {
-				if goLast < ts-unstableTolerance || goLast > ts+unstableTolerance {
-					report = append(report, line+fmt.Sprintf(" (unstable site: more than %d levels apart)", unstableTolerance))
-				}
-				continue
-			}
-			if ts != goLast {
-				report = append(report, line)
-				siteDiffers = true
-			}
-		}
-		// The cli offset is the one still estimated on some platforms: when
-		// Go misses TS there, report the offsets that would reproduce TS's
-		// depths (internal/jsjson/stack.go SiteCLI).
-		if site.argv != nil && siteDiffers {
-			if lo, hi, ok := jsjson.FitSiteOffsetForTest(shapeFns, tsLasts); ok {
-				t.Logf("%s/%s %s refit: site offsets %d to %d reproduce TS", runtime.GOOS, runtime.GOARCH, site.name, lo, hi)
-			} else {
-				t.Logf("%s/%s %s refit: no site offset reproduces TS on all four shapes", runtime.GOOS, runtime.GOARCH, site.name)
-			}
-		}
-	}
-	if len(report) > 0 {
-		t.Errorf("stack thresholds differ from Node:\n%s", strings.Join(report, "\n"))
+		})
 	}
 }
