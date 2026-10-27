@@ -40,7 +40,6 @@ type output struct {
 	mu        sync.Mutex
 	total     int
 	maxBuffer int
-	overflow  bool
 	stopped   bool
 	done      bool
 	runnerErr string
@@ -74,7 +73,6 @@ func (s *stream) read(r *os.File, done *sync.WaitGroup) {
 			s.buf = append(s.buf, chunk[:n]...)
 			s.out.total += n
 			if s.out.maxBuffer > 0 && s.out.total > s.out.maxBuffer {
-				s.out.overflow = true
 				s.out.stopped = true
 				if s.out.runnerErr == "" {
 					s.out.runnerErr = "ENOBUFS"
@@ -218,6 +216,9 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	go stderr.read(io.stderr, &readers)
 	readers.Wait()
 	state, _ := proc.Wait()
+	// A timer firing between the exit and this point still records
+	// ETIMEDOUT for a child that exited by itself; Node has the same race
+	// (uv_run runs due timers before it polls for the exit).
 	out.mu.Lock()
 	out.done = true
 	out.mu.Unlock()

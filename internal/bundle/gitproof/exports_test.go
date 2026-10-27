@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -61,10 +62,18 @@ func TestExportedLedgerSchemas(t *testing.T) {
 	if CodexLifecycleLedgerVersion != "faultline.codex-lifecycle-ledger.v1" || GitCheckpointVersion != "faultline.git-checkpoint.v1" {
 		t.Fatal("versions")
 	}
-	for _, o := range CodexTransportOptions {
-		if _, _, ok := s.Parse(CodexTransportSchema, jsjson.MakeString(o)); !ok {
-			t.Fatal(o)
-		}
+	// The enum's own options (zod's invalid_enum_value issue lists them in
+	// order) must be exactly CodexTransportOptions.
+	_, issues, ok := s.Parse(CodexTransportSchema, jsjson.MakeString("NOT_A_TRANSPORT"))
+	if ok || len(issues) != 1 {
+		t.Fatalf("%v %v", ok, issues)
+	}
+	var options []string
+	for _, o := range issues[0].Fields.Field("options").Items() {
+		options = append(options, o.Str())
+	}
+	if !slices.Equal(options, CodexTransportOptions) {
+		t.Fatalf("CodexTransportOptions %q, schema options %q", CodexTransportOptions, options)
 	}
 	ledger := baseFile(t, "git-fully-bound", "lifecycle/ledger.json")
 	events := ledger.Get("events").Items()

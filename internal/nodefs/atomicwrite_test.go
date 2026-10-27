@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -24,27 +23,6 @@ func TestAtomicWriteFileLeavesNoStage(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(path); string(data) != "x\n" {
 		t.Fatalf("%q", data)
-	}
-}
-
-// TestAtomicWriteFileRenameOntoDirectory pins the rename error naming both
-// paths, and the stage removed in `finally`.
-func TestAtomicWriteFileRenameOntoDirectory(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX rename codes")
-	}
-	dir := t.TempDir()
-	target := filepath.Join(dir, "ledger.json")
-	if err := os.MkdirAll(filepath.Join(target, "child"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	_, err := AtomicWriteFile(target, "x")
-	if err == nil || !strings.HasSuffix(err.Error(), ".tmp' -> '"+target+"'") || !strings.Contains(err.Error(), ", rename '"+dir+"/.ledger.json.") {
-		t.Fatalf("%v", err)
-	}
-	names, _ := os.ReadDir(dir)
-	if len(names) != 1 {
-		t.Fatalf("stage left behind: %v", names)
 	}
 }
 

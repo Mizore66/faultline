@@ -37,8 +37,10 @@ func HashLifecycleEvent(event jsjson.Value) string { return hashLifecycleEvent(e
 // VerifyGitCheckpoint ports verifyGitCheckpoint (src/ledger.ts:243).
 func VerifyGitCheckpoint(value jsjson.Value) []string { return verifyGitCheckpoint(value) }
 
-// TimestampMs is Date.parse of a canonical timestamp (CanonicalTimestamp),
-// and NaN for any other string.
+// TimestampMs is Date.parse for a schema-validated canonical timestamp
+// (CanonicalTimestamp holds). It returns NaN for any other string, which
+// Date.parse does not: Date.parse("2026-07-16T11:00:00Z") is a number. So
+// it is no port of Date.parse on unvalidated input.
 func TimestampMs(iso string) float64 {
 	if !canonicalTimestamp(iso) {
 		return math.NaN()

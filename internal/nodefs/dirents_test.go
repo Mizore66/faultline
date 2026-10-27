@@ -5,6 +5,7 @@ package nodefs
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -64,5 +65,24 @@ func TestMtimeMs(t *testing.T) {
 	// Node: 1700000000123.4568 (sec*1e3 + nsec/1e6).
 	if got := MtimeMs(info); got != 1_700_000_000*1e3+123_456_789/1e6 {
 		t.Fatalf("%v", got)
+	}
+}
+
+// TestAtomicWriteFileRenameOntoDirectory pins the rename error naming both
+// paths, and the stage removed in `finally`. It lives in this unix-only file
+// because the code is POSIX's (ENOTEMPTY or EEXIST; Windows reports another).
+func TestAtomicWriteFileRenameOntoDirectory(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "ledger.json")
+	if err := os.MkdirAll(filepath.Join(target, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := AtomicWriteFile(target, "x")
+	if err == nil || !strings.HasSuffix(err.Error(), ".tmp' -> '"+target+"'") || !strings.Contains(err.Error(), ", rename '"+dir+"/.ledger.json.") {
+		t.Fatalf("%v", err)
+	}
+	names, _ := os.ReadDir(dir)
+	if len(names) != 1 {
+		t.Fatalf("stage left behind: %v", names)
 	}
 }

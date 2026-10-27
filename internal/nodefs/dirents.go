@@ -23,7 +23,12 @@ const (
 // names (libuv scandir), types from d_type, an lstat in order for an
 // unknown type (the first failure thrown), as ReadDirNames. Where scandir
 // reports no d_type (the non-Linux scandir reads names only), every entry
-// is typed by that lstat.
+// is typed by that lstat, which diverges from Node there: Node takes the
+// types from d_type and lstats nothing, so a directory that is listable but
+// not searchable (mode 0444) lists with types in Node while this lstat
+// throws EACCES, an entry removed between the scandir and the lstat throws
+// ENOENT here only, and on Windows libuv types every reparse point as a
+// link where Lstat types a non-symlink one by its target.
 func ReadDirents(path string) ([]Dirent, error) {
 	names, types, err := scandir(sysPath(path))
 	if err != nil {
