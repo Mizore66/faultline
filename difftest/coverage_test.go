@@ -274,6 +274,12 @@ var unreachableLiterals = map[string]string{
 	// turnproof/pack.go (TestLiveTurnTreesPack's requireReached):
 	"Turn tree pack enumeration produced no Git objects.":         "rev-list --objects <tree> always lists the tree itself",
 	"Turn tree pack exceeds FaultLine's portable artifact limit.": "pack-objects output past the 64 MiB runHardenedGit cap fails first, below the 128 MiB limit",
+
+	// Slice 4b Task 4: the turn-minimization bridge (live-gated by
+	// TestLiveTurnBridge) and minimizeFromTurnInvestigation.
+	"Transition index must be a non-negative integer (got": "minimizeFromTurnInvestigation refuses a non-integer or negative --transition first (`--transition must be a non-negative integer.`), so fl never passes one to selectTurnTransition; TestLiveTurnBridge compares it on direct calls",
+	"--transition must be a non-negative integer.":         "reached by Task 9/10 goldens (investigate turns --minimize, prove transition); remove when they land",
+	"Counterfactual minimization from a turn boundary reuses Git-path machinery on synthetic commits. The parent turn package remains EXPERIMENTAL_TURN until TURN_PROOF promotion criteria are met.": "reached by Task 9/10 goldens (investigate turns --minimize, prove transition); remove when they land",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
@@ -1140,6 +1146,11 @@ var liveGatedFiles = map[string]string{
 	"internal/bundle/turnproof/pack.go":    "TestLiveTurnTreesPack",
 	// Slice 4b Task 3: turn states, reconstruction, transitions and attribution.
 	"internal/turninv/states.go": "TestLiveTurnStates",
+	// Slice 4b Task 4: the turn-minimization bridge, on generated
+	// transitions, repositories and environments. Its runGit rethrows
+	// spawnSync's own error: ENOENT is compared there, ENOBUFS needs more
+	// than 16 MiB from rev-parse or commit-tree, which print one object id.
+	"internal/minimize/bridge.go": "TestLiveTurnBridge",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally

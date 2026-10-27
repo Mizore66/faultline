@@ -56,6 +56,7 @@ import { existsSync as tsExists } from "node:fs";
 import { IncidentIntakeError, createNodeIncidentIntakeRunner, suggestIncidentRanges } from "../../src/incident-intake.js";
 import { turnproofOps } from "./oracle-turnproof.js";
 import { ops as turninvOps, StableTurnTransitionSchema, TurnInvestigationResultSchema, TurnInvestigationRunFactSchema, TurnStateSchema } from "./oracle-turninv.js";
+import { ops as bridgeOps } from "./oracle-bridge.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -792,6 +793,7 @@ export const handlers: Record<string, Handler> = {
   ...sidecarOps,
   ...turnproofOps,
   ...turninvOps,
+  ...bridgeOps,
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
