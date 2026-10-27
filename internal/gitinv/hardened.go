@@ -26,8 +26,11 @@ const (
 // SetGitTimeoutForTest.
 var gitMaterializationTimeoutMs = 30_000
 
-// toGitPath ports src/git-materialization.ts:15 toGitPath.
-func toGitPath(path string) string { return strings.ReplaceAll(nodefs.Resolve(path), `\`, "/") }
+// ToGitPath ports src/git-materialization.ts:15 toGitPath.
+func ToGitPath(path string) string { return strings.ReplaceAll(nodefs.Resolve(path), `\`, "/") }
+
+// toGitPath is the package-internal alias of ToGitPath.
+func toGitPath(path string) string { return ToGitPath(path) }
 
 // materializationSafeGitConfig ports src/git-materialization.ts:19
 // MATERIALIZATION_SAFE_GIT_CONFIG, in source order. TS freezes it; it stays
@@ -79,6 +82,9 @@ type HardenedOptions struct {
 // failed is `exitCode !== 0 || error !== undefined`, as at
 // src/git-materialization.ts:199, 222, 264 and 305-319.
 func (r GitRun) failed() bool { return r.ExitCode == nil || *r.ExitCode != 0 || r.Error != "" }
+
+// Failed is the exported failed().
+func (r GitRun) Failed() bool { return r.failed() }
 
 // detail is `stderr.toString("utf8").trim() || error || fallback`, as at
 // src/git-materialization.ts:224, 246, 265 and 306-320.

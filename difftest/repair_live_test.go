@@ -3,9 +3,13 @@
 package difftest
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,6 +17,7 @@ import (
 	"github.com/Mizore66/faultline/difftest/gen"
 	"github.com/Mizore66/faultline/difftest/oracle"
 	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/repair"
@@ -536,4 +541,295 @@ func TestLiveRepairBriefJSONSchema(t *testing.T) {
 	want := jsjson.Stringify(jsjson.MustObject("format", jsjson.MustObject("type", jsjson.MakeString("json_schema"),
 		"name", jsjson.MakeString("faultline_repair_brief"), "strict", jsjson.MakeBool(true), "schema", repair.BriefJSONSchema())))
 	liveCheck(t, c, "repairBriefJsonSchema", "{}", want)
+}
+
+// --- Slice 4c Task 11: the repair worktree ---
+
+// repairGitRecorder writes a git wrapper that logs each call's argv to log
+// and runs the real git, in a fresh directory; it returns the PATH to use.
+func repairGitRecorder(t *testing.T, log string) string {
+	t.Helper()
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\n{ for a in \"$@\"; do printf '%s\\n' \"$a\"; done; echo --; } >> '" + log + "'\nexec '" + real + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir + string(os.PathListSeparator) + os.Getenv("PATH")
+}
+
+// repairWorktreeRepo makes a repository with fixed dates (so both sides get
+// the same commit ids) and reflogs off, as the writer scenarios do.
+func repairWorktreeRepo(t *testing.T, repo string) string {
+	t.Helper()
+	run := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "core.logAllRefUpdates=false"}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_DATE=2026-07-16T12:00:00Z", "GIT_COMMITTER_DATE=2026-07-16T12:00:00Z")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	os.MkdirAll(repo, 0o755)
+	run("init", "-q")
+	run("config", "core.logAllRefUpdates", "false")
+	os.WriteFile(filepath.Join(repo, "state.txt"), []byte("bad\n"), 0o644)
+	run("add", "state.txt")
+	run("commit", "-q", "-m", "bad")
+	return run("rev-parse", "HEAD")
+}
+
+// repairDescribeTree lists root, with .git contents masked: a .git entry is
+// one line, and the names under repo/.git/worktrees are listed.
+func repairDescribeTree(root string) string {
+	var lines []string
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		switch {
+		case info.Name() == ".git" && rel != ".":
+			lines = append(lines, "G "+rel)
+			if names, err := os.ReadDir(filepath.Join(path, "worktrees")); err == nil {
+				for _, n := range names {
+					lines = append(lines, "W "+rel+"/worktrees/"+n.Name())
+				}
+			}
+			return filepath.SkipDir
+		case info.Mode()&os.ModeSymlink != 0:
+			target, _ := os.Readlink(path)
+			lines = append(lines, "L "+rel+" "+strings.ReplaceAll(target, root, "<R>"))
+		case info.IsDir():
+			lines = append(lines, "D "+rel+" "+fmt.Sprintf("%04o", uint32(info.Mode().Perm())))
+		case info.Mode().IsRegular():
+			b, _ := os.ReadFile(path)
+			lines = append(lines, "F "+rel+" "+fmt.Sprintf("%04o", uint32(info.Mode().Perm()))+" "+fmt.Sprintf("%q", strings.ReplaceAll(string(b), root, "<R>")))
+		default:
+			lines = append(lines, "O "+rel+" "+info.Mode().String())
+		}
+		return nil
+	})
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
+}
+
+type repairWorktreeCase struct {
+	name, kind string
+	keep       bool
+}
+
+// TestLiveRepairWorktree runs create, patch collection and removal in
+// fresh repositories on both sides under one seed (the repairId is the first
+// UUID read), and compares the results, the trees (.git masked) and the
+// recorded git argv.
+func TestLiveRepairWorktree(t *testing.T) {
+	const seed = "live-repair-worktree"
+	c := oracle.StartSeeded(t, seed)
+	defer c.Close()
+	clock.ResetForTest(seed)
+	kinds := []string{"normal", "unknown-base", "non-repository", "symlinked-parent", "existing-output", "bundle-symlink",
+		"worktrees-blocked", "nested-output", "bad-id", "missing-bundle", "removed-worktree", "dirty-bundle-subdir", "gitdir-deleted", "empty-managed-root"}
+	var cases []repairWorktreeCase
+	// 28 cases is two rounds of every kind (keep off, then on); the knob
+	// raises it, as FAULTLINE_CP_CASES does for cpSync.
+	n := 2 * len(kinds)
+	if v := os.Getenv("FAULTLINE_REPAIR_WT_CASES"); v != "" {
+		var err error
+		if n, err = strconv.Atoi(v); err != nil {
+			t.Fatalf("FAULTLINE_REPAIR_WT_CASES: %v", err)
+		}
+	}
+	for i := 0; i < n; i++ {
+		kind := kinds[i%len(kinds)]
+		if kind == "bundle-symlink" && runtime.GOOS != "linux" {
+			kind = "normal" // Node's cpSync differs on libc++ for links
+		}
+		cases = append(cases, repairWorktreeCase{name: fmt.Sprintf("%02d-%s", i, kind), kind: kind, keep: (i/len(kinds))%2 == 1})
+	}
+	kindsSeen := map[string]int{}
+	realGit, _ := exec.LookPath("git")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			type side struct {
+				root, repo, log string
+				out, patch      string
+				cleanup, tree   string
+				argv            string
+			}
+			var sides [2]side
+			for k := range sides {
+				root, _ := filepath.EvalSymlinks(t.TempDir())
+				s := &sides[k]
+				s.root, s.repo, s.log = root, filepath.Join(root, "repo"), filepath.Join(root, "git.log")
+				commit := repairWorktreeRepo(t, s.repo)
+				bundle := filepath.Join(root, "bundle")
+				must := func(err error) {
+					t.Helper()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				must(os.MkdirAll(filepath.Join(bundle, "runs"), 0o755))
+				must(os.WriteFile(filepath.Join(bundle, "manifest.json"), []byte("{}\n"), 0o644))
+				must(os.WriteFile(filepath.Join(bundle, "runs", "a.json"), []byte("[1]\n"), 0o600))
+				output := filepath.Join(root, "repairs", "r1")
+				base, repository := commit, s.repo
+				switch tc.kind {
+				case "unknown-base":
+					base = strings.Repeat("ab", 20)
+				case "non-repository":
+					repository = filepath.Join(root, "plain")
+					must(os.Mkdir(repository, 0o755))
+				case "symlinked-parent":
+					must(os.Mkdir(filepath.Join(root, "real"), 0o755))
+					os.Symlink("real", filepath.Join(root, "link"))
+					output = filepath.Join(root, "link", "r1")
+				case "existing-output":
+					must(os.MkdirAll(output, 0o755))
+				case "bundle-symlink":
+					must(os.Symlink("manifest.json", filepath.Join(bundle, "link")))
+					os.Symlink("../nowhere", filepath.Join(bundle, "runs", "dangling"))
+				case "worktrees-blocked":
+					must(os.WriteFile(filepath.Join(s.repo, ".git", "worktrees"), []byte("not a directory"), 0o644))
+				case "nested-output":
+					output = filepath.Join(root, "a", "b", "c", "r1")
+				case "bad-id":
+					// every variant runs in this case, below
+				case "missing-bundle":
+					bundle = filepath.Join(root, "no-bundle")
+				case "dirty-bundle-subdir":
+					must(os.MkdirAll(filepath.Join(bundle, "a", "b", "c"), 0o700))
+					os.WriteFile(filepath.Join(bundle, "a", "b", "c", "f"), nil, 0o400)
+				}
+				path := repairGitRecorder(t, s.log)
+				os.WriteFile(s.log, nil, 0o644)
+				args := fmt.Sprintf(`{"repository":%s,"baseCommit":%s,"bundleDirectory":%s,"outputDirectory":%s,"path":%s}`,
+					jsjson.Stringify(jsjson.MakeString(repository)), jsjson.Stringify(jsjson.MakeString(base)),
+					jsjson.Stringify(jsjson.MakeString(bundle)), jsjson.Stringify(jsjson.MakeString(output)), jsjson.Stringify(jsjson.MakeString(path)))
+				var created, patch, cleanup string
+				var sess repair.Session
+				ok := false
+				if tc.kind == "bad-id" {
+					// Each id the regexp rejects throws before any filesystem
+					// work; the 64-hex id that names no object runs last,
+					// because it gets as far as creating the output.
+					variants := []string{"nothex", strings.ToUpper(commit), commit[:39], commit + "0", "", strings.Repeat("0", 63), strings.Repeat("c", 64)}
+					for _, id := range variants {
+						var one string
+						if k == 0 {
+							t.Setenv("PATH", path)
+							_, err := repair.CreateWorktree(repository, id, bundle, output)
+							one = "THREW:" + jsexc.Message(err)
+							if err == nil {
+								one = "OK"
+							}
+						} else {
+							one = oracleText(t, c, "createRepairWorktree", fmt.Sprintf(`{"repository":%s,"baseCommit":%s,"bundleDirectory":%s,"outputDirectory":%s,"path":%s}`,
+								jsjson.Stringify(jsjson.MakeString(repository)), jsjson.Stringify(jsjson.MakeString(id)),
+								jsjson.Stringify(jsjson.MakeString(bundle)), jsjson.Stringify(jsjson.MakeString(output)), jsjson.Stringify(jsjson.MakeString(path))))
+						}
+						created += one + "\n"
+					}
+				} else if k == 0 {
+					t.Setenv("PATH", path)
+					var err error
+					sess, err = repair.CreateWorktree(repository, base, bundle, output)
+					if err != nil {
+						created = "THREW:" + jsexc.Message(err)
+					} else {
+						ok = true
+						created = jsjson.Stringify(jsjson.MustObject("repairId", jsjson.MakeString(sess.RepairID), "managedRoot", jsjson.MakeString(sess.ManagedRoot),
+							"worktreePath", jsjson.MakeString(sess.WorktreePath), "proofReadonlyPath", jsjson.MakeString(sess.ProofReadonlyPath),
+							"instructionsPath", jsjson.MakeString(sess.InstructionsPath), "artifactsPath", jsjson.MakeString(sess.ArtifactsPath),
+							"baseCommit", jsjson.MakeString(sess.BaseCommit), "repository", jsjson.MakeString(sess.Repository)))
+					}
+				} else {
+					created = oracleText(t, c, "createRepairWorktree", args)
+					if !strings.HasPrefix(created, "THREW:") {
+						ok = true
+						v := repairParse(t, created)
+						g := func(f string) string { x, _ := v.Obj().Get(f); return x.Str() }
+						sess = repair.Session{ManagedRoot: g("managedRoot"), WorktreePath: g("worktreePath"), Repository: g("repository")}
+					}
+				}
+				if ok {
+					if tc.kind != "removed-worktree" {
+						os.WriteFile(filepath.Join(sess.WorktreePath, "state.txt"), []byte("good\n"), 0o644)
+						os.WriteFile(filepath.Join(sess.WorktreePath, "new.txt"), []byte("new\n"), 0o644)
+						os.WriteFile(filepath.Join(sess.WorktreePath, "bin.dat"), []byte{0, 1, 2, 0xff}, 0o644)
+					}
+					if tc.kind != "removed-worktree" {
+						if out, err := exec.Command(realGit, "-C", sess.WorktreePath, "add", "-N", "new.txt", "bin.dat").CombinedOutput(); err != nil {
+							t.Fatalf("git add -N: %v\n%s", err, out)
+						}
+					}
+					if tc.kind == "removed-worktree" {
+						must(os.RemoveAll(sess.WorktreePath))
+					}
+					if tc.kind == "gitdir-deleted" {
+						// git no longer knows the worktree: remove fails, the
+						// rmSync fallback runs, then prune.
+						must(os.RemoveAll(filepath.Join(sess.Repository, ".git", "worktrees", "worktree")))
+					}
+					managedRoot := sess.ManagedRoot
+					if tc.kind == "empty-managed-root" {
+						managedRoot = ""
+					}
+					rargs := fmt.Sprintf(`{"repository":%s,"worktreePath":%s,"managedRoot":%s,"keepManagedRoot":%t,"path":%s}`,
+						jsjson.Stringify(jsjson.MakeString(sess.Repository)), jsjson.Stringify(jsjson.MakeString(sess.WorktreePath)),
+						jsjson.Stringify(jsjson.MakeString(managedRoot)), tc.keep, jsjson.Stringify(jsjson.MakeString(path)))
+					pargs := fmt.Sprintf(`{"worktreePath":%s,"path":%s}`, jsjson.Stringify(jsjson.MakeString(sess.WorktreePath)), jsjson.Stringify(jsjson.MakeString(path)))
+					cl := func(r repair.Cleanup) string {
+						errs := make([]jsjson.Value, len(r.Errors))
+						for i, e := range r.Errors {
+							errs[i] = jsjson.MakeString(e)
+						}
+						return jsjson.Stringify(jsjson.MustObject("cleaned", jsjson.MakeBool(r.Cleaned), "errors", jsjson.MakeArray(errs)))
+					}
+					if k == 0 {
+						p, err := repair.CollectPatch(sess.WorktreePath)
+						patch = p
+						if err != nil {
+							patch = "THREW:" + jsexc.Message(err)
+						}
+						cleanup = cl(repair.RemoveWorktree(sess.Repository, sess.WorktreePath, managedRoot, tc.keep))
+					} else {
+						patch = oracleText(t, c, "collectRepairPatch", pargs)
+						cleanup = oracleText(t, c, "removeRepairWorktree", rargs)
+					}
+				}
+				b, _ := os.ReadFile(s.log)
+				s.argv, s.out, s.patch, s.cleanup = string(b), created, patch, cleanup
+				s.tree = repairDescribeTree(root)
+				mask := func(x string) string { return strings.ReplaceAll(x, root, "<R>") }
+				s.argv, s.out, s.patch, s.cleanup, s.tree = mask(s.argv), mask(s.out), mask(s.patch), mask(s.cleanup), mask(s.tree)
+			}
+			g, w := sides[0], sides[1]
+			if g.out != w.out {
+				t.Fatalf("create:\n go   %s\n node %s", g.out, w.out)
+			}
+			if g.patch != w.patch {
+				t.Fatalf("patch:\n go   %q\n node %q", g.patch, w.patch)
+			}
+			if g.cleanup != w.cleanup {
+				t.Fatalf("cleanup:\n go   %s\n node %s", g.cleanup, w.cleanup)
+			}
+			if g.argv != w.argv {
+				t.Fatalf("git argv:\n--- go\n%s\n--- node\n%s", g.argv, w.argv)
+			}
+			if g.tree != w.tree {
+				t.Fatalf("trees:\n--- go\n%s\n--- node\n%s", g.tree, w.tree)
+			}
+			kindsSeen[tc.kind]++
+			if tc.kind == "gitdir-deleted" || tc.kind == "empty-managed-root" || tc.kind == "bad-id" {
+				t.Logf("node: create %.150q cleanup %.300q", w.out, w.cleanup)
+			}
+		})
+	}
+	t.Logf("cases per kind: %v", kindsSeen)
 }

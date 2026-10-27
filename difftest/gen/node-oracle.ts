@@ -986,6 +986,28 @@ export const handlers: Record<string, Handler> = {
       else process.env.FAULTLINE_CODEX_BIN = saved;
     }
   },
+  // Slice 4c Task 11 (src/repair-worktree.ts). Each returns a string: the
+  // session / cleanup / patch as JSON.stringify (patch raw), or "THREW:<message>".
+  // `path` replaces PATH (the hardened Git environment copies it) so the case's
+  // argv recorder sees every Git call. Start seeded to compare repairId.
+  createRepairWorktree: async ({ repository, baseCommit, bundleDirectory, outputDirectory, path }: { repository: string; baseCommit: string; bundleDirectory: string; outputDirectory: string; path?: string }) => {
+    const { createRepairWorktree } = await import("../../src/repair-worktree.js");
+    try {
+      return JSON.stringify(await withPath(path, () => createRepairWorktree({ repository, baseCommit, bundleDirectory, outputDirectory })));
+    } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  removeRepairWorktree: async ({ repository, worktreePath, managedRoot, keepManagedRoot, path }: { repository: string; worktreePath: string; managedRoot?: string; keepManagedRoot?: boolean; path?: string }) => {
+    const { removeRepairWorktree } = await import("../../src/repair-worktree.js");
+    try {
+      return JSON.stringify(await withPath(path, () => removeRepairWorktree({ repository, worktreePath, ...(managedRoot === undefined ? {} : { managedRoot }), ...(keepManagedRoot === undefined ? {} : { keepManagedRoot }) })));
+    } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
+  collectRepairPatch: async ({ worktreePath, path }: { worktreePath: string; path?: string }) => {
+    const { collectRepairPatch } = await import("../../src/repair-worktree.js");
+    try {
+      return (await withPath(path, () => collectRepairPatch(worktreePath))).patch;
+    } catch (error) { return `THREW:${(error as Error).message}`; }
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
