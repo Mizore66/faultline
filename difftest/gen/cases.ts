@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, lutimesSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,11 @@ export type Template = {
   fakeGitPathOnly?: boolean;
   // mode: a chmod template's permission bits, in octal ("555").
   mode?: string;
+  // iso: a set-mtime template's time (atime and mtime, lutimes semantics).
+  iso?: string;
+  // inv: a writer mutation applied just before invocation inv instead of
+  // at case setup (gen-writers.ts runCase).
+  inv?: number;
 };
 // JsonEdit is one json-edit step; a json-edit template is one step itself or
 // lists several in `edits`, applied in order.
@@ -134,7 +139,7 @@ function matches(pattern: string, file: string): boolean {
 }
 
 // Ops whose target is a path in the bundle (or the bundle itself), not an existing file.
-export const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "fifo", "sparse-file", "many-files", "fake-git", "pad-total"]);
+export const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "fifo", "sparse-file", "many-files", "fake-git", "pad-total", "add-symlink", "set-mtime"]);
 
 export function expandCases(base: string, root: string, templates: Template[]): Case[] {
   const files = listFiles(root);
@@ -409,7 +414,20 @@ export function applyMutation(root: string, c: Case): void {
     case "delete-file": rmSync(path); break;
     case "make-dir": rmSync(path); mkdirSync(path); break;
     case "symlink": rmSync(path); symlinkSync(t.target!, path); break;
-    case "add-file": mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, t.content!); break;
+    case "add-file": mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, expandRepeats(t.content!)); break;
+    // add-symlink makes path a symbolic link to target whether or not path
+    // exists; an existing file or link is replaced, a directory refused.
+    case "add-symlink": {
+      mkdirSync(dirname(path), { recursive: true });
+      if (existsSync(path) || lstatExists(path)) {
+        if (lstatSync(path).isDirectory()) throw new Error(`add-symlink: ${c.file} is a directory`);
+        rmSync(path);
+      }
+      symlinkSync(t.target!, path);
+      break;
+    }
+    // set-mtime sets atime and mtime without following a symbolic link.
+    case "set-mtime": { const at = new Date(t.iso!); lutimesSync(path, at, at); break; }
     // A writer case applies chmod after resetModes (gen-writers.ts runCase),
     // which would otherwise undo it.
     case "chmod": chmodSync(path, parseInt(t.mode!, 8)); break;
@@ -432,6 +450,22 @@ export function applyMutation(root: string, c: Case): void {
     default: throw new Error(`unknown op ${t.op}`);
   }
   if (t.rehash) rehash(root, c.base);
+}
+
+function lstatExists(path: string): boolean {
+  try { lstatSync(path); return true; } catch { return false; }
+}
+
+// REPEAT is <REPEAT:c:n> in a writer input or add-file content: the single
+// character c repeated n times (an oversized hook prompt). The Go twin is
+// expandRepeats in difftest/cases.go.
+const REPEAT = /<REPEAT:(.):([0-9]+)>/gsu;
+export const MAX_REPEAT = 8_388_608;
+export function expandRepeats(text: string): string {
+  return text.replace(REPEAT, (_whole, c: string, n: string) => {
+    if (Number(n) > MAX_REPEAT) throw new Error(`<REPEAT:${c}:${n}> is over ${MAX_REPEAT}`);
+    return c.repeat(Number(n));
+  });
 }
 
 // caseEnv is the environment a case runs fl with: a fake-git case puts
@@ -513,6 +547,11 @@ export function normalizeWriter(text: string, roots: { ws: string; tmp: string; 
   out = out.replace(/127\.0\.0\.1:([0-9]+)/g, (whole, port: string) => (port === "4174" ? whole : "127.0.0.1:<PORT>"));
   // The process id in an atomic write's staged name (.<name>.<pid>.<uuid>.tmp).
   out = out.replace(/\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp/g, ".<pid>.$1.tmp");
+  // A sidecar receipt stage (.<sha256(receipt path)[0:24]>.<pid>.tmp): its
+  // key hashes the absolute receipt path (codex-sidecar.ts writeJsonAtomic).
+  out = out.replace(/\.([0-9a-f]{24})\.([0-9]+)\.tmp/g, ".<STAGEKEY>.<pid>.tmp");
+  // sidecar status's lock age (codex-sidecar.ts sidecarLockHealth).
+  out = out.replace(/"ageMilliseconds": [0-9]+/g, '"ageMilliseconds": "<LOCKAGE>"');
   return maskGitOutput(out, true);
 }
 

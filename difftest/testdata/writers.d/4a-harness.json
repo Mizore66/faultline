@@ -1,0 +1,8 @@
+[
+  {"id":"harness-stdin-ignored","scenario":"empty","argv":[["witness","propose"]],"input":["{}\n"]},
+  {"id":"harness-stdin-large-ignored","scenario":"empty","argv":[["witness","propose"]],"input":["{\"cwd\":\"<WS>\",\"prompt\":\"<REPEAT:a:4194305>\"}\n"]},
+  {"id":"harness-stdin-hex-ignored","scenario":"empty","argv":[["witness","propose"]],"inputHex":["7b22223aff7d0a"]},
+  {"id":"harness-advance-clock","scenario":"witness-proposed","argv":[["witness","propose","--input","proposal.json","--store","s0"],["witness","propose","--input","proposal.json","--store","s1"]],"advanceClock":true},
+  {"id":"harness-inv-mutation","scenario":"witness-proposed","argv":[["witness","propose","--input","proposal.json","--store","s0"],["witness","propose","--input","proposal.json","--store","links/s1"]],"posixOnly":true,"mutations":[{"op":"add-symlink","path":"links/s1","target":"../s0","inv":1}]},
+  {"id":"harness-set-mtime","scenario":"witness-frozen","argv":[["witness","verify","demo-1"]],"mutations":[{"op":"set-mtime","path":"proposal.json","iso":"2000-01-01T00:00:00.000Z"}]}
+]

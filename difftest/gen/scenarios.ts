@@ -4,7 +4,7 @@
 // difftest/testdata/scenarios/<name>/, so the Go replay copies the exact
 // files fl would have written instead of rebuilding them.
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,8 +55,15 @@ export function requireFreshBuild(): void {
 // paths fl prints are the ones the harness masks.
 export type CaseRoots = { root: string; ws: string; home: string; tmp: string; argvLog: string; recorder: string };
 
-export function makeCaseRoots(): CaseRoots {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "faultline-writer-")));
+// fixedRoot, when given, is used (emptied first) instead of a new mkdtemp
+// directory: a scenario whose bytes hold its own workspace path is built
+// at one path on every run (sidecar-recorded).
+export function makeCaseRoots(fixedRoot?: string): CaseRoots {
+  if (fixedRoot !== undefined) {
+    rmSync(fixedRoot, { recursive: true, force: true });
+    mkdirSync(fixedRoot, { recursive: true, mode: 0o755 });
+  }
+  const root = realpathSync(fixedRoot ?? mkdtempSync(join(tmpdir(), "faultline-writer-")));
   const roots = { root, ws: join(root, "ws"), home: join(root, "home"), tmp: join(root, "tmp"), argvLog: join(root, "argv.log"), recorder: join(root, "recorder") };
   for (const dir of [roots.ws, roots.home, roots.tmp, roots.recorder]) mkdirSync(dir, { mode: 0o755 });
   writeFileSync(join(roots.home, "empty.gitconfig"), "");
@@ -126,9 +133,14 @@ export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | u
 export type RunResult = { stdout: string; stderr: string; exit: number };
 
 // runCli runs frozen TS under the seed preload with cwd = the workspace.
-export function runCli(roots: CaseRoots, argv: string[], env: NodeJS.ProcessEnv): Promise<RunResult> {
+// Its stdin is a pipe that receives input (none by default) and is then
+// closed; an EPIPE there (fl exited without reading it) is ignored. The Go
+// twin gives exec.Cmd a bytes.Reader (writer_test.go runWriterCaseWith).
+export function runCli(roots: CaseRoots, argv: string[], env: NodeJS.ProcessEnv, input: Buffer = Buffer.alloc(0)): Promise<RunResult> {
   return new Promise((done) => {
-    const child = spawn(process.execPath, ["--import", pathToFileURL(seedPreload).href, cli, ...argv], { env, cwd: roots.ws });
+    const child = spawn(process.execPath, ["--import", pathToFileURL(seedPreload).href, cli, ...argv], { env, cwd: roots.ws, stdio: ["pipe", "pipe", "pipe"] });
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => { if (error.code !== "EPIPE") throw error; });
+    child.stdin.end(input);
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     child.stdout.on("data", (b) => out.push(b));
@@ -664,8 +676,15 @@ const INCIDENT_GOOD_BAD = [incidentState("good"), incidentState("bad")];
 // SCENARIOS: the slice 1 bases a scenario copies in (difftest/testdata/bases,
 // keyed by workspace path), the files it writes, then the fl invocations that
 // build the rest of it (each under FAULTLINE_TEST_SEED=scenario:<name>).
+// fixedRoot: build the scenario under FIXED_SCENARIO_ROOT/<name> instead of
+// a new temporary directory, because its bytes hold the workspace path.
+// seeded: frozen TS code run once, after argv, in a node process under the
+// seed preload (seed scenario:<name>) with cwd = the workspace.
+// refreshIndex: the repositories (workspace-relative) whose index a case
+// refreshes once its workspace is in place (refreshScenarioIndexes).
 type Scenario = {
   bases?: Record<string, string>; files: Record<string, string>; setup?: (ws: string) => void; argv: string[][]; after?: (ws: string) => void;
+  fixedRoot?: boolean; seeded?: string; refreshIndex?: string[];
 };
 export const SCENARIOS: Record<string, Scenario> = {
   "empty": { files: {}, argv: [] },
@@ -850,6 +869,39 @@ function copyMapped(from: string, to: string, rename: (entry: string) => string)
   }
 }
 
+// A scenario index (writeIndex) records no stat data, so a clean-checkpoint
+// capture's `git diff-index HEAD` would see every file as modified; stat
+// data cannot be committed either (it depends on the copy). A scenario that
+// lists refreshIndex repositories is committed with <name>/refresh-index.txt
+// (one repository per line), and a case refreshes those indexes once its
+// scenario, setup mutations and resetModes are in place, with git's own
+// configuration and the repository's fsmonitor out of play. The index
+// keeps its entries (the writer replay compares it by them). The Go twin is
+// refreshScenarioIndexes in difftest/scenarios_test.go.
+export const REFRESH_INDEX_FILE = "refresh-index.txt";
+export function refreshScenarioIndexes(name: string, ws: string): void {
+  const list = join(scenariosDir, name, REFRESH_INDEX_FILE);
+  if (!existsSync(list)) return;
+  for (const rel of readFileSync(list, "utf8").split("\n").filter(Boolean)) refreshIndex(join(ws, rel));
+}
+// gitIndexes lists every Git index file under root (.git/index and
+// .git/worktrees/<name>/index at any depth).
+function gitIndexes(root: string, rel = "", out: string[] = []): string[] {
+  for (const name of readdirSync(join(root, rel))) {
+    const r = rel ? `${rel}/${name}` : name;
+    const stat = lstatSync(join(root, r));
+    if (stat.isDirectory()) gitIndexes(root, r, out);
+    else if (stat.isFile() && /(?:^|\/)\.git\/(?:worktrees\/[^/]+\/)?index$/.test(r)) out.push(join(root, r));
+  }
+  return out;
+}
+function refreshIndex(dir: string): void {
+  const r = spawnSync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/nonexistent/faultline-hooks", "-C", dir, "update-index", "-q", "--refresh"], {
+    env: { PATH: process.env.PATH ?? "", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" }, encoding: "utf8"
+  });
+  if (r.error || (r.status !== 0 && r.status !== 1)) throw new Error(`git update-index --refresh in ${dir}: ${r.error?.message ?? r.stderr}`);
+}
+
 // resetModes sets directories to 0755 and files to 0644 under root. A case
 // calls it once its scenario and mutations are in place, so the workspace
 // fl starts from never depends on the checkout or on how the harness wrote
@@ -879,9 +931,22 @@ function listDirs(root: string, rel = ""): string[] {
   return out;
 }
 
+// FIXED_SCENARIO_ROOT holds the scenarios built at a fixed path (fixedRoot):
+// the same on the podman image and on CI, so their bytes do not drift.
+const FIXED_SCENARIO_ROOT = "/tmp/faultline-scenario-fixed";
+
+// runSeeded runs an ES module body with node under the seed preload, cwd =
+// the workspace, in the writer environment; it fails on a non-zero exit.
+function runSeeded(roots: CaseRoots, name: string, code: string): void {
+  const r = spawnSync(process.execPath, ["--import", pathToFileURL(seedPreload).href, "--input-type=module", "-e", code], {
+    cwd: roots.ws, env: writerEnv(roots, `scenario:${name}`, undefined, {}), encoding: "utf8"
+  });
+  if (r.status !== 0) throw new Error(`scenario ${name}: seeded code exited ${r.status}\n${r.stdout}${r.stderr}`);
+}
+
 async function buildScenario(name: string): Promise<void> {
   const scenario = SCENARIOS[name]!;
-  const roots = makeCaseRoots();
+  const roots = makeCaseRoots(scenario.fixedRoot ? join(FIXED_SCENARIO_ROOT, name) : undefined);
   try {
     for (const [path, base] of Object.entries(scenario.bases ?? {})) {
       cpSync(join(repo, "difftest", "testdata", "bases", base), join(roots.ws, path), { recursive: true });
@@ -891,16 +956,27 @@ async function buildScenario(name: string): Promise<void> {
       writeFileSync(join(roots.ws, path), text);
     }
     scenario.setup?.(roots.ws);
+    // A build that runs fl or seeded code on the scenario repositories sees
+    // them clean, and commits the stat-free indexes it wrote: every index in
+    // the workspace (a linked worktree's lives in its main repository) is
+    // restored after the run.
+    const runs = scenario.argv.length > 0 || scenario.seeded !== undefined;
+    const indexes = runs && scenario.refreshIndex !== undefined ? gitIndexes(roots.ws) : [];
+    const saved = indexes.map((p) => readFileSync(p));
+    if (runs) for (const rel of scenario.refreshIndex ?? []) refreshIndex(join(roots.ws, rel));
     for (const argv of scenario.argv) {
       const r = await runCli(roots, argv, writerEnv(roots, `scenario:${name}`, "pass-fail", {}));
       if (r.exit !== 0) throw new Error(`scenario ${name}: fl ${argv.join(" ")} exited ${r.exit}\n${r.stdout}${r.stderr}`);
     }
+    if (scenario.seeded !== undefined) runSeeded(roots, name, scenario.seeded);
+    for (const [i, p] of indexes.entries()) writeFileSync(p, saved[i]!);
     scenario.after?.(roots.ws);
     const dirs = listDirs(roots.ws);
     const out = join(scenariosDir, name);
     rmSync(out, { recursive: true, force: true });
     mkdirSync(out, { recursive: true });
     writeFileSync(join(out, "dirs.txt"), dirs.map((d) => `${d}\n`).join(""));
+    if (scenario.refreshIndex !== undefined) writeFileSync(join(out, REFRESH_INDEX_FILE), scenario.refreshIndex.map((d) => `${d}\n`).join(""));
     if (readdirSync(roots.ws).length > 0) {
       mkdirSync(join(out, "tree"));
       copyMapped(roots.ws, join(out, "tree"), (entry) => {
@@ -990,6 +1066,165 @@ SCENARIOS["prevention-input"] = {
   argv: []
 };
 SCENARIOS["prevention-from-bundle"] = { bases: { bundle: "git-unbound" }, files: { "repaired-runs.json": preventionRepairedRuns() }, argv: [] };
+
+// Slice 4a recording scenarios (record, codex sidecar, codex snapshot gc).
+// Their ledgers are built by the frozen TS ledger functions with fixed ids
+// and times (from 2026-07-16T11:00:00.000Z, one second per event: an hour
+// before the seed epoch, so a later append by fl is in order), and a fixed
+// workingDirectory, so their bytes do not depend on the case path.
+//   record-repo       a clean one-commit repository at repo/ (state.txt,
+//                     .gitignore of .faultline/) with an index, and
+//                     ledger.json: SESSION_STARTED (SIDE_CAR, /work/repo),
+//                     turn 1 started and completed, for session s-1
+//   record-ledgers    record-repo plus ended.json, active.json,
+//                     tampered.json, bad-schema.json, not-json.json and
+//                     events/*.ndjson (record stdin bodies)
+//   record-dirty      record-repo with state.txt modified and an untracked
+//                     scratch.txt
+//   record-fsmonitor  record-repo whose core.fsmonitor command writes
+//                     FSMONITOR_RAN (tests/fl-record-checkpoint-fsmonitor.test.ts)
+//   sidecar-repo      a clean one-commit repository at the workspace root
+//                     (state.txt, .gitignore of .faultline/), with an index
+//   sidecar-dirty     sidecar-repo plus an untracked notes.txt
+//   sidecar-no-head   a repository with no commit (HEAD names an unborn
+//                     main), written by hand: git init's templates vary
+//   sidecar-worktree  the init-worktree layout (wt/ a linked worktree of main/)
+//   sidecar-recorded  sidecar-repo plus one recorded Codex session s-1 in
+//                     .git/faultline/recordings (SessionStart, turn t-1 and
+//                     its Stop with checkpoint, turn snapshot and receipt),
+//                     written by recordObservedCodexHook under the scenario
+//                     seed; its hook cwd is the build workspace, so it is
+//                     built at a fixed path (fixedRoot)
+//   snapgc-repo       sidecar-repo plus a quarantined snapshot object store
+//                     (.git/faultline/objects: a blob and a tree, loose,
+//                     deflated at level 0), its alternates entry, and
+//                     .faultline/recordings/codex-x.json naming the tree
+const RECORD_AT = (second: number): string => new Date(Date.UTC(2026, 6, 16, 11, 0, second)).toISOString();
+const RECORD_FILES: RepoState = { ".gitignore": ".faultline/\n", "state.txt": "good\n" };
+type LedgerStep = Parameters<typeof appendLifecycleEvent>[1];
+const PROMPT_DIGEST = `sha256:${"c".repeat(64)}`;
+const OUTPUT_DIGEST = `sha256:${"d".repeat(64)}`;
+const turnStarted = (ordinal: number): LedgerStep => ({ type: "TURN_STARTED", payload: { turnId: `turn-${ordinal}`, turnOrdinal: ordinal, promptDigest: PROMPT_DIGEST } });
+const turnCompleted = (ordinal: number): LedgerStep => ({ type: "TURN_COMPLETED", payload: { turnId: `turn-${ordinal}`, turnOrdinal: ordinal, outcome: "COMPLETED", outputDigest: OUTPUT_DIGEST } });
+const RECORD_STEPS: LedgerStep[] = [
+  { type: "SESSION_STARTED", payload: { transport: "SIDE_CAR", workingDirectory: "/work/repo" } },
+  turnStarted(1),
+  turnCompleted(1)
+];
+// recordLedger is a SIDE_CAR ledger for session s-1 of steps, event k (from
+// 1) at RECORD_AT(k) with id event-<k>.
+function recordLedger(steps: LedgerStep[]): CodexLifecycleLedger {
+  let ledger = createCodexLifecycleLedger({ ledgerId: "ledger-s-1", sessionId: "s-1", createdAt: RECORD_AT(0) });
+  for (const [index, step] of steps.entries()) {
+    ledger = appendLifecycleEvent(ledger, step, { occurredAt: RECORD_AT(index + 1), eventId: `event-${index + 1}` });
+  }
+  return ledger;
+}
+const recordLedgerText = (steps: LedgerStep[], edit?: (v: any) => void): string => {
+  const value = JSON.parse(JSON.stringify(recordLedger(steps)));
+  edit?.(value);
+  return jsonText(value);
+};
+// ndjson is one compact JSON document per line.
+const ndjson = (lines: unknown[]): string => lines.map((line) => `${JSON.stringify(line)}\n`).join("");
+const RECORD_LEDGER_FILES: Record<string, string> = {
+  "ended.json": recordLedgerText([...RECORD_STEPS, { type: "SESSION_ENDED", payload: { reason: "COMPLETED", completedTurns: 1 } }]),
+  "active.json": recordLedgerText([...RECORD_STEPS, turnStarted(2)]),
+  "tampered.json": recordLedgerText(RECORD_STEPS, (v) => { v.events[0].event.payload.workingDirectory = "/work/other"; }),
+  "bad-schema.json": recordLedgerText(RECORD_STEPS, (v) => { v.events[0].sequence = 0; }),
+  "not-json.json": "{",
+  "events/turn-2.ndjson": ndjson([turnStarted(2), turnCompleted(2)]),
+  "events/envelope.ndjson": ndjson([
+    { eventId: "event-envelope-1", occurredAt: "2026-07-16T12:30:00.000Z", event: turnStarted(2) },
+    { eventId: "event-envelope-2", occurredAt: "2026-07-16T12:30:01.000Z", event: turnCompleted(2) }
+  ]),
+  "events/checkpoint.ndjson": ndjson([{ type: "WORKTREE_CHECKPOINT", payload: { afterTurnOrdinal: 1 } }])
+};
+// recordRepo builds record-repo; edit then changes the workspace.
+function recordRepo(edit?: (ws: string) => void, extra: Record<string, string> = {}): Scenario {
+  return {
+    refreshIndex: ["repo"],
+    files: { "ledger.json": recordLedgerText(RECORD_STEPS), ...extra },
+    setup: (ws) => {
+      buildRepo(ws, "repo", [RECORD_FILES]);
+      writeIndex(join(ws, "repo", ".git"), Object.entries(RECORD_FILES).map(([path, content]) => ({ path, content })));
+      edit?.(ws);
+    },
+    argv: []
+  };
+}
+// The workspace-root repository the sidecar cases run hooks in.
+const sidecarRepo = (edit?: (ws: string) => void): Scenario => ({ ...doctorRepo(RECORD_FILES, edit), refreshIndex: ["."] });
+// writeNoHeadRepo writes a repository with no commit by hand (git init
+// would add its version's hooks and description).
+function writeNoHeadRepo(ws: string): void {
+  const gitDir = join(ws, ".git");
+  for (const dir of ["objects", "refs/heads", "refs/tags"]) mkdirSync(join(gitDir, dir), { recursive: true });
+  writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+  writeFileSync(join(gitDir, "config"), "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n");
+  for (const [path, text] of Object.entries(RECORD_FILES)) writeFileSync(join(ws, path), text);
+}
+// SIDECAR_SESSION is the session sidecar-recorded holds: SessionStart, then
+// turn t-1 (UserPromptSubmit, Stop), each a hook document whose cwd (here
+// a placeholder) is the build workspace.
+const SIDECAR_SESSION = [
+  { session_id: "s-1", cwd: "", model: "gpt-5.6", hook_event_name: "SessionStart" },
+  { session_id: "s-1", cwd: "", model: "gpt-5.6", hook_event_name: "UserPromptSubmit", turn_id: "t-1", prompt: "Keep state.txt good." },
+  { session_id: "s-1", cwd: "", model: "gpt-5.6", hook_event_name: "Stop", turn_id: "t-1" }
+];
+const recordSidecarSession = (): string => `
+const { recordObservedCodexHook } = await import(${JSON.stringify(pathToFileURL(join(repo, "dist", "codex-sidecar.js")).href)});
+const { realpathSync } = await import("node:fs");
+const cwd = realpathSync(process.cwd());
+for (const hook of ${JSON.stringify(SIDECAR_SESSION)}) {
+  const result = recordObservedCodexHook({ ...hook, cwd });
+  if (!["SESSION_STARTED", "TURN_STARTED", "CHECKPOINT_RECORDED"].includes(result.status) || result.idempotent) throw new Error(JSON.stringify(result));
+}
+`;
+// writeLooseObject writes one git object under objects (a loose object
+// deflated at level 0, as buildRepo writes them) and returns its id.
+function writeLooseObject(objects: string, type: string, body: Buffer): string {
+  const raw = Buffer.concat([Buffer.from(`${type} ${body.length}\0`), body]);
+  const oid = createHash("sha1").update(raw).digest("hex");
+  mkdirSync(join(objects, oid.slice(0, 2)), { recursive: true });
+  writeFileSync(join(objects, oid.slice(0, 2), oid.slice(2)), deflateSync(raw, { level: 0 }));
+  return oid;
+}
+// writeQuarantine writes what a slow-path turn snapshot of the dirty state
+// (state.txt bad) leaves behind: the blob and tree it adds to
+// .git/faultline/objects (with info/ and pack/), the alternates entry
+// (turn-snapshot.ts ensureFaultlineSnapshotObjectStore), and a recording that
+// names the tree.
+function writeQuarantine(ws: string): void {
+  const objects = join(ws, ".git", "faultline", "objects");
+  for (const dir of ["info", "pack"]) mkdirSync(join(objects, dir), { recursive: true });
+  const blob = writeLooseObject(objects, "blob", Buffer.from("bad\n"));
+  const gitignore = createHash("sha1").update(`blob ${RECORD_FILES[".gitignore"]!.length}\0${RECORD_FILES[".gitignore"]}`).digest();
+  const entry = (name: string, oid: Buffer) => Buffer.concat([Buffer.from(`100644 ${name}\0`), oid]);
+  const tree = writeLooseObject(objects, "tree", Buffer.concat([entry(".gitignore", gitignore), entry("state.txt", Buffer.from(blob, "hex"))]));
+  mkdirSync(join(ws, ".git", "objects", "info"), { recursive: true });
+  writeFileSync(join(ws, ".git", "objects", "info", "alternates"), "../faultline/objects\n");
+  mkdirSync(join(ws, ".faultline", "recordings"), { recursive: true });
+  writeFileSync(join(ws, ".faultline", "recordings", "codex-x.json"), jsonText({ snapshot: { treeDigest: tree } }));
+}
+Object.assign(SCENARIOS, {
+  "record-repo": recordRepo(),
+  "record-ledgers": recordRepo(undefined, RECORD_LEDGER_FILES),
+  "record-dirty": recordRepo((ws) => {
+    writeFileSync(join(ws, "repo", "state.txt"), "bad\n");
+    writeFileSync(join(ws, "repo", "scratch.txt"), "untracked\n");
+  }),
+  "record-fsmonitor": recordRepo((ws) => {
+    const config = join(ws, "repo", ".git", "config");
+    writeFileSync(config, `${readFileSync(config, "utf8")}\tfsmonitor = "printf fsmonitor-fired > FSMONITOR_RAN #"\n`);
+  }),
+  "sidecar-repo": sidecarRepo(),
+  "sidecar-dirty": sidecarRepo((ws) => writeFileSync(join(ws, "notes.txt"), "untracked\n")),
+  "sidecar-no-head": { files: {}, setup: writeNoHeadRepo, argv: [] },
+  "sidecar-worktree": { files: {}, setup: initWorktree, argv: [], refreshIndex: ["main", "wt"] },
+  "sidecar-recorded": { ...sidecarRepo(), fixedRoot: true, seeded: recordSidecarSession() },
+  "snapgc-repo": sidecarRepo(writeQuarantine)
+} satisfies Record<string, Scenario>);
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // Umask 0, like gen-writers.ts: fl's modes reach the files as requested.

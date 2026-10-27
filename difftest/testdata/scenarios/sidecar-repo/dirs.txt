@@ -1,0 +1,9 @@
+.git
+.git/objects
+.git/objects/12
+.git/objects/31
+.git/objects/4a
+.git/objects/b6
+.git/refs
+.git/refs/heads
+.git/refs/tags

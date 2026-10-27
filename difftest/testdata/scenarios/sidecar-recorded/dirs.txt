@@ -1,0 +1,15 @@
+.git
+.git/faultline
+.git/faultline/objects
+.git/faultline/objects/info
+.git/faultline/objects/pack
+.git/faultline/recordings
+.git/objects
+.git/objects/12
+.git/objects/31
+.git/objects/4a
+.git/objects/b6
+.git/objects/info
+.git/refs
+.git/refs/heads
+.git/refs/tags

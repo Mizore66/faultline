@@ -63,7 +63,7 @@ func TestWriterSameDirectory(t *testing.T) {
 				}
 				prepareWriterCase(t, repo, tpl, r)
 				var out []outcome
-				for _, argv := range tpl.Argv {
+				for inv, argv := range tpl.Argv {
 					os.Remove(r.argvLog)
 					args := slices.Clone(command)
 					for _, a := range argv {
@@ -71,7 +71,8 @@ func TestWriterSameDirectory(t *testing.T) {
 					}
 					cmd := exec.Command(args[0], args[1:]...)
 					cmd.Dir = r.ws
-					cmd.Env = writerEnv(repo, r, tpl.ID, tpl)
+					cmd.Env = invocationEnv(repo, r, tpl, inv)
+					cmd.Stdin = bytes.NewReader(invocationInput(t, tpl, inv, r))
 					var stdout, stderr bytes.Buffer
 					cmd.Stdout, cmd.Stderr = &stdout, &stderr
 					var exitErr *exec.ExitError
