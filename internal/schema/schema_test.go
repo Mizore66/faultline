@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Mizore66/faultline/internal/jsjson"
@@ -82,6 +83,28 @@ func TestUnionMatchesZod(t *testing.T) {
 	expectMessage(t, u, `{"a":1,"z":1}`, "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"z\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key(s) in object: 'z'\"\n  }\n]")
 	out, _, ok := Parse(u, mustParse(t, `{"b":"q","a":1}`))
 	if !ok || jsjson.Stringify(out) != `{"b":"q"}` {
+		t.Fatalf("out = %s ok=%v", jsjson.Stringify(out), ok)
+	}
+}
+
+func TestRecordOfKeyIssuesFirst(t *testing.T) {
+	r := RecordOf(String(Regex(Pattern(`^k$`), "")), String(MinLength(2)))
+	_, issues, ok := Parse(r, mustParse(t, `{"x":"y"}`))
+	if ok || len(issues) != 2 || ErrorMessage(issues[:1]) == ErrorMessage(issues[1:]) {
+		t.Fatalf("%v", issues)
+	}
+	if !strings.Contains(ErrorMessage(issues), `"validation": "regex"`) || strings.Index(ErrorMessage(issues), "regex") > strings.Index(ErrorMessage(issues), "too_small") {
+		t.Fatal(ErrorMessage(issues))
+	}
+}
+
+// TestRecordOfOrderAndKeys pins z.record(z.string().regex(/^k/), z.string().min(2))
+// on two entries: issues go key, value, key, value; the parsed key is the output key.
+func TestRecordOfOrderAndKeys(t *testing.T) {
+	r := RecordOf(String(Regex(Pattern(`^k`), "")), String(MinLength(2)))
+	expectMessage(t, r, `{"a":"y","b":"z"}`, "[\n  {\n    \"validation\": \"regex\",\n    \"code\": \"invalid_string\",\n    \"message\": \"Invalid\",\n    \"path\": [\n      \"a\"\n    ]\n  },\n  {\n    \"code\": \"too_small\",\n    \"minimum\": 2,\n    \"type\": \"string\",\n    \"inclusive\": true,\n    \"exact\": false,\n    \"message\": \"String must contain at least 2 character(s)\",\n    \"path\": [\n      \"a\"\n    ]\n  },\n  {\n    \"validation\": \"regex\",\n    \"code\": \"invalid_string\",\n    \"message\": \"Invalid\",\n    \"path\": [\n      \"b\"\n    ]\n  },\n  {\n    \"code\": \"too_small\",\n    \"minimum\": 2,\n    \"type\": \"string\",\n    \"inclusive\": true,\n    \"exact\": false,\n    \"message\": \"String must contain at least 2 character(s)\",\n    \"path\": [\n      \"b\"\n    ]\n  }\n]")
+	out, _, ok := Parse(RecordOf(String(Trim()), String()), mustParse(t, `{" a ":"x","__proto__":"y","b":"z"}`))
+	if !ok || jsjson.Stringify(out) != `{"a":"x","b":"z"}` {
 		t.Fatalf("out = %s ok=%v", jsjson.Stringify(out), ok)
 	}
 }

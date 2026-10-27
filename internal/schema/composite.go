@@ -166,9 +166,16 @@ func (a *arraySchema) parse(c *ctx, v jsjson.Value, path []any) (jsjson.Value, s
 	return jsjson.MakeArray(items), st
 }
 
-type recordSchema struct{ value Schema }
+type recordSchema struct{ key, value Schema }
 
-func Record(value Schema) Schema { return &recordSchema{value} }
+func Record(value Schema) Schema { return &recordSchema{value: value} }
+
+// RecordOf is z.record(key, value) (zod 3 ZodRecord._parse, sync): each own
+// key is parsed with key (its issues first, at path [..., key]), then its
+// value with value (at the same path), entry by entry. The parsed key
+// replaces the original in the output; a parsed key "__proto__" is dropped
+// (ParseStatus.mergeObjectSync).
+func RecordOf(key, value Schema) Schema { return &recordSchema{key: key, value: value} }
 
 func (r *recordSchema) parse(c *ctx, v jsjson.Value, path []any) (jsjson.Value, status) {
 	if v.Kind() != jsjson.Object {
@@ -178,10 +185,16 @@ func (r *recordSchema) parse(c *ctx, v jsjson.Value, path []any) (jsjson.Value, 
 	out := jsjson.NewObj()
 	st := valid
 	for _, k := range v.Obj().Keys() {
+		key := k
+		if r.key != nil {
+			parsedKey, keyStatus := r.key.parse(c, jsjson.MakeString(k), extend(path, k))
+			st = worst(st, keyStatus)
+			key = parsedKey.Str()
+		}
 		child, childStatus := r.value.parse(c, v.Obj().Field(k), extend(path, k))
 		st = worst(st, childStatus)
-		if k != "__proto__" {
-			out.Set(k, child)
+		if st != aborted && key != "__proto__" {
+			out.Set(key, child)
 		}
 	}
 	if st == aborted {
