@@ -1008,6 +1008,35 @@ export const handlers: Record<string, Handler> = {
       return (await withPath(path, () => collectRepairPatch(worktreePath))).patch;
     } catch (error) { return `THREW:${(error as Error).message}`; }
   },
+  // Slice 4c Task 13: commitRepairedWorktreeState, with process.env.PATH
+  // set to `path` for the call when given (a fake git ahead of the real
+  // one): JSON.stringify of { commit, tree }, or "THREW:<message>".
+  commitRepairedWorktreeState: async ({ worktreePath, baseCommit, path }: { worktreePath: string; baseCommit: string; path?: string }) => {
+    const { commitRepairedWorktreeState } = await import("../../src/prevention-from-artifacts.js");
+    const saved = process.env.PATH;
+    if (path !== undefined) process.env.PATH = path;
+    try { return JSON.stringify(commitRepairedWorktreeState(worktreePath, baseCommit)); } catch (error) { return `THREW:${(error as Error).message}`; } finally { process.env.PATH = saved; }
+  },
+  // collectRepairedPreventionRuns with a scripted verifyOnce: each call
+  // returns the next entry of `verdicts` as is, or throws Error(<rest>) for
+  // a "THROW:<rest>" string. JSON.stringify of the result, or
+  // "THREW:<message>".
+  collectRepairedPreventionRuns: async ({ bundleDirectory, repairedCommit, repairedTree, verdicts }: {
+    bundleDirectory: string; repairedCommit: string; repairedTree: string; verdicts: unknown[];
+  }) => {
+    const { collectRepairedPreventionRuns } = await import("../../src/prevention-from-artifacts.js");
+    let next = 0;
+    const verifyOnce = async () => {
+      const verdict = verdicts[next++];
+      if (typeof verdict === "string" && verdict.startsWith("THROW:")) throw new Error(verdict.slice(6));
+      return verdict as { ok: boolean; detail: string; executionId?: string };
+    };
+    try {
+      return JSON.stringify(await collectRepairedPreventionRuns({ worktreePath: "unused", bundleDirectory, repairedCommit, repairedTree, verifyOnce }));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });

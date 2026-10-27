@@ -396,3 +396,45 @@ func TestOpenWriteCodeByPlatform(t *testing.T) {
 		}
 	}
 }
+
+// ReadDirTypes is readdirSync withFileTypes: byte order, and a symlink is
+// neither a directory nor a file.
+func TestReadDirTypes(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "b"), nil, 0o644)
+	os.Mkdir(filepath.Join(dir, "a"), 0o755)
+	if err := os.Symlink("b", filepath.Join(dir, "c")); err != nil {
+		t.Skip(err)
+	}
+	got, err := ReadDirTypes(dir)
+	want := []Dirent{{Name: "a", IsDir: true}, {Name: "b", IsFile: true}, {Name: "c"}}
+	if err != nil || len(got) != len(want) {
+		t.Fatalf("%v %v", got, err)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ReadDirTypes = %v", got)
+		}
+	}
+	missing := filepath.Join(dir, "missing")
+	if _, err := ReadDirTypes(missing); err == nil || err.Error() != "ENOENT: no such file or directory, scandir '"+missing+"'" {
+		t.Fatalf("ReadDirTypes error = %v", err)
+	}
+}
+
+// A readable directory without search permission keeps its entry types:
+// libuv reads them from the directory record, without a stat.
+func TestReadDirTypesUnsearchable(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Getuid() == 0 {
+		t.Skip("needs POSIX permissions enforced")
+	}
+	dir := filepath.Join(t.TempDir(), "ro")
+	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	os.WriteFile(filepath.Join(dir, "f"), nil, 0o644)
+	os.Chmod(dir, 0o644)
+	defer os.Chmod(dir, 0o755)
+	got, err := ReadDirTypes(dir)
+	if err != nil || len(got) != 2 || got[0] != (Dirent{Name: "f", IsFile: true}) || got[1] != (Dirent{Name: "sub", IsDir: true}) {
+		t.Fatalf("%v %v", got, err)
+	}
+}

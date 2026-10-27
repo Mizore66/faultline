@@ -273,7 +273,7 @@ func fixWinEPERMAsync(raw, display string, original error) error {
 // readRawNames is readdirSync(path, "buffer"): libuv sorts names on Unix and
 // returns directory order on Windows.
 func readRawNames(raw string) ([]string, error) {
-	names, _, err := scandir(raw)
+	names, err := scandirNames(raw)
 	if err != nil {
 		return nil, err
 	}
