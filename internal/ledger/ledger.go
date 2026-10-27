@@ -79,9 +79,12 @@ func Append(ledger, input jsjson.Value, o AppendOptions) (next jsjson.Value, err
 	}
 	bundle.Must(bundle.ParseValue(jsjson.MakeString(occurredAt), gitproof.CanonicalTimestampSchema))
 	events := current.Get("events").Items()
-	previousHash := gitproof.LedgerGenesisHash(current)
+	// previous?.hash ?? ledgerGenesisHash(current)
+	var previousHash string
 	if len(events) > 0 {
 		previousHash = events[len(events)-1].Get("hash").Str()
+	} else {
+		previousHash = gitproof.LedgerGenesisHash(current)
 	}
 	eventID := o.EventID
 	if eventID == "" && !o.HasEventID {
@@ -144,8 +147,8 @@ func AppendAtomic(filePath string, input jsjson.Value, o AppendOptions) (next js
 	defer jsexc.Catch(func(e error) { next, err = jsjson.Value{}, e })
 	absolutePath := nodefs.Resolve(filePath)
 	lockPath := jsexc.Concat(absolutePath, ".lock")
-	if err := nodefs.MkdirAll(nodefs.Dirname(absolutePath), 0o777); err != nil {
-		return jsjson.Value{}, err
+	if mkdirErr := nodefs.MkdirAll(nodefs.Dirname(absolutePath), 0o777); mkdirErr != nil {
+		return jsjson.Value{}, mkdirErr
 	}
 	lock, err := acquireLedgerLock(lockPath)
 	if err != nil {

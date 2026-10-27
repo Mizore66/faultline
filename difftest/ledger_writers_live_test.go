@@ -597,6 +597,11 @@ func randomFileCase(r *rand.Rand, sources []string, i int) fileCase {
 // captured from.
 type captureRepoCase struct {
 	label, tmpl, from string // from is relative to work
+	// refresh: the copy has a commit, so its index stat data is refreshed
+	// after copyWork (the copy's inodes and times differ from the
+	// template's, and git 2.39/2.43 diff-index then reports every tracked
+	// file modified).
+	refresh bool
 }
 
 func ledgerGit(t *testing.T, dir string, args ...string) {
@@ -633,6 +638,7 @@ func randomCaptureRepo(t *testing.T, r *rand.Rand, i int) captureRepoCase {
 	os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("*.log\n"), 0o644)
 	ledgerGit(t, repo, "add", "-A")
 	ledgerGit(t, repo, "commit", "-q", "-m", "base")
+	c.refresh = true
 	switch kind {
 	case "tracked-change":
 		os.WriteFile(filepath.Join(repo, "a.txt"), []byte("line one\nchanged\n"), 0o644)
@@ -920,6 +926,10 @@ func TestLiveLedgerWriters(t *testing.T) {
 		args := jsjson.Stringify(jsjson.MustObject("repository", jsjson.MakeString(from), "path", jsjson.MakeString(path), "cwd", jsjson.MakeString(cwd)))
 		run := func(side string) (string, string) {
 			copyWork(t, rc.tmpl, work)
+			if rc.refresh {
+				// The repository's own fsmonitor must not run here either.
+				ledgerGit(t, filepath.Join(work, "repo"), "-c", "core.fsmonitor=false", "update-index", "-q", "--refresh")
+			}
 			var result string
 			if side == "ts" {
 				result = ledgerOracle(t, c, "captureGitCleanCheckpoint", args)
@@ -954,6 +964,9 @@ func TestLiveLedgerWriters(t *testing.T) {
 
 	if ts, goTick := oracleCall(t, c, "seededTick", "null"), clock.NowMillis()-seededEpochMillis; ts != strconv.FormatInt(goTick, 10) {
 		t.Fatalf("oracle clock at %s, Go clock at %d", ts, goTick)
+	}
+	if outcomes["capture-repo ok"] == 0 {
+		t.Error("no real repository gave a clean checkpoint")
 	}
 	outputs := recordedOutputs(t)
 	for _, marker := range []string{
