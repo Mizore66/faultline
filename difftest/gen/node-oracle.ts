@@ -51,6 +51,7 @@ import { captureTurnTreeSnapshot, defaultTurnSnapshotGitRunner, planTurnSnapshot
 import type { TurnSnapshotGitRunner } from "../../src/turn-snapshot.js";
 import { existsSync as tsExists } from "node:fs";
 import { IncidentIntakeError, createNodeIncidentIntakeRunner, suggestIncidentRanges } from "../../src/incident-intake.js";
+import { ops as turninvOps, StableTurnTransitionSchema, TurnInvestigationResultSchema, TurnInvestigationRunFactSchema, TurnStateSchema } from "./oracle-turninv.js";
 
 export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   PreventionProofBodySchema,
@@ -67,6 +68,11 @@ export const namedSchemas: Record<string, { safeParse(v: unknown): any }> = {
   GitProofSourceMetadataSchema,
   GitProofBundleManifestSchema,
   CodexLifecycleLedgerSchema,
+  // Slice 4b Task 3: the turn investigation schemas.
+  TurnInvestigationResultSchema,
+  TurnInvestigationRunFactSchema,
+  StableTurnTransitionSchema,
+  TurnStateSchema,
 };
 
 type Handler = (args: any) => unknown; // may return a Promise
@@ -775,6 +781,7 @@ export const handlers: Record<string, Handler> = {
     for (let i = 1; i < all.length; i++) ties += all[i - 1]!.localeCompare(all[i]!) === 0 ? "1" : "0";
     return { order: all.map((s) => s.codePointAt(0)), ties };
   },
+  ...turninvOps,
 };
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
