@@ -106,9 +106,9 @@ func looseObjects(t *testing.T, repository string) []string {
 	return ids
 }
 
-// createdObjects is oracle-bridge.ts's created: the loose objects not in
+// bridgeCreatedObjects is oracle-bridge.ts's created: the loose objects not in
 // before, sorted, each with its inflated content.
-func createdObjects(t *testing.T, repository string, before []string) jsjson.Value {
+func bridgeCreatedObjects(t *testing.T, repository string, before []string) jsjson.Value {
 	t.Helper()
 	var ids []string
 	for _, id := range looseObjects(t, repository) {
@@ -336,7 +336,7 @@ func TestLiveTurnBridge(t *testing.T) {
 			}
 			before := looseObjects(t, pair.goDir)
 			result, err := minimize.BridgeTurnTransition(pair.goDir, mustParseText(t, transitionsText).Items(), index)
-			got := bridgeOutcome(result, err, createdObjects(t, pair.goDir, before))
+			got := bridgeOutcome(result, err, bridgeCreatedObjects(t, pair.goDir, before))
 			// The copies differ only in their paths.
 			want = strings.ReplaceAll(want, pair.tsDir, pair.goDir)
 			if got != want {
@@ -355,7 +355,7 @@ func TestLiveTurnBridge(t *testing.T) {
 					gitFailed++
 				}
 			}
-			created += len(createdObjects(t, pair.goDir, before).Items())
+			created += len(bridgeCreatedObjects(t, pair.goDir, before).Items())
 			if strings.Contains(want, `\nencoding ISO-8859-1\n`) {
 				encoded++
 			}

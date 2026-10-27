@@ -1,0 +1,114 @@
+{
+  "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+  "ledgerId": "ledger-s-2",
+  "sessionId": "s-2",
+  "createdAt": "2026-07-16T11:00:00.000Z",
+  "events": [
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-s-2",
+      "sessionId": "s-2",
+      "sequence": 1,
+      "eventId": "event-1",
+      "occurredAt": "2026-07-16T11:00:01.000Z",
+      "event": {
+        "type": "SESSION_STARTED",
+        "payload": {
+          "transport": "SIDE_CAR",
+          "workingDirectory": "/work/repo"
+        }
+      },
+      "previousHash": "sha256:0fd5bf2bf958450623c3fa782d288dd7c7bcef10ce45f4f51e642722987c252a",
+      "hash": "sha256:b68431a261d4d3298d7439f01c558d470a749cfa95bd787f20dc19e7838c9a7a"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-s-2",
+      "sessionId": "s-2",
+      "sequence": 2,
+      "eventId": "event-2",
+      "occurredAt": "2026-07-16T11:00:02.000Z",
+      "event": {
+        "type": "SESSION_BASELINE_SNAPSHOT",
+        "payload": {
+          "snapshot": {
+            "schemaVersion": "faultline.turn-tree-snapshot.v1",
+            "repositoryRoot": "/work/repo",
+            "headCommit": "0151ba77023e3dcb196255cf99c6704955dc4525",
+            "treeDigest": "08200d9de47422f8c9e883ab843676699054cda1",
+            "capturedAt": "2026-07-16T11:00:02.000Z",
+            "dirty": false,
+            "statusDigest": "sha256:f26fcfb69545239c13ab63a1d2fe428761ed7fb8cbc4251d95297cfbd7d15026",
+            "digest": "sha256:f06d50a6a3a9b93166dfbae1edb6610fcca9172a79e02db03f2400ac4c4fe51d"
+          }
+        }
+      },
+      "previousHash": "sha256:b68431a261d4d3298d7439f01c558d470a749cfa95bd787f20dc19e7838c9a7a",
+      "hash": "sha256:3a25a36aa399012f8d8902675c96ce71351b1b7cac50ccb9d4f46e1c5190ab45"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-s-2",
+      "sessionId": "s-2",
+      "sequence": 3,
+      "eventId": "event-3",
+      "occurredAt": "2026-07-16T11:00:03.000Z",
+      "event": {
+        "type": "TURN_STARTED",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "promptDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      "previousHash": "sha256:3a25a36aa399012f8d8902675c96ce71351b1b7cac50ccb9d4f46e1c5190ab45",
+      "hash": "sha256:b5cd5f5c96fe27d66b83875a8451cb85aab4dba70cb74e6890af86014ca1a50e"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-s-2",
+      "sessionId": "s-2",
+      "sequence": 4,
+      "eventId": "event-4",
+      "occurredAt": "2026-07-16T11:00:04.000Z",
+      "event": {
+        "type": "TURN_COMPLETED",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "outcome": "COMPLETED",
+          "outputDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      "previousHash": "sha256:b5cd5f5c96fe27d66b83875a8451cb85aab4dba70cb74e6890af86014ca1a50e",
+      "hash": "sha256:ce52e9ee76c3ec1db3d7c4d534b79b6d360488f16a5c12f5b4bc0ab959453cb5"
+    },
+    {
+      "schemaVersion": "faultline.codex-lifecycle-ledger.v1",
+      "ledgerId": "ledger-s-2",
+      "sessionId": "s-2",
+      "sequence": 5,
+      "eventId": "event-5",
+      "occurredAt": "2026-07-16T11:00:05.000Z",
+      "event": {
+        "type": "TURN_TREE_SNAPSHOT",
+        "payload": {
+          "turnId": "turn-1",
+          "turnOrdinal": 1,
+          "snapshot": {
+            "schemaVersion": "faultline.turn-tree-snapshot.v1",
+            "repositoryRoot": "/work/repo",
+            "headCommit": "0151ba77023e3dcb196255cf99c6704955dc4525",
+            "treeDigest": "a1d82cc5cc0c3976e651069980545f9fc85b0f25",
+            "capturedAt": "2026-07-16T11:00:05.000Z",
+            "dirty": true,
+            "statusDigest": "sha256:d9b6a447093d9f45dfcbb71d0149fe3fe444838aa4df89501ad3eb6de9f29d55",
+            "digest": "sha256:73612974c54b835eaa660c51c1488a7d4ca0cf960bef74497d2a7d0af266ca90"
+          }
+        }
+      },
+      "previousHash": "sha256:ce52e9ee76c3ec1db3d7c4d534b79b6d360488f16a5c12f5b4bc0ab959453cb5",
+      "hash": "sha256:4c4dd51ae685f8ae0e6cd9be12f5b58dc50065b79ee188dfa26933a2c69bcd01"
+    }
+  ]
+}

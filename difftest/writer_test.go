@@ -640,6 +640,9 @@ type relocated struct {
 	roots  writerRoots
 	names  map[string]string // digest hex -> provenance name
 	sorted []string
+	// objects are the Git objects the case created so far (caseObjects),
+	// nil for none.
+	objects *caseObjectNames
 }
 
 var selfDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -682,6 +685,19 @@ var worktreeDigestMember = regexp.MustCompile(`"worktreeDigest":\s*"sha256:([0-9
 // depend on the case paths, each named by where it was first derived.
 func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 	t.Helper()
+	return relocationWith(t, r, records, nil)
+}
+
+// relocationWith is relocation with the case's created Git objects
+// (gen-writers.ts relocation's objects argument): their ids are seeds like
+// the case root, text masks each by its name, and fileDigest applies the
+// loose-object and reflog rules.
+func relocationWith(t *testing.T, r writerRoots, records []string, objects *caseObjectNames) *relocated {
+	t.Helper()
+	var objectIDs []string
+	if objects != nil {
+		objectIDs = slices.Sorted(maps.Keys(objects.names))
+	}
 	type file struct {
 		rel   string
 		bytes []byte
@@ -725,7 +741,7 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 	if _, err := os.Stat(r.ws); err == nil {
 		walk("")
 	}
-	rel := &relocated{roots: r, names: map[string]string{}}
+	rel := &relocated{roots: r, names: map[string]string{}, objects: objects}
 	var found []string
 	add := func(hex, name string) {
 		if _, ok := rel.names[hex]; !ok {
@@ -739,6 +755,11 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 		}
 		for d := range rel.names {
 			if strings.Contains(text, d) {
+				return true
+			}
+		}
+		for _, id := range objectIDs {
+			if strings.Contains(text, id) {
 				return true
 			}
 		}
@@ -792,7 +813,9 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 	}
 	// A minimization run fact hashes its materialized worktree path, which
 	// appears in no file: name those digests after the masked path.
-	seeds := []string{r.root}
+	// The ids of the Git objects the case created are seeds too
+	// (gen-writers.ts relocation).
+	seeds := append([]string{r.root}, objectIDs...)
 	for _, path := range loggedCasePaths(records, r) {
 		digest := canonical.SHA256Hex(path)
 		add(digest, "path:"+normalizeWriter(path, r))
@@ -835,7 +858,7 @@ func isRealDir(path string) bool {
 // text masks the case paths, then every path-dependent digest by its name
 // (gen-writers.ts relocation).
 func (rel *relocated) text(s string) string {
-	out := normalizeWriter(s, rel.roots)
+	out := maskObjectIDs(normalizeWriter(s, rel.roots), rel.objects)
 	for _, d := range rel.sorted {
 		out = strings.ReplaceAll(out, d, "<PATHDIGEST:"+rel.names[d]+">")
 	}
@@ -854,6 +877,9 @@ func (rel *relocated) fileDigest(path string, b []byte) string {
 		return gitIndexDigest(filepath.Dir(filepath.Join(rel.roots.ws, filepath.FromSlash(path))), b)
 	}
 	if d, ok := snapshotObjectDigest(path); ok {
+		return d
+	}
+	if d, ok := createdObjectDigest(path, b, rel.objects, rel.text); ok {
 		return d
 	}
 	d := canonical.SHA256HexBytes(b)
@@ -1023,6 +1049,10 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 	r := makeWriterRoots(t)
 	busyPort := holdBusyPort(t, tpl)
 	prepareWriterCase(t, repo, tpl, r)
+	// The Git objects the case starts from, recorded once its workspace is
+	// in place (gen-writers.ts runCase); objects are those it created so far.
+	start := caseObjectsBefore(t, r.ws)
+	objects := caseObjects(t, r, start)
 	var out []writerResult
 	// The recorded paths accumulate over the case's invocations: a later
 	// invocation must keep masking the worktree digests an earlier one
@@ -1037,7 +1067,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 			resetNewModes(t, r.ws, existing)
 			applyWriterMutations(t, tpl, r, func(m template) bool { return mutationInv(m) == inv && m.str("op") == "chmod" })
 		}
-		before := treeEntries(t, r.ws, relocation(t, r, records).fileDigest)
+		before := treeEntries(t, r.ws, relocationWith(t, r, records, objects).fileDigest)
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
@@ -1069,7 +1099,8 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		}
 		invocationRecords := readArgvLog(r.argvLog)
 		records = append(records, invocationRecords...)
-		reloc := relocation(t, r, records)
+		objects = caseObjects(t, r, start)
+		reloc := relocationWith(t, r, records, objects)
 		after := treeEntries(t, r.ws, reloc.fileDigest)
 		res := writerResult{Inv: inv, Stdout: maskPlanDigests(reloc.text(outText), plans), Stderr: maskPlanDigests(reloc.text(errText), plans),
 			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestWith(r.ws, reloc.fileDigest), Modes: modesDigest(after), Files: changedFiles(before, after),
@@ -1275,6 +1306,7 @@ func prepareWriterCase(t testing.TB, repo string, tpl writerTemplate, r writerRo
 	}
 	applyWriterMutations(t, tpl, r, setup(false))
 	resetModes(t, r.ws)
+	restoreScenarioModes(t, tpl.Scenario, r.ws)
 	refreshScenarioIndexes(t, repo, tpl.Scenario, r.ws)
 	// A read-only directory refuses writes only to a non-root user.
 	if os.Geteuid() == 0 && slices.ContainsFunc(tpl.Mutations, func(m template) bool { return m.str("op") == "chmod" }) {
@@ -1581,6 +1613,7 @@ func scenarioWorkspace(t *testing.T, name string) string {
 	r := makeWriterRoots(t)
 	copyScenario(t, repoRoot(t), name, r.ws)
 	resetModes(t, r.ws)
+	restoreScenarioModes(t, name, r.ws)
 	refreshScenarioIndexes(t, repoRoot(t), name, r.ws)
 	return r.ws
 }
@@ -1861,3 +1894,314 @@ func TestDoctorHostileFsmonitorGolden(t *testing.T) {
 		t.Fatalf("%s", want.Field("stdout").Str())
 	}
 }
+
+// ---- Created Git objects (slice 4b Task 1; the same rule as slice 4c Task 2) ----
+// The Go twins of gen-writers.ts's "Created Git objects" block, which states
+// the rule: the objects a case creates in a workspace repository (listed
+// with the harness's own git before the first invocation and after each
+// one) are named <BLOB|TREE|COMMIT:h12> from their content with the case
+// paths and already-named ids masked, a commit without its author and
+// committer times; ids that existed before the case are never masked; a
+// created loose object is hashed as sha256("git-object:" + its name); a new
+// or changed reflog has its "<seconds> <zone>\t" replaced with "<TIME>\t";
+// and the ids are relocation seeds.
+
+// harnessGit runs the harness's git on gitDir (gen-writers.ts harnessGit):
+// no fl environment, no argv log.
+func harnessGit(gitDir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", append([]string{"-c", "core.fsmonitor=false", "--git-dir=" + gitDir}, args...)...)
+	cmd.Dir = gitDir
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull}
+	return cmd.Output()
+}
+
+var objectIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// objectListing is a repository's object ids and their types (none when git
+// cannot read it), without the turn-snapshot store's objects
+// (gen-writers.ts objectListing).
+func objectListing(repoDir string) map[string]string {
+	gitDir := filepath.Join(repoDir, ".git")
+	out := map[string]string{}
+	listing, err := harnessGit(gitDir, "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)")
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(listing), "\n") {
+		id, typ, ok := strings.Cut(line, " ")
+		if !ok || strings.Contains(typ, " ") || !objectIDPattern.MatchString(id) {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(gitDir, "faultline", "objects", id[:2], id[2:])); err == nil {
+			continue
+		}
+		out[id] = typ
+	}
+	return out
+}
+
+// objectSet is the id set of repository repoDir, the directory holding .git
+// (gen-writers.ts objectSet).
+func objectSet(t testing.TB, repoDir string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for id := range objectListing(repoDir) {
+		out[id] = true
+	}
+	return out
+}
+
+// gitRepositories lists the workspace directories (relative, "." for ws
+// itself) that hold a .git directory, not entering any .git
+// (gen-writers.ts gitRepositories).
+func gitRepositories(ws string) []string {
+	var out []string
+	var walk func(rel string)
+	walk = func(rel string) {
+		dir := filepath.Join(ws, filepath.FromSlash(rel))
+		names, err := nodefs.ReadDirNames(dir)
+		if err != nil {
+			return
+		}
+		for _, name := range names {
+			info, err := os.Lstat(filepath.Join(dir, name))
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			if name == ".git" {
+				out = append(out, rel)
+			} else if rel == "." {
+				walk(name)
+			} else {
+				walk(rel + "/" + name)
+			}
+		}
+	}
+	if _, err := os.Stat(ws); err == nil {
+		walk(".")
+	}
+	return out
+}
+
+// createdObjects maps each workspace repository to the objects it holds now
+// and did not hold in before, id to type (gen-writers.ts createdObjects).
+func createdObjects(t testing.TB, ws string, before map[string]map[string]bool) map[string]map[string]string {
+	t.Helper()
+	out := map[string]map[string]string{}
+	for _, rel := range gitRepositories(ws) {
+		created := map[string]string{}
+		for id, typ := range objectListing(filepath.Join(ws, filepath.FromSlash(rel))) {
+			if !before[rel][id] {
+				created[id] = typ
+			}
+		}
+		if len(created) > 0 {
+			out[rel] = created
+		}
+	}
+	return out
+}
+
+// identTime is an author or committer line's trailing " <seconds> <zone>".
+var identTime = regexp.MustCompile(` [0-9]+ [+-][0-9]{4}$`)
+
+// objectNames names every created object of repository repoDir: blobs, then
+// trees, then commits, each from its `git cat-file -p` text with text()
+// and every already-named id masked (gen-writers.ts objectNames).
+func objectNames(t testing.TB, repoDir string, created map[string]string, text func(string) string) map[string]string {
+	t.Helper()
+	gitDir := filepath.Join(repoDir, ".git")
+	names := map[string]string{}
+	masked := func(s string) string {
+		out := text(s)
+		for _, id := range slices.Sorted(maps.Keys(names)) {
+			out = strings.ReplaceAll(out, id, names[id])
+		}
+		return out
+	}
+	name := func(kind, body string) string {
+		return "<" + strings.ToUpper(kind) + ":" + canonical.SHA256Hex(kind + "\n" + body)[:12] + ">"
+	}
+	var visit func(id string, path map[string]bool)
+	visit = func(id string, path map[string]bool) {
+		if _, ok := names[id]; ok || path[id] {
+			return
+		}
+		inner := maps.Clone(path)
+		inner[id] = true
+		raw, err := harnessGit(gitDir, "cat-file", "-p", id)
+		if err != nil {
+			t.Fatalf("git cat-file -p %s in %s: %v", id, repoDir, err)
+		}
+		content := jsstr.DecodeUTF8(raw)
+		switch typ := created[id]; typ {
+		case "tree":
+			entries := strings.TrimSuffix(content, "\n")
+			for _, line := range strings.Split(entries, "\n") {
+				head, _, _ := strings.Cut(line, "\t")
+				if fields := strings.Split(head, " "); len(fields) > 2 {
+					if _, ok := created[fields[2]]; ok {
+						visit(fields[2], inner)
+					}
+				}
+			}
+			names[id] = name("tree", masked(entries))
+		case "commit":
+			headerText, message, found := strings.Cut(content, "\n\n")
+			if !found {
+				message = ""
+			}
+			var lines []string
+			for _, header := range strings.Split(headerText, "\n") {
+				key, value, _ := strings.Cut(header, " ")
+				switch key {
+				case "tree", "parent":
+					if _, ok := created[value]; ok {
+						visit(value, inner)
+					}
+					lines = append(lines, key+" "+value)
+				case "author", "committer":
+					lines = append(lines, key+" "+identTime.ReplaceAllString(value, ""))
+				}
+			}
+			names[id] = name("commit", masked(strings.Join(append(lines, "", message), "\n")))
+		default:
+			names[id] = name(typ, masked(content))
+		}
+	}
+	ids := slices.Sorted(maps.Keys(created))
+	for _, kind := range []string{"blob", "tree", "commit"} {
+		for _, id := range ids {
+			if created[id] == kind {
+				visit(id, map[string]bool{})
+			}
+		}
+	}
+	for _, id := range ids { // any other type (a tag) last
+		visit(id, map[string]bool{})
+	}
+	return names
+}
+
+// caseObjectNames are the created objects' names (all repositories, for
+// text), per repository (for the loose-object rule), and the reflog digests
+// the case started from (gen-writers.ts CaseObjects).
+type caseObjectNames struct {
+	names   map[string]string
+	byRepo  map[string]map[string]string
+	reflogs map[string]string
+}
+
+// caseObjectsStart is what a case starts from: each repository's object set
+// and the reflog digests (gen-writers.ts CaseObjectsBefore).
+type caseObjectsStart struct {
+	sets    map[string]map[string]bool
+	reflogs map[string]string
+}
+
+var (
+	reflogPattern      = regexp.MustCompile(`(?:^|/)\.git/(?:[^\n]+/)?logs/[^\n]+$`)
+	looseObjectPattern = regexp.MustCompile(`^(?:([^\n]*)/)?\.git/objects/([0-9a-f]{2})/([0-9a-f]{38}|[0-9a-f]{62})$`)
+	reflogTime         = regexp.MustCompile(`[0-9]+ [+-][0-9]{4}\t`)
+)
+
+// reflogDigests are the SHA-256s of every reflog file under ws
+// (gen-writers.ts reflogDigests).
+func reflogDigests(ws string) map[string]string {
+	out := map[string]string{}
+	var walk func(rel string)
+	walk = func(rel string) {
+		names, err := nodefs.ReadDirNames(filepath.Join(ws, filepath.FromSlash(rel)))
+		if err != nil {
+			return
+		}
+		for _, name := range names {
+			r := name
+			if rel != "" {
+				r = rel + "/" + name
+			}
+			path := filepath.Join(ws, filepath.FromSlash(r))
+			info, err := os.Lstat(path)
+			switch {
+			case err != nil:
+			case info.IsDir():
+				walk(r)
+			case info.Mode().IsRegular() && reflogPattern.MatchString(r):
+				if b, err := os.ReadFile(path); err == nil {
+					out[r] = canonical.SHA256HexBytes(b)
+				}
+			}
+		}
+	}
+	walk("")
+	return out
+}
+
+// caseObjectsBefore records each repository's object set and the reflog
+// digests once the case's workspace is in place (gen-writers.ts
+// caseObjectsBefore).
+func caseObjectsBefore(t testing.TB, ws string) caseObjectsStart {
+	t.Helper()
+	start := caseObjectsStart{sets: map[string]map[string]bool{}, reflogs: reflogDigests(ws)}
+	for _, rel := range gitRepositories(ws) {
+		start.sets[rel] = objectSet(t, filepath.Join(ws, filepath.FromSlash(rel)))
+	}
+	return start
+}
+
+// caseObjects lists and names what the case created so far (gen-writers.ts
+// caseObjects).
+func caseObjects(t testing.TB, r writerRoots, start caseObjectsStart) *caseObjectNames {
+	t.Helper()
+	out := &caseObjectNames{names: map[string]string{}, byRepo: map[string]map[string]string{}, reflogs: start.reflogs}
+	for rel, created := range createdObjects(t, r.ws, start.sets) {
+		repoNames := objectNames(t, filepath.Join(r.ws, filepath.FromSlash(rel)), created, func(s string) string { return normalizeWriter(s, r) })
+		out.byRepo[rel] = repoNames
+		maps.Copy(out.names, repoNames)
+	}
+	return out
+}
+
+// maskObjectIDs replaces each created object id in text with its name
+// (gen-writers.ts maskObjectIds).
+func maskObjectIDs(text string, objects *caseObjectNames) string {
+	if objects == nil {
+		return text
+	}
+	for _, id := range slices.Sorted(maps.Keys(objects.names)) {
+		text = strings.ReplaceAll(text, id, objects.names[id])
+	}
+	return text
+}
+
+// createdObjectDigest is the loose-object and reflog rules' digest of
+// workspace file rel; ok is false when neither applies (gen-writers.ts
+// createdObjectDigest).
+func createdObjectDigest(rel string, b []byte, objects *caseObjectNames, text func(string) string) (string, bool) {
+	if objects == nil {
+		return "", false
+	}
+	if m := looseObjectPattern.FindStringSubmatchIndex(rel); m != nil {
+		repo := "."
+		if m[2] >= 0 {
+			repo = rel[m[2]:m[3]]
+		}
+		name, ok := objects.byRepo[repo][rel[m[4]:m[5]]+rel[m[6]:m[7]]]
+		if !ok {
+			return "", false
+		}
+		return canonical.SHA256Hex("git-object:" + name), true
+	}
+	if reflogPattern.MatchString(rel) && objects.reflogs[rel] != canonical.SHA256HexBytes(b) {
+		lines := strings.Split(jsstr.DecodeUTF8(b), "\n")
+		for i, line := range lines {
+			if loc := reflogTime.FindStringIndex(line); loc != nil {
+				lines[i] = line[:loc[0]] + "<TIME>\t" + line[loc[1]:]
+			}
+		}
+		return canonical.SHA256Hex(text(strings.Join(lines, "\n"))), true
+	}
+	return "", false
+}
+
+// ---- end of the created Git objects rule ----

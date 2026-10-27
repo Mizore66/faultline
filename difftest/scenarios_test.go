@@ -92,6 +92,17 @@ var writerScenarios = map[string]bool{
 	"sidecar-worktree": true,
 	"sidecar-recorded": true,
 	"snapgc-repo":      true,
+	// Slice 4b: fl investigate turns, prove transition.
+	"turn-two-states":        true,
+	"turn-non-monotonic":     true,
+	"turn-pass-only":         true,
+	"turn-baseline-only":     true,
+	"turn-duplicate-ordinal": true,
+	"turn-heterogeneous":     true,
+	"turn-missing-tree":      true,
+	"turn-sha256":            true,
+	"turn-sidecar":           true,
+	"turn-latest-ambiguous":  true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is
@@ -197,6 +208,30 @@ func checkScenarioDirs(t *testing.T, repo string) {
 	for _, e := range entries {
 		if !writerScenarios[e.Name()] {
 			t.Errorf("difftest/testdata/scenarios/%s has no builder: run difftest/gen/scenarios.ts", e.Name())
+		}
+	}
+}
+
+// scenarioDirModes lists the directories a scenario's builder makes with a
+// mode other than 0755 (scenarios.ts SCENARIO_DIR_MODES): git records no
+// directory modes, and copyScenario and resetModes make every directory
+// 0755. restoreScenarioModes sets them once resetModes has run.
+var scenarioDirModes = map[string]struct {
+	dirs []string
+	mode os.FileMode
+}{
+	"turn-sidecar":          {[]string{"repo/.git/faultline", "repo/.git/faultline/recordings"}, 0o700},
+	"turn-latest-ambiguous": {[]string{"repo/.git/faultline", "repo/.git/faultline/recordings"}, 0o700},
+}
+
+// restoreScenarioModes is scenarios.ts restoreScenarioModes.
+func restoreScenarioModes(t testing.TB, name, ws string) {
+	t.Helper()
+	if e, ok := scenarioDirModes[name]; ok {
+		for _, rel := range e.dirs {
+			if err := os.Chmod(filepath.Join(ws, filepath.FromSlash(rel)), e.mode); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 }
