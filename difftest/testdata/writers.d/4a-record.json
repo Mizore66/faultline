@@ -12,6 +12,7 @@
   {"id":"record-init-exists","scenario":"empty","argv":[["record","init","--session","s-1"]],"mutations":[{"op":"add-file","path":".faultline/recordings/s-1.json","content":"{}\n"}]},
   {"id":"record-init-exists-dangling-symlink","scenario":"empty","argv":[["record","init","--session","s-1"]],"posixOnly":true,"mutations":[{"op":"add-symlink","path":".faultline/recordings/s-1.json","target":"missing.json"}]},
   {"id":"record-init-dir-is-file","scenario":"empty","argv":[["record","init","--session","s-1"]],"posixOnly":true,"mutations":[{"op":"add-file","path":".faultline/recordings","content":"not a directory\n"}]},
+  {"id":"record-init-lone-surrogate-actor","scenario":"empty","argv":[["record","init","--session","s-1","--actor","Ada \ud800"]],"posixOnly":true},
   {"id":"record-checkpoint","scenario":"record-repo","argv":[["record","checkpoint","--ledger","ledger.json","--repo","repo","--after-turn","1"]],"posixOnly":true},
   {"id":"record-checkpoint-after-turn-forms","scenario":"record-repo","argv":[["record","checkpoint","--ledger","ledger.json","--repo","repo","--after-turn","0x1"],["record","checkpoint","--ledger","ledger.json","--repo","repo","--after-turn","1e0"],["record","checkpoint","--ledger","ledger.json","--repo","repo","--after-turn"," 1 "],["record","checkpoint","--ledger","ledger.json","--repo","repo","--after-turn","-0"]],"posixOnly":true,"advanceClock":true},
   {"id":"record-checkpoint-negative","scenario":"record-repo","argv":[["record","checkpoint","--ledger","ledger.json","--repo","repo","--after-turn","-1"]],"posixOnly":true},

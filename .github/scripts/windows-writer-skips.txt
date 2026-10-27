@@ -436,3 +436,4 @@ TestWriterReplay/posix/record-checkpoint-subdir
 TestWriterReplay/posix/record-attach-checkpoint
 TestWriterReplay/posix/record-stdin-checkpoint-capture
 TestWriterReplay/posix/record-stdin-checkpoint-missing-ordinal
+TestWriterReplay/posix/record-init-lone-surrogate-actor

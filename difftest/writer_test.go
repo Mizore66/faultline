@@ -1041,7 +1041,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
-			args[i] = stdoutArgument(t, fileArgument(t, strings.ReplaceAll(substituteRoots(a, r), busyPortMarker, busyPort), r), stdouts)
+			args[i] = jsstr.ToUTF8(stdoutArgument(t, fileArgument(t, strings.ReplaceAll(substituteRoots(a, r), busyPortMarker, busyPort), r), stdouts))
 		}
 		command := append([]string{flBinary}, args...)
 		if run.command != nil {
