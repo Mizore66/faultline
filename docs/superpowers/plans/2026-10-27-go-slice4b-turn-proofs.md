@@ -462,7 +462,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 | # | Case | Templates (new ones in bold) | Verdict |
 | --- | --- | --- | --- |
-| 1 | missing manifest/hashes/ROOT | `delete` on each file; **`turn-rename-hashes`** is generic `rename-hashes` | INVALID: `Turn proof bundle verification failed safely: ENOENT…` for hashes/ROOT. A missing manifest routes to the demo verifier (see Gotchas). |
+| 1 | missing manifest/hashes/ROOT | `delete` on each file; the generic `rename-hashes` and `rename-manifest` | INVALID: `Turn proof bundle verification failed safely: ENOENT…` for hashes/ROOT. A missing manifest routes to the demo verifier (see Gotchas). |
 | 2 | extra undeclared file | `add-root-stray`, `add-nested-stray`; **`turn-stray-declared`** (`add-file` `source/extra.bin` + `rehash`) | INVALID: `undeclared physical file…`, or `hashes.txt contains an unexpected artifact: source/extra.bin` |
 | 3 | traversal | `hashes-traversal`, `hashes-dotdot-escape`; **`turn-hashes-nested-traversal`** (`  manifest.json` → `  source/../../outside`) | INVALID: `hashes.txt contains an unsafe artifact path: <whole line>` |
 | 4 | absolute / Windows paths | `hashes-absolute`, `hashes-backslash`, `hashes-nul`; **`turn-hashes-drive-letter`** (`  C:/outside`, `posixOnly`) | INVALID; on POSIX the drive-letter path is safe and reads as ENOENT (correction 11) |
@@ -1314,6 +1314,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - Consumes:
   - Task 3: the schemas and `StatesFromLedger`, `DuplicateTurnOrdinal`, `ReconstructStable`, `FindTransitions`, `HasNonMonotonic`, `AttributeFailureIntroduction`.
   - `gitproof.VerifyFrozenWitnessRecord`, `gitproof.ReadVerifiedCodexLifecycleLedger` (4a's `ledger.ReadVerified` is the same function).
+  - Tests only: 4a Task 4's `ledger.Create(ledger.CreateOptions)`, `ledger.Append(ledger, input, ledger.AppendOptions)`, `ledger.WriteAtomic(path, ledger)`; `turnsnap.Capture`.
   - `gitinv.{MaterializeGitTree,MaterializeFrozenOverlays,ComputeFingerprint,Homogeneity,MissingRuntimeMappingDigests,BuildEffectiveRuntimeMapping,MappingEntry,EnvironmentChangedProofMessage}`.
   - `sandbox.{CreatePlan,AuditPlan,Execute,Runner,NativeRunner}`; `redaction.RedactText`; `evidence.TurnPathEvidence`; `clock.{NowMillis,NewUUID}`; `nodefs.{MkdtempAsync,RemoveAllAsync,Tmpdir,Join,Resolve}`; `canonical.DigestJSON`.
 - Produces:
