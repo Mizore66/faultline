@@ -63,16 +63,20 @@ func ReadDirents(path string) ([]Dirent, error) {
 }
 
 // MtimeMs is fs.Stats.mtimeMs of an lstat result: milliseconds with the
-// sub-millisecond fraction Node keeps (sec*1e3 + nsec/1e6 as a float64,
-// lib/internal/fs/utils.js msFromTimeSpec). On Windows the time is libuv's
-// uv__filetime_to_timespec of the 100 ns file time: the seconds and the
-// remainder both truncate toward zero.
+// sub-millisecond fraction Node keeps (msFromTimeSpec in
+// lib/internal/fs/utils.js: sec*1e3 + nsec/1e6 as a float64). On Windows
+// the timespec is libuv's fs__filetime_to_timespec of the 100 ns file time:
+// seconds truncated toward zero, the remainder times 100 as nanoseconds,
+// and a negative remainder borrowed from the seconds.
 func MtimeMs(info fs.FileInfo) float64 {
 	t := info.ModTime()
+	sec, nsec := t.Unix(), int64(t.Nanosecond())
 	if isWindows {
-		ticks := t.UnixNano() / 100
-		sec, rem := ticks/10_000_000, ticks%10_000_000
-		return float64(sec)*1e3 + float64(rem*100)/1e6
+		ticks := t.UnixNano() / 100 // exact: winStat's time is ticks*100 ns
+		sec, nsec = ticks/10_000_000, (ticks%10_000_000)*100
+		if nsec < 0 {
+			sec, nsec = sec-1, nsec+1_000_000_000
+		}
 	}
-	return float64(t.Unix())*1e3 + float64(t.Nanosecond())/1e6
+	return float64(sec)*1e3 + float64(nsec)/1e6
 }
