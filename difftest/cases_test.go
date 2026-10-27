@@ -115,7 +115,7 @@ func TestRelocationNamesUnloggedWorktreeDigest(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(r.ws, ".faultline", "minimizations", "m.json"), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		got := relocation(t, r, nil).text(text)
+		got := relocation(t, r, nil, nil).text(text)
 		if want := "<PATHDIGEST:worktree:.faultline/minimizations/m.json#0>"; !strings.Contains(got, want) || strings.Contains(got, digest) {
 			t.Errorf("%s: %s", root, got)
 		}

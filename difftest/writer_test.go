@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -597,6 +598,14 @@ type relocated struct {
 	roots  writerRoots
 	names  map[string]string // digest hex -> provenance name
 	sorted []string
+	// base is what the case's repositories held before its first
+	// invocation (nil: no Git object or reflog masks). created is the
+	// objects the case made by repository directory, ids each one's
+	// content-addressed name, idsKeys the ids sorted.
+	base    *gitBase
+	created map[string]map[string]string
+	ids     map[string]string
+	idsKeys []string
 }
 
 var selfDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -658,7 +667,7 @@ func openAIRequestInputs(records []string) []string {
 	return out
 }
 
-func relocation(t *testing.T, r writerRoots, records []string) *relocated {
+func relocation(t *testing.T, r writerRoots, records []string, base *gitBase) *relocated {
 	t.Helper()
 	type file struct {
 		rel   string
@@ -699,7 +708,17 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 	if _, err := os.Stat(r.ws); err == nil {
 		walk("")
 	}
-	rel := &relocated{roots: r, names: map[string]string{}}
+	rel := &relocated{roots: r, names: map[string]string{}, base: base, ids: map[string]string{}}
+	commits := map[string]string{} // created commit -> its tree
+	if base != nil {
+		rel.created = createdObjects(t, r.ws, base.objects)
+		for _, repo := range slices.Sorted(maps.Keys(rel.created)) {
+			names, trees := namedObjects(t, filepath.Join(r.ws, filepath.FromSlash(repo)), rel.created[repo], func(s string) string { return normalizeWriter(s, r) })
+			maps.Copy(rel.ids, names)
+			maps.Copy(commits, trees)
+		}
+		rel.idsKeys = slices.Sorted(maps.Keys(rel.ids))
+	}
 	var found []string
 	add := func(hex, name string) {
 		if _, ok := rel.names[hex]; !ok {
@@ -713,6 +732,11 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 		}
 		for d := range rel.names {
 			if strings.Contains(text, d) {
+				return true
+			}
+		}
+		for _, id := range rel.idsKeys {
+			if strings.Contains(text, id) {
 				return true
 			}
 		}
@@ -772,6 +796,17 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 		add(digest, "path:"+normalizeWriter(path, r))
 		seeds = append(seeds, digest)
 	}
+	// The Git objects the case created are seeds (named by objectNames in
+	// text), and so are the repaired-run digests computed from them.
+	seeds = append(seeds, rel.idsKeys...)
+	texts := map[string]string{}
+	for _, f := range files {
+		texts[f.rel] = f.text
+	}
+	for _, seed := range repairedRunSeeds(t, r, records, commits, texts) {
+		add(seed[0], seed[1])
+		seeds = append(seeds, seed[0])
+	}
 	// A worktree no recorder logged (a fault before git ran in it) is still
 	// hashed into its run fact: name each worktreeDigest value not named
 	// above after where it appears (round 7 #15).
@@ -818,6 +853,9 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 // (gen-writers.ts relocation).
 func (rel *relocated) text(s string) string {
 	out := normalizeWriter(s, rel.roots)
+	for _, id := range rel.idsKeys {
+		out = strings.ReplaceAll(out, id, rel.ids[id])
+	}
 	for _, d := range rel.sorted {
 		out = strings.ReplaceAll(out, d, "<PATHDIGEST:"+rel.names[d]+">")
 	}
@@ -837,6 +875,14 @@ func (rel *relocated) fileDigest(path string, b []byte) string {
 	}
 	if d, ok := snapshotObjectDigest(path); ok {
 		return d
+	}
+	if d, ok := rel.createdObjectDigest(path); ok {
+		return d
+	}
+	if rel.base != nil && reflogPath.MatchString(path) {
+		if was, ok := rel.base.logs[path]; !ok || was != canonical.SHA256HexBytes(b) {
+			return canonical.SHA256Hex(rel.text(maskReflogTimes(jsstr.DecodeUTF8(b))))
+		}
 	}
 	d := canonical.SHA256HexBytes(b)
 	if _, ok := rel.names[d]; !ok {
@@ -1008,13 +1054,16 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		tpl.openAIURL = startFakeOpenAI(t, r.ws, tpl.FakeOpenAI, r.argvLog)
 	}
 	prepareWriterCase(t, repo, tpl, r)
+	// What the repositories hold before the first invocation: an object or a
+	// reflog is new to the case by comparison with it (gitBase).
+	base := snapshotGit(t, r.ws)
 	var out []writerResult
 	// The recorded paths accumulate over the case's invocations: a later
 	// invocation must keep masking the worktree digests an earlier one
 	// wrote into a file (gen-writers.ts runCase).
 	var records, stdouts []string
 	for inv, argv := range tpl.Argv {
-		before := treeEntries(t, r.ws, relocation(t, r, records).fileDigest)
+		before := treeEntries(t, r.ws, relocation(t, r, records, base).fileDigest)
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
@@ -1046,7 +1095,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 			invocationRecords[i] = maskCodexPath(record, r, repo, inheritedPath)
 		}
 		records = append(records, invocationRecords...)
-		reloc := relocation(t, r, records)
+		reloc := relocation(t, r, records, base)
 		after := treeEntries(t, r.ws, reloc.fileDigest)
 		res := writerResult{Inv: inv, Stdout: maskPlanDigests(reloc.text(outText), plans), Stderr: maskPlanDigests(reloc.text(errText), plans),
 			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestWith(r.ws, reloc.fileDigest), Modes: modesDigest(after), Files: changedFiles(before, after),
@@ -1801,7 +1850,7 @@ func TestGitIndexRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	git("add", "a.txt")
-	reloc := relocation(t, r, nil)
+	reloc := relocation(t, r, nil, nil)
 	index := filepath.Join(r.ws, ".git", "index")
 	first, err := os.ReadFile(index)
 	if err != nil {
@@ -1884,4 +1933,360 @@ func TestDoctorHostileFsmonitorGolden(t *testing.T) {
 	if want.Field("exit").Num() != 0 || !strings.Contains(want.Field("stdout").Str(), "[READY] worktree:") {
 		t.Fatalf("%s", want.Field("stdout").Str())
 	}
+}
+
+// Created Git objects and repaired-run digests (slice 4c Task 2). A case that
+// makes a commit records the case directory in its README blob, so the blob,
+// the tree and the commit ids vary with where the case ran (the commit also
+// with the clock). Each object the case creates is named by its content with
+// the case paths masked (objectNames); the digests computed over those ids
+// (the repair verifier's executionId and each repaired run's runId) are
+// recomputed and named (repairedRunSeeds). gen-writers.ts has the twins.
+
+// gitBase is what the case's repositories held before its first invocation
+// (gen-writers.ts GitBase): the object ids of each repository (by directory
+// relative to the workspace) and the byte digest of each reflog.
+type gitBase struct {
+	objects map[string]map[string]bool
+	logs    map[string]string
+}
+
+// harnessGit runs the harness's own git (not fl's, and not through the
+// recorder: the PATH is the inherited one, as in gitIndexDigest) on the
+// repository whose .git directory is gitDir.
+func harnessGit(gitDir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", append([]string{"-c", "core.fsmonitor=false", "--git-dir=" + gitDir}, args...)...)
+	cmd.Dir = gitDir
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=" + os.DevNull}
+	return cmd.Output()
+}
+
+// gitRepos lists the directories under ws, relative to ws ("." for ws
+// itself), that hold a .git directory (a linked worktree's .git file does
+// not count), sorted. gen-writers.ts findRepos is the twin.
+func gitRepos(t testing.TB, ws string) []string {
+	t.Helper()
+	var out []string
+	var walk func(rel string)
+	walk = func(rel string) {
+		dir := filepath.Join(ws, filepath.FromSlash(rel))
+		names, err := nodefs.ReadDirNames(dir)
+		if err != nil {
+			t.Fatalf("listing %s: %v", rel, err)
+		}
+		for _, name := range names {
+			path := filepath.Join(dir, name)
+			info, err := os.Lstat(path)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			if name == ".git" {
+				if rel == "" {
+					out = append(out, ".")
+				} else {
+					out = append(out, rel)
+				}
+				continue
+			}
+			if rel == "" {
+				walk(name)
+			} else {
+				walk(rel + "/" + name)
+			}
+		}
+	}
+	if _, err := os.Stat(ws); err == nil {
+		walk("")
+	}
+	return out
+}
+
+// objectTypes is the id and type of every object repoDir's repository can
+// read, except those whose loose file lives in the turn-snapshot store
+// (.git/faultline/objects, an alternate of the repository): cat-file
+// --batch-all-objects lists them, and they already get snapshotObjectDigest.
+// A repository git cannot read lists nothing. gen-writers.ts objectTypes.
+func objectTypes(repoDir string) map[string]string {
+	gitDir := filepath.Join(repoDir, ".git")
+	out := map[string]string{}
+	listing, err := harnessGit(gitDir, "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)")
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(listing), "\n") {
+		id, typ, ok := strings.Cut(line, " ")
+		if !ok || len(id) < 3 {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(gitDir, "faultline", "objects", id[:2], id[2:])); err == nil {
+			continue
+		}
+		out[id] = typ
+	}
+	return out
+}
+
+// objectSet is the id set of objectTypes (gen-writers.ts objectSet).
+func objectSet(t testing.TB, repoDir string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	for id := range objectTypes(repoDir) {
+		out[id] = true
+	}
+	return out
+}
+
+// createdObjects maps each repository directory (relative to ws) to the
+// objects it holds now that it did not hold in before, id to type
+// (gen-writers.ts createdObjects).
+func createdObjects(t testing.TB, ws string, before map[string]map[string]bool) map[string]map[string]string {
+	t.Helper()
+	out := map[string]map[string]string{}
+	for _, repo := range gitRepos(t, ws) {
+		for id, typ := range objectTypes(filepath.Join(ws, filepath.FromSlash(repo))) {
+			if before[repo][id] {
+				continue
+			}
+			if out[repo] == nil {
+				out[repo] = map[string]string{}
+			}
+			out[repo][id] = typ
+		}
+	}
+	return out
+}
+
+// reflogPath is a reflog: any file under a logs directory of a .git
+// directory (gen-writers.ts REFLOG).
+var reflogPath = regexp.MustCompile(`(?:^|/)\.git/(?:[^/]+/)*logs/.+$`)
+
+// reflogTime is a reflog line's "<seconds> <zone>\t".
+var reflogTime = regexp.MustCompile(`[0-9]+ [+-][0-9]{4}\t`)
+
+// maskReflogTimes replaces each line's "<seconds> <zone>\t" with "<TIME>\t".
+func maskReflogTimes(text string) string { return reflogTime.ReplaceAllString(text, "<TIME>\t") }
+
+// snapshotGit records what the workspace's repositories hold now: call it
+// after the case is built and before its first invocation.
+func snapshotGit(t testing.TB, ws string) *gitBase {
+	t.Helper()
+	base := &gitBase{objects: map[string]map[string]bool{}, logs: map[string]string{}}
+	for _, repo := range gitRepos(t, ws) {
+		dir := filepath.Join(ws, filepath.FromSlash(repo))
+		base.objects[repo] = objectSet(t, dir)
+		_ = filepath.WalkDir(filepath.Join(dir, ".git"), func(path string, d os.DirEntry, err error) error {
+			if err != nil || !d.Type().IsRegular() {
+				return nil
+			}
+			rel, err := filepath.Rel(ws, path)
+			if err != nil || !reflogPath.MatchString(filepath.ToSlash(rel)) {
+				return nil
+			}
+			b, err := os.ReadFile(path)
+			if err == nil {
+				base.logs[filepath.ToSlash(rel)] = canonical.SHA256HexBytes(b)
+			}
+			return nil
+		})
+	}
+	return base
+}
+
+var identityTime = regexp.MustCompile(` [0-9]+ [+-][0-9]{4}$`)
+
+// namedObjects names every created object of one repository, in dependency
+// order, and gives each created commit's tree id. Each name is
+// <BLOB:h12>, <TREE:h12> or <COMMIT:h12>, h12 being the first 12 hex digits
+// of the SHA-256 of "<type>\n" and the object's `git cat-file -p` text with
+// the case paths (text) and every already-named id masked. A commit's text
+// leaves out its author and committer times. An id that existed before the
+// case is never masked. gen-writers.ts namedObjects.
+func namedObjects(t testing.TB, repoDir string, created map[string]string, text func(string) string) (names, commitTree map[string]string) {
+	t.Helper()
+	gitDir := filepath.Join(repoDir, ".git")
+	names, commitTree = map[string]string{}, map[string]string{}
+	var name func(id string) string
+	name = func(id string) string {
+		typ, ok := created[id]
+		if !ok {
+			return id
+		}
+		if n, ok := names[id]; ok {
+			return n
+		}
+		raw, err := harnessGit(gitDir, "cat-file", "-p", id)
+		if err != nil {
+			t.Fatalf("git cat-file -p %s in %s: %v", id, repoDir, err)
+		}
+		body := jsstr.DecodeUTF8(raw)
+		var label, material string
+		switch typ {
+		case "blob":
+			label, material = "BLOB", "blob\n"+text(body)
+		case "tree":
+			label = "TREE"
+			var lines []string
+			if body != "" {
+				lines = strings.Split(strings.TrimSuffix(body, "\n"), "\n")
+			}
+			for i, line := range lines {
+				if tab := strings.IndexByte(line, '\t'); tab >= 0 {
+					if fields := strings.SplitN(line[:tab], " ", 3); len(fields) == 3 {
+						fields[2] = name(fields[2])
+						lines[i] = strings.Join(fields, " ") + line[tab:]
+					}
+				}
+			}
+			material = "tree\n" + text(strings.Join(lines, "\n"))
+		case "commit":
+			label = "COMMIT"
+			header, message, _ := strings.Cut(body, "\n\n")
+			lines := strings.Split(header, "\n")
+			for i, line := range lines {
+				switch {
+				case strings.HasPrefix(line, "tree "):
+					commitTree[id] = line[5:]
+					lines[i] = "tree " + name(line[5:])
+				case strings.HasPrefix(line, "parent "):
+					lines[i] = "parent " + name(line[7:])
+				case strings.HasPrefix(line, "author "), strings.HasPrefix(line, "committer "):
+					lines[i] = identityTime.ReplaceAllString(line, "")
+				}
+			}
+			material = "commit\n" + text(strings.Join(lines, "\n")+"\n\n"+message)
+		default: // a tag: named by its text like a blob
+			label, material = "BLOB", typ+"\n"+text(body)
+		}
+		names[id] = "<" + label + ":" + canonical.SHA256Hex(material)[:12] + ">"
+		return names[id]
+	}
+	for _, id := range slices.Sorted(maps.Keys(created)) {
+		name(id)
+	}
+	return names, commitTree
+}
+
+// objectNames maps each created id to its name (gen-writers.ts objectNames).
+func objectNames(t testing.TB, repoDir string, created map[string]string, text func(string) string) map[string]string {
+	names, _ := namedObjects(t, repoDir, created, text)
+	return names
+}
+
+var looseObject = regexp.MustCompile(`^(?:(.*)/)?\.git/objects/([0-9a-f]{2})/([0-9a-f]{38}|[0-9a-f]{62})$`)
+
+// createdObjectDigest hashes a loose object the case created by its name,
+// like snapshotObjectDigest; one that existed before keeps its byte digest.
+func (rel *relocated) createdObjectDigest(path string) (string, bool) {
+	m := looseObject.FindStringSubmatch(path)
+	if m == nil {
+		return "", false
+	}
+	repo := m[1]
+	if repo == "" {
+		repo = "."
+	}
+	if _, ok := rel.created[repo][m[2]+m[3]]; !ok {
+		return "", false
+	}
+	return canonical.SHA256Hex("git-object:" + rel.ids[m[2]+m[3]]), true
+}
+
+// fakeDockerPassStdout is the pass-fail fake Docker's stdout for state=good.
+const fakeDockerPassStdout = "state=good\nFAULTLINE_WITNESS_RESULT={\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n"
+
+// repairedRunSeeds computes the digests a repaired run binds to a created
+// commit and tree: for each repaired worktree a recorder logged and each
+// PASS run fact of a bundle in the workspace, the repair verifier's
+// executionId (src/codex-loop.ts:243) named exec:<masked worktree>; for each
+// created commit with its tree and each executionId, the runId of attempts 1
+// to 3 (src/prevention-from-artifacts.ts:525) named run:<attempt>. A
+// candidate that appears in no file is dropped; a wrong one is never named.
+// It returns [hex, name] pairs. gen-writers.ts repairedRunSeeds.
+func repairedRunSeeds(t testing.TB, r writerRoots, records []string, commits map[string]string, texts map[string]string) [][2]string {
+	t.Helper()
+	if len(commits) == 0 {
+		return nil
+	}
+	digest := func(keys []string, vals []jsjson.Value) string {
+		o := jsjson.NewObj()
+		for i, k := range keys {
+			o.Set(k, vals[i])
+		}
+		d, err := canonical.DigestJSON(jsjson.MakeObject(o))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	str := jsjson.MakeString
+	type pass struct{ policy, envPolicy, frozen, witness, environment string }
+	var passes []pass
+	for _, rel := range slices.Sorted(maps.Keys(texts)) {
+		bundle, ok := strings.CutSuffix(rel, ".json")
+		if !ok {
+			continue
+		}
+		dir, _ := path.Split(bundle)
+		if !strings.HasSuffix(dir, "runs/") {
+			continue
+		}
+		dir = strings.TrimSuffix(dir, "runs/")
+		run, err := jsjson.Parse(texts[rel])
+		if err != nil || run.Get("schemaVersion").Str() != "faultline.git-investigation.v1" ||
+			run.Get("result", "verdict").Str() != "PASS" || run.Get("result", "reason").Str() != "PREDICATE_PASS" {
+			continue
+		}
+		investigation, err := jsjson.Parse(texts[dir+"investigation.json"])
+		if err != nil {
+			continue
+		}
+		digests := investigation.Get("environment", "distinctDigests")
+		if digests.Kind() != jsjson.Array || len(digests.Items()) != 1 || digests.Items()[0].Kind() != jsjson.String {
+			continue
+		}
+		witness := run.Get("witnessDigest").Str()
+		if frozen, err := jsjson.Parse(texts[dir+"witness/frozen.json"]); err == nil && frozen.Get("witnessDigest").Kind() == jsjson.String {
+			witness = frozen.Get("witnessDigest").Str()
+		}
+		passes = append(passes, pass{run.Get("sandbox", "policyDigest").Str(), run.Get("sandbox", "environmentPolicyDigest").Str(),
+			run.Get("frozenDigest").Str(), witness, digests.Items()[0].Str()})
+	}
+	appears := func(hex string) bool {
+		for _, text := range texts {
+			if strings.Contains(text, hex) {
+				return true
+			}
+		}
+		return false
+	}
+	var out [][2]string
+	seen := map[string]bool{}
+	stdoutDigest := "sha256:" + canonical.SHA256Hex(fakeDockerPassStdout)
+	stderrDigest := "sha256:" + canonical.SHA256Hex("")
+	for _, w := range loggedCasePaths(records, r) {
+		for _, p := range passes {
+			execution := digest(
+				[]string{"kind", "executor", "verdict", "reason", "policyDigest", "environmentPolicyDigest", "exitCode", "stdoutDigest", "stderrDigest", "worktree", "frozenDigest"},
+				[]jsjson.Value{str("faultline.repair-verify-execution.v1"), str("NATIVE_DOCKER"), str("PASS"), str("PREDICATE_PASS"), str(p.policy), str(p.envPolicy),
+					jsjson.MakeNumber(0), str(stdoutDigest), str(stderrDigest), str(w), str(p.frozen)})
+			if seen[execution] || !appears(execution[7:]) {
+				continue
+			}
+			seen[execution] = true
+			out = append(out, [2]string{execution[7:], "exec:" + normalizeWriter(w, r)})
+			for _, commit := range slices.Sorted(maps.Keys(commits)) {
+				for attempt := 1; attempt <= 3; attempt++ {
+					run := digest(
+						[]string{"schemaVersion", "attempt", "commit", "tree", "witnessDigest", "environmentDigest", "executionId", "detail"},
+						[]jsjson.Value{str("faultline.prevention-repaired-run.v1"), jsjson.MakeNumber(float64(attempt)), str(commit), str(commits[commit]), str(p.witness), str(p.environment),
+							str(execution), str("Frozen witness PREDICATE_PASS on repaired worktree (NATIVE_DOCKER).")})
+					if !seen[run] {
+						seen[run] = true
+						out = append(out, [2]string{run[7:], "run:" + strconv.Itoa(attempt)})
+					}
+				}
+			}
+		}
+	}
+	return out
 }

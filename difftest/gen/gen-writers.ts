@@ -146,6 +146,226 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 // unmasked. The Go twin is relocation in difftest/writer_test.go.
 export type Relocation = { text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string };
 
+// Created Git objects and repaired-run digests (slice 4c Task 2). A case that
+// makes a commit records the case directory in its README blob, so the blob,
+// the tree and the commit ids vary with where the case ran (the commit also
+// with the clock). Each object the case creates is named by its content with
+// the case paths masked (objectNames); the digests computed over those ids
+// (the repair verifier's executionId and each repaired run's runId) are
+// recomputed and named (repairedRunSeeds). The Go twins are in
+// difftest/writer_test.go.
+
+// GitBase is what the case's repositories held before its first invocation:
+// the object ids of each repository (by directory relative to the workspace)
+// and the byte digest of each reflog.
+export type GitBase = { objects: Map<string, Set<string>>; logs: Map<string, string> };
+
+// harnessGit runs the harness's own git (not fl's, and not through the
+// recorder: the PATH is the inherited one, as in gitIndexDigest) on the
+// repository whose .git directory is gitDir.
+function harnessGit(gitDir: string, args: string[]): Buffer | undefined {
+  try {
+    return execFileSync("git", ["-c", "core.fsmonitor=false", `--git-dir=${gitDir}`, ...args], {
+      cwd: gitDir, env: { PATH: process.env.PATH ?? "", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+      stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 28
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+// gitRepos lists the directories under ws, relative to ws ("." for ws
+// itself), that hold a .git directory (a linked worktree's .git file does
+// not count), sorted. The Go twin is gitRepos.
+export function gitRepos(ws: string): string[] {
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    for (const name of readdirSync(join(ws, rel)).sort(byCodeUnit)) {
+      const r = rel ? `${rel}/${name}` : name;
+      if (!lstatSync(join(ws, r)).isDirectory()) continue;
+      if (name === ".git") out.push(rel === "" ? "." : rel);
+      else walk(r);
+    }
+  };
+  if (existsSync(ws)) walk("");
+  return out;
+}
+
+// objectTypes is the id and type of every object repoDir's repository can
+// read, except those whose loose file lives in the turn-snapshot store
+// (.git/faultline/objects, an alternate of the repository): cat-file
+// --batch-all-objects lists them, and they already get snapshotObjectDigest.
+// A repository git cannot read lists nothing. The Go twin is objectTypes.
+export function objectTypes(repoDir: string): Map<string, string> {
+  const gitDir = join(repoDir, ".git");
+  const out = new Map<string, string>();
+  const listing = harnessGit(gitDir, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)"]);
+  if (listing === undefined) return out;
+  for (const line of listing.toString("utf8").split("\n")) {
+    const space = line.indexOf(" ");
+    if (space < 3) continue;
+    const id = line.slice(0, space);
+    if (existsSync(join(gitDir, "faultline", "objects", id.slice(0, 2), id.slice(2)))) continue;
+    out.set(id, line.slice(space + 1));
+  }
+  return out;
+}
+export const objectSet = (repoDir: string): Set<string> => new Set(objectTypes(repoDir).keys());
+
+// createdObjects maps each repository directory (relative to ws) to the
+// objects it holds now that it did not hold in before, id to type.
+export function createdObjects(ws: string, before: Map<string, Set<string>>): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
+  for (const repo of gitRepos(ws)) {
+    for (const [id, type] of objectTypes(join(ws, repo))) {
+      if (before.get(repo)?.has(id)) continue;
+      if (!out.has(repo)) out.set(repo, new Map());
+      out.get(repo)!.set(id, type);
+    }
+  }
+  return out;
+}
+
+// REFLOG is a reflog: any file under a logs directory of a .git directory.
+const REFLOG = /(?:^|\/)\.git\/(?:[^/]+\/)*logs\/.+$/;
+// maskReflogTimes replaces each line's "<seconds> <zone>\t" with "<TIME>\t".
+const maskReflogTimes = (text: string): string => text.replace(/[0-9]+ [+-][0-9]{4}\t/g, "<TIME>\t");
+
+// snapshotGit records what the workspace's repositories hold now: call it
+// after the case is built and before its first invocation.
+export function snapshotGit(ws: string): GitBase {
+  const base: GitBase = { objects: new Map(), logs: new Map() };
+  for (const repo of gitRepos(ws)) {
+    base.objects.set(repo, objectSet(join(ws, repo)));
+    const walk = (rel: string) => {
+      for (const name of readdirSync(join(ws, rel)).sort(byCodeUnit)) {
+        const r = `${rel}/${name}`;
+        const stat = lstatSync(join(ws, r));
+        if (stat.isDirectory()) walk(r);
+        else if (stat.isFile() && REFLOG.test(r)) base.logs.set(r, sha256(readFileSync(join(ws, r))));
+      }
+    };
+    walk(repo === "." ? ".git" : `${repo}/.git`);
+  }
+  return base;
+}
+
+// namedObjects names every created object of one repository, in dependency
+// order, and gives each created commit's tree id. Each name is
+// <BLOB:h12>, <TREE:h12> or <COMMIT:h12>, h12 being the first 12 hex digits
+// of the SHA-256 of "<type>\n" and the object's `git cat-file -p` text with
+// the case paths (text) and every already-named id masked. A commit's text
+// leaves out its author and committer times. An id that existed before the
+// case is never masked. The Go twin is namedObjects.
+export function namedObjects(repoDir: string, created: Map<string, string>, text: (s: string) => string): { names: Map<string, string>; commitTree: Map<string, string> } {
+  const gitDir = join(repoDir, ".git");
+  const names = new Map<string, string>();
+  const commitTree = new Map<string, string>();
+  const name = (id: string): string => {
+    const type = created.get(id);
+    if (type === undefined) return id;
+    const known = names.get(id);
+    if (known !== undefined) return known;
+    const raw = harnessGit(gitDir, ["cat-file", "-p", id]);
+    if (raw === undefined) throw new Error(`git cat-file -p ${id} in ${repoDir} failed`);
+    const body = raw.toString("utf8");
+    let label: string;
+    let material: string;
+    if (type === "blob") {
+      label = "BLOB"; material = `blob\n${text(body)}`;
+    } else if (type === "tree") {
+      label = "TREE";
+      const lines = body === "" ? [] : (body.endsWith("\n") ? body.slice(0, -1) : body).split("\n");
+      for (const [i, line] of lines.entries()) {
+        const tab = line.indexOf("\t");
+        if (tab < 0) continue;
+        const fields = line.slice(0, tab).split(" ");
+        if (fields.length < 3) continue;
+        const rest = fields.slice(2).join(" ");
+        lines[i] = `${fields[0]} ${fields[1]} ${name(rest)}${line.slice(tab)}`;
+      }
+      material = `tree\n${text(lines.join("\n"))}`;
+    } else if (type === "commit") {
+      label = "COMMIT";
+      const split = body.indexOf("\n\n");
+      const header = split < 0 ? body : body.slice(0, split);
+      const message = split < 0 ? "" : body.slice(split + 2);
+      const lines = header.split("\n").map((line) => {
+        if (line.startsWith("tree ")) { commitTree.set(id, line.slice(5)); return `tree ${name(line.slice(5))}`; }
+        if (line.startsWith("parent ")) return `parent ${name(line.slice(7))}`;
+        if (line.startsWith("author ") || line.startsWith("committer ")) return line.replace(/ [0-9]+ [+-][0-9]{4}$/, "");
+        return line;
+      });
+      material = `commit\n${text(`${lines.join("\n")}\n\n${message}`)}`;
+    } else {
+      label = "BLOB"; material = `${type}\n${text(body)}`; // a tag: named by its text like a blob
+    }
+    const result = `<${label}:${sha256(material).slice(0, 12)}>`;
+    names.set(id, result);
+    return result;
+  };
+  for (const id of [...created.keys()].sort(byCodeUnit)) name(id);
+  return { names, commitTree };
+}
+
+// objectNames maps each created id to its name.
+export const objectNames = (repoDir: string, created: Map<string, string>, text: (s: string) => string): Map<string, string> => namedObjects(repoDir, created, text).names;
+
+// The pass-fail fake Docker's stdout for state=good.
+const FAKE_DOCKER_PASS_STDOUT = 'state=good\nFAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n';
+
+// repairedRunSeeds computes the digests a repaired run binds to a created
+// commit and tree: for each repaired worktree a recorder logged and each
+// PASS run fact of a bundle in the workspace, the repair verifier's
+// executionId (src/codex-loop.ts:243) named exec:<masked worktree>; for each
+// created commit with its tree and each executionId, the runId of attempts 1
+// to 3 (src/prevention-from-artifacts.ts:525) named run:<attempt>. A
+// candidate that appears in no file is dropped; a wrong one is never named.
+// It returns [hex, name] pairs. The Go twin is repairedRunSeeds.
+export function repairedRunSeeds(roots: CaseRoots, records: string[], commits: Map<string, string>, texts: Map<string, string>): [string, string][] {
+  if (commits.size === 0) return [];
+  const parse = (rel: string): any => { try { return JSON.parse(texts.get(rel) ?? ""); } catch { return undefined; } };
+  const passes: { policy: string; envPolicy: string; frozen: string; witness: string; environment: string }[] = [];
+  for (const rel of [...texts.keys()].sort(byCodeUnit)) {
+    const m = /^(.*\/)?runs\/[^/]+\.json$/.exec(rel);
+    if (!m) continue;
+    const dir = m[1] ?? "";
+    const run = parse(rel);
+    if (run?.schemaVersion !== "faultline.git-investigation.v1" || run.result?.verdict !== "PASS" || run.result?.reason !== "PREDICATE_PASS") continue;
+    const digests = parse(`${dir}investigation.json`)?.environment?.distinctDigests;
+    if (!Array.isArray(digests) || digests.length !== 1 || typeof digests[0] !== "string") continue;
+    const frozen = parse(`${dir}witness/frozen.json`);
+    const witness = typeof frozen?.witnessDigest === "string" ? frozen.witnessDigest : String(run.witnessDigest ?? "");
+    passes.push({ policy: String(run.sandbox?.policyDigest ?? ""), envPolicy: String(run.sandbox?.environmentPolicyDigest ?? ""),
+      frozen: String(run.frozenDigest ?? ""), witness, environment: digests[0] });
+  }
+  const appears = (hex: string): boolean => [...texts.values()].some((text) => text.includes(hex));
+  const out: [string, string][] = [];
+  const seen = new Set<string>();
+  for (const w of loggedCasePaths(records, roots)) {
+    for (const p of passes) {
+      const execution = digestJson({
+        kind: "faultline.repair-verify-execution.v1", executor: "NATIVE_DOCKER", verdict: "PASS", reason: "PREDICATE_PASS",
+        policyDigest: p.policy, environmentPolicyDigest: p.envPolicy, exitCode: 0,
+        stdoutDigest: `sha256:${sha256(FAKE_DOCKER_PASS_STDOUT)}`, stderrDigest: `sha256:${sha256("")}`, worktree: w, frozenDigest: p.frozen
+      });
+      if (seen.has(execution) || !appears(execution.slice(7))) continue;
+      seen.add(execution);
+      out.push([execution.slice(7), `exec:${normalizeWriter(w, roots)}`]);
+      for (const commit of [...commits.keys()].sort(byCodeUnit)) {
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          const run = digestJson({
+            schemaVersion: "faultline.prevention-repaired-run.v1", attempt, commit, tree: commits.get(commit), witnessDigest: p.witness,
+            environmentDigest: p.environment, executionId: execution, detail: "Frozen witness PREDICATE_PASS on repaired worktree (NATIVE_DOCKER)."
+          });
+          if (!seen.has(run)) { seen.add(run); out.push([run.slice(7), `run:${attempt}`]); }
+        }
+      }
+    }
+  }
+  return out;
+}
+
 // A Git index (.git/index at any depth) holds stat data (times, inode,
 // device) that differs between the TS and the Go copy of a scenario, and
 // git rewrites it on a plain `git status` (doctor sets no
@@ -219,7 +439,7 @@ export function openAIRequestInputs(records: string[]): string[] {
   });
 }
 
-export function relocation(roots: CaseRoots, records: string[] = []): Relocation {
+export function relocation(roots: CaseRoots, records: string[] = [], base?: GitBase): Relocation {
   const files: [string, Buffer, string][] = [];
   const walk = (rel: string) => {
     for (const name of readdirSync(join(roots.ws, rel)).sort(byCodeUnit)) {
@@ -231,9 +451,18 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
   };
   if (existsSync(roots.ws)) walk("");
   const names = new Map<string, string>();
+  const ids = new Map<string, string>(); // created object id -> its name
+  const commits = new Map<string, string>(); // created commit -> its tree
+  const created = base ? createdObjects(roots.ws, base.objects) : new Map<string, Map<string, string>>();
+  for (const [repo, objects] of [...created].sort(([a], [b]) => byCodeUnit(a, b))) {
+    const named = namedObjects(join(roots.ws, repo), objects, (s) => normalizeWriter(s, roots));
+    for (const [id, name] of named.names) ids.set(id, name);
+    for (const [commit, tree] of named.commitTree) commits.set(commit, tree);
+  }
+  const idKeys = [...ids.keys()].sort(byCodeUnit);
   let found: string[] = [];
   const add = (hex: string, name: string) => { if (!names.has(hex)) { names.set(hex, name); found.push(hex); } };
-  const tainted = (text: string) => text.includes(roots.root) || [...names.keys()].some((d) => text.includes(d));
+  const tainted = (text: string) => text.includes(roots.root) || [...names.keys()].some((d) => text.includes(d)) || idKeys.some((id) => text.includes(id));
   const visit = (value: unknown, rel: string, pointer: string): void => {
     if (value === null || typeof value !== "object") return;
     if (!tainted(canonicalJson(value))) return;
@@ -255,6 +484,13 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
     const digest = sha256(Buffer.from(path, "utf8"));
     add(digest, `path:${normalizeWriter(path, roots)}`);
     seeds.push(digest);
+  }
+  // The Git objects the case created are seeds (named by objectNames in
+  // text), and so are the repaired-run digests computed from them.
+  seeds.push(...idKeys);
+  for (const [hex, name] of repairedRunSeeds(roots, records, commits, new Map(files.map(([rel, , text]) => [rel, text])))) {
+    add(hex, name);
+    seeds.push(hex);
   }
   // A worktree no recorder logged (a fault before git ran in it) is still
   // hashed into its run fact: name each worktreeDigest value not named
@@ -289,6 +525,7 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
   const sorted = [...names.keys()].sort(byCodeUnit);
   const text = (s: string): string => {
     let out = normalizeWriter(s, roots);
+    for (const id of idKeys) out = out.split(id).join(ids.get(id)!);
     for (const d of sorted) out = out.split(d).join(`<PATHDIGEST:${names.get(d)}>`);
     // The proof page also prints a digest abbreviated (git-proof-view.ts
     // shortDigest: its first and last 8 hex digits).
@@ -301,6 +538,11 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
       if (isGitIndex(rel)) return gitIndexDigest(dirname(join(roots.ws, rel)), bytes);
       const object = snapshotObjectDigest(rel);
       if (object !== undefined) return object;
+      const loose = /^(?:(.*)\/)?\.git\/objects\/([0-9a-f]{2})\/([0-9a-f]{38}|[0-9a-f]{62})$/.exec(rel);
+      if (loose && ids.has(`${loose[2]}${loose[3]}`) && created.get(loose[1] ?? ".")?.has(`${loose[2]}${loose[3]}`)) {
+        return sha256(`git-object:${ids.get(`${loose[2]}${loose[3]}`)}`);
+      }
+      if (base && REFLOG.test(rel) && base.logs.get(rel) !== sha256(bytes)) return sha256(text(maskReflogTimes(bytes.toString("utf8"))));
       return names.has(sha256(bytes)) ? sha256(text(bytes.toString("utf8"))) : sha256(bytes);
     }
   };
@@ -615,8 +857,11 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     // wrote into a file (the Go twin is runWriterCase).
     const records: string[] = [];
     const stdouts: string[] = [];
+    // What the repositories hold before the first invocation (the Go twin
+    // is snapshotGit in runWriterCaseWith).
+    const base = snapshotGit(roots.ws);
     for (const [inv, argv] of t.argv.entries()) {
-      const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
+      const before = treeEntries(roots.ws, relocation(roots, records, base).fileDigest);
       rmSync(roots.argvLog, { force: true });
       const args = argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts));
       const r = await runCli(roots, args, writerEnv(roots, t.id, t.fakeDocker, invocationEnv(t, roots), t.fakeTools, t.pathTools, fakes));
@@ -628,7 +873,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       const plans = planDigests(r.stdout);
       const invocationRecords = readArgvLog(roots.argvLog).map((record) => maskCodexPath(record, roots, repo, process.env.PATH ?? ""));
       records.push(...invocationRecords);
-      const reloc = relocation(roots, records);
+      const reloc = relocation(roots, records, base);
       const after = treeEntries(roots.ws, reloc.fileDigest);
       const tree = treeDigest(roots.ws, reloc.fileDigest);
       // After the tree and the argv log are read, like the Go replay.
