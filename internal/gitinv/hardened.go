@@ -83,6 +83,9 @@ type HardenedOptions struct {
 // src/git-materialization.ts:199, 222, 264 and 305-319.
 func (r GitRun) failed() bool { return r.ExitCode == nil || *r.ExitCode != 0 || r.Error != "" }
 
+// Failed is the exported failed().
+func (r GitRun) Failed() bool { return r.failed() }
+
 // detail is `stderr.toString("utf8").trim() || error || fallback`, as at
 // src/git-materialization.ts:224, 246, 265 and 306-320.
 func (r GitRun) detail(fallback string) string {

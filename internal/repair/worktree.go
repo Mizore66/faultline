@@ -8,6 +8,7 @@ import (
 	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/gitinv"
 	"github.com/Mizore66/faultline/internal/jsexc"
+	"github.com/Mizore66/faultline/internal/jsre"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
 	"github.com/Mizore66/faultline/internal/safedir"
@@ -25,33 +26,8 @@ type Cleanup struct {
 	Errors  []string
 }
 
-// isGitObjectID is GIT_OBJECT_ID (src/repair-worktree.ts:7),
-// /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.
-func isGitObjectID(s string) bool {
-	if len(s) != 40 && len(s) != 64 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-func gitFailed(r gitinv.GitRun) bool { return r.ExitCode == nil || *r.ExitCode != 0 || r.Error != "" }
-
-// gitDetail is `stderr.toString("utf8").trim() || error || "Git failed."`.
-func gitDetail(r gitinv.GitRun) string {
-	if s := jsstr.Trim(jsstr.DecodeUTF8(r.Stderr)); s != "" {
-		return s
-	}
-	if r.Error != "" {
-		return r.Error
-	}
-	return "Git failed."
-}
+// gitObjectID is GIT_OBJECT_ID (src/repair-worktree.ts:7).
+var gitObjectID = jsre.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`, "")
 
 // Port of src/repair-worktree.ts:28 assertManagedChild.
 func assertManagedChild(root, candidate, label string) (string, error) {
@@ -83,7 +59,7 @@ func assertNotSymlink(path, label string) error {
 // Port of src/repair-worktree.ts:48 createRepairWorktree (repairId is always
 // generated from the clock's next UUID).
 func CreateWorktree(repository, baseCommit, bundleDirectory, outputDirectory string) (Session, error) {
-	if !isGitObjectID(baseCommit) {
+	if !gitObjectID.Test(baseCommit) {
 		return Session{}, errors.New(jsexc.Concat("Repair base commit is not a Git object id: ", baseCommit))
 	}
 	repo := nodefs.Resolve(repository)
@@ -139,7 +115,7 @@ func CreateWorktree(repository, baseCommit, bundleDirectory, outputDirectory str
 	}
 
 	verify := gitinv.RunHardenedGit([]string{"rev-parse", "--verify", "--end-of-options", jsexc.Concat(baseCommit, "^{commit}")}, gitinv.HardenedOptions{Repository: absoluteRepo})
-	if gitFailed(verify) {
+	if verify.Failed() {
 		if err := nodefs.RemoveAll(safeRoot); err != nil {
 			return Session{}, err
 		}
@@ -147,11 +123,11 @@ func CreateWorktree(repository, baseCommit, bundleDirectory, outputDirectory str
 	}
 
 	add := gitinv.RunHardenedGit([]string{"worktree", "add", "--detach", gitinv.ToGitPath(worktreePath), baseCommit}, gitinv.HardenedOptions{Repository: absoluteRepo})
-	if gitFailed(add) {
+	if add.Failed() {
 		if err := nodefs.RemoveAll(safeRoot); err != nil {
 			return Session{}, err
 		}
-		return Session{}, errors.New(jsexc.Concat("Could not create detached repair worktree: ", gitDetail(add)))
+		return Session{}, errors.New(jsexc.Concat("Could not create detached repair worktree: ", add.Detail("Git failed.")))
 	}
 	if err := assertNotSymlink(worktreePath, "repair worktree"); err != nil {
 		return Session{}, err
@@ -204,8 +180,8 @@ func RemoveWorktree(repository, worktreePath, managedRoot string, keepManagedRoo
 
 	if nodefs.Exists(worktree) {
 		removed := gitinv.RunHardenedGit([]string{"worktree", "remove", "--force", gitinv.ToGitPath(worktree)}, gitinv.HardenedOptions{Repository: repo})
-		if gitFailed(removed) {
-			errs = append(errs, jsexc.Concat("git worktree remove failed: ", gitDetail(removed)))
+		if removed.Failed() {
+			errs = append(errs, jsexc.Concat("git worktree remove failed: ", removed.Detail("Git failed.")))
 			if err := nodefs.RemoveAll(worktree); err != nil {
 				errs = append(errs, jsexc.Concat("Could not delete worktree directory after remove failure: ", jsexc.Message(err)))
 			}
@@ -213,8 +189,8 @@ func RemoveWorktree(repository, worktreePath, managedRoot string, keepManagedRoo
 	}
 
 	pruned := gitinv.RunHardenedGit([]string{"worktree", "prune"}, gitinv.HardenedOptions{Repository: repo})
-	if gitFailed(pruned) {
-		errs = append(errs, jsexc.Concat("git worktree prune failed: ", gitDetail(pruned)))
+	if pruned.Failed() {
+		errs = append(errs, jsexc.Concat("git worktree prune failed: ", pruned.Detail("Git failed.")))
 	}
 
 	if managedRoot != "" && !keepManagedRoot {
@@ -235,8 +211,8 @@ func RemoveWorktree(repository, worktreePath, managedRoot string, keepManagedRoo
 func CollectPatch(worktreePath string) (string, error) {
 	diff := gitinv.RunHardenedGit([]string{"diff", "--binary", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames"},
 		gitinv.HardenedOptions{Repository: nodefs.Resolve(worktreePath)})
-	if gitFailed(diff) {
-		return "", errors.New(jsexc.Concat("Could not collect repair patch: ", gitDetail(diff)))
+	if diff.Failed() {
+		return "", errors.New(jsexc.Concat("Could not collect repair patch: ", diff.Detail("Git failed.")))
 	}
 	return jsstr.DecodeUTF8(diff.Stdout), nil
 }

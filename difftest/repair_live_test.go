@@ -633,11 +633,11 @@ func TestLiveRepairWorktree(t *testing.T) {
 	defer c.Close()
 	clock.ResetForTest(seed)
 	kinds := []string{"normal", "unknown-base", "non-repository", "symlinked-parent", "existing-output", "bundle-symlink",
-		"worktrees-blocked", "nested-output", "bad-id", "missing-bundle", "removed-worktree", "dirty-bundle-subdir"}
+		"worktrees-blocked", "nested-output", "bad-id", "missing-bundle", "removed-worktree", "dirty-bundle-subdir", "gitdir-deleted", "empty-managed-root"}
 	var cases []repairWorktreeCase
-	// 24 cases is two rounds of every kind (keep off, then on); the knob
+	// 28 cases is two rounds of every kind (keep off, then on); the knob
 	// raises it, as FAULTLINE_CP_CASES does for cpSync.
-	n := 24
+	n := 2 * len(kinds)
 	if v := os.Getenv("FAULTLINE_REPAIR_WT_CASES"); v != "" {
 		var err error
 		if n, err = strconv.Atoi(v); err != nil {
@@ -668,9 +668,15 @@ func TestLiveRepairWorktree(t *testing.T) {
 				s.root, s.repo, s.log = root, filepath.Join(root, "repo"), filepath.Join(root, "git.log")
 				commit := repairWorktreeRepo(t, s.repo)
 				bundle := filepath.Join(root, "bundle")
-				os.MkdirAll(filepath.Join(bundle, "runs"), 0o755)
-				os.WriteFile(filepath.Join(bundle, "manifest.json"), []byte("{}\n"), 0o644)
-				os.WriteFile(filepath.Join(bundle, "runs", "a.json"), []byte("[1]\n"), 0o600)
+				must := func(err error) {
+					t.Helper()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				must(os.MkdirAll(filepath.Join(bundle, "runs"), 0o755))
+				must(os.WriteFile(filepath.Join(bundle, "manifest.json"), []byte("{}\n"), 0o644))
+				must(os.WriteFile(filepath.Join(bundle, "runs", "a.json"), []byte("[1]\n"), 0o600))
 				output := filepath.Join(root, "repairs", "r1")
 				base, repository := commit, s.repo
 				switch tc.kind {
@@ -678,26 +684,26 @@ func TestLiveRepairWorktree(t *testing.T) {
 					base = strings.Repeat("ab", 20)
 				case "non-repository":
 					repository = filepath.Join(root, "plain")
-					os.Mkdir(repository, 0o755)
+					must(os.Mkdir(repository, 0o755))
 				case "symlinked-parent":
-					os.Mkdir(filepath.Join(root, "real"), 0o755)
+					must(os.Mkdir(filepath.Join(root, "real"), 0o755))
 					os.Symlink("real", filepath.Join(root, "link"))
 					output = filepath.Join(root, "link", "r1")
 				case "existing-output":
-					os.MkdirAll(output, 0o755)
+					must(os.MkdirAll(output, 0o755))
 				case "bundle-symlink":
-					os.Symlink("manifest.json", filepath.Join(bundle, "link"))
+					must(os.Symlink("manifest.json", filepath.Join(bundle, "link")))
 					os.Symlink("../nowhere", filepath.Join(bundle, "runs", "dangling"))
 				case "worktrees-blocked":
-					os.WriteFile(filepath.Join(s.repo, ".git", "worktrees"), []byte("not a directory"), 0o644)
+					must(os.WriteFile(filepath.Join(s.repo, ".git", "worktrees"), []byte("not a directory"), 0o644))
 				case "nested-output":
 					output = filepath.Join(root, "a", "b", "c", "r1")
 				case "bad-id":
-					base = []string{"nothex", strings.ToUpper(commit), commit[:39], commit + "0", ""}[len(tc.name)%5]
+					// every variant runs in this case, below
 				case "missing-bundle":
 					bundle = filepath.Join(root, "no-bundle")
 				case "dirty-bundle-subdir":
-					os.MkdirAll(filepath.Join(bundle, "a", "b", "c"), 0o700)
+					must(os.MkdirAll(filepath.Join(bundle, "a", "b", "c"), 0o700))
 					os.WriteFile(filepath.Join(bundle, "a", "b", "c", "f"), nil, 0o400)
 				}
 				path := repairGitRecorder(t, s.log)
@@ -708,7 +714,28 @@ func TestLiveRepairWorktree(t *testing.T) {
 				var created, patch, cleanup string
 				var sess repair.Session
 				ok := false
-				if k == 0 {
+				if tc.kind == "bad-id" {
+					// Each id the regexp rejects throws before any filesystem
+					// work; the 64-hex id that names no object runs last,
+					// because it gets as far as creating the output.
+					variants := []string{"nothex", strings.ToUpper(commit), commit[:39], commit + "0", "", strings.Repeat("0", 63), strings.Repeat("c", 64)}
+					for _, id := range variants {
+						var one string
+						if k == 0 {
+							t.Setenv("PATH", path)
+							_, err := repair.CreateWorktree(repository, id, bundle, output)
+							one = "THREW:" + jsexc.Message(err)
+							if err == nil {
+								one = "OK"
+							}
+						} else {
+							one = oracleText(t, c, "createRepairWorktree", fmt.Sprintf(`{"repository":%s,"baseCommit":%s,"bundleDirectory":%s,"outputDirectory":%s,"path":%s}`,
+								jsjson.Stringify(jsjson.MakeString(repository)), jsjson.Stringify(jsjson.MakeString(id)),
+								jsjson.Stringify(jsjson.MakeString(bundle)), jsjson.Stringify(jsjson.MakeString(output)), jsjson.Stringify(jsjson.MakeString(path))))
+						}
+						created += one + "\n"
+					}
+				} else if k == 0 {
 					t.Setenv("PATH", path)
 					var err error
 					sess, err = repair.CreateWorktree(repository, base, bundle, output)
@@ -736,13 +763,26 @@ func TestLiveRepairWorktree(t *testing.T) {
 						os.WriteFile(filepath.Join(sess.WorktreePath, "new.txt"), []byte("new\n"), 0o644)
 						os.WriteFile(filepath.Join(sess.WorktreePath, "bin.dat"), []byte{0, 1, 2, 0xff}, 0o644)
 					}
-					exec.Command(realGit, "-C", sess.WorktreePath, "add", "-N", "new.txt", "bin.dat").Run()
+					if tc.kind != "removed-worktree" {
+						if out, err := exec.Command(realGit, "-C", sess.WorktreePath, "add", "-N", "new.txt", "bin.dat").CombinedOutput(); err != nil {
+							t.Fatalf("git add -N: %v\n%s", err, out)
+						}
+					}
 					if tc.kind == "removed-worktree" {
-						os.RemoveAll(sess.WorktreePath)
+						must(os.RemoveAll(sess.WorktreePath))
+					}
+					if tc.kind == "gitdir-deleted" {
+						// git no longer knows the worktree: remove fails, the
+						// rmSync fallback runs, then prune.
+						must(os.RemoveAll(filepath.Join(sess.Repository, ".git", "worktrees", "worktree")))
+					}
+					managedRoot := sess.ManagedRoot
+					if tc.kind == "empty-managed-root" {
+						managedRoot = ""
 					}
 					rargs := fmt.Sprintf(`{"repository":%s,"worktreePath":%s,"managedRoot":%s,"keepManagedRoot":%t,"path":%s}`,
 						jsjson.Stringify(jsjson.MakeString(sess.Repository)), jsjson.Stringify(jsjson.MakeString(sess.WorktreePath)),
-						jsjson.Stringify(jsjson.MakeString(sess.ManagedRoot)), tc.keep, jsjson.Stringify(jsjson.MakeString(path)))
+						jsjson.Stringify(jsjson.MakeString(managedRoot)), tc.keep, jsjson.Stringify(jsjson.MakeString(path)))
 					pargs := fmt.Sprintf(`{"worktreePath":%s,"path":%s}`, jsjson.Stringify(jsjson.MakeString(sess.WorktreePath)), jsjson.Stringify(jsjson.MakeString(path)))
 					cl := func(r repair.Cleanup) string {
 						errs := make([]jsjson.Value, len(r.Errors))
@@ -757,7 +797,7 @@ func TestLiveRepairWorktree(t *testing.T) {
 						if err != nil {
 							patch = "THREW:" + jsexc.Message(err)
 						}
-						cleanup = cl(repair.RemoveWorktree(sess.Repository, sess.WorktreePath, sess.ManagedRoot, tc.keep))
+						cleanup = cl(repair.RemoveWorktree(sess.Repository, sess.WorktreePath, managedRoot, tc.keep))
 					} else {
 						patch = oracleText(t, c, "collectRepairPatch", pargs)
 						cleanup = oracleText(t, c, "removeRepairWorktree", rargs)
@@ -785,12 +825,11 @@ func TestLiveRepairWorktree(t *testing.T) {
 			if g.tree != w.tree {
 				t.Fatalf("trees:\n--- go\n%s\n--- node\n%s", g.tree, w.tree)
 			}
-			if strings.HasPrefix(w.out, "THREW:") {
-				kindsSeen["THREW"]++
-			} else {
-				kindsSeen["ok"]++
+			kindsSeen[tc.kind]++
+			if tc.kind == "gitdir-deleted" || tc.kind == "empty-managed-root" || tc.kind == "bad-id" {
+				t.Logf("node: create %.150q cleanup %.300q", w.out, w.cleanup)
 			}
 		})
 	}
-	t.Logf("outcomes: %v", kindsSeen)
+	t.Logf("cases per kind: %v", kindsSeen)
 }
