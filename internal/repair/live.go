@@ -80,8 +80,10 @@ var responsesClient = func() *http.Client {
 			DialContext:           (&net.Dialer{Timeout: connectTimeout}).DialContext,
 			TLSHandshakeTimeout:   connectTimeout,
 			ResponseHeaderTimeout: headersTimeout,
-			DisableCompression:    true,
-			Protocols:             &protocols,
+			// Node's http.maxHeaderSize; llhttp counts the bytes slightly differently.
+			MaxResponseHeaderBytes: 16 * 1024,
+			DisableCompression:     true,
+			Protocols:              &protocols,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
