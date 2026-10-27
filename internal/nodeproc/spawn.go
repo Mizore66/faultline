@@ -143,6 +143,11 @@ func SpawnSyncWith(file string, args []string, o SpawnSyncOptions) Result {
 	if maxBuffer == 0 {
 		maxBuffer = defaultMaxBuffer
 	}
+	if refusesBatchFile(jsstr.ToUTF8(file)) {
+		// ParseOptions fails before the loop runs: status, stdout and
+		// stderr are null.
+		return Result{Err: spawnError(file, "EINVAL")}
+	}
 	io, err := newStdio(o.HasInput, o.ignoreStdin)
 	if err != nil {
 		return Result{Err: spawnError(file, nodefs.SystemErrorName(err))}
