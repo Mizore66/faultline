@@ -1015,3 +1015,294 @@ git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com comm
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+### Task 5: Turn bundle file walks, the uncapped hash catalog and the tree pack
+
+**Files:**
+- Create: `internal/bundle/turnproof/catalog.go`, `internal/bundle/turnproof/pack.go`, `internal/bundle/turnproof/catalog_test.go`, `internal/bundle/turnproof/pack_test.go`, `difftest/turnproof_live_test.go` (with `TestLiveTurnHashCatalog` and `TestLiveTurnTreesPack`; Tasks 7 and 8 add their tests to the same file below these), `difftest/gen/oracle-turnproof.ts` (Tasks 7 and 8 add ops to it)
+- Modify:
+  - `internal/jsstr/jsstr.go`, `internal/jsstr/jsstr_test.go`: `TrimEnd`.
+  - `internal/nodefs/rm.go`, `internal/nodefs/rm_test.go`: `RemoveAllRetry`.
+  - `difftest/gen/node-oracle.ts`: one import line and one spread line.
+
+**Interfaces:**
+- Consumes: `gitinv.RunHardenedGit`, `gitinv.HardenedOptions`, `gitinv.GitRun` (`.Detail`), `gitinv.ToGitPath` (export `toGitPath` here if 4c Task 1 has not; the two exports are one line and dedupe trivially); `nodefs.{Mkdtemp,Tmpdir,Join,Resolve,Relative,IsAbsolute,Lstat,ReadDirNames,ReadBytes,MkdirAll,WriteFileBytes}`; `canonical.{SHA256HexBytes,SortLocale}`; `jsexc`; `bundle.{Throw,Must,Try}`.
+- Produces:
+
+```go
+// internal/jsstr
+// TrimEnd is String.prototype.trimEnd (the IsWhitespace set).
+func TrimEnd(s string) string
+
+// internal/nodefs
+// RemoveAllRetry is rmSync(path, {recursive: true, force: true,
+// maxRetries, retryDelay}): RemoveAll, where every unlink and the final
+// rmdir of each directory are retried up to maxRetries times on EBUSY,
+// EMFILE, ENFILE, ENOTEMPTY and EPERM, sleeping i*retryDelay before
+// retry i (internal/fs/rimraf.js _unlinkSync, _rmdirSync).
+func RemoveAllRetry(path string, maxRetries int, retryDelay time.Duration) error
+```
+
+```go
+package turnproof // Port of src/turn-proof-bundle.ts.
+
+const (
+	BundleSchemaVersion     = "faultline.turn-proof-bundle.v1"  // :59
+	SourceSchemaVersion     = "faultline.turn-proof-source.v1"  // :60
+	MaxSourceArtifactBytes  = 128 * 1024 * 1024                 // :64
+	MaxHashCatalogBytes     = 4 * 1024 * 1024                   // :65
+	MaxArtifacts            = 2048                              // :66
+	MaxTotalBytes           = 512 * 1024 * 1024                 // :67
+)
+
+// IsSafeRelativeArtifactPath ports :72.
+func IsSafeRelativeArtifactPath(value string) bool
+
+// Catalog is the Map<string, string> parseHashCatalog returns: Keys in
+// first-insertion order, Digests by artifact (a duplicate's last digest).
+type Catalog struct {
+	Keys    []string
+	Digests map[string]string
+}
+
+// ParseHashCatalog ports parseHashCatalog (:390): no entry cap.
+func ParseHashCatalog(hashes []byte, errs *[]string) Catalog
+
+// The throwing helpers (jsexc), used by the verifier and the writer:
+func safeArtifactPath(root, artifact string) string                 // :195
+func assertNoLinksOrSpecialFiles(directory string)                  // :205
+func assertRegularFile(path, label string, maximumBytes int64) int64 // :259
+func readBoundedFile(path, label string, maximumBytes int64) []byte  // :266
+func collectFiles(root, current string, budget *fileBudget) []string // :271
+func writeArtifact(root, artifact string, b []byte)                 // :296
+
+// PackTurnTrees ports packTurnTrees (:412): treeDigests in state order.
+func PackTurnTrees(repository string, treeDigests []string) ([]byte, error)
+
+// VerifyTreesPack ports verifyTreesPack (:452): it appends to errs and
+// returns an error only for what TS throws out of it (mkdtempSync, the
+// pack-file write and the cleanup).
+func VerifyTreesPack(pack []byte, treeDigests []string, errs *[]string) error
+```
+
+**Gotchas:**
+- **The catalog** (`:390-410`; correction 1):
+
+  ```go
+  // ParseHashCatalog ports turn-proof-bundle.ts:390.
+  func ParseHashCatalog(hashes []byte, errs *[]string) Catalog {
+  	c := Catalog{Digests: map[string]string{}}
+  	text := jsstr.DecodeUTF8(hashes)
+  	if !strings.HasSuffix(text, "\n") {
+  		*errs = append(*errs, "hashes.txt must end with a trailing newline")
+  	}
+  	for _, line := range strings.Split(jsstr.TrimEnd(text), "\n") {
+  		digest, artifact, ok := catalogLine(line) // /^([a-f0-9]{64})  (.+)$/
+  		if !ok {
+  			*errs = append(*errs, jsexc.Concat("hashes.txt contains a malformed line: ", line))
+  			continue
+  		}
+  		if !IsSafeRelativeArtifactPath(artifact) {
+  			*errs = append(*errs, jsexc.Concat("hashes.txt contains an unsafe artifact path: ", line))
+  			continue
+  		}
+  		if _, dup := c.Digests[artifact]; dup {
+  			*errs = append(*errs, jsexc.Concat("hashes.txt declares duplicate artifact: ", artifact))
+  		} else {
+  			c.Keys = append(c.Keys, artifact)
+  		}
+  		jsexc.MapSet(c.Digests, artifact, digest)
+  	}
+  	return c
+  }
+  ```
+
+  - `catalogLine` is `gitproof.parseCatalogLine`'s logic: 64 lowercase hex characters, two spaces, then at least one character. `.` excludes `\r`, U+2028 and U+2029; `\n` cannot occur after the split. Copy it here; do not import gitproof's unexported helper.
+  - `jsexc.Concat` and `jsexc.MapSet` keep V8's string-length and Map-size limits, as in gitproof.
+  - Empty strings are not filtered, so `""`, `"\n"` and `"a\n\nb\n"` each report an empty malformed line.
+- **`TrimEnd`** strips trailing code units for which `IsWhitespace` holds: the same set as `Trim`, U+FEFF included.
+- **`collectFiles`** (`:271-294`) is the Git verifier's walk with the turn texts:
+  - `Turn proof bundle contains a symbolic link or special file: <child>`
+  - `Turn proof bundle artifact exceeds FaultLine's read limit: <child>`
+  - `Turn proof bundle contains too many files to verify safely`
+  - `Turn proof bundle exceeds FaultLine's total verification read limit`
+
+  `readdirSync(withFileTypes)` order is libuv's byte order, which `nodefs.ReadDirNames` gives. `relative(root, child)` has `\` replaced by `/`.
+- **`assertNoLinksOrSpecialFiles`** (`:205-218`): `Turn proof bundle must be a real directory: <dir>`, then `… contains a symbolic link or special file: <child>`.
+- **`assertRegularFile`**: `<label> must be a regular non-symlink file` and `<label> exceeds FaultLine's <n> byte read limit`, with `n` as `String(maximumBytes)`.
+- **`safeArtifactPath`**: `Unsafe artifact path: <a>` and `Artifact path escapes its bundle: <a>`.
+- **`writeArtifact`**: `mkdirSync(dirname, {recursive: true, mode: 0o700})`, which is `nodefs.MkdirAll(…, 0o700)`. Then `writeFileSync(…, {mode: 0o600, flag: "wx"})`, which is `nodefs.WriteFileBytes(…, 0o600, true)`. Then `assertRegularFile(dest, "artifact <a>")`.
+- **packTurnTrees** (`:412-434`):
+  1. For each tree in state order: `RunHardenedGit(["rev-list", "--objects", tree], {Repository: repository})`. On `exitCode !== 0 || error !== undefined`, throw `Could not enumerate objects for turn tree <tree>: <stderr.trim() || error || "Git failed.">` (`GitRun.Detail`).
+  2. Split stdout on `/\r?\n/`, JS-trim each line, take the first `\s+` field, and add it to an insertion-ordered set.
+  3. An empty set throws `Turn tree pack enumeration produced no Git objects.` This is unreachable, because `rev-list --objects <tree>` lists the tree itself (coverage gate reason).
+  4. stdin is the ids sorted with `localeCompare` (`canonical.SortLocale`; hex is ASCII, so this equals byte order), joined with `\n`, plus `\n`.
+  5. `RunHardenedGit(["pack-objects", "--stdout", "--compression=9"], {Repository, Stdin, HasStdin: true})`. A failure or empty stdout throws `Could not pack turn trees: <detail>`.
+  6. Over 128 MiB throws `Turn tree pack exceeds FaultLine's portable artifact limit.`, unreachable because of the 64 MiB output cap (coverage gate reason).
+- **verifyTreesPack** (`:452-495`):
+  1. `bare = nodefs.Mkdtemp(Join(Tmpdir(), "faultline-turn-proof-pack-"))`, the sync suffix (correction 9). A failure throws out of the verifier into its `catch`.
+  2. `init --bare` with `{Repository: bare}`. Its failure gives `Could not create temporary bare repository for pack verification: <detail>`, then return (the `finally` still runs).
+  3. `unpack-objects -q --strict` with `{Repository: bare, GitDir: bare, Stdin: pack, HasStdin: true}`.
+  4. If that fails:
+     - `mkdirSync(join(bare, "objects", "pack"), {recursive, 0o700})`;
+     - write `turn-trees.pack` there (mode 0o600, flag `w`, not exclusive);
+     - run `index-pack --strict <ToGitPath(packFile)>` with `{Repository: bare, GitDir: bare}`.
+
+     If index-pack also fails, append `Turn tree pack is not a valid Git pack: <first non-empty of: index stderr trimmed, unpack stderr trimmed, index error, unpack error, "Git failed.">` and return.
+  5. For each tree: `cat-file -t <tree>` with `{Repository: bare, GitDir: bare}`. A failure, or trimmed stdout other than `tree`, appends `Turn tree object missing or wrong type in portable pack: <tree>`.
+  6. `finally`: `removeTemporaryDirectory(bare)`:
+     - `RemoveAllRetry(bare, 3, 50ms)` on POSIX;
+     - `(20, 250ms)` on Windows, where an `EPERM` or `EBUSY` code is swallowed;
+     - any other error is thrown, which the verifier's outer catch reports.
+- **The environment.** Every call above goes through `runHardenedGit`, so it gets `MATERIALIZATION_SAFE_GIT_CONFIG` and the stripped environment, with `GIT_DIR` set when `gitDir` is given. `GIT_DEFAULT_HASH` is not passed (correction 3).
+
+**Live tests** (`difftest/turnproof_live_test.go`):
+- `TestLiveTurnHashCatalog`: the oracle op `parseTurnHashCatalog({hex})` evaluates `parseHashCatalog`, which is not exported, from `dist/turn-proof-bundle.js`. It uses the `new Function` extraction that `safeGitLists` uses, together with `isSafeRelativeArtifactPath`. It returns `{errors, entries: [[artifact, digest], …]}`.
+
+  Inputs: 5,000 generated catalogs. They cover:
+  - valid lines in random order;
+  - CRLF line ends, `\r` inside a name, U+2028/U+2029/U+FEFF/NBSP at the end and inside;
+  - uppercase hex, 63 and 65 hex digits, one space or three;
+  - the unsafe path kinds (`/`, `\`, NUL, `.`, `..`, empty segments);
+  - duplicates (also with a different digest);
+  - blank lines, an empty catalog and no final newline;
+  - lone surrogates and invalid UTF-8;
+  - 2,047 to 2,100 entries.
+
+  Go must give equal errors and entries.
+- `TestLiveTurnTreesPack`: the oracle ops `packTurnTrees({repository, trees})` and `verifyTreesPack({hex, trees})` evaluate the unexported functions in the same way, under the seeded `mkdtemp` (`oracle.StartSeeded`). The inputs are 200 generated repositories with 2 to 6 trees:
+  - shared and unshared blobs, empty trees, nested trees;
+  - a tree id that is a commit or a blob;
+  - a missing tree;
+  - packs that are truncated, byte-flipped, the pack of another repository, or empty;
+  - a SHA-256 repository.
+
+  Compare the pack bytes, the error lists, and that the temporary directory is gone afterwards.
+- `requireReached("internal/bundle/turnproof/catalog.go", …)` and `pack.go`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```go
+// internal/bundle/turnproof/catalog_test.go
+package turnproof
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestCatalogHasNoCapAndOwnMessages(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 2100; i++ {
+		b.WriteString(strings.Repeat("0", 64) + "  extra/" + strings.Repeat("x", 1) + string(rune('a'+i%26)) + "/" + strings.Repeat("y", i%7+1) + ".json\n")
+	}
+	var errs []string
+	c := ParseHashCatalog([]byte(b.String()), &errs)
+	if len(c.Keys)+countPrefix(errs, "hashes.txt declares duplicate artifact: ") != 2100 {
+		t.Fatalf("keys %d errs %d", len(c.Keys), len(errs))
+	}
+	for _, e := range errs {
+		if strings.Contains(e, "too many") {
+			t.Fatal("turn catalog must not cap entries")
+		}
+	}
+}
+
+func TestCatalogLineRules(t *testing.T) {
+	h := strings.Repeat("a", 64)
+	var errs []string
+	c := ParseHashCatalog([]byte(h+"  m.json\n\n"+h+"  ../x\n"+h+"  m.json\n"+h+" one-space\n"+h+"  last   "), &errs)
+	want := []string{
+		"hashes.txt must end with a trailing newline",
+		"hashes.txt contains a malformed line: ",
+		"hashes.txt contains an unsafe artifact path: " + h + "  ../x",
+		"hashes.txt declares duplicate artifact: m.json",
+		"hashes.txt contains a malformed line: " + h + " one-space",
+	}
+	if strings.Join(errs, "|") != strings.Join(want, "|") || len(c.Keys) != 2 || c.Keys[1] != "last" {
+		t.Fatalf("%q %q", errs, c.Keys)
+	}
+}
+
+func countPrefix(errs []string, p string) int {
+	n := 0
+	for _, e := range errs {
+		if strings.HasPrefix(e, p) {
+			n++
+		}
+	}
+	return n
+}
+```
+
+```go
+// internal/bundle/turnproof/pack_test.go
+package turnproof
+
+import (
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+func TestPackRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	git := func(stdin string, args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Stdin = strings.NewReader(stdin)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "init", "-q")
+	blob := git("good\n", "hash-object", "-w", "--stdin")
+	tree := git("100644 blob "+blob+"\tstate.txt\n", "mktree")
+	pack, err := PackTurnTrees(dir, []string{tree, tree})
+	if err != nil || len(pack) < 32 || string(pack[:4]) != "PACK" {
+		t.Fatalf("%v %d", err, len(pack))
+	}
+	var errs []string
+	if err := VerifyTreesPack(pack, []string{tree}, &errs); err != nil || len(errs) != 0 {
+		t.Fatalf("%v %q", err, errs)
+	}
+	errs = nil
+	VerifyTreesPack(pack[:len(pack)-5], []string{tree}, &errs)
+	if len(errs) != 1 || !strings.HasPrefix(errs[0], "Turn tree pack is not a valid Git pack: ") {
+		t.Fatalf("%q", errs)
+	}
+}
+```
+
+```go
+// internal/jsstr/jsstr_test.go
+func TestTrimEnd(t *testing.T) {
+	if got := TrimEnd("a b \t\r\n ﻿"); got != "a b" {
+		t.Fatalf("%q", got)
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/bundle/turnproof/ ./internal/jsstr/ ./internal/nodefs/ -run 'TestCatalog|TestPack|TestTrimEnd|TestRemoveAllRetry'`
+Expected: FAIL (undefined).
+
+- [ ] **Step 3: Implement**, with a TS line on every function. Add `TestRemoveAllRetry`: a directory that is read-only for one 50 ms window is removed on the retry, and with no retry the first error is returned. Write the oracle ops.
+
+- [ ] **Step 4: Run to verify the tests pass**
+
+Run: `go test ./internal/bundle/turnproof/ ./internal/jsstr/ ./internal/nodefs/ && GOOS=windows go vet ./internal/bundle/turnproof/ ./internal/nodefs/ && FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test ./difftest/ -run 'TestLiveTurnHashCatalog|TestLiveTurnTreesPack' -v > /tmp/s4b-t5.log 2>&1; tail -5 /tmp/s4b-t5.log`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/bundle/turnproof internal/jsstr internal/nodefs internal/gitinv difftest/turnproof_live_test.go difftest/gen/oracle-turnproof.ts difftest/gen/node-oracle.ts
+git -c user.name="Anas Tarek Qumhiyeh" -c user.email=anasqumhiyeh@gmail.com commit -m "feat(go): uncapped turn hash catalog, turn bundle file walks and the portable tree pack
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+```
