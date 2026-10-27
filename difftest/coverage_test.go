@@ -280,6 +280,13 @@ var unreachableLiterals = map[string]string{
 	"Transition index must be a non-negative integer (got": "minimizeFromTurnInvestigation refuses a non-integer or negative --transition first (`--transition must be a non-negative integer.`), so fl never passes one to selectTurnTransition; TestLiveTurnBridge compares it on direct calls",
 	"--transition must be a non-negative integer.":         "reached by Task 9/10 goldens (investigate turns --minimize, prove transition); remove when they land",
 	"Counterfactual minimization from a turn boundary reuses Git-path machinery on synthetic commits. The parent turn package remains EXPERIMENTAL_TURN until TURN_PROOF promotion criteria are met.": "reached by Task 9/10 goldens (investigate turns --minimize, prove transition); remove when they land",
+
+	// turninv/investigate.go (TestLiveInvestigateTurns's requireReached):
+	"Missing prepared state or fingerprint at index":    "phase 2 runs only after the fingerprint count check, so every state has a fingerprint",
+	"No resolved runtime image for fingerprint":         "buildEffectiveRuntimeMapping resolves an image for every distinct fingerprint digest or throws first",
+	"Could not fingerprint every turn state.":           "every state without a fingerprint pushed its materialization error, so the error list is never empty there",
+	"Turn investigation did not localize a transition.": "baseResult's default reason; every caller passes a proofReason",
+	"Turn investigation did not produce proof.":         "baseResult's default reason; every caller passes a proofReason",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
@@ -1073,6 +1080,8 @@ var gatedDirs = []string{
 	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
 	"internal/safegit", "internal/hostcmd", "internal/runtimeimage", "internal/doctor", "internal/allowlist", "internal/turnsnap",
 	"internal/incident",
+	// Slice 4b Task 6 (planned for Task 11): every file is live-gated.
+	"internal/turninv",
 }
 
 // gatedLiterals is errorLiterals over every gatedDirs package.
@@ -1151,6 +1160,9 @@ var liveGatedFiles = map[string]string{
 	// spawnSync's own error: ENOENT is compared there, ENOBUFS needs more
 	// than 16 MiB from rev-parse or commit-tree, which print one object id.
 	"internal/minimize/bridge.go": "TestLiveTurnBridge",
+	// Slice 4b Task 6: investigateTurnTrees on generated sessions.
+	"internal/turninv/investigate.go": "TestLiveInvestigateTurns",
+	"internal/turninv/schemas.go":     "TestLiveInvestigateTurns",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally
