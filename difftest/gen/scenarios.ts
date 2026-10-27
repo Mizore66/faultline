@@ -21,10 +21,13 @@ import { proposeWitness } from "../../src/witness-lock.js";
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const cli = join(repo, "dist", "cli.js");
 const seedPreload = join(repo, "difftest", "gen", "seed.mjs");
+const fetchShim = join(repo, "difftest", "gen", "fetch-shim.mjs");
 export const scenariosDir = join(repo, "difftest", "testdata", "scenarios");
 const recorderDir = join(repo, "difftest", "testdata", "recorder");
 const fakeDockerDir = join(repo, "difftest", "testdata", "fakedocker");
 const fakeToolsDir = join(repo, "difftest", "testdata", "faketools");
+export const fakeCodexDir = join(repo, "difftest", "testdata", "fakecodex");
+export const fakeGhDir = join(repo, "difftest", "testdata", "fakegh");
 
 // The pinned oracle release: CI regenerates on it and fails on drift.
 export function requireOracleNode(): void {
@@ -80,10 +83,33 @@ export function writeRecorders(roots: CaseRoots): void {
 }
 
 // inheritedOut names the variables a writer case never inherits: git's own,
-// FaultLine's, and those src/ reads to detect CI or a live model.
+// FaultLine's, GitHub Actions' (provenance create reads GITHUB_SHA and the
+// rest: slice 4c correction 6), and those src/ reads to detect CI or a live
+// model. The Go twin is inheritedOut in difftest/writer_test.go.
 export function inheritedOut(name: string): boolean {
-  return name.startsWith("GIT_") || name.startsWith("FAULTLINE_") || ["CI", "GITHUB_ACTIONS", "OPENAI_API_KEY"].includes(name);
+  return name.startsWith("GIT_") || name.startsWith("FAULTLINE_") || name.startsWith("GITHUB_") || ["CI", "OPENAI_API_KEY"].includes(name);
 }
+
+// installFakeCodex copies difftest/testdata/fakecodex/<name>/codex to
+// <HOME>/fakecodex/codex (mode 0755) with the case's argv log path written
+// into its `log=` line, as writeRecorders does: fl runs codex with PATH as
+// its only environment variable. It returns the copy's path. The Go twin is
+// installFakeCodex in difftest/writer_test.go.
+export function installFakeCodex(roots: CaseRoots, name: string): string {
+  const template = readFileSync(join(fakeCodexDir, name, "codex"), "utf8");
+  const line = "log=$FAULTLINE_ARGV_LOG\n";
+  if (!template.includes(line) || roots.argvLog.includes("'")) throw new Error(`fake codex ${name} cannot take ${roots.argvLog}`);
+  const dir = join(roots.home, "fakecodex");
+  mkdirSync(dir, { recursive: true, mode: 0o755 });
+  const bin = join(dir, "codex");
+  writeFileSync(bin, template.replace(line, `log='${roots.argvLog}'\n`), { mode: 0o755 });
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+// WriterFakes are a template's slice 4c fakes (difftest/testdata/fakecodex,
+// difftest/testdata/fakegh and the fake OpenAI server's URL).
+export type WriterFakes = { fakeCodex?: string | undefined; fakeCodexOnPath?: boolean | undefined; fakeGh?: string | undefined; openAIURL?: string | undefined };
 
 // linkPathTools gives a case whose template lists pathTools a PATH with no
 // docker on it (difftest/testdata/faketools/README.md): <case>/bin holds a
@@ -108,27 +134,40 @@ export function linkPathTools(roots: CaseRoots, tools: readonly string[]): strin
 
 // The environment every writer invocation runs with; extra is the
 // template's env (after placeholder substitution). PATH is the recorders,
-// then the template's fake toolchain (difftest/testdata/faketools/<name>),
-// then its fake Docker, then the inherited PATH, or, when the template
-// lists pathTools, only those tools (linkPathTools).
-export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | undefined, extra: Record<string, string>, fakeTools?: string, pathTools?: readonly string[]): NodeJS.ProcessEnv {
+// then <HOME>/fakecodex (fakeCodexOnPath), then the template's fake gh
+// (difftest/testdata/fakegh/<name>), its fake toolchain
+// (difftest/testdata/faketools/<name>) and its fake Docker, then the
+// inherited PATH, or, when the template lists pathTools, only those tools
+// (linkPathTools). fakeCodex sets FAULTLINE_CODEX_BIN to the installed copy
+// unless it is on PATH; a fake OpenAI server's URL is
+// FAULTLINE_TEST_OPENAI_URL (fetch-shim.mjs). The Go twin is writerEnv in
+// difftest/writer_test.go.
+export function writerEnv(roots: CaseRoots, seed: string, fakeDocker: string | undefined, extra: Record<string, string>, fakeTools?: string, pathTools?: readonly string[], fakes: WriterFakes = {}): NodeJS.ProcessEnv {
   const inherited = pathTools ? linkPathTools(roots, pathTools) : process.env.PATH ?? "";
-  const path = [roots.recorder, ...(fakeTools ? [join(fakeToolsDir, fakeTools)] : []), ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), inherited].join(":");
+  const codexName = fakes.fakeCodex ?? (fakes.fakeCodexOnPath ? "edits" : undefined);
+  const codex = codexName === undefined ? undefined : installFakeCodex(roots, codexName);
+  const path = [
+    roots.recorder, ...(codex !== undefined && fakes.fakeCodexOnPath ? [dirname(codex)] : []), ...(fakes.fakeGh ? [join(fakeGhDir, fakes.fakeGh)] : []),
+    ...(fakeTools ? [join(fakeToolsDir, fakeTools)] : []), ...(fakeDocker ? [join(fakeDockerDir, fakeDocker)] : []), inherited
+  ].join(":");
   return {
     ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !inheritedOut(name))),
     HOME: roots.home, USERPROFILE: roots.home, TMPDIR: roots.tmp, TEMP: roots.tmp, TMP: roots.tmp,
     GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(roots.home, "empty.gitconfig"), LC_ALL: "C.UTF-8", LANGUAGE: "", GIT_DEFAULT_HASH: "sha1",
     FAULTLINE_TEST_SEED: seed, FAULTLINE_NO_BROWSER: "1", FAULTLINE_ARGV_LOG: roots.argvLog, PATH: path,
+    ...(codex !== undefined && !fakes.fakeCodexOnPath ? { FAULTLINE_CODEX_BIN: codex } : {}),
+    ...(fakes.openAIURL !== undefined ? { FAULTLINE_TEST_OPENAI_URL: fakes.openAIURL } : {}),
     ...extra
   };
 }
 
 export type RunResult = { stdout: string; stderr: string; exit: number };
 
-// runCli runs frozen TS under the seed preload with cwd = the workspace.
+// runCli runs frozen TS under the seed preload, then the fetch shim
+// (fetch-shim.mjs: the fake OpenAI server), with cwd = the workspace.
 export function runCli(roots: CaseRoots, argv: string[], env: NodeJS.ProcessEnv): Promise<RunResult> {
   return new Promise((done) => {
-    const child = spawn(process.execPath, ["--import", pathToFileURL(seedPreload).href, cli, ...argv], { env, cwd: roots.ws });
+    const child = spawn(process.execPath, ["--import", pathToFileURL(seedPreload).href, "--import", pathToFileURL(fetchShim).href, cli, ...argv], { env, cwd: roots.ws });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     child.stdout.on("data", (b) => out.push(b));

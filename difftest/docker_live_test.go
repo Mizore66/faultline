@@ -231,10 +231,11 @@ func buildRealDockerWorkspace(t *testing.T, repo string, r writerRoots) {
 	}
 }
 
-// tsCommand runs frozen TS with the seeded clock, UUIDs and mkdtemp names
-// (gen-writers.ts runCli).
+// tsCommand runs frozen TS with the seeded clock, UUIDs and mkdtemp names,
+// then the fetch shim (gen-writers.ts runCli).
 func tsCommand(repo string) []string {
-	return []string{"node", "--import", "file://" + filepath.Join(repo, "difftest", "gen", "seed.mjs"), filepath.Join(repo, "dist", "cli.js")}
+	gen := filepath.Join(repo, "difftest", "gen")
+	return []string{"node", "--import", "file://" + filepath.Join(gen, "seed.mjs"), "--import", "file://" + filepath.Join(gen, "fetch-shim.mjs"), filepath.Join(repo, "dist", "cli.js")}
 }
 
 // runInCase runs command plus args in the case workspace with the writer

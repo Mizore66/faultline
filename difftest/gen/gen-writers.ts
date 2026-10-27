@@ -7,17 +7,23 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { canonicalJson, digestJson, sha256 } from "../../src/canonical.js";
 import { PATH_OPS, applyMutation, normalizeWriter, treeDigest, type Template } from "./cases.js";
-import { copyScenario, makeCaseRoots, resetModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
+import { startFakeOpenAI, type FakeOpenAI } from "./fake-openai.js";
+import { copyScenario, makeCaseRoots, resetModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots, type WriterFakes } from "./scenarios.js";
 
 export type WriterTemplate = {
   id: string; scenario: string; argv: string[][]; fakeDocker?: string; fakeTools?: string; pathTools?: string[]; env?: Record<string, string>;
   posixOnly?: boolean; mutations?: Template[];
+  // Slice 4c fakes: difftest/testdata/fakecodex/<fakeCodex> as
+  // FAULTLINE_CODEX_BIN (or on PATH with fakeCodexOnPath),
+  // difftest/testdata/fakegh/<fakeGh> on PATH, and a fake OpenAI server
+  // answering from the workspace file fakeOpenAI (fake-openai.ts).
+  fakeCodex?: string; fakeCodexOnPath?: boolean; fakeGh?: string; fakeOpenAI?: string;
 };
 
-const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations"]);
+const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations", "fakeCodex", "fakeCodexOnPath", "fakeGh", "fakeOpenAI"]);
 
 // TMPDIR_FAKE_DOCKERS are the fake Dockers that keep state in $TMPDIR on
 // purpose (difftest/testdata/fakedocker/README.md).
@@ -197,6 +203,22 @@ export function loggedCasePaths(records: string[], roots: CaseRoots): string[] {
   return out;
 }
 
+// openAIRequestInputs are the input strings of the request bodies the fake
+// OpenAI server recorded ("" for a body that is not JSON or has no string
+// input), in log order. The Go twin is openAIRequestInputs in
+// difftest/writer_test.go.
+export function openAIRequestInputs(records: string[]): string[] {
+  return records.filter((record) => record.startsWith("openai\x1f")).map((record) => {
+    const body = record.split("\x1f").slice(5).join("\x1f");
+    try {
+      const input = (JSON.parse(body) as { input?: unknown }).input;
+      return typeof input === "string" ? input : "";
+    } catch {
+      return "";
+    }
+  });
+}
+
 export function relocation(roots: CaseRoots, records: string[] = []): Relocation {
   const files: [string, Buffer, string][] = [];
   const walk = (rel: string) => {
@@ -244,6 +266,12 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
       k += 1;
     }
   }
+  // The fake OpenAI server's records hold the request body, whose input is
+  // the evidence packet: its packetDigest covers the path-dependent
+  // investigationDigest, and a failed request leaves the packet in no file.
+  // Each is walked like a file's JSON as openai:<k> (the k-th openai
+  // record), without a file: name.
+  const requests = openAIRequestInputs(records);
   let frontier = seeds;
   while (frontier.length > 0) {
     found = [];
@@ -251,6 +279,10 @@ export function relocation(roots: CaseRoots, records: string[] = []): Relocation
       if (!frontier.some((needle) => text.includes(needle))) continue;
       add(sha256(bytes), `file:${rel}`);
       try { visit(JSON.parse(text), rel, ""); } catch { /* not JSON */ }
+    }
+    for (const [k, text] of requests.entries()) {
+      if (!frontier.some((needle) => text.includes(needle))) continue;
+      try { visit(JSON.parse(text), `openai:${k}`, ""); } catch { /* not JSON */ }
     }
     frontier = found;
   }
@@ -335,17 +367,108 @@ export function writtenPrevention(stdout: string): { directory: string; rootDige
   }
 }
 
+// parsedObject is stdout parsed as a JSON object, or undefined.
+function parsedObject(stdout: string): Record<string, unknown> | undefined {
+  try {
+    const v = JSON.parse(stdout) as unknown;
+    return v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// writtenAttestation is the receipt an `fl attest create` invocation
+// reports (status ATTESTED): its path and receipt digest. The Go twin is
+// writtenAttestation in difftest/writer_test.go.
+export function writtenAttestation(stdout: string): { path: string; receiptDigest: string } | undefined {
+  const v = parsedObject(stdout);
+  if (v?.status !== "ATTESTED" || typeof v.path !== "string" || typeof v.receiptDigest !== "string") return undefined;
+  return { path: v.path, receiptDigest: v.receiptDigest };
+}
+
+// writtenRepairBrief is the package an `fl repair brief` invocation reports
+// (status PERSISTED): its directory and artifact digest. The Go twin is
+// writtenRepairBrief in difftest/writer_test.go.
+export function writtenRepairBrief(stdout: string): { directory: string; artifactDigest: string } | undefined {
+  const v = parsedObject(stdout);
+  if (v?.status !== "PERSISTED" || typeof v.directory !== "string" || typeof v.artifactDigest !== "string") return undefined;
+  return { directory: v.directory, artifactDigest: v.artifactDigest };
+}
+
+// writtenProvenanceReceipt is the receipt an `fl provenance create`
+// invocation reports (status AWAITING_GITHUB_ARTIFACT_ATTESTATION). The Go
+// twin is writtenProvenanceReceipt in difftest/writer_test.go.
+export function writtenProvenanceReceipt(stdout: string): { path: string } | undefined {
+  const v = parsedObject(stdout);
+  if (v?.status !== "AWAITING_GITHUB_ARTIFACT_ATTESTATION" || typeof v.path !== "string") return undefined;
+  return { path: v.path };
+}
+
+// writtenRepairPrevention is the prevention package an `fl repair --bundle`
+// invocation reports (preventionExport with ok: true): its directory and
+// root digest. The Go twin is writtenRepairPrevention in
+// difftest/writer_test.go.
+export function writtenRepairPrevention(stdout: string): { directory: string; rootDigest: string } | undefined {
+  const exported = parsedObject(stdout)?.preventionExport as Record<string, unknown> | null | undefined;
+  if (exported === null || typeof exported !== "object" || exported.ok !== true || typeof exported.directory !== "string" || typeof exported.rootDigest !== "string") return undefined;
+  return { directory: exported.directory, rootDigest: exported.rootDigest };
+}
+
+// checkDetectors is the start-up self-check of the artifact detectors (the
+// Go twin is TestWrittenArtifactDetectors in difftest/fakes_test.go).
+function checkDetectors(): void {
+  const attestation = writtenAttestation("{\n  \"status\": \"ATTESTED\",\n  \"path\": \"/s/r1.json\",\n  \"receiptDigest\": \"sha256:aa\"\n}\n");
+  if (attestation?.path !== "/s/r1.json" || attestation.receiptDigest !== "sha256:aa") throw new Error("writtenAttestation self-check failed");
+  if (writtenRepairBrief("{\"status\":\"PERSISTED\"}\n") !== undefined) throw new Error("writtenRepairBrief self-check failed: no directory is not a brief");
+  const prevention = writtenRepairPrevention(`{"status":"REPAIR_CANDIDATE_VERIFIED","preventionExport":{"ok":true,"directory":"/p","rootDigest":"sha256:bb"}}`);
+  if (prevention?.directory !== "/p" || prevention.rootDigest !== "sha256:bb") throw new Error("writtenRepairPrevention self-check failed");
+  if (writtenRepairPrevention(`{"preventionExport":{"ok":false,"reasons":["x"]}}`) !== undefined) throw new Error("writtenRepairPrevention self-check failed: a failed export is not a package");
+}
+
+// optionValue is the value after flag in argv (cli-app.ts option), or
+// undefined.
+function optionValue(argv: string[], flag: string): string | undefined {
+  const index = argv.indexOf(flag);
+  return index >= 0 ? argv[index + 1] : undefined;
+}
+
 // crossVerify runs TS `fl verify` on every bundle (slice 2 spec 2.4) and
-// every prevention package TS wrote; TestWriterReplay does the same with Go
-// on the ones Go wrote. It runs after the invocation's argv log is read, so
-// its git calls are not recorded.
-async function crossVerify(id: string, inv: number, roots: CaseRoots, stdout: string): Promise<void> {
-  const prevention = writtenPrevention(stdout);
+// every prevention package TS wrote, and the TS verifier of every
+// attestation receipt, repair brief, provenance receipt (with fake gh
+// `pass`) and repair-written prevention package; TestWriterReplay does the
+// same with TS on the ones Go wrote. It runs after the invocation's argv log
+// is read, so its git and gh calls are not recorded. argv is the
+// invocation's, after substitution. The Go twin is crossVerify in
+// difftest/writer_test.go.
+async function crossVerify(id: string, inv: number, roots: CaseRoots, stdout: string, argv: string[]): Promise<void> {
+  const fail = (what: string, r: { exit: number; stdout: string; stderr: string }) => new Error(`${id}|${inv}: TS ${what} TS wrote failed (exit ${r.exit})\n${r.stdout}${r.stderr}`);
+  const env = (fakes: WriterFakes = {}) => writerEnv(roots, `${id}:verify`, undefined, {}, undefined, undefined, fakes);
+  const prevention = writtenPrevention(stdout) ?? writtenRepairPrevention(stdout);
   const directory = prevention?.directory ?? writtenBundle(stdout);
-  if (directory === undefined) return;
-  const root = prevention?.rootDigest ?? (JSON.parse(stdout) as { proofBundle: { rootDigest: string } }).proofBundle.rootDigest;
-  const r = await runCli(roots, ["verify", directory, "--expect-root", root], writerEnv(roots, `${id}:verify`, undefined, {}));
-  if (r.exit !== 0 || !r.stdout.startsWith("Integrity: VALID\n") || !r.stdout.includes("\nExternal root: MATCH\n")) throw new Error(`${id}|${inv}: TS verify of the bundle TS wrote failed (exit ${r.exit})\n${r.stdout}${r.stderr}`);
+  if (directory !== undefined) {
+    const root = prevention?.rootDigest ?? (JSON.parse(stdout) as { proofBundle: { rootDigest: string } }).proofBundle.rootDigest;
+    const r = await runCli(roots, ["verify", directory, "--expect-root", root], env());
+    if (r.exit !== 0 || !r.stdout.startsWith("Integrity: VALID\n") || !r.stdout.includes("\nExternal root: MATCH\n")) throw fail("verify of the bundle", r);
+  }
+  const attestation = writtenAttestation(stdout);
+  if (attestation !== undefined) {
+    const receiptId = basename(attestation.path).replace(/\.json$/, "");
+    const r = await runCli(roots, ["attest", "verify", receiptId, "--store", dirname(attestation.path), "--expect-digest", attestation.receiptDigest], env());
+    if (r.exit !== 0) throw fail("attest verify of the receipt", r);
+  }
+  const brief = writtenRepairBrief(stdout);
+  if (brief !== undefined) {
+    const r = await runCli(roots, ["repair", "verify", brief.directory, "--expect-digest", brief.artifactDigest], env());
+    if (r.exit !== 0 || !r.stdout.includes('"valid": true')) throw fail("repair verify of the brief", r);
+  }
+  const receipt = writtenProvenanceReceipt(stdout);
+  if (receipt !== undefined) {
+    const bundle = optionValue(argv, "--bundle");
+    if (bundle === undefined) throw new Error(`${id}|${inv}: a provenance receipt without --bundle in the argv`);
+    const r = await runCli(roots, ["provenance", "verify", "--bundle", bundle, "--receipt", receipt.path, "--trust", join(roots.ws, "trust.json"),
+      "--attestation-bundle", join(roots.ws, "attestation.sigstore.json")], env({ fakeGh: "pass" }));
+    if (r.exit !== 0) throw fail("provenance verify of the receipt", r);
+  }
 }
 
 // BUSY_PORT in an argv string is the port of a listener the case holds on
@@ -360,6 +483,31 @@ export const BUSY_PORT = "<BUSYPORT>";
 export function fileArgument(arg: string, roots: CaseRoots): string {
   const m = /^<FILE:([^>]+)>$/.exec(arg);
   return m ? readFileSync(join(roots.ws, m[1]!), "utf8").trim() : arg;
+}
+
+// invocationEnv is a template's env for one invocation: <WS>, <TMP> and
+// <HOME> substituted, and a value that is exactly <FILE:rel> replaced by
+// the trimmed text of the workspace file rel when the invocation starts, as
+// fileArgument does for argv (a provenance case's GITHUB_SHA). The Go twin
+// is the env loop in writerEnv, difftest/writer_test.go.
+export function invocationEnv(t: WriterTemplate, roots: CaseRoots): Record<string, string> {
+  return Object.fromEntries(Object.entries(t.env ?? {}).map(([k, v]) => [k, fileArgument(substitute(v, roots), roots)]));
+}
+
+// maskCodexPath masks, in a fake codex record's PATH= field, the harness's
+// inherited PATH as <PATH>, then the case root as <ROOT> and the
+// repository as <REPO> (the recorder, fake codex and fake tool
+// directories): fl passes codex its whole PATH, which differs between
+// machines. Nothing else is touched. The Go twin is maskCodexPath in
+// difftest/writer_test.go.
+export function maskCodexPath(record: string, roots: CaseRoots, repoDir: string, inheritedPath: string): string {
+  if (!record.startsWith("codex ")) return record;
+  return record.split("\x1f").map((arg) => {
+    if (!arg.startsWith("PATH=")) return arg;
+    let value = arg.slice("PATH=".length);
+    if (inheritedPath !== "") value = value.split(inheritedPath).join("<PATH>");
+    return `PATH=${value.split(roots.root).join("<ROOT>").split(repoDir).join("<REPO>")}`;
+  }).join("\x1f");
 }
 
 // An argv string that is exactly <STDOUT:n:/json/pointer> becomes the
@@ -446,7 +594,10 @@ const tmpFailures: string[] = [];
 async function runCase(t: WriterTemplate): Promise<string[]> {
   const roots = makeCaseRoots();
   const busy = await holdBusyPort(t);
+  let openAI: FakeOpenAI | undefined;
   try {
+    if (t.fakeOpenAI !== undefined) openAI = await startFakeOpenAI(roots.ws, t.fakeOpenAI, roots.argvLog);
+    const fakes: WriterFakes = { fakeCodex: t.fakeCodex, fakeCodexOnPath: t.fakeCodexOnPath, fakeGh: t.fakeGh, openAIURL: openAI?.url };
     copyScenario(t.scenario, roots.ws);
     // chmod mutations run after resetModes, which would undo them (the Go
     // twin is prepareWriterCase).
@@ -458,7 +609,6 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     // generated as root would drift.
     if (mutations.some((m) => m.op === "chmod") && process.getuid?.() === 0) throw new Error(`${t.id}: chmod cases must be generated by a non-root user`);
     for (const m of mutations) if (m.op === "chmod") apply(m);
-    const env = Object.fromEntries(Object.entries(t.env ?? {}).map(([k, v]) => [k, substitute(v, roots)]));
     const lines: string[] = [];
     // The recorded paths accumulate over the case's invocations: a later
     // invocation must keep masking the worktree digests an earlier one
@@ -468,20 +618,21 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     for (const [inv, argv] of t.argv.entries()) {
       const before = treeEntries(roots.ws, relocation(roots, records).fileDigest);
       rmSync(roots.argvLog, { force: true });
-      const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)), writerEnv(roots, t.id, t.fakeDocker, env, t.fakeTools, t.pathTools));
+      const args = argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts));
+      const r = await runCli(roots, args, writerEnv(roots, t.id, t.fakeDocker, invocationEnv(t, roots), t.fakeTools, t.pathTools, fakes));
       // Temporary files fl makes (mkdtemp roots, the snapshot index, the
       // doctor --security fixture) must be gone, as in Go.
       const leftovers = checksTmpdir(t) ? tmpLeftovers(roots) : [];
       if (leftovers.length > 0) tmpFailures.push(`${t.id}|${inv}: TS left ${leftovers.join(", ")} in TMPDIR`);
       stdouts.push(r.stdout);
       const plans = planDigests(r.stdout);
-      const invocationRecords = readArgvLog(roots.argvLog);
+      const invocationRecords = readArgvLog(roots.argvLog).map((record) => maskCodexPath(record, roots, repo, process.env.PATH ?? ""));
       records.push(...invocationRecords);
       const reloc = relocation(roots, records);
       const after = treeEntries(roots.ws, reloc.fileDigest);
       const tree = treeDigest(roots.ws, reloc.fileDigest);
       // After the tree and the argv log are read, like the Go replay.
-      await crossVerify(t.id, inv, roots, r.stdout);
+      await crossVerify(t.id, inv, roots, r.stdout, args);
       // Windows runs no sh recorder: a case that records argv is POSIX-only.
       if (invocationRecords.length > 0 && !t.posixOnly) throw new Error(`${t.id}: records git/docker argv but is not posixOnly`);
       lines.push(JSON.stringify({
@@ -493,6 +644,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     return lines;
   } finally {
     for (const server of busy.servers) server.close();
+    await openAI?.close();
     restoreWritable(roots.root);
     rmSync(roots.root, { recursive: true, force: true });
   }
@@ -524,6 +676,7 @@ process.umask(0);
 const repo = resolve(".");
 const templates = JSON.parse(readFileSync(join(repo, "difftest/testdata/writers.json"), "utf8")) as WriterTemplate[];
 checkTemplates(templates);
+checkDetectors();
 const results: string[][] = new Array(templates.length);
 // FAULTLINE_WRITERS_ONLY=<regex> regenerates only the cases whose id
 // matches and keeps every other case's lines from the committed golden
