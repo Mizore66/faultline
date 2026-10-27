@@ -282,8 +282,11 @@ var unreachableLiterals = map[string]string{
 	"Could not create temporary bare repository for pack verification:": "reached by Task 2 turn-git-fail-init golden; remove when it lands",
 
 	// turninv/investigate.go (TestLiveInvestigateTurns's requireReached):
-	"Missing prepared state or fingerprint at index": "phase 2 runs only after the fingerprint count check, so every state has a fingerprint",
-	"No resolved runtime image for fingerprint":      "buildEffectiveRuntimeMapping resolves an image for every distinct fingerprint digest or throws first",
+	"Missing prepared state or fingerprint at index":    "phase 2 runs only after the fingerprint count check, so every state has a fingerprint",
+	"No resolved runtime image for fingerprint":         "buildEffectiveRuntimeMapping resolves an image for every distinct fingerprint digest or throws first",
+	"Could not fingerprint every turn state.":           "every state without a fingerprint pushed its materialization error, so the error list is never empty there",
+	"Turn investigation did not localize a transition.": "baseResult's default reason; every caller passes a proofReason",
+	"Turn investigation did not produce proof.":         "baseResult's default reason; every caller passes a proofReason",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
