@@ -5,11 +5,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/Mizore66/faultline/internal/jsjson"
 )
+
+// setTempDir points os.tmpdir() (and os.TempDir) at a fresh directory.
+func setTempDir(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(name, dir)
+	}
+}
 
 func gitRepo(t *testing.T) (dir, head string) {
 	t.Helper()
@@ -32,7 +41,7 @@ func gitRepo(t *testing.T) (dir, head string) {
 }
 
 func TestCommitRepairedWorktreeState(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
+	setTempDir(t)
 	dir, head := gitRepo(t)
 	os.WriteFile(filepath.Join(dir, "state.txt"), []byte("good\n"), 0o755)
 	os.Chmod(filepath.Join(dir, "state.txt"), 0o755)
@@ -46,7 +55,8 @@ func TestCommitRepairedWorktreeState(t *testing.T) {
 	}
 	out, _ := exec.Command("git", "-C", dir, "ls-tree", "-r", s.Tree).Output()
 	tree := string(out)
-	if !strings.Contains(tree, "100755 blob ") || strings.Contains(tree, "gone.txt") ||
+	// Windows has no execute bits: lstat reports 0o666 there.
+	if (runtime.GOOS != "windows") != strings.Contains(tree, "100755 blob ") || strings.Contains(tree, "gone.txt") ||
 		!strings.Contains(tree, ".faultline-repair/README.md") || strings.Contains(tree, "\tlink\n") {
 		t.Fatalf("%s", out)
 	}
@@ -72,7 +82,7 @@ func TestCommitRepairedWorktreeState(t *testing.T) {
 }
 
 func TestCommitRepairedWorktreeStateUnknownBase(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
+	setTempDir(t)
 	dir, _ := gitRepo(t)
 	_, err := CommitRepairedWorktreeState(dir, strings.Repeat("0", 40))
 	// The read-tree stderr, untrimmed.
