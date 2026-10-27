@@ -36,7 +36,6 @@ var unreachableLiterals = map[string]string{
 	"three-state prevention requires PASS → FAIL → PASS":                      "each state's verdict is a zod literal (PASS, FAIL, PASS); the schema rejects other orders first",
 	"prevention requires at least three distinct executions per state":        "distinctExecutionCount has a zod minimum of 3",
 	"source metadata artifact paths do not match the manifest":                "both paths are zod literals, so they always agree after the schemas pass",
-	"Cannot bind an invalid Codex lifecycle ledger:":                          "binding runs only after the ledger verified",
 	"Cannot bind a lifecycle ledger that has no SESSION_STARTED observation.": "a verified ledger always starts with SESSION_STARTED",
 
 	// gitproof/write.go (TestLiveProofWriter's requireReached):

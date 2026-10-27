@@ -442,6 +442,115 @@ func writeJSON(path string, v jsjson.Value) {
 	os.WriteFile(path, []byte(jsstr.ToUTF8(jsjson.StringifyIndent(v, "  ")+"\n")), 0o644)
 }
 
+// writeCanonical writes canonicalJson(v) + "\n", a turn bundle artifact's
+// bytes (cases.ts writeCanonical).
+func writeCanonical(path string, v jsjson.Value) {
+	text, err := canonical.CanonicalJSON(v)
+	if err != nil {
+		panic(err)
+	}
+	os.WriteFile(path, []byte(jsstr.ToUTF8(text+"\n")), 0o644)
+}
+
+// withoutKey is a copy of o without key (`const { key: _, ...rest } = o`).
+func withoutKey(o *jsjson.Obj, key string) jsjson.Value {
+	c := jsjson.NewObj()
+	for _, k := range o.Keys() {
+		if k != key {
+			c.Set(k, o.Field(k))
+		}
+	}
+	return jsjson.MakeObject(c)
+}
+
+// resignTurnBundle is the TS engine's resignTurnBundle: the editor who
+// rewrites a turn bundle consistently after an edit of investigation.json.
+// Each runId is re-derived from its run (executionId is left alone) and
+// renamed wherever stable states and transitions name it, then the run and
+// transition artifacts and the manifest's artifact index and investigation
+// digest are rewritten; the template's rehash then rewrites hashes.txt and
+// ROOT.sha256.
+func resignTurnBundle(root string) {
+	investigationPath := filepath.Join(root, "investigation.json")
+	o, ok := parseObjectFile(investigationPath)
+	if !ok {
+		return
+	}
+	investigation := jsjson.MakeObject(o)
+	renamed := map[string]string{}
+	runs := investigation.Get("runs").Items()
+	for _, run := range runs {
+		old := run.Get("runId").Str()
+		id := bundleMustString(canonical.DigestJSON(withoutKey(run.Obj(), "runId")))
+		run.Obj().Set("runId", jsjson.MakeString(id))
+		renamed[old] = id
+	}
+	rename := func(s jsjson.Value) {
+		if s.Kind() != jsjson.Object {
+			return
+		}
+		ids := s.Get("runIds")
+		if ids.Kind() != jsjson.Array {
+			return
+		}
+		out := make([]jsjson.Value, len(ids.Items()))
+		for i, id := range ids.Items() {
+			out[i] = id
+			if n, ok := renamed[id.Str()]; ok && id.Kind() == jsjson.String {
+				out[i] = jsjson.MakeString(n)
+			}
+		}
+		s.Obj().Set("runIds", jsjson.MakeArray(out))
+	}
+	for _, st := range investigation.Get("stableStates").Items() {
+		rename(st)
+	}
+	transitions := investigation.Get("transitions").Items()
+	for _, tr := range transitions {
+		rename(tr.Get("before"))
+		rename(tr.Get("after"))
+	}
+	writeCanonical(investigationPath, investigation)
+	runPath := func(run jsjson.Value) string {
+		return "runs/" + strings.TrimPrefix(run.Get("runId").Str(), "sha256:") + ".json"
+	}
+	transitionPath := func(i int) string { return fmt.Sprintf("transitions/%04d.json", i) }
+	for _, dir := range []string{"runs", "transitions"} {
+		os.MkdirAll(filepath.Join(root, dir), 0o755)
+		names, _ := nodefs.ReadDirNames(filepath.Join(root, dir))
+		for _, name := range names {
+			if strings.HasSuffix(name, ".json") {
+				os.Remove(filepath.Join(root, dir, name))
+			}
+		}
+	}
+	var runIndex, transitionIndex []jsjson.Value
+	for _, run := range runs {
+		writeCanonical(filepath.Join(root, filepath.FromSlash(runPath(run))), run)
+		d := jsjson.NewObj()
+		d.Set("runId", run.Get("runId"))
+		d.Set("path", jsjson.MakeString(runPath(run)))
+		runIndex = append(runIndex, jsjson.MakeObject(d))
+	}
+	for i, tr := range transitions {
+		writeCanonical(filepath.Join(root, filepath.FromSlash(transitionPath(i))), tr)
+		d := jsjson.NewObj()
+		d.Set("index", jsjson.MakeNumber(float64(i)))
+		d.Set("path", jsjson.MakeString(transitionPath(i)))
+		transitionIndex = append(transitionIndex, jsjson.MakeObject(d))
+	}
+	manifestPath := filepath.Join(root, "manifest.json")
+	manifest, ok := parseObjectFile(manifestPath)
+	if !ok {
+		return
+	}
+	artifacts := manifest.Field("artifacts").Obj()
+	artifacts.Set("runs", jsjson.MakeArray(append([]jsjson.Value{}, runIndex...)))
+	artifacts.Set("transitions", jsjson.MakeArray(append([]jsjson.Value{}, transitionIndex...)))
+	manifest.Set("investigationDigest", jsjson.MakeString(bundleMustString(canonical.DigestJSON(investigation))))
+	writeCanonical(manifestPath, jsjson.MakeObject(manifest))
+}
+
 func rehash(root, base string) {
 	if strings.HasPrefix(base, "prevention-") {
 		manifest, ok := parseObjectFile(filepath.Join(root, "manifest.json"))
@@ -571,6 +680,30 @@ func applyMutation(root string, c testCase) bool {
 	case "copy-file":
 		b, _ := os.ReadFile(filepath.Join(fixturesDir(), filepath.FromSlash(t.str("from"))))
 		os.WriteFile(path, b, 0o644)
+	case "pad-file":
+		// Spaces until the file is exactly total bytes.
+		b, err := os.ReadFile(path)
+		total := int(t.fields.Field("total").Num())
+		if err != nil || len(b) > total {
+			return false
+		}
+		os.WriteFile(path, append(b, bytes.Repeat([]byte{0x20}, total-len(b))...), 0o644)
+	case "replace-pack":
+		// A new trees.pack, with the source metadata's pack digest and size
+		// following it.
+		b, err := os.ReadFile(filepath.Join(fixturesDir(), filepath.FromSlash(t.str("from"))))
+		if err != nil {
+			return false
+		}
+		os.WriteFile(path, b, 0o644)
+		metadataPath := filepath.Join(root, "source", "trees.metadata.json")
+		metadata, ok := parseObjectFile(metadataPath)
+		if !ok || metadata.Field("pack").Kind() != jsjson.Object {
+			return false
+		}
+		metadata.Field("pack").Obj().Set("digest", jsjson.MakeString("sha256:"+canonical.SHA256HexBytes(b)))
+		metadata.Field("pack").Obj().Set("bytes", jsjson.MakeNumber(float64(len(b))))
+		writeCanonical(metadataPath, jsjson.MakeObject(metadata))
 	case "sparse-file":
 		// count > 1 makes path-00000, path-00001, ...
 		os.MkdirAll(filepath.Dir(path), 0o755)
@@ -645,6 +778,9 @@ func applyMutation(root string, c testCase) bool {
 			o.Delete(first)
 		}
 		writeJSON(path, jsjson.MakeObject(o))
+	}
+	if t.fields.Field("resignTurn").Bool() {
+		resignTurnBundle(root)
 	}
 	if t.fields.Field("rehash").Bool() {
 		rehash(root, c.base)
@@ -722,6 +858,21 @@ var gitLabels = []string{
 	"Git bundle extraction", "Git commit resolution", "Git tree resolution", "Git bundle range enumeration",
 	"Git binary range patch creation", "Git bundle object-format resolution",
 }
+
+// turnGitLabels precede git's stderr in the turn verifier's and writer's
+// messages (turn-proof-bundle.ts:417, 428, 457, 475), in the ": " form;
+// turnEnumerateLabel is the one that names a tree.
+var (
+	turnGitLabels = []string{
+		"Turn tree pack is not a valid Git pack: ",
+		"Could not create temporary bare repository for pack verification: ",
+		"Could not pack turn trees: ",
+	}
+	turnEnumerateLabel = regexp.MustCompile(`Could not enumerate objects for turn tree [0-9a-f]{40,64}: `)
+)
+
+// gitTmpMarkers name the git verifiers' temporary directories.
+var gitTmpMarkers = []string{"faultline-git-proof-verify-", "faultline-turn-proof-pack-"}
 
 func isBoundary(c byte) bool {
 	return c == '\'' || c == '"' || c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
@@ -861,31 +1012,51 @@ var stagedPID = regexp.MustCompile(`\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{
 // and, with maskGit, git's own diagnostics after each gitLabels failure.
 func maskGitOutput(text string, maskGit bool) string {
 	out := text
-	const marker = "faultline-git-proof-verify-"
-	for i := strings.Index(out, marker); i >= 0; {
-		start := i
-		for start > 0 && !isBoundary(out[start-1]) {
-			start--
+	for _, marker := range gitTmpMarkers {
+		for i := strings.Index(out, marker); i >= 0; {
+			start := i
+			for start > 0 && !isBoundary(out[start-1]) {
+				start--
+			}
+			end := i + len(marker)
+			for end < len(out) && isAlnum(out[end]) {
+				end++
+			}
+			out = out[:start] + "<GITTMP>" + out[end:]
+			next := strings.Index(out[start+len("<GITTMP>"):], marker)
+			if next < 0 {
+				break
+			}
+			i = start + len("<GITTMP>") + next
 		}
-		end := i + len(marker)
-		for end < len(out) && isAlnum(out[end]) {
-			end++
-		}
-		out = out[:start] + "<GITTMP>" + out[end:]
-		next := strings.Index(out[start+len("<GITTMP>"):], marker)
-		if next < 0 {
-			break
-		}
-		i = start + len("<GITTMP>") + next
 	}
-	labels := gitLabels
 	if !maskGit {
-		labels = nil
+		return out
 	}
-	for _, label := range labels {
-		needle := label + " failed: "
-		for i := strings.Index(out, needle); i >= 0; {
-			from := i + len(needle)
+	// Each needle finds the start of the next detail at or after from (-1 if none).
+	var needles []func(from int) int
+	literal := func(needle string) func(int) int {
+		return func(from int) int {
+			if i := strings.Index(out[from:], needle); i >= 0 {
+				return from + i + len(needle)
+			}
+			return -1
+		}
+	}
+	for _, label := range gitLabels {
+		needles = append(needles, literal(label+" failed: "))
+	}
+	for _, label := range turnGitLabels {
+		needles = append(needles, literal(label))
+	}
+	needles = append(needles, func(from int) int {
+		if m := turnEnumerateLabel.FindStringIndex(out[from:]); m != nil {
+			return from + m[1]
+		}
+		return -1
+	})
+	for _, after := range needles {
+		for from := after(0); from >= 0; from = after(from) {
 			to := strings.Index(out[from:], "\n- ")
 			if to >= 0 {
 				to += from
@@ -896,11 +1067,7 @@ func maskGitOutput(text string, maskGit bool) string {
 			}
 			detail := maskGitDetail(out[from:to])
 			out = out[:from] + detail + out[to:]
-			next := strings.Index(out[from+len(detail):], needle)
-			if next < 0 {
-				break
-			}
-			i = from + len(detail) + next
+			from += len(detail)
 		}
 	}
 	return out
