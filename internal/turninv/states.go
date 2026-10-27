@@ -7,9 +7,11 @@ import (
 	"github.com/Mizore66/faultline/internal/v8sort"
 )
 
-// State ports TurnState (:60).
+// State ports TurnState (:60). Index and TurnOrdinal stay float64: the
+// schema accepts any non-negative integer, including ones past 2^53 and
+// 2^63 (1e19) that an int cannot hold, and -0.
 type State struct {
-	Index, TurnOrdinal                       int
+	Index, TurnOrdinal                       float64
 	TurnID, Role, TreeDigest, SnapshotDigest string
 	Dirty                                    bool
 }
@@ -18,9 +20,9 @@ type State struct {
 // treeDigest, snapshotDigest, dirty.
 func (st State) Value() jsjson.Value {
 	return jsjson.MustObject(
-		"index", jsjson.MakeNumber(float64(st.Index)),
+		"index", jsjson.MakeNumber(st.Index),
 		"turnId", jsjson.MakeString(st.TurnID),
-		"turnOrdinal", jsjson.MakeNumber(float64(st.TurnOrdinal)),
+		"turnOrdinal", jsjson.MakeNumber(st.TurnOrdinal),
 		"role", jsjson.MakeString(st.Role),
 		"treeDigest", jsjson.MakeString(st.TreeDigest),
 		"snapshotDigest", jsjson.MakeString(st.SnapshotDigest),
@@ -42,9 +44,9 @@ func StatesFromValue(v jsjson.Value) []State {
 	states := make([]State, 0, len(v.Items()))
 	for _, item := range v.Items() {
 		states = append(states, State{
-			Index:          int(item.Get("index").Num()),
+			Index:          item.Get("index").Num(),
 			TurnID:         item.Get("turnId").Str(),
-			TurnOrdinal:    int(item.Get("turnOrdinal").Num()),
+			TurnOrdinal:    item.Get("turnOrdinal").Num(),
 			Role:           item.Get("role").Str(),
 			TreeDigest:     item.Get("treeDigest").Str(),
 			SnapshotDigest: item.Get("snapshotDigest").Str(),
@@ -55,7 +57,8 @@ func StatesFromValue(v jsjson.Value) []State {
 }
 
 // StatesFromLedger ports turnStatesFromLedger (:347). ledger is a parsed
-// CodexLifecycleLedger; a snapshot that fails TurnTreeSnapshotSchema
+// CodexLifecycleLedger (so each TURN_TREE_SNAPSHOT payload has a string
+// turnId and a positive integer turnOrdinal; anything else is out of domain); a snapshot that fails TurnTreeSnapshotSchema
 // throws the ZodError (jsexc), as TS's .parse does.
 func StatesFromLedger(ledger jsjson.Value) ([]State, error) {
 	states := []State{}
@@ -67,7 +70,7 @@ func StatesFromLedger(ledger jsjson.Value) ([]State, error) {
 				return nil, err
 			}
 			states = append(states, State{
-				Index:          len(states),
+				Index:          float64(len(states)),
 				TurnID:         SessionBaselineTurnID,
 				TurnOrdinal:    0,
 				Role:           "SESSION_BASELINE",
@@ -86,9 +89,9 @@ func StatesFromLedger(ledger jsjson.Value) ([]State, error) {
 		}
 		payload := record.Get("event", "payload")
 		states = append(states, State{
-			Index:          len(states),
+			Index:          float64(len(states)),
 			TurnID:         payload.Get("turnId").Str(),
-			TurnOrdinal:    int(payload.Get("turnOrdinal").Num()),
+			TurnOrdinal:    payload.Get("turnOrdinal").Num(),
 			Role:           "TURN",
 			TreeDigest:     snapshot.Get("treeDigest").Str(),
 			SnapshotDigest: snapshot.Get("digest").Str(),
@@ -97,10 +100,10 @@ func StatesFromLedger(ledger jsjson.Value) ([]State, error) {
 	}
 	// (:375) left.turnOrdinal - right.turnOrdinal || left.index - right.index.
 	v8sort.Sort(states, func(left, right State) int {
-		if d := sign(float64(left.TurnOrdinal) - float64(right.TurnOrdinal)); d != 0 {
+		if d := sign(left.TurnOrdinal - right.TurnOrdinal); d != 0 {
 			return d
 		}
-		return sign(float64(left.Index) - float64(right.Index))
+		return sign(left.Index - right.Index)
 	})
 	return states, nil
 }
@@ -116,8 +119,9 @@ func sign(d float64) int {
 }
 
 // DuplicateTurnOrdinal ports duplicateTurnOrdinalError (:379); "" is null.
+// The float64 key is SameValueZero for these numbers: +0 and -0 are one key.
 func DuplicateTurnOrdinal(states []State) string {
-	ordinals := map[int]bool{}
+	ordinals := map[float64]bool{}
 	for _, st := range states {
 		ordinals[st.TurnOrdinal] = true
 	}
@@ -189,7 +193,7 @@ func AttributeFailureIntroduction(states []State, transitions, stable []jsjson.V
 	baselineFound := false
 	for _, st := range stable {
 		if isString(st.Get("role"), "SESSION_BASELINE") && strictEqual(st.Get("turnOrdinal"), jsjson.MakeNumber(0)) &&
-			strictEqual(st.Get("stateIndex"), jsjson.MakeNumber(float64(baselineState.Index))) {
+			strictEqual(st.Get("stateIndex"), jsjson.MakeNumber(baselineState.Index)) {
 			baselineStable, baselineFound = st, true
 			break
 		}
@@ -236,7 +240,7 @@ func ReconstructStable(states []State, runs []jsjson.Value, requireNative bool) 
 	for _, st := range states {
 		var stateRuns []jsjson.Value
 		for _, run := range runs {
-			if strictEqual(run.Get("stateIndex"), jsjson.MakeNumber(float64(st.Index))) {
+			if strictEqual(run.Get("stateIndex"), jsjson.MakeNumber(st.Index)) {
 				stateRuns = append(stateRuns, run)
 			}
 		}
@@ -261,7 +265,7 @@ func ReconstructStable(states []State, runs []jsjson.Value, requireNative bool) 
 		consistent := true
 		for _, run := range stateRuns {
 			if !isString(run.Get("turnId"), st.TurnID) ||
-				!strictEqual(run.Get("turnOrdinal"), jsjson.MakeNumber(float64(st.TurnOrdinal))) ||
+				!strictEqual(run.Get("turnOrdinal"), jsjson.MakeNumber(st.TurnOrdinal)) ||
 				!isString(run.Get("role"), st.Role) ||
 				!isString(run.Get("treeDigest"), st.TreeDigest) ||
 				!isString(run.Get("snapshotDigest"), st.SnapshotDigest) ||
@@ -282,9 +286,9 @@ func ReconstructStable(states []State, runs []jsjson.Value, requireNative bool) 
 			runIDValues[i] = run.Get("runId")
 		}
 		stable = append(stable, jsjson.MustObject(
-			"stateIndex", jsjson.MakeNumber(float64(st.Index)),
+			"stateIndex", jsjson.MakeNumber(st.Index),
 			"turnId", jsjson.MakeString(st.TurnID),
-			"turnOrdinal", jsjson.MakeNumber(float64(st.TurnOrdinal)),
+			"turnOrdinal", jsjson.MakeNumber(st.TurnOrdinal),
 			"role", jsjson.MakeString(st.Role),
 			"treeDigest", jsjson.MakeString(st.TreeDigest),
 			"snapshotDigest", jsjson.MakeString(st.SnapshotDigest),

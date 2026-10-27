@@ -1,6 +1,7 @@
 package turninv
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -173,4 +174,31 @@ func snapshotJSON(tree string, dirty bool) string {
 func turnEvent(ordinal int, tree string) string {
 	n := string(rune('0' + ordinal))
 	return `{"event":{"type":"TURN_TREE_SNAPSHOT","payload":{"turnId":"turn-` + n + `","turnOrdinal":` + n + `,"snapshot":` + snapshotJSON(tree, false) + `}}}`
+}
+
+// TestIntegersPastInt64 pins the review's case: schema-valid integers of
+// 2^63 and beyond (1e19, 2e19) keep their value, so TS's ===/Set results
+// hold (an int field saturated differently on amd64 and arm64).
+func TestIntegersPastInt64(t *testing.T) {
+	if DuplicateTurnOrdinal([]State{{TurnOrdinal: 1e19}, {TurnOrdinal: 2e19}}) != "" {
+		t.Fatal("1e19 and 2e19 are distinct ordinals")
+	}
+	if DuplicateTurnOrdinal([]State{{TurnOrdinal: 0}, {TurnOrdinal: math.Copysign(0, -1)}}) != DuplicateOrdinalError {
+		t.Fatal("-0 and 0 are one ordinal (SameValueZero)")
+	}
+	st := State{Index: 1e19, TurnID: "turn-x", TurnOrdinal: 2e19, Role: "TURN", TreeDigest: strings.Repeat("b", 40), SnapshotDigest: "sha256:" + strings.Repeat("2", 64)}
+	var runs []jsjson.Value
+	for a := 1; a <= 3; a++ {
+		r := run(State{Index: 1, TurnID: st.TurnID, TurnOrdinal: 2e19, Role: st.Role, TreeDigest: st.TreeDigest, SnapshotDigest: st.SnapshotDigest}, a, "FAIL", "PREDICATE_FAIL", "NATIVE_DOCKER")
+		r.Obj().Set("stateIndex", jsjson.MakeNumber(1e19))
+		runs = append(runs, r)
+	}
+	stable := ReconstructStable([]State{st}, runs, true)
+	if len(stable) != 1 || jsjson.Stringify(stable[0].Get("stateIndex")) != "10000000000000000000" || jsjson.Stringify(st.Value().Get("turnOrdinal")) != "20000000000000000000" {
+		t.Fatalf("%v", stable)
+	}
+	got := StatesFromValue(mustJSON(t, `[{"index":1e19,"turnId":"t","turnOrdinal":9007199254740993,"role":"TURN","treeDigest":"x","snapshotDigest":"y","dirty":false}]`))
+	if got[0].Index != 1e19 || got[0].TurnOrdinal != 9007199254740992 {
+		t.Fatalf("%v", got)
+	}
 }

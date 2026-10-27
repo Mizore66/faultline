@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"math/rand/v2"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,10 +20,6 @@ import (
 	"github.com/Mizore66/faultline/internal/turninv"
 )
 
-// Task 11 moves this entry into liveGatedFiles (coverage_test.go); until
-// then the live test registers it, so requireReached gates the file.
-func init() { liveGatedFiles["internal/turninv/states.go"] = "TestLiveTurnStates" }
-
 // turnOutcome renders a Go result as oracle-turninv.ts's outcome does:
 // JSON.stringify of {value} or {threw, zod}.
 func turnOutcome(v jsjson.Value, err error) string {
@@ -34,16 +31,27 @@ func turnOutcome(v jsjson.Value, err error) string {
 }
 
 // numberSentinel marks a number a generator wants written in a JSON form
-// jsjson.Stringify never emits ("-0", "1e0"): the value is a string
-// "\u0000num:<text>" until withNumberForms rewrites it.
+// jsjson.Stringify never emits ("-0", "1e0", "9007199254740993"): the value
+// is a string "\u0000num:<text>" until withNumberForms rewrites it.
 func numberSentinel(text string) jsjson.Value { return jsjson.MakeString("\x00num:" + text) }
 
-func withNumberForms(text string) string {
-	for _, form := range []string{"-0", "1e0", "2e0", "0e0"} {
-		text = strings.ReplaceAll(text, jsjson.Quote("\x00num:"+form), form)
+var numberSentinelText = regexp.MustCompile(`"\\u0000num:([^"]*)"`)
+
+func withNumberForms(text string) string { return numberSentinelText.ReplaceAllString(text, "$1") }
+
+// hasBigInteger reports whether a generated text carries a bigIntegers form.
+func hasBigInteger(text string) bool {
+	for _, form := range bigIntegers {
+		if strings.Contains(text, ":"+form+",") || strings.Contains(text, ":"+form+"}") {
+			return true
+		}
 	}
-	return text
+	return false
 }
+
+// bigIntegers are schema-valid integers an int64 cannot hold or a float64
+// cannot hold exactly: 2^53+1 (parses to 2^53), 2^63, 1e19, 2e19, 2^64.
+var bigIntegers = []string{"9007199254740993", "9007199254740992", "9223372036854775808", "1e19", "2e19", "18446744073709551616"}
 
 func mustParseText(t *testing.T, text string) jsjson.Value {
 	t.Helper()
@@ -108,7 +116,8 @@ func mutateTurnLedger(r *rand.Rand, ledger jsjson.Value) {
 		}
 	case 4: // -0 and 1e0 ordinals
 		if ps := turnPayloads(); len(ps) > 0 {
-			ps[r.IntN(len(ps))].Set("turnOrdinal", numberSentinel([]string{"-0", "1e0", "2e0", "0e0"}[r.IntN(4)]))
+			forms := append([]string{"-0", "1e0", "2e0", "0e0"}, bigIntegers...)
+			ps[r.IntN(len(ps))].Set("turnOrdinal", numberSentinel(forms[r.IntN(len(forms))]))
 		}
 	case 5: // corrupt a snapshot payload's leaf (gen.CorruptLeaf)
 		if i, ok := pickSnapshot(); ok {
@@ -188,6 +197,13 @@ func randomTurnStates(r *rand.Rand) []jsjson.Value {
 		if ord == 0 && r.IntN(6) == 0 {
 			ordinalValue = numberSentinel("-0")
 		}
+		if r.IntN(12) == 0 { // an index or ordinal of 2^53 and beyond
+			if r.IntN(2) == 0 {
+				indexValue = numberSentinel(bigIntegers[r.IntN(len(bigIntegers))])
+			} else {
+				ordinalValue = numberSentinel(bigIntegers[r.IntN(len(bigIntegers))])
+			}
+		}
 		out = append(out, jsjson.MustObject(
 			"index", indexValue,
 			"turnId", jsjson.MakeString(turnID),
@@ -236,7 +252,7 @@ func randomTurnRuns(r *rand.Rand, states []jsjson.Value) []jsjson.Value {
 			if st.Get("index").Kind() == jsjson.String {
 				idx = 0
 			}
-			execID := "sha256:" + strings.Repeat(string(turnTrees[int(idx)%16]), 62) + string(turnTrees[a]) + string(turnTrees[r.IntN(2)])
+			execID := "sha256:" + strings.Repeat(string(turnTrees[int(math.Mod(idx, 16))]), 62) + string(turnTrees[a]) + string(turnTrees[r.IntN(2)])
 			if r.IntN(16) == 0 {
 				execID = "sha256:" + strings.Repeat("e", 64) // duplicate execution id
 			}
@@ -297,6 +313,9 @@ func handShapedStable(r *rand.Rand) (states, stable []jsjson.Value) {
 		if index == 0 && r.IntN(5) == 0 {
 			indexValue = numberSentinel("-0")
 		}
+		if r.IntN(10) == 0 { // 2^53+1 is 2^53, so x+1 === x past 2^53
+			indexValue = numberSentinel(bigIntegers[r.IntN(len(bigIntegers))])
+		}
 		states = append(states, jsjson.MustObject("index", indexValue, "turnId", jsjson.MakeString(turnID), "turnOrdinal", jsjson.MakeNumber(float64(ord)),
 			"role", jsjson.MakeString(role), "treeDigest", jsjson.MakeString(tree), "snapshotDigest", jsjson.MakeString(snap), "dirty", jsjson.MakeBool(false)))
 		if r.IntN(6) != 0 { // a state without a stable entry is an observation gap
@@ -349,7 +368,7 @@ func TestLiveTurnStates(t *testing.T) {
 		}
 		pool = append(pool, oracleText(t, c, "turnLedger", `{"states":[`+strings.Join(specs, ",")+`],"baseline":`+strconv.FormatBool(r.IntN(5) != 0)+`}`))
 	}
-	ledgers, statesSeen, threw := 0, 0, 0
+	ledgers, statesSeen, threw, bigLedgers, bigPairs := 0, 0, 0, 0, 0
 	for ledgers < 1500 {
 		text := pool[r.IntN(len(pool))]
 		if r.IntN(5) == 0 {
@@ -364,6 +383,9 @@ func TestLiveTurnStates(t *testing.T) {
 			continue
 		}
 		ledgers++
+		if hasBigInteger(text) {
+			bigLedgers++
+		}
 		states, err := turninv.StatesFromLedger(mustParseText(t, text))
 		var value jsjson.Value
 		if err == nil {
@@ -390,6 +412,9 @@ func TestLiveTurnStates(t *testing.T) {
 		runs := randomTurnRuns(r, stateValues)
 		statesText := withNumberForms(jsjson.Stringify(jsjson.MakeArray(stateValues)))
 		runsText := withNumberForms(jsjson.Stringify(jsjson.MakeArray(runs)))
+		if hasBigInteger(statesText) {
+			bigPairs++
+		}
 		parsedStates := turninv.StatesFromValue(mustParseText(t, statesText))
 		parsedRuns := mustParseText(t, runsText).Items()
 		for _, native := range []bool{true, false} {
@@ -414,7 +439,8 @@ func TestLiveTurnStates(t *testing.T) {
 		checkTransitionsAndAttribution(t, c, r, statesText, turninv.StatesFromValue(mustParseText(t, statesText)), mustParseText(t, stableText).Items())
 	}
 
-	liveSummary(t, "%d ledgers (%d threw, %d states), %d reconstructions (%d non-empty), 300 hand-shaped lists", ledgers, threw, statesSeen, reconstructed, nonEmpty)
+	liveSummary(t, "%d ledgers (%d threw, %d states, %d with integers past 2^53), %d reconstructions (%d non-empty; %d pairs past 2^53), 300 hand-shaped lists",
+		ledgers, threw, statesSeen, bigLedgers, reconstructed, nonEmpty, bigPairs)
 	requireReached(t, "internal/turninv/states.go", recordedOutputs(t))
 }
 
@@ -457,7 +483,7 @@ func turnResultSeed(verdicts ...string) jsjson.Value {
 		if i == 0 {
 			role, turnID = "SESSION_BASELINE", turninv.SessionBaselineTurnID
 		}
-		st := turninv.State{Index: i, TurnID: turnID, TurnOrdinal: i, Role: role,
+		st := turninv.State{Index: float64(i), TurnID: turnID, TurnOrdinal: float64(i), Role: role,
 			TreeDigest: strings.Repeat(string(turnTrees[i+1]), 40), SnapshotDigest: "sha256:" + strings.Repeat(string(turnTrees[i+1]), 64), Dirty: i > 0}
 		states = append(states, st.Value())
 		for attempt := 1; attempt <= 3; attempt++ {

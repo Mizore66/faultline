@@ -1128,6 +1128,8 @@ var liveGatedFiles = map[string]string{
 	"internal/bundle/prevention/write.go":     "TestLivePreventionWrite",
 	"internal/bundle/prevention/agentsmd.go":  "TestLiveAgentsMd",
 	"internal/bundle/prevention/artifacts.go": "TestLivePreventionFromArtifacts",
+	// Slice 4b Task 3: turn states, reconstruction, transitions and attribution.
+	"internal/turninv/states.go": "TestLiveTurnStates",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally
