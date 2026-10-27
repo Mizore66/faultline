@@ -2,7 +2,7 @@
 // one JSON response per stdout line. Run: pnpm exec tsx difftest/gen/node-oracle.ts
 import { createInterface } from "node:readline";
 import nodePath from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { buildZod } from "./schema-dsl.js";
@@ -774,6 +774,16 @@ export const handlers: Record<string, Handler> = {
     let ties = "";
     for (let i = 1; i < all.length; i++) ties += all[i - 1]!.localeCompare(all[i]!) === 0 ? "1" : "0";
     return { order: all.map((s) => s.codePointAt(0)), ties };
+  },
+  // Slice 4c Task 4: cpSync(src, dest, { recursive: true, dereference: false,
+  // errorOnExist: true, force: false }) as repair-worktree.ts:111 calls it,
+  // run in a child node (umask 022, cwd) so a C++ abort inside cpSync does
+  // not take the oracle with it: "OK", "THREW:<message>" or "ABORT".
+  cpSyncTree: ({ src, dest, cwd }: { src: string; dest: string; cwd: string }) => {
+    const script = `try { require("node:fs").cpSync(process.argv[1], process.argv[2], { recursive: true, dereference: false, errorOnExist: true, force: false }); process.stdout.write("OK"); } catch (e) { process.stdout.write("THREW:" + e.message); }`;
+    const run = spawnSync(process.execPath, ["-e", script, src, dest], { cwd, encoding: "utf8", env: process.env });
+    if (run.signal !== null || run.status !== 0) return "ABORT";
+    return run.stdout;
   },
 };
 
