@@ -635,7 +635,16 @@ func TestLiveRepairWorktree(t *testing.T) {
 	kinds := []string{"normal", "unknown-base", "non-repository", "symlinked-parent", "existing-output", "bundle-symlink",
 		"worktrees-blocked", "nested-output", "bad-id", "missing-bundle", "removed-worktree", "dirty-bundle-subdir"}
 	var cases []repairWorktreeCase
-	for i := 0; i < 80; i++ {
+	// 24 cases is two rounds of every kind (keep off, then on); the knob
+	// raises it, as FAULTLINE_CP_CASES does for cpSync.
+	n := 24
+	if v := os.Getenv("FAULTLINE_REPAIR_WT_CASES"); v != "" {
+		var err error
+		if n, err = strconv.Atoi(v); err != nil {
+			t.Fatalf("FAULTLINE_REPAIR_WT_CASES: %v", err)
+		}
+	}
+	for i := 0; i < n; i++ {
 		kind := kinds[i%len(kinds)]
 		if kind == "bundle-symlink" && runtime.GOOS != "linux" {
 			kind = "normal" // Node's cpSync differs on libc++ for links
