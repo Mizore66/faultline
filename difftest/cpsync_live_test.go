@@ -17,7 +17,7 @@ import (
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
-type cpAbort struct{}
+type cpAbort struct{ what string }
 
 var cpNames = []string{"a", "b.json", "with space", "é", "line\nbreak", "z", "runs", "Ünï", "x y"}
 
@@ -51,7 +51,9 @@ func buildCpTree(r *rand.Rand, dir, root string, depth int, special bool) {
 			os.Chmod(path, os.FileMode(0o400+r.IntN(0o400)))
 			files = append(files, name)
 		case k == 7 && special:
-			os.Symlink(cpNames[r.IntN(len(cpNames))], path)
+			n := cpNames[r.IntN(len(cpNames))]
+			target := []string{n, n + "/", n + "/..", n + "/.", "nope/..", "nope/.", "nope/", name, "..", "../s", ".", "./" + n, "loopb", "loopa"}[r.IntN(14)]
+			os.Symlink(target, path)
 		case k == 8 && special:
 			os.Symlink(filepath.Join(root, "s", cpNames[r.IntN(len(cpNames))]), path)
 		case k == 9 && special && r.IntN(3) == 0:
@@ -103,9 +105,9 @@ func TestLiveCpSyncTree(t *testing.T) {
 	defer c.Close()
 	oldAbort := nodefs.CpAbort
 	defer func() { nodefs.CpAbort = oldAbort }()
-	nodefs.CpAbort = func(string) { panic(cpAbort{}) }
+	nodefs.CpAbort = func(what string) { panic(cpAbort{what}) }
 	counts := map[string]int{}
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 400; i++ {
 		seed := uint64(i)
 		var roots [2]string
 		for j := range roots {
@@ -136,7 +138,7 @@ func TestLiveCpSyncTree(t *testing.T) {
 			}
 			// the destination
 			out := filepath.Join(roots[j], "out")
-			switch kind := r.IntN(16); kind {
+			switch kind := r.IntN(20); kind {
 			case 0:
 				os.WriteFile(out, []byte("old"), 0o644)
 			case 1:
@@ -150,6 +152,18 @@ func TestLiveCpSyncTree(t *testing.T) {
 						break
 					}
 				}
+			case 9:
+				// a destination entry that links to itself (a loop)
+				os.Mkdir(out, 0o755)
+				entries, _ := os.ReadDir(s)
+				for _, e := range entries {
+					os.Symlink(e.Name(), filepath.Join(out, e.Name()))
+				}
+			case 10:
+				os.Symlink("out", out) // dest itself is a self-loop
+			case 11:
+				os.Symlink("out2", out)
+				os.Symlink("out", filepath.Join(roots[j], "out2"))
 			case 6, 7, 8:
 				// a destination that already holds the source's links: as a
 				// link to the source's own tree, a stale link or a file
@@ -184,10 +198,12 @@ func TestLiveCpSyncTree(t *testing.T) {
 		func() {
 			defer func() {
 				if p := recover(); p != nil {
-					if _, ok := p.(cpAbort); !ok {
+					a, ok := p.(cpAbort)
+					if !ok {
 						panic(p)
 					}
-					got = "ABORT"
+					// the libstdc++ terminate handler's stderr, as nodefs.CpAbort prints it
+					got = "ABORT:terminate called after throwing an instance of 'std::filesystem::__cxx11::filesystem_error'\n  what():  filesystem error: " + a.what + "\n"
 				}
 			}()
 			if err := nodefs.CpSyncTree(filepath.Join(goRoot, "s"), goOut); err != nil {
@@ -200,7 +216,9 @@ func TestLiveCpSyncTree(t *testing.T) {
 		want := oracleText(t, c, "cpSyncTree", fmt.Sprintf(`{"src":%q,"dest":%q,"cwd":%q}`, filepath.Join(nodeRoot, "s"), nodeOut, nodeRoot))
 		want = mask(nodeRoot, want)
 		kind := "OK"
-		if want != "OK" {
+		if strings.HasPrefix(want, "ABORT:") {
+			kind = "ABORT"
+		} else if want != "OK" {
 			kind = want
 			if k := strings.Index(kind, ":"); k > 0 && strings.HasPrefix(kind, "THREW") {
 				kind = "THREW:" + strings.SplitN(strings.TrimPrefix(kind, "THREW:"), " ", 2)[0]

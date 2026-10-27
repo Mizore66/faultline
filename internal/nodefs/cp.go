@@ -74,30 +74,69 @@ func cppAbsolute(p string) string {
 	return cwd + "/" + p
 }
 
-func cppIsDirectory(p string) bool {
-	info, err := os.Stat(sysPath(p))
-	return err == nil && info.IsDir()
+// cppNotFound is libstdc++'s is_not_found_errno: ENOENT and ENOTDIR.
+func cppNotFound(err error) bool {
+	errno, ok := cpErrnoOf(err)
+	return ok && (errno == syscall.ENOENT || errno == syscall.ENOTDIR)
 }
 
-// cppEquivalent is std::filesystem::equivalent(a, b, ec): both stat'ed
-// through links; one that cannot be is "not equivalent", and the error flag
-// is set only when both fail.
-func cppEquivalent(a, b string) (equal bool, failed bool) {
-	ia, ea := os.Stat(sysPath(a))
-	ib, eb := os.Stat(sysPath(b))
-	if ea != nil && eb != nil {
-		return false, true
+// cppStatusQuiet is std::filesystem::status(p, ec): found is false for a
+// not-found errno; any other failure comes back as err.
+func cppStatusQuiet(p string) (info fs.FileInfo, found bool, err error) {
+	if p == "" {
+		return nil, false, nil
 	}
-	if ea != nil || eb != nil {
-		return false, false
+	info, err = os.Stat(sysPath(p))
+	if err == nil {
+		return info, true, nil
 	}
-	// libstdc++: two files that are neither regular, directories nor links
-	// (FIFOs, sockets, devices) are not comparable: ENOTSUP.
+	if cppNotFound(err) {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+
+// cppStatus is the throwing status() behind exists, is_directory and
+// is_symlink: an errno other than not-found is a filesystem_error nothing
+// catches, so the process aborts ("status: <strerror> [<p>]").
+func cppStatus(p string) (fs.FileInfo, bool) {
+	info, found, err := cppStatusQuiet(p)
+	if err != nil {
+		CpAbort("status: " + glibcErr(err) + " [" + p + "]")
+		return nil, false // reached only when a test replaces CpAbort
+	}
+	return info, found
+}
+
+func cppIsDirectory(p string) bool {
+	info, found := cppStatus(p)
+	return found && info.IsDir()
+}
+
+// cppEquivalent is std::filesystem::equivalent(a, b, ec). errno is set when
+// libstdc++ sets the error code: a stat failure other than not-found, both
+// missing (ENOENT), or two files that are neither regular files nor
+// directories (ENOTSUP). One missing file is simply "not equivalent".
+func cppEquivalent(a, b string) (equal bool, errno syscall.Errno) {
+	ia, fa, ea := cppStatusQuiet(a)
+	ib, fb, eb := cppStatusQuiet(b)
+	for _, err := range []error{eb, ea} {
+		if err != nil {
+			e, _ := cpErrnoOf(err)
+			return false, e
+		}
+	}
+	if !fa && !fb {
+		return false, syscall.ENOENT
+	}
+	if !fa || !fb {
+		return false, 0
+	}
 	other := func(i fs.FileInfo) bool { return !i.Mode().IsRegular() && !i.IsDir() }
 	if other(ia) && other(ib) {
-		return false, true
+		return false, syscall.ENOTSUP
 	}
-	return os.SameFile(ia, ib), false
+	return os.SameFile(ia, ib), 0
 }
 
 // cppIsInsideDir is node_file.cc isInsideDir.
@@ -171,9 +210,9 @@ func cpCheckPaths(src, dest string) error {
 	destExists := destErr == nil
 	srcIsDir := srcInfo.IsDir()
 	if destErr == nil {
-		same, failed := cppEquivalent(src, dest)
-		if failed { // the throwing overload
-			CpAbort("in equivalent: Operation not supported [" + src + "] [" + dest + "]")
+		same, errno := cppEquivalent(src, dest)
+		if errno != 0 { // the throwing overload
+			CpAbort("cannot check file equivalence: " + glibcMessage(errno) + " [" + src + "] [" + dest + "]")
 		}
 		if same {
 			return &cpMessageError{"src and dest cannot be the same " + dest}
@@ -195,11 +234,11 @@ func cpCheckPaths(src, dest string) error {
 	}
 	destParent := cppParentPath(dest)
 	for cppParentPath(src) != destParent && cppParentPath(destParent) != "" && cppParentPath(destParent) != destParent {
-		same, failed := cppEquivalent(src, cppParentPath(dest))
+		same, errno := cppEquivalent(src, cppParentPath(dest))
 		if same {
 			return &cpMessageError{"Cannot copy " + srcStr + " to a subdirectory of self " + dest}
 		}
-		if failed {
+		if errno != 0 {
 			break
 		}
 		destParent = cppParentPath(destParent)
@@ -221,12 +260,10 @@ func cpCheckPaths(src, dest string) error {
 	return nil
 }
 
+// pathExists is the throwing std::filesystem::exists.
 func pathExists(p string) bool {
-	if p == "" {
-		return false
-	}
-	_, err := os.Stat(sysPath(p))
-	return err == nil
+	_, found := cppStatus(p)
+	return found
 }
 
 // rawMode is st_mode's permission, setuid, setgid and sticky bits.
@@ -270,7 +307,9 @@ func cpGetStats(src, dest string) error {
 		if !errors.As(err, &ne) || ne.Code != "ENOENT" {
 			return err
 		}
-		destStat = nil // lstatSync(dest, { throwIfNoEntry: false })
+		// lstatSync(dest, { throwIfNoEntry: false }) ignores ENOENT only
+		// (is_uv_error_except_no_entry), not ENOTDIR as libstdc++ would.
+		destStat = nil
 	}
 	m := srcStat.Mode()
 	switch {
@@ -407,7 +446,7 @@ func cpCopyDirContents(src, dest string) error {
 	}
 	if err != nil {
 		CpAbort("directory iterator cannot open directory: " + glibcErr(err) + " [" + src + "]")
-		return err
+		return err // reached only when a test replaces CpAbort
 	}
 	for _, entry := range entries {
 		name := entry.Name()
@@ -418,9 +457,9 @@ func cpCopyDirContents(src, dest string) error {
 				return err
 			}
 		case t.IsDir():
-			if err := os.Mkdir(sysPath(destItem), 0o777); err != nil && !cppIsDirectory(destItem) {
+			if err := os.Mkdir(sysPath(destItem), 0o777); err != nil && !cppIsDirQuiet(destItem) {
 				CpAbort("cannot create directory: " + glibcErr(err) + " [" + destItem + "]")
-				return err
+				return err // reached only when a test replaces CpAbort
 			}
 			if err := cpCopyDirContents(srcItem, destItem); err != nil {
 				return err
@@ -534,53 +573,122 @@ func joinSlashAbs(src, target string) string {
 	return joinSlash(src, target)
 }
 
-// cppWeaklyCanonical is std::filesystem::weakly_canonical (libstdc++) in
-// its throwing form: a path that exists is canonical()'d; a missing one has
-// its longest existing prefix canonical()'d and the rest appended, then
-// normalized. A status or canonical failure that is not "not found" (a
-// symlink loop, a prefix without search permission) throws a
-// filesystem_error nothing catches, so the process aborts.
-func cppWeaklyCanonical(p string) string {
-	status := func(path string) bool {
-		_, err := os.Stat(sysPath(path))
-		if err == nil {
-			return true
-		}
-		if errno, ok := cpErrnoOf(err); ok && (errno == syscall.ENOENT || errno == syscall.ENOTDIR) {
-			return false
-		}
-		CpAbort("cannot canonicalize: " + glibcErr(err) + " [" + p + "]")
-		return false
+// cppCanonical is the throwing std::filesystem::canonical (realpath): every
+// link resolved physically, ".." included.
+func cppCanonical(p string) string {
+	fail := func(errno syscall.Errno) string {
+		CpAbort("cannot make canonical path: " + glibcMessage(errno) + " [" + p + "]")
+		return p // reached only when a test replaces CpAbort
 	}
-	canonical := func(path string) string {
-		real, err := RealpathSync(path)
-		if err != nil {
-			CpAbort("cannot canonicalize: " + glibcErr(err) + " [" + path + "]")
-		}
-		return real
-	}
-	if status(p) {
-		return canonical(p)
-	}
-	rest := strings.Split(p, "/")
-	result := ""
-	i := 0
-	for ; i < len(rest); i++ {
-		if rest[i] == "" {
+	pending := strings.Split(p, "/")
+	var done []string
+	links := 0
+	for len(pending) > 0 {
+		name := pending[0]
+		pending = pending[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			if len(done) > 0 {
+				done = done[:len(done)-1]
+			}
 			continue
 		}
-		if !status(result + "/" + rest[i]) {
+		cur := "/" + strings.Join(append(append([]string{}, done...), name), "/")
+		info, err := os.Lstat(sysPath(cur))
+		if err != nil {
+			errno, _ := cpErrnoOf(err)
+			return fail(errno)
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			done = append(done, name)
+			continue
+		}
+		if links++; links > 40 {
+			return fail(syscall.ELOOP)
+		}
+		target, err := os.Readlink(sysPath(cur))
+		if err != nil {
+			errno, _ := cpErrnoOf(err)
+			return fail(errno)
+		}
+		if strings.HasPrefix(target, "/") {
+			done = nil
+		}
+		pending = append(strings.Split(target, "/"), pending...)
+	}
+	// every component must exist (realpath)
+	return "/" + strings.Join(done, "/")
+}
+
+// cppLexicallyNormal is path::lexically_normal for an absolute path: "."
+// and empty names go, ".." removes the name before it, and a path whose
+// last name was ".", ".." or empty keeps a trailing separator.
+func cppLexicallyNormal(p string) string {
+	elems := strings.Split(p, "/")
+	var names []string
+	for _, e := range elems {
+		switch e {
+		case "", ".":
+		case "..":
+			if len(names) > 0 {
+				names = names[:len(names)-1]
+			}
+		default:
+			names = append(names, e)
+		}
+	}
+	out := "/" + strings.Join(names, "/")
+	switch elems[len(elems)-1] {
+	case "", ".", "..":
+		if len(names) > 0 {
+			out += "/"
+		}
+	}
+	return out
+}
+
+// cppWeaklyCanonical is std::filesystem::weakly_canonical (libstdc++) in
+// its throwing form: the longest prefix that exists, element by element
+// (each tested with the throwing status, so a prefix that fails with
+// anything but not-found aborts, naming that prefix), is canonical()'d; the
+// remaining elements, an empty one for a trailing "/" included, are appended
+// and the result is lexically normalized. p is absolute.
+func cppWeaklyCanonical(p string) string {
+	elems := strings.Split(p, "/")[1:] // p starts with "/"
+	prefix := ""
+	i := 0
+	for ; i < len(elems); i++ {
+		if elems[i] == "" && i < len(elems)-1 {
+			continue
+		}
+		if elems[i] == "" { // trailing separator: an empty last element
 			break
 		}
-		result += "/" + rest[i]
-	}
-	if result != "" {
-		result = canonical(result)
-	}
-	for ; i < len(rest); i++ {
-		if rest[i] != "" {
-			result += "/" + rest[i]
+		if _, found := cppStatus(prefix + "/" + elems[i]); !found {
+			break
 		}
+		prefix += "/" + elems[i]
 	}
-	return PosixNormalize(result)
+	result := "/"
+	if prefix != "" {
+		result = cppCanonical(prefix)
+	}
+	for ; i < len(elems); i++ {
+		if elems[i] == "" && i < len(elems)-1 {
+			continue
+		}
+		if !strings.HasSuffix(result, "/") {
+			result += "/"
+		}
+		result += elems[i]
+	}
+	return cppLexicallyNormal(result)
+}
+
+// cppIsDirQuiet is is_directory(p, ec).
+func cppIsDirQuiet(p string) bool {
+	info, found, _ := cppStatusQuiet(p)
+	return found && info.IsDir()
 }
