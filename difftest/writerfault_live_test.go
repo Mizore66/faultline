@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
-	"github.com/Mizore66/faultline/internal/canonical"
 )
 
 // writerFault fails the first call of one syscall group on one writer path
@@ -310,41 +309,6 @@ type faultResult struct {
 	trace string
 }
 
-// stagePerSide is the receipt stage of the case rooted at root for the
-// receipt at receiptRel (relative to the root of the case it was discovered
-// in): writeJsonAtomic's ".<sha256(receipt path)[0:24]>.<pid>.tmp" beside it
-// (src/codex-sidecar.ts:529), with <PID> for the process id.
-func stagePerSide(root, receiptRel string) string {
-	abs := root + "/" + receiptRel
-	return path.Join(path.Dir(receiptRel), "."+canonical.SHA256Hex(abs)[:24]+".<PID>.tmp")
-}
-
-// stagedPid is the process id in a ledger binding's staged name
-// (src/ledger-binding.ts:540 `.${basename}.${pid}.${uuid}.tmp`).
-var stageKeyPid = regexp.MustCompile(`\.[0-9a-f]{24}\.[0-9]+\.tmp`)
-
-var stagedPid = regexp.MustCompile(`(\.[^./]+\.json)\.[0-9]+(\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp)`)
-
-// maskStagedPid masks the pid in staged names in text and renames any such
-// file the invocation left in the workspace, so TS and Go trees compare.
-func maskStagedPid(t *testing.T, r writerRoots, _ int, stdout, stderr string) (string, string) {
-	t.Helper()
-	filepath.WalkDir(r.ws, func(p string, d os.DirEntry, err error) error {
-		if err == nil && stagedPid.MatchString(d.Name()) {
-			if err := os.Rename(p, filepath.Join(filepath.Dir(p), stagedPid.ReplaceAllString(d.Name(), "$1.<PID>$2"))); err != nil {
-				t.Fatal(err)
-			}
-		} else if err == nil && stageKeyPid.MatchString(d.Name()) {
-			if err := os.Rename(p, filepath.Join(filepath.Dir(p), stageKeyPid.ReplaceAllString(d.Name(), ".<STAGEKEY>.<PID>.tmp"))); err != nil {
-				t.Fatal(err)
-			}
-		}
-		return nil
-	})
-	stdout, stderr = stagedPid.ReplaceAllString(stdout, "$1.<PID>$2"), stagedPid.ReplaceAllString(stderr, "$1.<PID>$2")
-	return stageKeyPid.ReplaceAllString(stdout, ".<STAGEKEY>.<PID>.tmp"), stageKeyPid.ReplaceAllString(stderr, ".<STAGEKEY>.<PID>.tmp")
-}
-
 // runWithFault runs the case's invocation with command under strace -D (the
 // tracee keeps the shell's pid, so a staged name holding the pid is known
 // before it runs), failing the first call of f's group on rel.
@@ -361,7 +325,13 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 	var root string
 	run := writerRun{
 		noVerify: true,
-		mask:     maskStagedPid,
+		mask: func(t *testing.T, r writerRoots, _ int, stdout, stderr string) (string, string) {
+			stageRel := ""
+			if perSide != nil {
+				stageRel = perSide(r.root)
+			}
+			return maskStagedPid(t, r, stageRel, stdout, stderr)
+		},
 		command: func(r writerRoots, inv int, args []string) []string {
 			root = r.root
 			if lastOnly && inv != last {
