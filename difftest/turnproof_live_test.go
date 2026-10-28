@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1001,7 +1002,11 @@ func TestLiveTurnProofWriter(t *testing.T) {
 		}
 		compare(i, tc)
 	}
-	liveSummary(t, "%d cases [%d, %d) compared on both sides, outcomes %v", end-first, first, end, statuses)
+	if full {
+		liveSummary(t, "%d cases [%d, %d) compared on both sides, outcomes %v", end-first, first, end, statuses)
+	} else {
+		t.Logf("window [%d, %d) of %d cases compared (not a full run): outcomes %v", first, end, total, statuses)
+	}
 	if !full {
 		// A window keeps the TS results it compared when
 		// FAULTLINE_TURNWRITE_KEEP names a directory; the final run with
@@ -1022,36 +1027,211 @@ func TestLiveTurnProofWriter(t *testing.T) {
 	requireReached(t, "internal/bundle/turnproof/write.go", outputs.String())
 }
 
-// TestLiveTurnProofWriterAggregate is the aggregate requireReached of
-// TestLiveTurnProofWriter windows run apart (each under the 5 minute
-// command limit): it needs FAULTLINE_TURNWRITE_AGGREGATE=<directory of the
-// windows' FAULTLINE_TURNWRITE_KEEP files> and fails unless they cover
-// cases [0, 80) exactly once.
-func TestLiveTurnProofWriterAggregate(t *testing.T) {
-	dir := os.Getenv("FAULTLINE_TURNWRITE_AGGREGATE")
-	if dir == "" {
-		t.Skip("set FAULTLINE_TURNWRITE_AGGREGATE=<directory of window outputs>")
+// tpwWrittenOutcomes counts, in the TS results a window compared (one
+// JSON-quoted result or "THREW:..." text per line, as TestLiveTurnProofWriter
+// keeps them), the writes that succeeded and those whose manifest carries a
+// codex section. It reads the real results, not a case index.
+func tpwWrittenOutcomes(outputs string) (written, withCodex int, err error) {
+	for _, line := range strings.Split(strings.TrimRight(outputs, "\n"), "\n") {
+		v, perr := jsjson.Parse(line)
+		if perr != nil || v.Kind() != jsjson.String {
+			return 0, 0, fmt.Errorf("result line is not a quoted string: %.80s", line)
+		}
+		text := v.Str()
+		if strings.HasPrefix(text, "THREW:") {
+			continue
+		}
+		parsed, perr := jsjson.Parse(text)
+		if perr != nil || parsed.Get("manifest", "schemaVersion").Kind() != jsjson.String {
+			return 0, 0, fmt.Errorf("result is neither a refusal nor a written bundle: %.80s", text)
+		}
+		written++
+		if parsed.Get("manifest", "codex").Kind() == jsjson.Object {
+			withCodex++
+		}
 	}
+	return written, withCodex, nil
+}
+
+var tpwWindowName = regexp.MustCompile(`^([0-9]{2})-([0-9]{2})\.txt$`)
+
+// tpwAggregate concatenates the window files of dir, which must be exactly
+// contiguous windows covering [0, 80) and nothing else, and requires that
+// the TS results they hold include successful writes and a manifest with a
+// codex section. The files are plain dumps of compared TS results; they
+// carry no commit or seed stamp, so the fixed generator seeds in
+// TestLiveTurnProofWriter and a fresh directory per run are the only
+// binding to the code under test.
+func tpwAggregate(dir string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatal(err)
+		return "", err
 	}
 	var outputs strings.Builder
 	next := 0
 	for _, e := range entries { // sorted by name: first-end, zero padded
-		var a, b int
-		if _, err := fmt.Sscanf(e.Name(), "%02d-%02d.txt", &a, &b); err != nil || a != next {
-			t.Fatalf("window file %s: want a window starting at case %d", e.Name(), next)
+		m := tpwWindowName.FindStringSubmatch(e.Name())
+		if m == nil || e.IsDir() {
+			return "", fmt.Errorf("unexpected entry %q: only NN-NN.txt window files are allowed", e.Name())
+		}
+		a, _ := strconv.Atoi(m[1])
+		b, _ := strconv.Atoi(m[2])
+		if a != next || b <= a {
+			return "", fmt.Errorf("window file %s: want a window starting at case %d", e.Name(), next)
 		}
 		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			t.Fatal(err)
+			return "", err
 		}
 		outputs.Write(raw)
 		next = b
 	}
 	if next != 80 {
-		t.Fatalf("the windows cover cases [0, %d), not [0, 80)", next)
+		return "", fmt.Errorf("the windows cover cases [0, %d), not [0, 80)", next)
 	}
-	requireReached(t, "internal/bundle/turnproof/write.go", outputs.String())
+	written, withCodex, err := tpwWrittenOutcomes(outputs.String())
+	if err != nil {
+		return "", err
+	}
+	if written == 0 || withCodex == 0 {
+		return "", fmt.Errorf("the compared results hold %d written bundles, %d with a codex manifest; both must be present", written, withCodex)
+	}
+	return outputs.String(), nil
+}
+
+// TestLiveTurnProofWriterAggregate is the aggregate check of
+// TestLiveTurnProofWriter windows run apart (each under the 5 minute
+// command limit): FAULTLINE_TURNWRITE_AGGREGATE=<directory of the windows'
+// FAULTLINE_TURNWRITE_KEEP files>. It asserts coverage, the mandatory
+// outcomes (tpwAggregate) and requireReached on all 80 TS results.
+func TestLiveTurnProofWriterAggregate(t *testing.T) {
+	dir := os.Getenv("FAULTLINE_TURNWRITE_AGGREGATE")
+	if dir == "" {
+		t.Skip("set FAULTLINE_TURNWRITE_AGGREGATE=<directory of window outputs>")
+	}
+	outputs, err := tpwAggregate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, withCodex, _ := tpwWrittenOutcomes(outputs)
+	liveSummary(t, "aggregate of 80 compared results: %d written bundles, %d with codex", written, withCodex)
+	requireReached(t, "internal/bundle/turnproof/write.go", outputs)
+}
+
+// TestTurnProofWriterAggregateRejects pins the aggregate's negative paths
+// on small synthetic windows (no oracle): a missing success, a missing
+// codex manifest, a gap, a short cover and a stray file all fail.
+func TestTurnProofWriterAggregateRejects(t *testing.T) {
+	refusal := jsjson.Quote("THREW:Turn proof bundle output already exists and will not be replaced: /x") + "\n"
+	written := func(codex bool) string {
+		m := jsjson.NewObj()
+		m.Set("schemaVersion", jsjson.MakeString("faultline.turn-proof-bundle.v1"))
+		if codex {
+			m.Set("codex", jsjson.MustObject("repairThreadId", jsjson.MakeString("t")))
+		}
+		return jsjson.Quote(jsjson.Stringify(jsjson.MustObject("manifest", jsjson.MakeObject(m)))) + "\n"
+	}
+	dirOf := func(files map[string]string) string {
+		dir := t.TempDir()
+		for name, text := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string // "" = must pass
+	}{
+		{"ok", map[string]string{"00-40.txt": refusal + written(true), "40-80.txt": written(false)}, ""},
+		{"no success", map[string]string{"00-40.txt": refusal, "40-80.txt": refusal}, "0 written bundles"},
+		{"no codex", map[string]string{"00-40.txt": refusal + written(false), "40-80.txt": written(false)}, "0 with a codex manifest"},
+		{"gap", map[string]string{"00-40.txt": written(true), "41-80.txt": written(false)}, "starting at case 40"},
+		{"short", map[string]string{"00-40.txt": written(true)}, "not [0, 80)"},
+		{"stray name", map[string]string{"00-80.txt": written(true), "00-80.txt.bak": ""}, "unexpected entry"},
+		{"garbage line", map[string]string{"00-80.txt": "not json\n"}, "not a quoted string"},
+	}
+	for _, tc := range cases {
+		_, err := tpwAggregate(dirOf(tc.files))
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: %v", tc.name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: err %v, want it to contain %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+// TestLiveTurnProofWriterNonProof compares the writer on a result with no
+// stable transition (isProof false): semantics refuse it before anything
+// is written, on both sides, leaving the output and proof root untouched.
+func TestLiveTurnProofWriterNonProof(t *testing.T) {
+	oracle.Skip(t)
+	setWriterUmask(t)
+	const seed = "live-turn-writer-nonproof"
+	c := oracle.StartSeeded(t, seed)
+	defer c.Close()
+	clock.ResetForTest(seed)
+	oracleCall(t, c, "echo", "null")
+	time.Sleep(time.Second)
+	tick, err := strconv.ParseInt(oracleCall(t, c, "seededTick", "null"), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range tick + 1 {
+		clock.NowMillis()
+	}
+	// The all-pass fixture session: completes without a transition.
+	builder := oracle.Start(t)
+	defer builder.Close()
+	clock.ResetForTest("live-turn-writer-nonproof-witness")
+	frozen := gitinv.FrozenWitnessForTest(t)
+	spec := turnSessionSpec{format: "sha1", baseline: true, verdicts: []string{"good", "good", "good"}, dirty: make([]bool, 3),
+		image: gitinv.PinnedImageForTest, injected: true, duplicate: -1, missingAt: -1, symlinkAt: -1}
+	_, request := buildTurnSession(t, builder, spec, []jsjson.Value{frozen, frozen})
+	request.Runner, request.Injected = turnStateRunner, true
+	observed, err := turninv.InvestigateTurnTrees(request)
+	if err != nil || observed.Get("status").Str() != "COMPLETED" {
+		t.Fatalf("session must complete: %v", err)
+	}
+	promoted := mustParseText(t, oracleText(t, builder, "promoteNativeTurn", `{"observed":`+jsjson.Stringify(observed)+`}`))
+	if promoted.Get("proof", "isProof").Bool() {
+		t.Fatal("an all-pass session must not be a proof")
+	}
+	ledgerText, err := os.ReadFile(request.LedgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := mustParseText(t, string(ledgerText))
+	work, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsRoot, goRoot := filepath.Join(work, "ts"), filepath.Join(work, "go")
+	for _, d := range []string{tsRoot, goRoot} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stamp := "2026-07-16T11:04:00.000Z"
+	options := jsjson.MustObject("proofRoot", jsjson.MakeString(tsRoot), "generatedAt", jsjson.MakeString(stamp),
+		"lifecycleLedger", ledger, "repository", jsjson.MakeString(request.Repository))
+	want := oracleText(t, c, "writeTurnInvestigationProofBundle", `{"output":`+jsjson.Quote(filepath.Join(tsRoot, "out"))+`,"result":`+jsjson.Stringify(promoted)+
+		`,"frozen":`+jsjson.Stringify(request.FrozenWitness)+`,"options":`+jsjson.Stringify(options)+`,"path":`+jsjson.Quote(os.Getenv("PATH"))+`,"argvLog":`+jsjson.Quote(filepath.Join(work, "ts.log"))+`}`)
+	_, werr := turnproof.Write(filepath.Join(goRoot, "out"), promoted, request.FrozenWitness,
+		turnproof.WriteOptions{ProofRoot: goRoot, GeneratedAt: &stamp, LifecycleLedger: ledger, Repository: request.Repository})
+	if werr == nil || "THREW:"+werr.Error() != want {
+		t.Fatalf("go %v\nts %s", werr, want)
+	}
+	if !strings.Contains(want, "Turn proof bundle requires at least one reconstructed stable transition") {
+		t.Fatalf("not the non-proof refusal: %s", want)
+	}
+	for _, d := range []string{tsRoot, goRoot} {
+		if names, _ := os.ReadDir(d); len(names) != 0 {
+			t.Fatalf("%s must stay empty, holds %d entries", d, len(names))
+		}
+	}
+	liveSummary(t, "non-proof refusal compared on both sides: %.100s", want)
 }
