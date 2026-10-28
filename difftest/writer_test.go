@@ -1383,10 +1383,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		var carried map[string]string
 		if slices.ContainsFunc(tpl.Mutations, func(m template) bool { return mutationInv(m) == inv }) {
 			carried = carriedNames(prevNames, tpl.Mutations, inv, r)
-			existing := pathsUnder(t, r.ws)
-			applyWriterMutations(t, tpl, r, func(m template) bool { return mutationInv(m) == inv && m.str("op") != "chmod" })
-			resetNewModes(t, r.ws, existing)
-			applyWriterMutations(t, tpl, r, func(m template) bool { return mutationInv(m) == inv && m.str("op") == "chmod" })
+			applyDueMutations(t, tpl, r, inv, base)
 		}
 		beforeReloc := relocationCarrying(t, r, records, base, carried)
 		before := treeEntriesAliased(t, r.ws, beforeReloc.fileDigest, beforeReloc.alias)
@@ -1645,7 +1642,7 @@ func prepareWriterCase(t testing.TB, repo string, tpl writerTemplate, r writerRo
 	setup := func(chmod bool) func(template) bool {
 		return func(m template) bool { return mutationInv(m) < 0 && (m.str("op") == "chmod") == chmod }
 	}
-	applyWriterMutations(t, tpl, r, setup(false))
+	applyWriterMutations(t, tpl, r, nil, setup(false))
 	resetModes(t, r.ws)
 	restoreScenarioModes(t, tpl.Scenario, r.ws)
 	refreshScenarioIndexes(t, repo, tpl.Scenario, r.ws)
@@ -1656,7 +1653,7 @@ func prepareWriterCase(t testing.TB, repo string, tpl writerTemplate, r writerRo
 	// Registered first, so a chmod that leaves a directory read-only and then
 	// fails the case is still undone before t.TempDir's cleanup.
 	t.Cleanup(func() { restoreWritable(r.root) })
-	applyWriterMutations(t, tpl, r, setup(true))
+	applyWriterMutations(t, tpl, r, nil, setup(true))
 }
 
 // pathsUnder lists every entry under root, not following links
@@ -1708,7 +1705,7 @@ func resetNewModes(t testing.TB, root string, before map[string]bool) {
 
 // applyWriterMutations applies, in template order, the mutations of tpl
 // that pick selects (gen-writers.ts applyMutations).
-func applyWriterMutations(t testing.TB, tpl writerTemplate, r writerRoots, pick func(template) bool) {
+func applyWriterMutations(t testing.TB, tpl writerTemplate, r writerRoots, base *gitBase, pick func(template) bool) {
 	t.Helper()
 	for _, raw := range tpl.Mutations {
 		if !pick(raw) {
@@ -1722,10 +1719,32 @@ func applyWriterMutations(t testing.TB, tpl writerTemplate, r writerRoots, pick 
 				file = p.Str()
 			}
 		}
+		_, existed := os.Lstat(filepath.Join(r.ws, filepath.FromSlash(file)))
 		if !applyMutation(r.ws, testCase{id: tpl.ID, base: "writer", file: file, tpl: &m}) {
 			t.Fatalf("could not apply mutation %s", m.str("op"))
 		}
+		// A rename that really moved the path takes the baseline with it, in
+		// the order the renames succeeded (gen-writers.ts runCase twin).
+		if m.str("op") == "rename" && existed == nil {
+			if _, gone := os.Lstat(filepath.Join(r.ws, filepath.FromSlash(file))); gone != nil {
+				if _, there := os.Lstat(filepath.Join(r.ws, filepath.FromSlash(m.str("to")))); there == nil {
+					base.moved(file, m.str("to"))
+				}
+			}
+		}
 	}
+}
+
+// applyDueMutations applies invocation inv's mutations: the others, then the
+// new entries' modes reset, then the chmods (gen-writers.ts runCase). base is
+// the case's beginning-of-case baseline (gitBase), which has to follow a
+// repository that a mutation moves.
+func applyDueMutations(t testing.TB, tpl writerTemplate, r writerRoots, inv int, base *gitBase) {
+	t.Helper()
+	existing := pathsUnder(t, r.ws)
+	applyWriterMutations(t, tpl, r, base, func(m template) bool { return mutationInv(m) == inv && m.str("op") != "chmod" })
+	resetNewModes(t, r.ws, existing)
+	applyWriterMutations(t, tpl, r, base, func(m template) bool { return mutationInv(m) == inv && m.str("op") == "chmod" })
 }
 
 // restoreWritable makes every directory under root writable again (a chmod
@@ -2362,6 +2381,39 @@ func TestDoctorHostileFsmonitorGolden(t *testing.T) {
 type gitBase struct {
 	objects map[string]map[string]bool
 	logs    map[string]string
+}
+
+// moved follows a successful rename of from to to (workspace-relative, from
+// a mutation): every baseline key equal to from or under from+"/" (a strict
+// path-component boundary) is re-keyed under to, so the objects and reflogs
+// the case started with stay "existed before" at their new path. The sets
+// themselves are never refreshed, so what the case creates stays created.
+// A nil base (a mutation at setup, before the baseline) moves nothing.
+func (b *gitBase) moved(from, to string) {
+	if b == nil {
+		return
+	}
+	from, to = path.Clean(filepath.ToSlash(from)), path.Clean(filepath.ToSlash(to))
+	remap := func(key string) (string, bool) {
+		if key == from {
+			return to, true
+		}
+		if rest, ok := strings.CutPrefix(key, from+"/"); ok {
+			return to + "/" + rest, true
+		}
+		return key, false
+	}
+	objects := map[string]map[string]bool{}
+	for key, ids := range b.objects {
+		k, _ := remap(key)
+		objects[k] = ids
+	}
+	logs := map[string]string{}
+	for key, digest := range b.logs {
+		k, _ := remap(key)
+		logs[k] = digest
+	}
+	b.objects, b.logs = objects, logs
 }
 
 // harnessGit runs the harness's own git (not fl's, and not through the

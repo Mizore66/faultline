@@ -322,6 +322,21 @@ export function snapshotGit(ws: string): GitBase {
   return base;
 }
 
+// movedBaseline follows a successful rename of from to to (workspace-relative):
+// every baseline key equal to from or under from + "/" (a strict path
+// component boundary) is re-keyed under to, so the objects and reflogs the
+// case started with stay "existed before" at their new path. The sets are
+// never refreshed, so what the case creates stays created. The Go twin is
+// gitBase.moved.
+export function movedBaseline(base: GitBase, from: string, to: string): void {
+  const norm = (p: string): string => p.split("/").filter((c) => c !== "" && c !== ".").join("/");
+  const f = norm(from);
+  const t = norm(to);
+  const remap = (key: string): string => (key === f ? t : key.startsWith(`${f}/`) ? `${t}/${key.slice(f.length + 1)}` : key);
+  base.objects = new Map([...base.objects].map(([k, v]) => [remap(k), v]));
+  base.logs = new Map([...base.logs].map(([k, v]) => [remap(k), v]));
+}
+
 // namedObjects names every created object of one repository, in dependency
 // order, and gives each created commit's tree id. Each name is
 // <BLOB:h12>, <TREE:h12> or <COMMIT:h12>, h12 being the first 12 hex digits
@@ -789,6 +804,7 @@ export function relocation(roots: CaseRoots, records: string[] = [], base?: GitB
   };
 }
 
+const pathExists = (path: string): boolean => { try { lstatSync(path); return true; } catch { return false; } };
 const isRealDir = (path: string): boolean => { try { return lstatSync(path).isDirectory(); } catch { return false; } };
 
 // readArgvLog splits the recorders' log into records ("git a\x1fb").
@@ -1114,7 +1130,15 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       const due = mutations.filter((m) => m.inv === inv);
       if (due.length > 0) {
         const existing = pathsUnder(roots.ws);
-        for (const m of due) if (m.op !== "chmod") apply(m);
+        for (const m of due) {
+          if (m.op === "chmod") continue;
+          const had = m.op === "rename" && pathExists(join(roots.ws, m.file!));
+          apply(m);
+          // A rename that really moved the path takes the baseline with it,
+          // in the order the renames succeeded (the Go twin is
+          // applyWriterMutations).
+          if (had && !pathExists(join(roots.ws, m.file!)) && pathExists(join(roots.ws, m.to!))) movedBaseline(base, m.file!, m.to!);
+        }
         resetNewModes(roots.ws, existing);
         for (const m of due) if (m.op === "chmod") apply(m);
       }
