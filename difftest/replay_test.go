@@ -70,11 +70,18 @@ func TestMain(m *testing.M) {
 		os.Setenv("GOCOVERDIR", coverDir)
 		buildArgs = append(buildArgs, "-cover", "-coverpkg="+coverPkgs)
 	}
-	build := exec.Command("go", append(buildArgs, "github.com/Mizore66/faultline/cmd/fl")...)
-	build.Stdout, build.Stderr = os.Stderr, os.Stderr
-	if err := build.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "building fl:", err)
-		os.Exit(1)
+	if prebuilt := os.Getenv("FAULTLINE_FL_BINARY"); prebuilt != "" && coverDir == "" {
+		// A container with no Go toolchain (localhost/r73img) runs a
+		// test binary and an fl cross-built with the same -tags
+		// faultline_test on the host.
+		flBinary = prebuilt
+	} else {
+		build := exec.Command("go", append(buildArgs, "github.com/Mizore66/faultline/cmd/fl")...)
+		build.Stdout, build.Stderr = os.Stderr, os.Stderr
+		if err := build.Run(); err != nil {
+			fmt.Fprintln(os.Stderr, "building fl:", err)
+			os.Exit(1)
+		}
 	}
 	if coverDir != "" {
 		// Write the coverage meta-data file once, before the replay: fl
