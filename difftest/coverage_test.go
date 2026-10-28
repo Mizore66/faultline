@@ -269,7 +269,7 @@ var unreachableLiterals = map[string]string{
 	"Turn proof bundle artifact exceeds FaultLine's read limit:": "reached by Task 7/8 goldens; remove when they land",
 
 	// turnproof/verify.go and semantics.go (Task 7).
-	// proveTransitionCommand's `|| "unknown error"` (cli-app.ts:2299): every invalid Verification carries an error (a missing directory, a failed
+	// proveTransitionCommand's `|| "unknown error"` (cli-app.ts:2310): every invalid Verification carries an error (a missing directory, a failed
 	// check or the catch-all "verification failed safely" all push one), so the empty join is a defensive fallback.
 	"unknown error": "verifyTurnInvestigationProofBundle returns valid:false only with at least one pushed error (turn-proof-bundle.ts:823,964-970); prove's empty-join fallback is unreachable",
 
