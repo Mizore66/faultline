@@ -9,7 +9,9 @@ import { runHardenedGit, toGitPath } from "../../src/git-materialization.js";
 import { canonicalJson, digestJson } from "../../src/canonical.js";
 import { CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger } from "../../src/ledger.js";
 import { turnStatesFromLedger } from "../../src/turn-investigation.js";
-import { validateTurnInvestigationProofSemantics } from "../../src/turn-proof-bundle.js";
+import { validateTurnInvestigationProofSemantics, writeTurnInvestigationProofBundle } from "../../src/turn-proof-bundle.js";
+import { TurnInvestigationResultSchema } from "../../src/turn-investigation.js";
+import { nativeTurnFixture } from "./fixtures.js";
 
 type Handler = (args: any) => unknown;
 
@@ -115,5 +117,39 @@ export const turnproofOps: Record<string, Handler> = {
     }
     const left = leftovers().filter((n) => !before.has(n));
     return JSON.stringify({ errors, threw, leftover: left.length });
+  },
+  // Task 8. nativeTurnFixture (fixtures.ts) over an observed result: the
+  // promoted investigation as JSON, or "THREW:<message>".
+  promoteNativeTurn: ({ observed }: { observed: unknown }) => {
+    try {
+      return JSON.stringify(nativeTurnFixture(TurnInvestigationResultSchema.parse(observed)));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    }
+  },
+  // writeTurnInvestigationProofBundle with PATH, FAULTLINE_ARGV_LOG (the git
+  // recorder's log) and, when given, the working directory replaced:
+  // JSON.stringify of the written bundle (key order kept), or
+  // "THREW:<message>". Start the oracle seeded to compare the staging UUID,
+  // the verifier's temporary directory and the generatedAt default.
+  writeTurnInvestigationProofBundle: async ({ output, result, frozen, options, path, argvLog, cwd }: {
+    output: string; result: unknown; frozen: unknown; options: any; path: string; argvLog: string; cwd?: string;
+  }) => {
+    const saved = { PATH: process.env.PATH, FAULTLINE_ARGV_LOG: process.env.FAULTLINE_ARGV_LOG };
+    const savedCwd = process.cwd();
+    process.env.PATH = path;
+    process.env.FAULTLINE_ARGV_LOG = argvLog;
+    try {
+      if (cwd !== undefined) process.chdir(cwd);
+      return JSON.stringify(await writeTurnInvestigationProofBundle(output, result as never, frozen as never, options));
+    } catch (error) {
+      return `THREW:${(error as Error).message}`;
+    } finally {
+      process.chdir(savedCwd);
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   },
 };

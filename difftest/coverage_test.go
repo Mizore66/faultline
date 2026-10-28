@@ -283,6 +283,12 @@ var unreachableLiterals = map[string]string{
 	"--transition must be a non-negative integer.":         "reached by Task 9/10 goldens (investigate turns --minimize, prove transition); remove when they land",
 	"Counterfactual minimization from a turn boundary reuses Git-path machinery on synthetic commits. The parent turn package remains EXPERIMENTAL_TURN until TURN_PROOF promotion criteria are met.": "reached by Task 9/10 goldens (investigate turns --minimize, prove transition); remove when they land",
 
+	// turnproof/write.go (TestLiveTurnProofWriter's requireReached):
+	"Turn proof root is not a real directory:":                                    "the filesystem root is always a real directory",
+	"Turn proof bundle generated duplicate artifact:":                             "semantic validation refuses duplicate run ids first",
+	"Turn proof writer did not produce the complete expected artifact set.":       "the writer puts exactly requiredArtifactPaths",
+	"Turn proof bundle output appeared during assembly and will not be replaced:": "race only: the output was refused when it existed before staging",
+
 	// turninv/investigate.go (TestLiveInvestigateTurns's requireReached):
 	"Missing prepared state or fingerprint at index":    "phase 2 runs only after the fingerprint count check, so every state has a fingerprint",
 	"No resolved runtime image for fingerprint":         "buildEffectiveRuntimeMapping resolves an image for every distinct fingerprint digest or throws first",
@@ -1158,6 +1164,9 @@ var liveGatedFiles = map[string]string{
 	// Slice 4b Task 7: the turn proof semantics and lifecycle binding, on
 	// 3,000 mutations of the two turn bases.
 	"internal/bundle/turnproof/semantics.go": "TestLiveTurnSemantics",
+	// Slice 4b Task 8: the write-once turn proof bundle writer, on 80
+	// generated investigations and the refusal variants.
+	"internal/bundle/turnproof/write.go": "TestLiveTurnProofWriter",
 	// Slice 4b Task 3: turn states, reconstruction, transitions and attribution.
 	"internal/turninv/states.go": "TestLiveTurnStates",
 	// Slice 4b Task 4: the turn-minimization bridge, on generated
