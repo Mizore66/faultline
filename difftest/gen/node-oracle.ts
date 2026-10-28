@@ -1150,6 +1150,121 @@ process.stdout.write(JSON.stringify(outs));`;
     if (cwd !== undefined) process.chdir(cwd);
     try { return p.writeGithubProvenanceReceipt(output, receipt, root); } catch (error) { return `THREW:${(error as Error).message}`; } finally { process.chdir(saved); }
   },
+  // Slice 4c Task 16: repairWithCodex (src/codex-loop.ts) with scripted
+  // runners. a.env replaces process.env entries (PATH with the case's
+  // recorders, TMPDIR, ...) and a.cwd is the working directory for the call.
+  //   a.codex: "none" (no runner), {kind:"result", exitCode, stdout, stderr,
+  //     edits} (edits are applied in the worktree before returning) or
+  //     {kind:"throw", message}.
+  //   a.verifier: "none", "frozen" (createFrozenWitnessRepairVerifier with
+  //     the scripted a.sandbox runner: a list of PASS/FAIL/ERROR answered in
+  //     call order, the last repeating; "native" gives no runner, so Docker
+  //     runs from PATH) or "scripted" (a.verdicts, in call order, the last
+  //     repeating; a "THROW:<message>" string rejects; removeFrozen and
+  //     removeAdminDir break the bundle or the worktree before the verdict).
+  //   a.defaultOutput: the CLI's default output name (Date.now()).
+  // Returns the result (JSON.stringify, or "THREW:<message>"), the seeded
+  // {ticks, uuids} counters before and after, and the scripted calls.
+  repairWithCodex: async (a: {
+    bundle: string; expectRoot: string; repository: string; output: string; cwd: string; env: Record<string, string>;
+    invariant?: string; withCodex: boolean; instructionsOnly: boolean; keepWorktree: boolean;
+    verify: { kind: "real" } | { kind: "valid"; rootDigest: string | null } | { kind: "invalid"; errors: string[] };
+    codex: "none" | { kind: "result"; exitCode: number | null; stdout: string; stderr: string; edits?: { path: string; content?: string; mode?: number; remove?: boolean }[] } | { kind: "throw"; message: string };
+    verifier: "none" | "frozen" | "scripted";
+    sandbox: "native" | string[];
+    verdicts?: (({ ok: boolean; detail: string; executionId?: string; removeAdminDir?: boolean; removeFrozen?: boolean }) | string)[];
+    defaultOutput?: boolean;
+  }) => {
+    // repairWithCodex imports these lazily; tsx reads the seeded Date while it
+    // loads a module, so load them before the counters are read.
+    await Promise.all([
+      "../../src/prevention-from-artifacts.js", "../../src/prevention-proof.js", "../../src/agents-md.js", "../../src/sandbox.js",
+      "../../src/safe-overlay.js", "../../src/witness-lock.js", "../../src/repair-worktree.js", "../../src/codex-loop.js"
+    ].map((module) => import(module)));
+    const counters = () => ({ ...(globalThis as unknown as { __faultlineSeedCounters: { ticks: number; uuids: number } }).__faultlineSeedCounters });
+    const { repairWithCodex, createFrozenWitnessRepairVerifier } = await import("../../src/codex-loop.js");
+    const { verifyGitInvestigationProofBundle } = await import("../../src/git-proof-bundle.js");
+    const { formatWitnessResult } = await import("../../src/witness-result.js");
+    const { mkdirSync, rmSync, writeFileSync, chmodSync, readFileSync } = await import("node:fs");
+    const codexCalls: unknown[] = [];
+    const sandboxCalls: unknown[] = [];
+    const codex = a.codex;
+    const runner = codex === "none" ? undefined : {
+      async run(args: readonly string[], options: { cwd: string; input?: string }) {
+        codexCalls.push({ args, cwd: options.cwd, input: options.input ?? null });
+        if (codex.kind === "throw") throw new Error(codex.message);
+        for (const edit of codex.edits ?? []) {
+          const target = nodePath.isAbsolute(edit.path) ? edit.path : nodePath.join(options.cwd, edit.path);
+          if (edit.remove) { rmSync(target, { force: true, recursive: true }); continue; }
+          mkdirSync(nodePath.dirname(target), { recursive: true });
+          writeFileSync(target, edit.content ?? "");
+          if (edit.mode !== undefined) chmodSync(target, edit.mode);
+        }
+        return { exitCode: codex.exitCode, stdout: codex.stdout, stderr: codex.stderr };
+      }
+    };
+    let sandboxNext = 0;
+    const script = a.sandbox === "native" ? undefined : a.sandbox;
+    const sandboxRunner = script === undefined ? undefined : {
+      async run(invocation: { arguments: readonly string[]; cwd: string; containerName?: string }) {
+        const kind = script[Math.min(sandboxNext++, script.length - 1)]!;
+        sandboxCalls.push({ kind, arguments: invocation.arguments, cwd: invocation.cwd, containerName: invocation.containerName ?? null });
+        if (kind === "ERROR") throw new Error("scripted sandbox failure");
+        if (kind === "FAIL") return { exitCode: 1, stdout: `state=bad\n${formatWitnessResult("PREDICATE_FAIL")}\n`, stderr: "witness failed" };
+        return { exitCode: 0, stdout: `state=good\n${formatWitnessResult("PREDICATE_PASS")}\n`, stderr: "" };
+      }
+    };
+    let verdictNext = 0;
+    const verifyCandidate = a.verifier === "none" ? undefined
+      : a.verifier === "frozen" ? createFrozenWitnessRepairVerifier(sandboxRunner === undefined ? undefined : { runner: sandboxRunner })
+      : async (context: { worktreePath: string }) => {
+        const entry = a.verdicts![Math.min(verdictNext++, a.verdicts!.length - 1)]!;
+        if (typeof entry === "string") throw new Error(entry.slice("THROW:".length));
+        const { removeAdminDir, removeFrozen, ...verdict } = entry;
+        // removeFrozen: the bundle's witness/frozen.json goes away, so a later read of it fails.
+        if (removeFrozen) rmSync(nodePath.join(a.bundle, "witness", "frozen.json"), { force: true });
+        if (removeAdminDir) {
+          // Delete the linked worktree's administrative directory, so the later cleanup fails.
+          const pointer = readFileSync(nodePath.join(context.worktreePath, ".git"), "utf8").trim();
+          rmSync(pointer.slice("gitdir: ".length), { recursive: true, force: true });
+        }
+        return verdict;
+      };
+    const savedEnv: Record<string, string | undefined> = {};
+    for (const [key, value] of Object.entries(a.env)) { savedEnv[key] = process.env[key]; process.env[key] = value; }
+    const savedCwd = process.cwd();
+    process.chdir(a.cwd);
+    // Modes are compared under umask 0 (the Go side runs the same way).
+    const savedUmask = process.umask(0);
+    const before = counters();
+    let result: string;
+    try {
+      // The CLI's default output name reads Date.now() (cli-app.ts:2688).
+      const output = a.defaultOutput ? nodePath.resolve(nodePath.join(".faultline", "repairs", `repair-${Date.now()}`)) : a.output;
+      result = JSON.stringify(await repairWithCodex({
+        bundleDirectory: a.bundle, expectRoot: a.expectRoot, repository: a.repository, outputDirectory: output,
+        ...(a.invariant === undefined ? {} : { invariant: a.invariant }),
+        withCodex: a.withCodex, instructionsOnly: a.instructionsOnly, keepWorktree: a.keepWorktree,
+        ...(runner === undefined ? {} : { runner }),
+        ...(verifyCandidate === undefined ? {} : { verifyCandidate }),
+        verifyBundle: (directory, expectRoot) => {
+          if (a.verify.kind === "real") {
+            const v = verifyGitInvestigationProofBundle(directory, expectRoot);
+            return { valid: v.valid, errors: [...v.errors], rootDigest: v.rootDigest };
+          }
+          if (a.verify.kind === "valid") return { valid: true, errors: [], rootDigest: a.verify.rootDigest };
+          return { valid: false, errors: a.verify.errors, rootDigest: null };
+        }
+      }));
+    } catch (error) {
+      result = `THREW:${(error as Error).message}`;
+    } finally {
+      process.chdir(savedCwd);
+      process.umask(savedUmask);
+      for (const [key, value] of Object.entries(savedEnv)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    }
+    return { result, before, after: counters(), codexCalls, sandboxCalls };
+  },
 };
 
 // provenanceModule is dist/github-provenance.js with its
