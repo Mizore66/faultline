@@ -141,7 +141,11 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
       - name: Live property tests
         # Every TestLive* but the ones the jobs below run. Only the cases
-        # that need root may skip here; they run below. Slice 3a adds
+        # that need root may skip here; they run below. The one other
+        # allowed skip is TestLiveTurnProofWriterAggregate, a manual helper
+        # that skips unless FAULTLINE_TURNWRITE_AGGREGATE names retained
+        # window outputs; CI does not set it, so it is listed and accounted
+        # for but does not execute. Slice 3a adds
         # TestLiveSafeGitLists, TestLiveHostCmd, TestLiveConfigWriters,
         # TestLiveRuntimeMappingWriter, TestLiveCuratedRuntime,
         # TestLiveRepoDigestHelpers, TestLiveProjectContext (with the sparse
@@ -152,13 +156,13 @@ jobs:
         # only over all 150 cases, so FAULTLINE_TURNSNAP_CASES stays unset.
         # Slice 3b adds TestLiveIncidentSuggest, TestLiveIncidentDraft,
         # TestLivePreventionWrite, TestLiveAgentsMd and
+        # TestLivePreventionFromArtifacts (about 4.5 minutes together locally,
+        # most of it the TS Git proof verifier in PreventionFromArtifacts).
         # Slice 4b adds TestLiveTurnStates, TestLiveInvestigateTurns,
         # TestLiveTurnHashCatalog, TestLiveTurnTreesPack, TestLiveTurnSemantics,
         # TestLiveTurnProofWriter and TestLiveTurnBridge through this
         # derivation; their CI durations are not measured yet, so the job
         # timeout is not re-checked against a podman measurement.
-        # TestLivePreventionFromArtifacts (about 4.5 minutes together locally,
-        # most of it the TS Git proof verifier in PreventionFromArtifacts).
         run: |
           unset FAULTLINE_TURNSNAP_CASES
           set -o pipefail
@@ -167,7 +171,7 @@ jobs:
           go test -tags faultline_test -list 'TestLive' ./difftest/ | grep -E '^Test' | grep -vxF -f <(printf '%s\n' $elsewhere) > "$RUNNER_TEMP/live.list"
           tests=$(paste -sd '|' "$RUNNER_TEMP/live.list")
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($tests)\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^(TestLiveCwdErrorsMatchNode/(chroot|self0600|parent0311|locked[0-9]+)|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode)$' "$RUNNER_TEMP/live.list" || status=1
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^(TestLiveCwdErrorsMatchNode/(chroot|self0600|parent0311|locked[0-9]+)|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode|TestLiveTurnProofWriterAggregate)$' "$RUNNER_TEMP/live.list" || status=1
           exit $status
       - name: Measured stack depths
         # TestLiveStackThresholdsMatchNode runs in the step above on
