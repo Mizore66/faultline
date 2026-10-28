@@ -172,7 +172,8 @@ jobs:
         # TestLiveCpSyncTree and TestLiveHardGuardDigests (the run listing
         # picks them up). Measured locally in localhost/r73img (linux/arm64,
         # Node 22.22.2, uid 1000), in bounded windows: about 85 s of test
-        # time for the 18 listed in the window run (TestLiveRepairWithCodex
+        # time for the 18-test historical selection of the window run (the CI list
+        # below names 20 tests) (TestLiveRepairWithCodex
         # 16 s, TestLiveCpSyncTree 14 s, the rest under 7 s each). The
         # whole job has NOT been measured on CI, so none moves to
         # difftest-live-writers yet; do that if the job nears its 90 minutes.
@@ -340,9 +341,10 @@ jobs:
   # to about 13 minutes of strace cases with the init --yes paths (577 s on
   # CI in slice 3a). Slice 3b's incident and prevention writer paths add
   # about 5 minutes, well inside the 60 minute go test timeout. Slice 4c adds
-  # 111 cases (attest, provenance, repair brief, witness implement overlay and
-  # the repair command: 477 cases in all) that took about 11 minutes together
-  # in bounded linux/arm64 podman windows; the CI total is unmeasured, so the
+  # 111 cases (15 path entries, 37 path x syscall rows x 3 errnos: attest,
+  # provenance, repair brief, witness implement overlay and the repair command;
+  # 477 cases in all) that took about 11 minutes together in bounded
+  # linux/arm64 podman windows; the CI total is unmeasured, so the
   # 60 minute go test timeout stays and is the number to check.
   # repair-bundle-codex-ok faults only its repair invocation
   # (faultLastInvocation).

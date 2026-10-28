@@ -172,8 +172,8 @@ internal/cli/repair.go                   cli-app.ts:2672-2801
 internal/cli/witness.go                  + implement (cli-app.ts:1169-1203)
 internal/cli/cli.go                      + dispatch attest, provenance, repair
 difftest/gen/fetch-shim.mjs              TS preload: redirect https://api.openai.com/v1/responses to FAULTLINE_TEST_OPENAI_URL
-difftest/testdata/fakecodex/<name>/codex sh fakes (recorder style: log path written in)
-difftest/testdata/fakegh/<name>/gh       sh fakes
+difftest/testdata/fakecodex/codex        one sh fake for every variant (Task 21: a `variant=` line is written beside the log path)
+difftest/testdata/fakegh/<name>/gh       sets variant= and sources fakegh/lib.sh (Task 21)
 difftest/testdata/fakeopenai/<name>.json scripted Responses API replies
 difftest/fakeopenai.go                   the fake OpenAI server (Go side); difftest/gen/fake-openai.ts (TS side)
 difftest/gen/gen-writers.ts, difftest/writer_test.go   + fakeCodex/fakeGh/fakeOpenAI keys, <FILE:> in env, GITHUB_* dropped, cross-verify kinds, Git-object masks, repair seeds
@@ -2813,7 +2813,7 @@ func TestEndToEndSlice4cWithoutNode(t *testing.T) {
 - **Identity-less `commit-tree`:** git's error names the machine (correction 2).
 - **Not ported:** `captureAllowlistedEvent` and `prevention-from-turn`, only if 4a or 4b has not added it. The controller dedupes.
 
-- [x] **Step 1: Add the fault paths and the end-to-end test; run them** (done in bounded windows: 111 fault cases PASS in linux/arm64 podman as uid 1000 with Node 22.22.2; the host `timeout`/`podman run ... timeout 280` form is replaced by per-command parent deadlines)
+- [x] **Step 1: Add the fault paths and the end-to-end test; run them** (done in bounded windows: 111 fault cases ran in linux/arm64 podman; the 39 repair-bundle-codex-ok ones compared the wrong (first) invocation until fix round 1 and PASS with the final invocation compared as uid 1000 with Node 22.22.2; the host `timeout`/`podman run ... timeout 280` form is replaced by per-command parent deadlines)
 
 Run: `go test -tags faultline_test ./difftest/ -run TestEndToEndSlice4cWithoutNode -v > /tmp/s4c-t21-e2e.log 2>&1; tail -5 /tmp/s4c-t21-e2e.log`
 Expected: PASS.
