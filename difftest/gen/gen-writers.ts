@@ -16,7 +16,8 @@ import { copyScenario, makeCaseRoots, resetModes, requireFreshBuild, requireOrac
 export type WriterTemplate = {
   id: string; scenario: string; argv: string[][]; fakeDocker?: string; fakeTools?: string; pathTools?: string[]; env?: Record<string, string>;
   posixOnly?: boolean; mutations?: Template[];
-  // Slice 4c fakes: difftest/testdata/fakecodex/<fakeCodex> as
+  // Slice 4c fakes: difftest/testdata/fakecodex/codex (one script; the
+  // variant <fakeCodex> is written into its variant= line) as
   // FAULTLINE_CODEX_BIN (or on PATH with fakeCodexOnPath),
   // difftest/testdata/fakegh/<fakeGh> on PATH, and a fake OpenAI server
   // answering from the workspace file fakeOpenAI (fake-openai.ts).
