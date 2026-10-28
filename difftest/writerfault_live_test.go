@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -163,17 +164,19 @@ var writerFaultPaths = []struct {
 	{"turns-proof", "turn-stage-manifest", "ws/.faultline/turn-proof-bundles/.turns-*.staging-*/manifest.json", []string{"open", "write", "close"}, ""},
 	{"turns-proof", "turn-stage-pack", "ws/.faultline/turn-proof-bundles/.turns-*.staging-*/source/trees.pack", []string{"open", "write", "close"}, ""},
 	{"turns-proof", "turn-stage-source-dir", "ws/.faultline/turn-proof-bundles/.turns-*.staging-*/source", []string{"mkdir"}, ""},
+	{"turns-proof", "turn-pack-verify-tmp", "tmp/faultline-turn-proof-pack-*", []string{"mkdir"}, ""},
 	{"turns-proof", "turn-stage-root", "ws/.faultline/turn-proof-bundles/.turns-*.staging-*/ROOT.sha256", []string{"open", "write", "close"}, ""},
-	// Dropped, not faked: the verifier's temporary pack repository
-	// (tmp/faultline-turn-proof-pack-*, mkdir). TS's seeded mkdtemp retries a
-	// failed mkdir with the real one (difftest/gen/seed.mjs), so a first-call
-	// fault leaves TS exit 0 while Go refuses.
+	// turn-pack-verify-tmp is the verifier's seeded mkdtemp: TS retries a failed
+	// mkdir with the real mkdtemp (difftest/gen/seed.mjs), which -P cannot
+	// match, so faultOrdinals fails every mkdir from the ordinal at which the
+	// fault-free trace makes it, on both sides.
 	// Fires only on the index-pack fallback, which the fail-unpack fake git forces.
 	{"turns-proof", "turn-pack-index-file", "tmp/faultline-turn-proof-pack-*/objects/pack/turn-trees.pack", []string{"open", "write"}, "fail-unpack"},
-	// The binding freeze made is read first, and a failed close of that read
-	// aborts Node with its native assertion (a stack trace Go cannot
-	// reproduce), so the close group is dropped like the seeded mkdtemp's.
-	{"turns-proof", "turn-binding", "ws/repo/.faultline/incidents/bindings/*.json", []string{"open", "write"}, ""},
+	// The binding freeze made is read twice before it is rewritten. A failed
+	// close of a READ aborts Node with its native assertion (a stack trace Go
+	// cannot reproduce; retained evidence in the task 11 follow-up report), so
+	// the close fault targets the rewrite's close through faultOrdinals.
+	{"turns-proof", "turn-binding", "ws/repo/.faultline/incidents/bindings/*.json", []string{"open", "write", "close"}, ""},
 	{"turns-minimize", "turn-minimization-temp", "ws/.faultline/minimizations/.*.faultline-git-minimization.tmp", []string{"open", "write", "close", "link", "unlink"}, ""},
 	{"turns-minimize", "turn-minimization-dir", "ws/.faultline/minimizations", []string{"mkdir"}, ""},
 }
@@ -258,10 +261,20 @@ func TestLiveWriterFaults(t *testing.T) {
 			}
 			ts := runTSWithFault(t, repo, tpl, f, rel)
 			goRes := runGoWithFault(t, repo, tpl, f, rel)
+			if o, ok := faultOrdinals[f.caseID+"/"+f.label+"/"+f.call]; ok && o.onlyCalls {
+				if !injectedOrdinal(ts.trace, o.ts) || !injectedOrdinal(goRes.trace, o.goSide) {
+					t.Fatalf("the injected %s was not call %d (TS) / %d (Go) of its trace, or a side aborted (wrong operation)\n--- TS\n%s--- Go\n%s", f.call, o.ts, o.goSide, ts.trace, goRes.trace)
+				}
+			}
 			if ts.injected == 0 {
 				t.Fatalf("TS made no %s call on %s to fail", f.call, rel)
 			}
 			switch {
+			case faultOrdinals[f.caseID+"/"+f.label+"/"+f.call].from:
+				o := faultOrdinals[f.caseID+"/"+f.label+"/"+f.call]
+				if ts.injected != 2 || goRes.injected != 1 || !strings.Contains(firstInjected(ts.trace), o.onPath) || !strings.Contains(firstInjected(goRes.trace), o.onPath) {
+					t.Errorf("mkdir from ordinal TS %d / Go %d: %d injected in TS, %d in Go (want 2 and 1, the first on %s)\n--- TS\n%s--- Go\n%s", o.ts, o.goSide, ts.injected, goRes.injected, o.onPath, ts.trace, goRes.trace)
+				}
 			case f.everyCall:
 				// TS's seeded mkdtemp fails, then its real one.
 				if ts.injected != 2 || goRes.injected != 1 || !strings.Contains(ts.trace, rel) || !strings.Contains(goRes.trace, rel) {
@@ -287,11 +300,11 @@ type faultResult struct {
 }
 
 func runTSWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, rel string) faultResult {
-	return runWithFault(t, repo, tpl, f, rel, tsCommand(repo))
+	return runWithFault(t, repo, tpl, f, rel, tsCommand(repo), faultOrdinals[f.caseID+"/"+f.label+"/"+f.call].ts, true)
 }
 
 func runGoWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, rel string) faultResult {
-	return runWithFault(t, repo, tpl, f, rel, []string{flBinary})
+	return runWithFault(t, repo, tpl, f, rel, []string{flBinary}, faultOrdinals[f.caseID+"/"+f.label+"/"+f.call].goSide, false)
 }
 
 // stagedPid is the process id in a ledger binding's staged name
@@ -316,8 +329,11 @@ func maskStagedPid(t *testing.T, r writerRoots, _ int, stdout, stderr string) (s
 // runWithFault runs the case's invocation with command under strace -D (the
 // tracee keeps the shell's pid, so a staged name holding the pid is known
 // before it runs), failing the first call of f's group on rel.
-func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, rel string, command []string) faultResult {
+func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, rel string, command []string, ordinal int, tsSide bool) faultResult {
 	t.Helper()
+	if ordinal == 0 {
+		ordinal = 1
+	}
 	trace := filepath.Join(t.TempDir(), "trace")
 	calls := faultCalls[f.call]
 	var root string
@@ -331,8 +347,10 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 			}
 			abs := filepath.Join(r.root, filepath.FromSlash(rel))
 			script := "exec strace -D -f -qq -s 4096 -o " + quote(trace)
-			when := "+"
-			if !f.everyCall {
+			when := "+" // every call from the ordinal on
+			// Go makes the same seeded mkdir by name, on a thread that varies
+			// between runs (when= counts per thread), so Go is faulted by path.
+			if !f.everyCall && (!faultOrdinals[f.caseID+"/"+f.label+"/"+f.call].from || !tsSide) {
 				when = ""
 				script += " -P " + quote(abs)
 				// A writer may name a workspace path relative to its cwd.
@@ -340,7 +358,7 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 					script += " -P " + quote(after)
 				}
 			}
-			script += " -e trace=" + calls + " -e inject=" + calls + ":error=" + f.errno + ":when=1" + when + " -- \"$@\""
+			script += " -e trace=" + calls + " -e inject=" + calls + ":error=" + f.errno + ":when=" + strconv.Itoa(ordinal) + when + " -- \"$@\""
 			return withFakeGit(repo, f.fakeGit, append([]string{"sh", "-c", script, "sh"}, append(command, args...)...))
 		},
 	}

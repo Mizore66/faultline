@@ -310,6 +310,9 @@ jobs:
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 75m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
+          # The oracle is on, so TestWriterReplay must report a positive count
+          # of Go bundles verified by TS (a zero or missing summary fails).
+          .github/scripts/check-crossverify.sh "$RUNNER_TEMP/live.log" || status=1
           exit $status
 
   # Split from difftest-live-replay in slice 3a: the writer fault matrix grew
@@ -317,9 +320,9 @@ jobs:
   # CI in slice 3a). Slice 3b's incident and prevention writer paths add
   # about 5 minutes, well inside the 60 minute go test timeout. Slice 4b adds
   # the turns-proof and turns-minimize rows (23 path and syscall-group pairs
-  # by 3 errnos = 69 cases, 435 in all; the index-pack file row runs under the
+  # by 3 errnos = 69 cases, 441 in all; the index-pack file row runs under the
   # fail-unpack fake git; the verifier's temporary-repository mkdir and the
-  # binding read's close are dropped, see the writerFaultPaths comments); their
+  # binding rewrite's close use per-side call ordinals, see faultOrdinals); their
   # CI duration is not measured yet (about 5 s per case locally in podman).
   difftest-live-faults:
     name: difftest live writer faults and real Docker (frozen TS oracle)
