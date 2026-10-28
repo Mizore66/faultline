@@ -75,7 +75,11 @@ Slice 4 extends the slice 3 writer replay; it adds inputs and fakes, not a new h
 
 ### 2.1 Seeded clock and IDs
 
-The preload `difftest/gen/seed.mjs` already seeds every clock and UUID read slice 4 adds: ledger and event ids (`ledger-<uuid>`, `event-<uuid>`), `createdAt`/`occurredAt`/`capturedAt`, run `executionNonce`, `startedAt`/`finishedAt`/`durationMs`, bundle `generatedAt` and staging UUIDs, the `Date.now()` output names (`turns-*`, `repair-*`, `turn-transition-*`, `from-repair-*`), attestation `issuedAt`, provenance `createdAt`, `repairId` and temporary index names. Go reads them from `internal/clock` in TS's order. Values a seed cannot fix are masked: the process id in lock and temp file names (`<PID>`) and `sidecar status`'s `lock.ageMilliseconds`.
+The preload `difftest/gen/seed.mjs` already seeds every clock and UUID read slice 4 adds: ledger and event ids (`ledger-<uuid>`, `event-<uuid>`), `createdAt`/`occurredAt`/`capturedAt`, run `executionNonce`, `startedAt`/`finishedAt`/`durationMs`, bundle `generatedAt` and staging UUIDs, the `Date.now()` output names (`turns-*`, `repair-*`, `turn-transition-*`, `from-repair-*`), attestation `issuedAt`, provenance `createdAt`, `repairId` and temporary index names. Go reads them from `internal/clock` in TS's order. Values a seed cannot fix are masked: the process id in temporary file names (`<PID>`; no lock name holds one: `<ledger>.lock` and `<ledger>.sidecar.lock` are fixed), the sidecar receipt stage `.<sha256(receiptPath)[0:24]>.<pid>.tmp` (`src/codex-sidecar.ts:529`) as `.<STAGEKEY>.<pid>.tmp` (its key hashes the absolute receipt path, so it differs between the TS and the Go case directory; a sidecar unit test pins the key), and the age of an ACTIVE `sidecar status` lock (`<LOCKAGE>`; a stale lock's age is fixed by the seed and stays compared). The ledger's temporary name `.<base>.<pid>.<uuid>.tmp` keeps the slice 2 mask.
+
+Each `fl` invocation starts at the seed epoch with UUID counter 0, so a second `record` or hook invocation in a case would write an `occurredAt` before the first one's and repeat `event-<uuid>` ids. Writer templates therefore gain `advanceClock: true`: invocation `n >= 1` runs with seed `<id>/<n>` and `FAULTLINE_TEST_CLOCK_OFFSET_MS = n x 3,600,000`, which `seed.mjs` and `internal/clock` add to the epoch. Scenario ledgers are built by the TS ledger functions with fixed timestamps before the epoch, not by running `fl`.
+
+The sidecar's 2 s lock wait runs on the seeded clock: `withSidecarLock` reads `Date.now()` three times per 25 ms retry, and each read advances one millisecond, so a held fresh lock is reported after about 667 retries, about 17 s of real time, on both sides. A fresh planted lock is never stale (its real mtime is after the seed epoch), and its `lock.ageMilliseconds` is `0`; one planted with `set-mtime` 2000-01-01 always is stale.
 
 ### 2.2 Commit ids
 
@@ -83,7 +87,9 @@ The preload `difftest/gen/seed.mjs` already seeds every clock and UUID read slic
 
 ### 2.3 Inputs and fakes
 
-- **Stdin.** Writer templates gain an `input` field (bytes per invocation), for `codex sidecar hook` and `record stdin`.
+- **Stdin.** Writer templates gain an `input` field (bytes per invocation), for `codex sidecar hook` and `record stdin`. The 4 MB limit counts the UTF-8-decoded text (`readStandardInput`, `src/cli-app.ts:287`, checks `Buffer.byteLength` of the decoded body), so each invalid byte counts 3 (U+FFFD); its text, `Lifecycle stdin exceeds the 4 MB safety limit.`, is also what `codex sidecar hook` prints.
+- **Relocation.** The sidecar ledger and receipts live in `.git/faultline/recordings/` and hold the case path (`workingDirectory`, `repositoryRoot`) and digests over it, so the writer relocation walk, which skips every `.git`, walks that one subtree on both sides.
+- **Layout of the cases.** Templates may also live in `difftest/testdata/writers.d/*.json` and goldens in `difftest/testdata/golden/writers.d/*.jsonl`, one file per task; `.github/scripts/windows-writer-skips.txt` is marked `merge=union`.
 - **Fake `codex`** selected with `FAULTLINE_CODEX_BIN` (which TS already honours): answers `--version`; `exec --full-auto` applies scripted edits. Variants: probe failure, non-zero exit, timeout, edits outside the allowed files.
 - **Fake `gh`** on `PATH`: `attestation verify` returns a scripted pass or failure.
 - **Fake OpenAI**: a local HTTP server the harness starts. TS reaches it through a new preload `difftest/gen/fetch-shim.mjs` that redirects `https://api.openai.com/v1/responses`; Go through a base-URL override that exists only under the `faultline_test` build tag. Release builds keep TS's hard-coded URL. Scripted responses: valid, malformed, wrong citations, HTTP errors.
@@ -105,9 +111,9 @@ The preload `difftest/gen/seed.mjs` already seeds every clock and UUID read slic
 
 ### 2.6 Faults and end to end
 
-- The strace fault matrix gains the new writer paths: the ledger temporary file and rename, the ledger lock, sidecar stop receipts, the turn bundle stage, the repair brief stage and the attestation link. Renames are faulted through their source path (slice 3a CI: on x86_64, `strace -P` matches only `rename(2)`'s first argument).
+- The strace fault matrix gains the new writer paths: the ledger temporary file and rename, the ledger lock, sidecar stop receipts, the turn bundle stage, the repair brief stage and the attestation link. Renames are faulted through their source path (slice 3a CI: on x86_64, `strace -P` matches only `rename(2)`'s first argument). The 4a rows (record init and checkpoint, `codex --snapshot`, snapshot gc and the sidecar hooks) run through `TestLiveWriterFaults`. The harness gained `faultLastInvocation` (every invocation runs; only the last runs under strace and is compared: the stop receipt of `sidecar-hook-full-turn`) and per-side receipt stages (the stage key is recomputed from each side's case root before it is faulted, and `<STAGEKEY>` masks it in the compared output).
 - The 4b rows (`turns-proof`, `turns-minimize`) fault the paths a fault-free TS trace discovers; a group that never fires is dropped, not faked (none was dropped in 4b). Two rows need a per-side call ordinal (`faultOrdinals`, `difftest/faultordinal_test.go`): the verifier's seeded `mkdtemp` (TS retries a failed mkdir with the real one, so every mkdir from its ordinal is failed in TS and the seeded name in Go; 2 injections in TS, 1 in Go) and the binding rewrite's `close` (the third `close` of the file on each side; a failed close of the preceding READ aborts Node with a native assertion, listed in KNOWN_DIFFERENCES). The `index-pack` file row runs under the `fail-unpack` fake git.
-- One end-to-end test without Node per PR: 4a `record init` → hook events → `record verify`; 4b the same, then `investigate turns` → `fl verify` → `prove transition`; 4c `repair --bundle` with the fake `codex` → `repair verify` → `prevention write` → `attest create` → `attest verify`.
+- One end-to-end test without Node per PR (4a: `TestEndToEndSlice4aWithoutNode`; its `record attach` names the ledger with `--ledger`, since `attach` has no `--session` and otherwise addresses `recordings/session.json`, `src/cli-app.ts:256`): 4a `record init` → hook events → `record verify`; 4b the same, then `investigate turns` → `fl verify` → `prove transition`; 4c `repair --bundle` with the fake `codex` → `repair verify` → `prevention write` → `attest create` → `attest verify`.
 
 ### 2.7 Not compared byte for byte
 
@@ -145,6 +151,11 @@ Go keeps TS's choice at each call site:
 
 When a write or a child process fails part way, Go leaves the same files behind as TS (fault matrix, Section 2.6).
 
+- **Two checkpoint runners.** `fl record` uses `defaultHardenedGitRunner`: a 60 s `spawnSync` timeout and the error `Git checkpoint capture failed for <args>: ...` (`src/ledger.ts:274`). The sidecar's Stop uses its own `runHardenedGit`: no timeout, and the error `FaultLine could not safely inspect this Git worktree: ...` (`src/codex-sidecar.ts:891`). `nodeproc.SpawnSyncOptions` gains `Timeout`, which Node reports as `spawnSync git ETIMEDOUT` with a null status.
+- **Capture comes before the lock.** `record checkpoint`, `record attach --checkpoint` and the `record stdin` checkpoint lines capture the checkpoint while the arguments are evaluated, before `appendLifecycleEventAtomic` takes its lock; that function's `mkdirSync(dirname, {recursive: true})` runs before the lock and the read, so a failed append still leaves the directories behind.
+- **`codex snapshot gc`** works on `resolve(--repo)`, not on the Git top level or the common directory: the object store is the literal `<repo>/.git/faultline/objects` (`src/turn-snapshot.ts:194`). In a linked worktree (`.git` is a file) it reports `ALREADY_EMPTY`, and from a subdirectory it finds nothing.
+- **`codex --snapshot`** writes under `<--repo>/.faultline/recordings`, not under the top level. Its git runs unhardened with the full environment and no `GIT_OPTIONAL_LOCKS`, so its `status` may refresh `.git/index`; the index rule compares the index by content.
+
 ### 3.4 Turn proofs
 
 - State reconstruction, stable transitions, the duplicate-ordinal error and failure attribution match `src/turn-investigation.ts:347-613`.
@@ -167,11 +178,12 @@ When a write or a child process fails part way, Go leaves the same files behind 
 - `--allow-codex-full-auto` is checked inside the runner; without it the result is `CODEX_UNAVAILABLE` (exit 1 for `witness implement`, exit 0 for `repair`).
 - `repair` uses the repository recorded in the investigation before `--repo`; `codexThreadId` is always `null` from the CLI.
 - `repair brief` takes exactly one of `--live`/`--input` and exactly one of `--bundle`/`--investigation`; evidence schema v1 is refused as legacy; `--live` without `OPENAI_API_KEY` throws TS's text.
+- A `PreToolUse`/`PostToolUse` for a turn that was never started fails with `Stop was observed before the matching UserPromptSubmit event.` (`turnOrdinalForStartedTurn`, `src/codex-sidecar.ts:440`): TS reuses that message for a different cause, and Go reproduces the text.
 - `provenance create` requires the `GITHUB_*` environment and refuses locally; run and execution ids are sorted with `localeCompare`.
 
 ### 3.6 Expected KNOWN_DIFFERENCES entries
 
-Added as confirmed: the commit-id mask (Section 2.2), the turn pack bytes following git and zlib, SHA-256 turn bundles and the bridge (TS behaviour reproduced), the turn stack and spread sites with their measured platforms; `captureAllowlistedEvent` and `prevention-from-turn` not ported; batch staging deferred past parity.
+Added as confirmed: the commit-id mask (Section 2.2); the `<STAGEKEY>` and `<LOCKAGE>` masks (Section 2.1); the seeded lock wait costing about 17 s of real time on both sides (not an output difference); the turn pack bytes following git and zlib, SHA-256 turn bundles and the bridge (TS behaviour reproduced), the turn stack and spread sites with their measured platforms; `captureAllowlistedEvent` and `prevention-from-turn` not ported; batch staging deferred past parity.
 
 ## 4. CI and done criteria
 
@@ -191,6 +203,7 @@ Each holds per PR, for the commands that PR ports.
 1. `go test ./...` passes on all six runners, and every writer case matches its golden.
 2. `difftest-live`, `difftest-live-faults` and `stack-live` pass.
 3. The PR's end-to-end test without Node passes.
+   - PR 4a: `TestEndToEndSlice4aWithoutNode`.
 4. Every turn bundle, attestation, provenance receipt, repair brief and prevention package Go writes verifies under TS.
 5. PR 4b: the hostile-verifier turn corpus gives identical verdicts and error text in Go and TS.
 6. `difftest/KNOWN_DIFFERENCES.md` lists every intentional difference.

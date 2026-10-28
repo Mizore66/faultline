@@ -71,5 +71,6 @@
   {"id":"sidecar-status-two-sessions","scenario":"sidecar-recorded","argv":[["codex","sidecar","hook"],["codex","sidecar","status"]],"input":["{\"session_id\":\"s-2\",\"cwd\":\"<WS>\",\"model\":\"gpt-5.6\",\"hook_event_name\":\"SessionStart\"}\n"],"advanceClock":true,"posixOnly":true},
   {"id":"sidecar-usage","scenario":"empty","argv":[["codex","sidecar"]]},
   {"id":"sidecar-usage-unknown","scenario":"empty","argv":[["codex","sidecar","bogus"]]},
-  {"id":"sidecar-status-session-empty","scenario":"sidecar-recorded","argv":[["codex","sidecar","status","--session",""]],"posixOnly":true}
+  {"id":"sidecar-status-session-empty","scenario":"sidecar-recorded","argv":[["codex","sidecar","status","--session",""]],"posixOnly":true},
+  {"id":"sidecar-config-command-empty-string","scenario":"init-sidecar","argv":[["codex","sidecar","config","--command",""]]}
 ]

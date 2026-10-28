@@ -1896,22 +1896,22 @@ A group that never fires is dropped from the table, not faked; note which in the
 - `captureAllowlistedEvent` (`src/redaction.ts:441`) and `src/prevention-from-turn.ts` have no caller in `src/` and are not ported.
 - PR #195's batch turn-snapshot staging is not in frozen TS and is deferred past parity.
 
-- [ ] **Step 1: Add the fault rows and the end-to-end test; run them**
+- [x] **Step 1: Add the fault rows and the end-to-end test; run them** (102 fault cases in podman uid 1000; end to end on macOS; see task-9-report.md)
 
 Run: `go test -tags faultline_test ./difftest/ -run TestEndToEndSlice4aWithoutNode -v` and, in podman as uid 1000: `FAULTLINE_NODE_ORACLE=1 timeout 280 go test -tags faultline_test ./difftest/ -run 'TestLiveWriterFaults/(record-|codex-|sidecar-)' > /tmp/s4a-t9.log 2>&1; grep -E '^(---|FAIL|ok)' /tmp/s4a-t9.log | head -60`. Split the filter by prefix if it runs past 280 s.
 Expected: PASS. Fix any mismatch in Go.
 
-- [ ] **Step 2: Apply the CI, gate and docs changes; run the gates**
+- [x] **Step 2: Apply the CI, gate and docs changes; run the gates** (CI, gates and docs applied; the monolithic gated full replay is UNVERIFIED locally and left to CI)
 
 Run: `go test -tags faultline_test ./difftest/ -run 'TestGoldensReachEveryErrorLiteral|TestWindowsWriterSkipsList|TestNoDirectClockReads' -v 2>&1 | tail -5`. Then run the full gated replay in the background with `FAULTLINE_COVERAGE_GATE=1` (3a Task 13's report has the command), polling its log.
 Expected: PASS; the coverage gate reports no missed site in `internal/ledger`, `internal/sidecar`, `internal/snapgc` or the new `internal/cli` files.
 
-- [ ] **Step 3: Full podman regeneration, no drift**
+- [ ] **Step 3: Full podman regeneration, no drift** (UNVERIFIED: no fixture changed; only the 7 fault cases were regenerated, with zero drift; the full regeneration runs in CI)
 
 Run the podman command of Global Constraints with no `ONLY`, preceded by `pnpm exec tsx difftest/gen/gen-goldens.ts` and followed by `pnpm exec tsx difftest/gen/gen-corpus.ts` inside the container, as `difftest-goldens` does. Then: `git status --porcelain difftest/testdata`
 Expected: empty output. Any drift is a nondeterminism bug to fix in the harness or Go, not a golden to commit.
 
-- [ ] **Step 4: Commit; hand back to the controller to push** (the controller pushes as Mizore66 and reads CI)
+- [x] **Step 4: Commit; hand back to the controller to push** (the controller pushes as Mizore66 and reads CI)
 
 ```bash
 git add .github difftest docs internal/projinit

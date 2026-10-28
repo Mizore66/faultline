@@ -31,22 +31,10 @@ import (
 	"github.com/Mizore66/faultline/internal/sidecar"
 )
 
-// sidecarGatedFiles are the files TestLiveSidecarHooks gates. Task 9 moves
-// them into liveGatedFiles; until then the test adds them for its own run.
+// sidecarGatedFiles are the files TestLiveSidecarHooks gates (they are in
+// coverage_test.go's liveGatedFiles; their unreachable literals are in its
+// unreachableLiterals).
 var sidecarGatedFiles = []string{"internal/sidecar/hook.go", "internal/sidecar/receipt.go", "internal/sidecar/lock.go", "internal/sidecar/inspect.go"}
-
-// sidecarUnreachable are error literals of the gated files that no input
-// reaches: races with the filesystem or a Git invariant. (Task 9 moves them
-// into coverage_test.go's unreachableLiterals.)
-var sidecarUnreachable = map[string]string{
-	"A recorded checkpoint result requires a checkpoint digest.":           "checkpointResult is only called with a checkpoint for CHECKPOINT_RECORDED",
-	"The sidecar stop receipt omitted its checkpoint digest.":              "assertReceiptMatchesLedger compares the digest with the ledger's first and refuses a receipt without one",
-	"A checkpoint receipt requires a checkpoint digest.":                   "writeReceipt only gets a RECORDED result that carries its digest",
-	"A turn snapshot receipt requires a turn tree snapshot digest.":        "a TURN_SNAPSHOT_RECORDED result always carries its snapshot",
-	"Only Stop checkpoint outcomes can be persisted as a sidecar receipt.": "writeReceipt is only called with the four Stop statuses",
-	"session-start":    "event id phase strings reach a message only through appendIfAbsent, which SessionStart does not use",
-	"session-baseline": "event id phase strings reach a message only through appendIfAbsent, which SessionStart does not use",
-}
 
 // sidecarOutcomeJSON is oracle-sidecar.ts's sidecarOutcome: {result, stderr}
 // or {threw, zod, stderr}.
@@ -227,6 +215,10 @@ func applyHookOp(t *testing.T, work, cwd, session string, seq, step int, op gen.
 		mtime := time.UnixMilli(seededEpochMillis - sidecarStaleAge)
 		os.Chtimes(lock, mtime, mtime)
 		os.Chmod(recordings, 0o555)
+		// A failing step must not leave the directory 0555 for the
+		// temporary-directory removal (sidecarRestore does the same after
+		// a step that completes).
+		t.Cleanup(func() { os.Chmod(recordings, 0o700) })
 		cleanup = "ro:" + recordings
 	case "x:lock-dir":
 		os.Mkdir(ledgerPath+".sidecar.lock", 0o700)
@@ -237,7 +229,8 @@ func applyHookOp(t *testing.T, work, cwd, session string, seq, step int, op gen.
 	return cleanup
 }
 
-// sidecarRestore undoes a step's planted fresh lock or storage symlink.
+// sidecarRestore undoes a step's planted fresh lock, storage symlink,
+// symlinked ledger or read-only recordings directory.
 func sidecarRestore(target string) {
 	if target == "" {
 		return
@@ -323,12 +316,6 @@ type sidecarSequence struct {
 // most 5 sequences plant one.
 func TestLiveSidecarHooks(t *testing.T) {
 	oracle.Skip(t)
-	for _, f := range sidecarGatedFiles {
-		if liveGatedFiles[f] == "" {
-			liveGatedFiles[f] = "TestLiveSidecarHooks"
-			defer delete(liveGatedFiles, f)
-		}
-	}
 	gitDir, err := exec.Command("git", "--exec-path").Output()
 	if err != nil {
 		t.Fatal(err)
@@ -642,6 +629,11 @@ func TestLiveSidecarHooks(t *testing.T) {
 			t.Errorf("no generated step reached %q", marker)
 		}
 	}
+	// Any window that runs the interrupted-turn directed sequence must show
+	// its status (the marker loop above only checks full runs).
+	if at := unavailableDirected(random); first <= at && at < n && reached[`"status":"CHECKPOINT_SKIPPED_UNAVAILABLE"`] == 0 {
+		t.Errorf("directed sequence %d did not reach CHECKPOINT_SKIPPED_UNAVAILABLE", at)
+	}
 	if fullRun {
 		for _, f := range sidecarGatedFiles {
 			sidecarRequireReached(t, f, outputs)
@@ -650,17 +642,13 @@ func TestLiveSidecarHooks(t *testing.T) {
 	liveSummary(t, "%d sequences and %d stores, %d steps compared; outcomes %v", n-first, stores, steps, outcomes)
 }
 
-// sidecarRequireReached is requireReached with sidecarUnreachable
-// exemptions.
+// sidecarRequireReached is requireReached with the euid 0 exemption below.
 func sidecarRequireReached(t *testing.T, file, outputs string) {
 	t.Helper()
 	repo := oracle.RepoRoot(t)
 	outputs += goldenText(t, repo)
 	for lit, pos := range errorLiterals(t, filepath.Join(repo, filepath.FromSlash(file))) {
 		if _, ok := unreachableLiterals[lit]; ok {
-			continue
-		}
-		if _, ok := sidecarUnreachable[lit]; ok {
 			continue
 		}
 		// An unlink of a stale lock fails only for a user the read-only
@@ -805,12 +793,6 @@ func TestSidecarReachedFromDump(t *testing.T) {
 		t.Fatal(err)
 	}
 	outputs := string(b)
-	for _, f := range sidecarGatedFiles {
-		if liveGatedFiles[f] == "" {
-			liveGatedFiles[f] = "TestLiveSidecarHooks"
-			defer delete(liveGatedFiles, f)
-		}
-	}
 	for _, f := range sidecarGatedFiles {
 		sidecarRequireReached(t, f, outputs)
 	}
@@ -989,8 +971,16 @@ func directedSequences() [][]gen.HookStep {
 		{start, op("x:rebuild", "empty"), start, prompt("t-1", "p1"), stop("t-1"), pre("shell", "call-1")},
 		// The unlink of a stale lock refused (EACCES) in a read-only recordings directory.
 		{start, op("x:ro-lock", ""), prompt("t-1", "p1"), prompt("t-1", "p1")},
+		// CHECKPOINT_SKIPPED_UNAVAILABLE (hook.go "interrupted transaction"):
+		// a completed turn with neither snapshot, checkpoint nor receipt.
+		// Appended last so that every earlier sequence keeps its index.
+		base(op("remove-receipt", "t-1"), op("x:rebuild", "drop-snapshot,drop-checkpoint"), stop("t-1")),
 	}
 }
+
+// unavailableDirected is the index, among the sequences, of the directed
+// sequence that must reach CHECKPOINT_SKIPPED_UNAVAILABLE (the last one).
+func unavailableDirected(random int) int { return random + len(directedSequences()) - 1 }
 
 // maskSidecarPID masks only ".<24 lowercase hex>.<own pid>.tmp".
 func TestMaskSidecarPID(t *testing.T) {
