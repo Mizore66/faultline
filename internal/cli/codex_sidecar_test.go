@@ -35,3 +35,23 @@ func TestSidecarNotQuietRethrows(t *testing.T) {
 		t.Fatalf("%d %q %q", code, out.String(), errb.String())
 	}
 }
+
+// A supplied empty --session is parsed (min(1)) like any other id
+// (codex-sidecar.ts:1017); an absent or dangling one is undefined and
+// reaches the storage lookup, which fails here on a non-repository.
+func TestSidecarStatusSessionEmptyVersusAbsent(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := run("codex", "sidecar", "status", "--repo", dir, "--session", "")
+	if code != 1 || !strings.Contains(stderr, `"code": "too_small"`) || !strings.Contains(stderr, `"minimum": 1`) || strings.Contains(stderr, "Git worktree") {
+		t.Fatalf("empty: %d %q", code, stderr)
+	}
+	for _, args := range [][]string{
+		{"codex", "sidecar", "status", "--repo", dir},
+		{"codex", "sidecar", "status", "--repo", dir, "--session"},
+	} {
+		_, stderr, code := run(args...)
+		if code != 1 || !strings.Contains(stderr, "could not safely inspect this Git worktree") {
+			t.Fatalf("%q: %d %q", args, code, stderr)
+		}
+	}
+}

@@ -3,10 +3,10 @@ package cli
 import (
 	"io"
 
+	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
-	"github.com/Mizore66/faultline/internal/nodefs"
 	"github.com/Mizore66/faultline/internal/projinit"
 	"github.com/Mizore66/faultline/internal/sidecar"
 )
@@ -77,12 +77,15 @@ func sidecarInstall(e *env, args []string) error {
 // sidecarStatus ports the status branch (src/cli-app.ts:1789-1806).
 func sidecarStatus(e *env, args []string) (err error) {
 	defer jsexc.Catch(func(t error) { err = t })
-	repo, ok := option(args, "--repo")
-	if !ok {
-		repo = "."
+	repository := repoOption(args)
+	session, hasSession := option(args, "--session")
+	if hasSession && session == "" {
+		// inspectObservedCodexSidecar parses any supplied session id
+		// (codex-sidecar.ts:1017), the empty string included; sidecar.Inspect
+		// takes "" as undefined, so the parse runs here, after the repository
+		// is resolved and before any storage is read.
+		bundle.Must(bundle.ParseValue(jsjson.MakeString(session), sidecar.IdentifierSchema))
 	}
-	repository := nodefs.Resolve(repo)
-	session, _ := option(args, "--session")
 	inspection, err := sidecar.Inspect(repository, session)
 	if err != nil {
 		return err

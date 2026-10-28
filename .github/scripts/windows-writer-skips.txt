@@ -510,3 +510,4 @@ TestWriterReplay/posix/sidecar-status-lock-stale
 TestWriterReplay/posix/sidecar-status-lock-invalid
 TestWriterReplay/posix/sidecar-status-not-a-repo
 TestWriterReplay/posix/sidecar-status-two-sessions
+TestWriterReplay/posix/sidecar-status-session-empty
