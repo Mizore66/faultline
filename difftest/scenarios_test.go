@@ -83,6 +83,8 @@ var writerScenarios = map[string]bool{
 	"attest-bundles":             true,
 	"provenance-ci":              true,
 	"provenance-signed":          true,
+	"repair-brief":               true,
+	"repair-package":             true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is

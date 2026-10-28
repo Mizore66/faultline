@@ -92,6 +92,8 @@ func dispatch(e *env, args []string) error {
 		return attestCommand(e, rest)
 	case command == "provenance":
 		return provenanceCommand(e, rest)
+	case command == "repair":
+		return repairCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:

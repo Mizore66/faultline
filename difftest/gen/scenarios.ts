@@ -1076,6 +1076,47 @@ SCENARIOS["provenance-signed"] = {
   argv: [["provenance", "create", "--bundle", "bundle"]], env: provenanceCiEnv
 };
 
+// fl repair brief and fl repair verify (slice 4c Task 18). The base is
+// git-unbound; brief.json cites E1-E3 of the packet TS builds from its
+// investigation. brief-secret.json holds a password assignment built from
+// pieces (TruffleHog scans this file). reply-*.json are the fake OpenAI
+// replies: {status, contentType, body} (fake-openai.ts).
+const { createRepairEvidencePacket } = await import("../../src/repair-brief.js");
+function repairBriefFiles(): Record<string, string> {
+  const packet = createRepairEvidencePacket(JSON.parse(baseText("git-unbound/investigation.json")));
+  const cited = (statement: string, evidenceIds: string[]) => ({ statement, evidenceIds });
+  const brief = (digest: string, ids: string[], hardStatement = "Guard the state transition with the frozen witness.") => ({
+    schemaVersion: "faultline.repair-brief.v1",
+    evidencePacketDigest: digest,
+    proposedInvariant: cited("The repository state must not become bad.", ids),
+    repairDirections: [cited("Restore the state that the passing commit had.", ids.slice(0, 2))],
+    prevention: { hardEnforcement: [cited(hardStatement, ids.slice(0, 1))], softGuidance: [cited("Review state changes with the witness output.", ids.slice(1, 2))] },
+    uncertainties: ["Other causes of the transition cannot be excluded."]
+  });
+  const ok = brief(packet.packetDigest, ["E1", "E2", "E3"]);
+  const reply = (status: number, contentType: string | undefined, body: string) => jsonText({ status, ...(contentType === undefined ? {} : { contentType }), body });
+  const responseWith = (outputs: string[]) => JSON.stringify({ id: "resp_test", status: "completed", output: [{ type: "message", content: outputs.map((text) => ({ type: "output_text", text })) }] });
+  const secretValue = ["hunter", "2", "Passw0rd", "xyz"].join("");
+  return {
+    "brief.json": jsonText(ok),
+    "brief-unknown-id.json": jsonText(brief(packet.packetDigest, ["E1", "E2", "E9"])),
+    "brief-wrong-digest.json": jsonText(brief(`sha256:${"0".repeat(64)}`, ["E1", "E2", "E3"])),
+    "brief-secret.json": jsonText(brief(packet.packetDigest, ["E1", "E2", "E3"], ["Rotate the credential: pass", "word=", secretValue, " in the CI settings."].join(""))),
+    "reply-ok.json": reply(200, "application/json", responseWith([JSON.stringify(ok)])),
+    "reply-wrong-ids.json": reply(200, "application/json", responseWith([JSON.stringify(brief(packet.packetDigest, ["E1", "E2", "E9"]))])),
+    "reply-500.json": reply(500, "text/plain", "upstream failure"),
+    "reply-not-json.json": reply(200, "text/plain", "this is not json"),
+    "reply-two-outputs.json": reply(200, "application/json", responseWith([JSON.stringify(ok), JSON.stringify(ok)]))
+  };
+}
+SCENARIOS["repair-brief"] = { bases: { bundle: "git-unbound" }, files: repairBriefFiles(), argv: [] };
+// repair-package: the same inputs plus a written package at
+// .faultline/repair-briefs/pkg, which the cross-platform verify cases read.
+SCENARIOS["repair-package"] = {
+  bases: { bundle: "git-unbound" }, files: repairBriefFiles(),
+  argv: [["repair", "brief", "--input", "brief.json", "--bundle", "bundle", "--output", ".faultline/repair-briefs/pkg"]]
+};
+
 // witness-implement: the incident packets `fl witness implement --incident`
 // reads (raw readFileSync + JSON.parse).
 const IMPLEMENT_INCIDENT = { symptom: "The repository state must not be bad.", ciLog: "state.txt became bad", repositoryLanguage: "Text", repositorySummary: "Temporary repository for the writer replay." };
