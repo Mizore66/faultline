@@ -90,11 +90,11 @@ func TestCreatedObjectNamesArePinned(t *testing.T) {
 	blob := gitIn(t, repo, "bad\n", "hash-object", "-w", "--stdin")
 	tree := gitIn(t, repo, "100644 blob "+blob+"\tstate.txt\n", "mktree")
 	commit := gitIn(t, repo, "", "commit-tree", tree, "-m", "m "+r.ws)
-	reloc := relocationWith(t, r, nil, base)
+	ids := relocationWith(t, r, nil, base).ids
 	want := map[string]string{blob: "<BLOB:bf9ddff4bbf5>", tree: "<TREE:b352e6817bf5>", commit: "<COMMIT:c43d2f3c0662>"}
 	for id, name := range want {
-		if reloc.ids[id] != name {
-			t.Errorf("%s: %q, want %q", id, reloc.ids[id], name)
+		if ids[id] != name {
+			t.Errorf("%s: %q, want %q", id, ids[id], name)
 		}
 	}
 	reflog := "repo/.git/logs/refs/heads/x"
@@ -105,6 +105,7 @@ func TestCreatedObjectNamesArePinned(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.ws, "names.txt"), []byte(commit+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	reloc := relocationWith(t, r, nil, base)
 	loose := "repo/.git/objects/" + commit[:2] + "/" + commit[2:]
 	if got := reloc.fileDigest(loose, []byte("zlib bytes")); got != canonical.SHA256Hex("git-object:<COMMIT:c43d2f3c0662>") {
 		t.Errorf("loose object digest %s", got)
