@@ -182,6 +182,19 @@ func TestSlice4aMasks(t *testing.T) {
 	}
 }
 
+// Only an ACTIVE lock age is masked: a STALE age is seeded and compared.
+func TestLockAgeMaskActiveOnly(t *testing.T) {
+	r := writerRoots{ws: "/c/ws", tmp: "/c/tmp", home: "/c/home"}
+	active := "\"lock\": {\n  \"state\": \"ACTIVE\",\n  \"ageMilliseconds\": 17\n}"
+	stale := "\"lock\": {\n  \"state\": \"STALE\",\n  \"ageMilliseconds\": 829000000000\n}"
+	if got := normalizeWriter(active, r); got != "\"lock\": {\n  \"state\": \"ACTIVE\",\n  \"ageMilliseconds\": \"<LOCKAGE>\"\n}" {
+		t.Fatalf("%q", got)
+	}
+	if got := normalizeWriter(stale, r); got != stale {
+		t.Fatalf("stale age masked: %q", got)
+	}
+}
+
 func TestWriterTemplateInputs(t *testing.T) {
 	repo := repoRoot(t)
 	for _, tpl := range loadWriterTemplates(t, repo) {
