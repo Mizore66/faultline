@@ -50,7 +50,8 @@ type writerTemplate struct {
 	PosixOnly bool
 	Mutations []template
 	// Slice 4c fakes (gen-writers.ts WriterTemplate):
-	// difftest/testdata/fakecodex/<FakeCodex> as FAULTLINE_CODEX_BIN (or on
+	// difftest/testdata/fakecodex/codex (one script; the variant <FakeCodex> is
+	// written into its variant= line) as FAULTLINE_CODEX_BIN (or on
 	// PATH with FakeCodexOnPath), difftest/testdata/fakegh/<FakeGh> on PATH,
 	// and a fake OpenAI server answering from the workspace file FakeOpenAI.
 	FakeCodex, FakeGh, FakeOpenAI string
