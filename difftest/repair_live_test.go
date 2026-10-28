@@ -1097,7 +1097,7 @@ func TestLiveRepairWorktree(t *testing.T) {
 	defer c.Close()
 	clock.ResetForTest(seed)
 	kinds := []string{"normal", "unknown-base", "non-repository", "symlinked-parent", "existing-output", "bundle-symlink",
-		"worktrees-blocked", "nested-output", "bad-id", "missing-bundle", "removed-worktree", "dirty-bundle-subdir", "gitdir-deleted", "empty-managed-root"}
+		"worktrees-blocked", "nested-output", "bad-id", "missing-bundle", "removed-worktree", "dirty-bundle-subdir", "gitdir-deleted", "empty-managed-root", "undeletable-worktree", "prune-blocked"}
 	var cases []repairWorktreeCase
 	// 28 cases is two rounds of every kind (keep off, then on); the knob
 	// raises it, as FAULTLINE_CP_CASES does for cpSync.
@@ -1112,6 +1112,9 @@ func TestLiveRepairWorktree(t *testing.T) {
 		kind := kinds[i%len(kinds)]
 		if kind == "bundle-symlink" && runtime.GOOS != "linux" {
 			kind = "normal" // Node's cpSync differs on libc++ for links
+		}
+		if (kind == "undeletable-worktree" || kind == "prune-blocked") && os.Geteuid() == 0 {
+			kind = "normal" // root ignores the modes these two cases rely on
 		}
 		cases = append(cases, repairWorktreeCase{name: fmt.Sprintf("%02d-%s", i, kind), kind: kind, keep: (i/len(kinds))%2 == 1})
 	}
@@ -1234,6 +1237,23 @@ func TestLiveRepairWorktree(t *testing.T) {
 					}
 					if tc.kind == "removed-worktree" {
 						must(os.RemoveAll(sess.WorktreePath))
+					}
+					if tc.kind == "undeletable-worktree" {
+						// git worktree remove --force cannot empty a directory
+						// without write permission, nor can the rm fallback or
+						// the leftover removal: all three texts are reached.
+						locked := filepath.Join(sess.WorktreePath, "locked")
+						must(os.Mkdir(locked, 0o755))
+						must(os.WriteFile(filepath.Join(locked, "f"), []byte("x"), 0o644))
+						must(os.Chmod(locked, 0o555))
+						t.Cleanup(func() { os.Chmod(locked, 0o755) })
+					}
+					if tc.kind == "prune-blocked" {
+						// git cannot read .git/config: remove fails, the rm
+						// fallback succeeds, prune fails.
+						blocked := filepath.Join(sess.Repository, ".git", "config")
+						must(os.Chmod(blocked, 0))
+						t.Cleanup(func() { os.Chmod(blocked, 0o755) })
 					}
 					if tc.kind == "gitdir-deleted" {
 						// git no longer knows the worktree: remove fails, the

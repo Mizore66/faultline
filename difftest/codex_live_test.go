@@ -959,8 +959,11 @@ func TestLiveRepairWithCodex(t *testing.T) {
 			if !slices.Equal(ts.seeds, gone.seeds) {
 				t.Errorf("named exec:/run: digests\nnode %q\ngo   %q", ts.seeds, gone.seeds)
 			}
-			if sc.native() && (len(gone.seeds) == 0) == (sc.wantExport == "ok") {
-				t.Errorf("exec:/run: digests named: %q, preventionExport %q", gone.seeds, gone.export)
+			// The frozen verifier's PASS writes an execution id (the exec:
+			// seed) whether or not the export that follows succeeds: a
+			// heterogeneous bundle fails the export after a PASS (Task 20).
+			if sc.native() && (len(gone.seeds) != 0) != (gone.status == "REPAIR_CANDIDATE_VERIFIED") {
+				t.Errorf("exec:/run: digests named: %q, status %s, preventionExport %q", gone.seeds, gone.status, gone.export)
 			}
 			if !slices.Equal(ts.tmpLeft, gone.tmpLeft) {
 				t.Errorf("TMPDIR left: node %v, go %v", ts.tmpLeft, gone.tmpLeft)

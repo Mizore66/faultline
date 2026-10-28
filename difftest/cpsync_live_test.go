@@ -104,6 +104,23 @@ var cpFixedCases = []struct {
 		os.Symlink("loop", filepath.Join(root, "loop"))
 		os.Symlink("../loop/x", filepath.Join(root, "s", "a"))
 	}},
+	{"source is a socket", func(root string) {
+		s := filepath.Join(root, "s")
+		os.Remove(s)
+		fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+		if err != nil {
+			panic(err)
+		}
+		defer syscall.Close(fd)
+		if err := syscall.Bind(fd, &syscall.SockaddrUnix{Name: s}); err != nil {
+			panic(err)
+		}
+	}},
+	{"source is a character device", func(string) {}}, // src is /dev/null itself: a device cannot be made without root
+	{"destination is the source", func(root string) {
+		os.WriteFile(filepath.Join(root, "s", "f"), []byte("f\n"), 0o644)
+		os.Symlink("s", filepath.Join(root, "out"))
+	}},
 	{"permission denied under a non-searchable dir", func(root string) {
 		os.MkdirAll(filepath.Join(root, "nos", "in"), 0o755)
 		os.Chmod(filepath.Join(root, "nos"), 0)
@@ -256,6 +273,10 @@ func TestLiveCpSyncTree(t *testing.T) {
 		nodeRoot, nodeOut, _ := strings.Cut(roots[1], "\x00")
 		mask := func(root, text string) string { return strings.ReplaceAll(text, root, "<R>") }
 
+		goSrc, nodeSrc := filepath.Join(goRoot, "s"), filepath.Join(nodeRoot, "s")
+		if fixed >= 0 && cpFixedCases[fixed].name == "source is a character device" {
+			goSrc, nodeSrc = "/dev/null", "/dev/null"
+		}
 		var got string
 		func() {
 			defer func() {
@@ -268,14 +289,14 @@ func TestLiveCpSyncTree(t *testing.T) {
 					got = "ABORT:terminate called after throwing an instance of 'std::filesystem::__cxx11::filesystem_error'\n  what():  filesystem error: " + a.what + "\n"
 				}
 			}()
-			if err := nodefs.CpSyncTree(filepath.Join(goRoot, "s"), goOut); err != nil {
+			if err := nodefs.CpSyncTree(goSrc, goOut); err != nil {
 				got = "THREW:" + err.Error()
 			} else {
 				got = "OK"
 			}
 		}()
 		got = mask(goRoot, got)
-		want := oracleText(t, c, "cpSyncTree", fmt.Sprintf(`{"src":%q,"dest":%q,"cwd":%q}`, filepath.Join(nodeRoot, "s"), nodeOut, nodeRoot))
+		want := oracleText(t, c, "cpSyncTree", fmt.Sprintf(`{"src":%q,"dest":%q,"cwd":%q}`, nodeSrc, nodeOut, nodeRoot))
 		want = mask(nodeRoot, want)
 		kind := "OK"
 		if strings.HasPrefix(want, "ABORT:") {

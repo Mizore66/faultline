@@ -106,6 +106,9 @@ func requireReached(t *testing.T, file, outputs string) {
 		if _, ok := unreachableLiterals[lit]; ok {
 			continue
 		}
+		if _, ok := liveOnlyUnreachable[lit]; ok {
+			continue
+		}
 		reached := true
 		for _, frag := range messageFragments(lit) {
 			reached = reached && strings.Contains(outputs, jsjson.Quote(frag)[1:len(jsjson.Quote(frag))-1])

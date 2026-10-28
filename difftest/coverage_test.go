@@ -294,6 +294,14 @@ var unreachableLiterals = map[string]string{
 	// Node 22 decodes a br response; Go does not and reports terminated
 	// (difftest/KNOWN_DIFFERENCES.md), so no case compares a br body.
 	"brotli is not supported": "a documented known difference: Node decodes br, and the Go text is never printed (the body read fails as terminated)",
+	// Slice 4c, internal/repair worktree.go (TestLiveRepairWorktree).
+	"must be a child of the managed repair root.":  "the four paths are fixed names joined to the managed root, so they are always its children",
+	"Repair managed root is not a real directory:": "race only: the managed root was created by mkdir just before",
+	"must not be a symbolic link:":                 "race only: git worktree add just created the worktree directory",
+	// Slice 4c, internal/codexloop/repair.go (TestSelectRepairBaseCommit and
+	// TestRepairBundleInvalid pin both texts).
+	"Proof bundle verification failed.":                              "Valid is len(errors)==0, so an invalid bundle always carries at least one error and the join is never empty",
+	"Verified investigation does not identify a repair base commit.": "a bundle the verifier accepted holds a resolved range whose descendant has a commit (semantic validation refuses a null range first)",
 	// Slice 4c Task 10: not an error text. repair.ProposeBrief parses
 	// redactValue's result with bundle.ParseValue, whose input the flow
 	// analysis counts as a message, so redactValue's returns become sites.
@@ -1186,6 +1194,13 @@ var liveGatedFiles = map[string]string{
 	// Docker-isolated proof with a transition and a witness digest, so the
 	// packet refusal is not reachable through the CLI.
 	"internal/repair/brief.go": "TestLiveRepairEvidencePacket",
+}
+
+// liveOnlyUnreachable are error texts in live-gated files outside gatedDirs
+// (so TestGoldensReachEveryErrorLiteral never sees them) that their live test
+// cannot reach, each with the reason; requireReached skips them.
+var liveOnlyUnreachable = map[string]string{
+	"Cannot copy an unknown file type:": "needs a source that is neither a file, directory, link, socket nor FIFO: a block device, which only root can make (a character device, /dev/null, copies as OK on both sides and is a fixed case of TestLiveCpSyncTree)",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally
