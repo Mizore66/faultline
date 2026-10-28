@@ -1,0 +1,9 @@
+[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+[user]
+	name = FaultLine Test
+	email = faultline@example.test
+[core]
+	logAllRefUpdates = false

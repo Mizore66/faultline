@@ -76,7 +76,8 @@ const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 // a file by its SHA-256, a symlink by its target, a directory, or anything
 // else (a FIFO); all but symlinks also carry their permission bits in octal
 // ("<sha256> 600", "dir 700"), since the stores are written 0600/0700.
-export function treeEntries(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes)): Map<string, string> {
+export function treeEntries(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes),
+  alias: (rel: string) => string | null = (rel) => rel): Map<string, string> {
   const out = new Map<string, string>();
   if (!existsSync(root)) return out;
   const walk = (rel: string) => {
@@ -85,10 +86,12 @@ export function treeEntries(root: string, fileDigest: (rel: string, bytes: Buffe
       const path = join(root, r);
       const stat = lstatSync(path);
       const mode = ` ${(stat.mode & 0o777).toString(8)}`;
-      if (stat.isSymbolicLink()) out.set(r, `symlink:${readlinkSync(path)}`);
-      else if (stat.isDirectory()) { out.set(r, `dir${mode}`); walk(r); }
-      else if (!stat.isFile()) out.set(r, `special${mode}`);
-      else out.set(r, `${fileDigest(r, readFileSync(path))}${mode}`);
+      const key = alias(r);
+      const set = (entry: string) => { if (key !== null) out.set(key, entry); };
+      if (stat.isSymbolicLink()) set(`symlink:${readlinkSync(path)}`);
+      else if (stat.isDirectory()) { set(`dir${mode}`); walk(r); }
+      else if (!stat.isFile()) set(`special${mode}`);
+      else set(`${fileDigest(r, readFileSync(path))}${mode}`);
     }
   };
   walk("");
@@ -144,7 +147,7 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 // generator verifies every bundle TS wrote against the root it printed, the
 // Go replay does the same, and TestWriterSameDirectory compares a subset
 // unmasked. The Go twin is relocation in difftest/writer_test.go.
-export type Relocation = { text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string };
+export type Relocation = { text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string; alias: (rel: string) => string | null };
 
 // Created Git objects and repaired-run digests (slice 4c Task 2). A case that
 // makes a commit records the case directory in its README blob, so the blob,
@@ -325,7 +328,7 @@ const FAKE_DOCKER_PASS_STDOUT = 'state=good\nFAULTLINE_WITNESS_RESULT={"protocol
 export function repairedRunSeeds(roots: CaseRoots, records: string[], commits: Map<string, string>, texts: Map<string, string>): [string, string][] {
   if (commits.size === 0) return [];
   const parse = (rel: string): any => { try { return JSON.parse(texts.get(rel) ?? ""); } catch { return undefined; } };
-  const passes: { policy: string; envPolicy: string; frozen: string; witness: string; environment: string }[] = [];
+  const passes: { policy: string; envPolicy: string; frozen: string; witness: string; environment: string | undefined }[] = [];
   for (const rel of [...texts.keys()].sort(byCodeUnit)) {
     const m = /^(.*\/)?runs\/[^/]+\.json$/.exec(rel);
     if (!m) continue;
@@ -333,11 +336,13 @@ export function repairedRunSeeds(roots: CaseRoots, records: string[], commits: M
     const run = parse(rel);
     if (run?.schemaVersion !== "faultline.git-investigation.v1" || run.result?.verdict !== "PASS" || run.result?.reason !== "PREDICATE_PASS") continue;
     const digests = parse(`${dir}investigation.json`)?.environment?.distinctDigests;
-    if (!Array.isArray(digests) || digests.length !== 1 || typeof digests[0] !== "string") continue;
+    // A heterogeneous bundle has no single environment digest: the exec:
+    // seed still exists (the verifier ran), but no run: seed does.
+    const environment = Array.isArray(digests) && digests.length === 1 && typeof digests[0] === "string" ? digests[0] : undefined;
     const frozen = parse(`${dir}witness/frozen.json`);
     const witness = typeof frozen?.witnessDigest === "string" ? frozen.witnessDigest : String(run.witnessDigest ?? "");
     passes.push({ policy: String(run.sandbox?.policyDigest ?? ""), envPolicy: String(run.sandbox?.environmentPolicyDigest ?? ""),
-      frozen: String(run.frozenDigest ?? ""), witness, environment: digests[0] });
+      frozen: String(run.frozenDigest ?? ""), witness, environment });
   }
   const appears = (hex: string): boolean => [...texts.values()].some((text) => text.includes(hex));
   const out: [string, string][] = [];
@@ -352,6 +357,7 @@ export function repairedRunSeeds(roots: CaseRoots, records: string[], commits: M
       if (seen.has(execution) || !appears(execution.slice(7))) continue;
       seen.add(execution);
       out.push([execution.slice(7), `exec:${normalizeWriter(w, roots)}`]);
+      if (p.environment === undefined) continue;
       for (const commit of [...commits.keys()].sort(byCodeUnit)) {
         for (let attempt = 1; attempt <= 3; attempt += 1) {
           const run = digestJson({
@@ -439,6 +445,13 @@ export function openAIRequestInputs(records: string[]): string[] {
   });
 }
 
+const WORKTREE_GITDIR = /(?:^|\/)\.git\/worktrees\/[^/]+\/gitdir$/;
+// WORKTREE_REFS is the empty refs directory that newer Git versions (2.54)
+// make in a linked worktree's administrative directory and older ones (2.39)
+// do not: Git's own layout, left out of the comparison.
+const WORKTREE_REFS = /(?:^|\/)\.git\/worktrees\/[^/]+\/refs$/;
+const LOOSE_OBJECT = /^(?:(.*)\/)?\.git\/objects\/([0-9a-f]{2})\/([0-9a-f]{38}|[0-9a-f]{62})$/;
+const FAN_OUT =/^(?:(.*)\/)?\.git\/objects\/([0-9a-f]{2})$/;
 export function relocation(roots: CaseRoots, records: string[] = [], base?: GitBase): Relocation {
   const files: [string, Buffer, string][] = [];
   const walk = (rel: string) => {
@@ -532,17 +545,52 @@ export function relocation(roots: CaseRoots, records: string[] = [], base?: GitB
     for (const d of sorted) out = out.split(`${d.slice(0, 8)}...${d.slice(-8)}`).join(`<PATHDIGEST:${names.get(d)}:short>`);
     return out;
   };
+  // alias names the entries whose paths hold a created object's id: a loose
+  // object the case created is renamed to its content name; an object that
+  // existed before the case, or one in the turn-snapshot store, keeps its
+  // path. Two Git-layout entries are left out, each only where its exact
+  // condition holds: a fan-out directory .git/objects/<xx> that no object
+  // from before the case lives in and that holds nothing but created loose
+  // objects (its name is an id prefix), and the EMPTY directory
+  // .git/worktrees/<name>/refs that Git 2.54 makes in a linked worktree's
+  // administrative directory and the pinned 2.39.5 does not. A non-empty
+  // refs directory, a file or symlink of that name, and every other path
+  // stay compared. The Go twin is relocated.alias.
+  const alias = (rel: string): string | null => {
+    const abs = join(roots.ws, rel);
+    if (WORKTREE_REFS.test(rel)) {
+      return lstatSync(abs).isDirectory() && readdirSync(abs).length === 0 ? null : rel;
+    }
+    const loose = LOOSE_OBJECT.exec(rel);
+    if (loose && ids.has(`${loose[2]}${loose[3]}`) && created.get(loose[1] ?? ".")?.has(`${loose[2]}${loose[3]}`)) {
+      return `${loose[1] === undefined ? "" : `${loose[1]}/`}.git/objects/${ids.get(`${loose[2]}${loose[3]}`)}`;
+    }
+    const fan = FAN_OUT.exec(rel);
+    if (fan && base) {
+      const repo = fan[1] ?? ".";
+      if ([...(base.objects.get(repo) ?? [])].some((id) => id.startsWith(fan[2]!))) return rel;
+      const names = readdirSync(abs);
+      if (names.length > 0 && names.every((name) => created.get(repo)?.has(`${fan[2]}${name}`))) return null;
+    }
+    return rel;
+  };
   return {
     text,
+    alias,
     fileDigest: (rel, bytes) => {
       if (isGitIndex(rel)) return gitIndexDigest(dirname(join(roots.ws, rel)), bytes);
       const object = snapshotObjectDigest(rel);
       if (object !== undefined) return object;
-      const loose = /^(?:(.*)\/)?\.git\/objects\/([0-9a-f]{2})\/([0-9a-f]{38}|[0-9a-f]{62})$/.exec(rel);
+      const loose = LOOSE_OBJECT.exec(rel);
       if (loose && ids.has(`${loose[2]}${loose[3]}`) && created.get(loose[1] ?? ".")?.has(`${loose[2]}${loose[3]}`)) {
         return sha256(`git-object:${ids.get(`${loose[2]}${loose[3]}`)}`);
       }
       if (base && REFLOG.test(rel) && base.logs.get(rel) !== sha256(bytes)) return sha256(text(maskReflogTimes(bytes.toString("utf8"))));
+      // A linked worktree's gitdir file holds the absolute path of the
+      // worktree's .git file (slice 4c Task 20, --keep-worktree): hashed by
+      // its text with the case paths masked. The Go twin is fileDigest in
+      // difftest/writer_test.go.
+      if (WORKTREE_GITDIR.test(rel)) return sha256(text(bytes.toString("utf8")));
       return names.has(sha256(bytes)) ? sha256(text(bytes.toString("utf8"))) : sha256(bytes);
     }
   };
@@ -861,7 +909,8 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     // is snapshotGit in runWriterCaseWith).
     const base = snapshotGit(roots.ws);
     for (const [inv, argv] of t.argv.entries()) {
-      const before = treeEntries(roots.ws, relocation(roots, records, base).fileDigest);
+      const beforeReloc = relocation(roots, records, base);
+      const before = treeEntries(roots.ws, beforeReloc.fileDigest, beforeReloc.alias);
       rmSync(roots.argvLog, { force: true });
       const args = argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts));
       const r = await runCli(roots, args, writerEnv(roots, t.id, t.fakeDocker, invocationEnv(t, roots), t.fakeTools, t.pathTools, fakes));
@@ -874,8 +923,8 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       const invocationRecords = readArgvLog(roots.argvLog).map((record) => maskCodexPath(record, roots, repo, process.env.PATH ?? ""));
       records.push(...invocationRecords);
       const reloc = relocation(roots, records, base);
-      const after = treeEntries(roots.ws, reloc.fileDigest);
-      const tree = treeDigest(roots.ws, reloc.fileDigest);
+      const after = treeEntries(roots.ws, reloc.fileDigest, reloc.alias);
+      const tree = treeDigest(roots.ws, reloc.fileDigest, reloc.alias);
       // After the tree and the argv log are read, like the Go replay.
       await crossVerify(t.id, inv, roots, r.stdout, args);
       // Windows runs no sh recorder: a case that records argv is POSIX-only.

@@ -6,7 +6,7 @@
 //   pnpm build && pnpm exec tsx difftest/gen/scenarios.ts
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -471,13 +471,16 @@ const witnessInput = (options: { overlays?: { path: string; text: string }[]; ti
 const FREEZE_IN_REPO = ["witness", "freeze", PROPOSAL_ID, "--repo", "repo"];
 const repeat = (value: string, n: number): RepoState[] => Array.from({ length: n }, () => state(value));
 function gitScenario(states: RepoState[], options: {
-  objectFormat?: "sha1" | "sha256"; proposal?: string; extra?: (repo: BuiltRepo) => Record<string, string>; hostile?: Hostile
+  objectFormat?: "sha1" | "sha256"; proposal?: string; extra?: (repo: BuiltRepo) => Record<string, string>; hostile?: Hostile;
+  // config is appended to repo/.git/config (slice 4c Task 20).
+  config?: string
 } = {}): Scenario {
   return {
     files: { "proposal.json": options.proposal ?? witnessInput() },
     setup: (ws) => {
       const repo = buildRepo(ws, "repo", states, options.objectFormat, options.hostile);
       for (const [path, text] of Object.entries(options.extra?.(repo) ?? {})) writeFileSync(join(ws, path), text);
+      if (options.config !== undefined) appendFileSync(join(ws, "repo", ".git", "config"), options.config);
     },
     argv: [PROPOSE, APPROVE, FREEZE_IN_REPO]
   };
@@ -1116,6 +1119,19 @@ SCENARIOS["repair-package"] = {
   bases: { bundle: "git-unbound" }, files: repairBriefFiles(),
   argv: [["repair", "brief", "--input", "brief.json", "--bundle", "bundle", "--output", ".faultline/repair-briefs/pkg"]]
 };
+
+// fl repair --bundle (slice 4c Task 20). repair-repo is the git-unbound
+// repository (gitScenario(GOOD_BAD_REPAIRED)) with the frozen witness, plus
+// a committer identity (a repair commits the repaired worktree state; without
+// [user] git's error names the machine) and no reflog (logAllRefUpdates =
+// false keeps reflog times out of the files). repair-heterogeneous is the
+// git-heterogeneous repository with the same config.
+const REPAIR_CONFIG = "[user]\n\tname = FaultLine Test\n\temail = faultline@example.test\n[core]\n\tlogAllRefUpdates = false\n";
+SCENARIOS["repair-repo"] = gitScenario(GOOD_BAD_REPAIRED, { config: REPAIR_CONFIG });
+SCENARIOS["repair-heterogeneous"] = gitScenario([state("good", { "package.json": "{\"name\":\"demo\",\"version\":\"1.0.0\"}\n" }),
+  state("bad", { "package.json": "{\"name\":\"demo\",\"version\":\"2.0.0\"}\n" })], {
+  extra: (repo) => ({ "runtime-mapping.json": runtimeMapping(repo, [PINNED_IMAGE, OTHER_IMAGE]) }), config: REPAIR_CONFIG
+});
 
 // witness-implement: the incident packets `fl witness implement --incident`
 // reads (raw readFileSync + JSON.parse).

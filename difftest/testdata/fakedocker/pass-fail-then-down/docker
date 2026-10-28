@@ -1,0 +1,25 @@
+#!/bin/sh
+# Fake Docker "pass-fail-then-down" (README.md): the first nine `run`s (the
+# three states of an `investigate git --from HEAD~2 --to HEAD`, three
+# executions each) play back `pass-fail`; every later one is the
+# `daemon-down` refusal. The count is kept in $FAULTLINE_FAKE_DOCKER_STATE
+# (a writer case sets it to <TMP>), or else beside the script. It lets a
+# case's second invocation (fl repair --bundle) meet a daemon that went away
+# after the investigation. `rm` succeeds silently.
+case "$1" in
+rm) exit 0 ;;
+run)
+  here=$(dirname "$0")
+  counter="${FAULTLINE_FAKE_DOCKER_STATE:-$here}/pass-fail-then-down-runs"
+  runs=$(cat "$counter" 2>/dev/null || echo 0)
+  runs=$((runs + 1))
+  printf '%s' "$runs" > "$counter"
+  if [ "$runs" -gt 9 ]; then
+    printf 'docker: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n' >&2
+    exit 1
+  fi
+  exec "$here/../pass-fail/docker" "$@"
+  ;;
+esac
+printf 'fake docker (pass-fail-then-down): unsupported command: %s\n' "$1" >&2
+exit 125
