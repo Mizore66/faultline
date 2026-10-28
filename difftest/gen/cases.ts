@@ -443,22 +443,33 @@ export function caseEnv(c: Case, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...env, PATH: `${dir}:${env.PATH ?? ""}` };
 }
 
-export function treeDigest(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes)): string {
+// treeDigest hashes the tree under root. alias (the writer replay's
+// relocation.alias) renames a path whose name holds a case-dependent Git
+// object id, or returns null to leave the entry out. A renamed line goes
+// last, sorted, since its order would follow the ids; an unchanged path
+// keeps its place, so a tree without such paths hashes as before.
+export function treeDigest(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes),
+  alias: (rel: string) => string | null = (rel) => rel): string {
   const lines: string[] = [];
+  const moved: string[] = [];
   if (!existsSync(root)) return sha256(""); // remove-root; Go lists nothing either
   const walk = (rel: string) => {
     for (const name of readdirSync(join(root, rel)).sort(byCodeUnit)) {
       const r = rel ? `${rel}/${name}` : name;
       const path = join(root, r);
       const stat = lstatSync(path);
-      if (stat.isSymbolicLink()) lines.push(`L ${r} ${readlinkSync(path)}`);
-      else if (stat.isDirectory()) { lines.push(`D ${r}`); walk(r); }
-      else if (!stat.isFile()) lines.push(`S ${r}`); // a FIFO: reading it would block
-      else lines.push(`F ${r} ${fileDigest(r, readFileSync(path))}`);
+      const shown = alias(r);
+      const add = (kind: string, rest: string) => {
+        if (shown !== null) (shown === r ? lines : moved).push(`${kind} ${shown}${rest}`);
+      };
+      if (stat.isSymbolicLink()) add("L", ` ${readlinkSync(path)}`);
+      else if (stat.isDirectory()) { add("D", ""); walk(r); }
+      else if (!stat.isFile()) add("S", ""); // a FIFO: reading it would block
+      else add("F", ` ${fileDigest(r, readFileSync(path))}`);
     }
   };
   walk("");
-  return sha256(lines.join("\n"));
+  return sha256([...lines, ...moved.sort(byCodeUnit)].join("\n"));
 }
 
 export const GIT_LABELS = [

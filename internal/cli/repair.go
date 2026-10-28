@@ -3,19 +3,22 @@ package cli
 import (
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/Mizore66/faultline/internal/bundle"
+	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/clock"
+	"github.com/Mizore66/faultline/internal/codexloop"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
 	"github.com/Mizore66/faultline/internal/proofview"
 	"github.com/Mizore66/faultline/internal/redaction"
 	"github.com/Mizore66/faultline/internal/repair"
+	"github.com/Mizore66/faultline/internal/sandbox"
 )
 
-// Port of src/cli-app.ts:2672 repairCommand. The --bundle (Codex) branch is
-// Task 20; until then it stays unported.
+// Port of src/cli-app.ts:2672 repairCommand.
 func repairCommand(e *env, args []string) error {
 	if len(args) > 0 && args[0] == "verify" {
 		var directory string
@@ -35,7 +38,7 @@ func repairCommand(e *env, args []string) error {
 		return nil
 	}
 	if hasFlag(args, "--bundle") && (len(args) == 0 || args[0] != "brief") {
-		return fail("not yet ported: repair --bundle")
+		return e.repairBundle(args)
 	}
 	if len(args) == 0 || args[0] != "brief" {
 		return fail("Usage: fl repair --bundle <dir> --expect-root <digest> [--with-codex] | fl repair brief|verify ...")
@@ -122,5 +125,59 @@ func (e *env) repairBrief(args []string) error {
 		"evidencePacketDigest", packet.Get("packetDigest"), "repairBriefDigest", manifest.Get("repairBrief", "digest"),
 		"privacy", obj("packet", packetReport.JSON(), "candidate", candidateReport.JSON()),
 		"limitation", "INFERRED repair guidance is not an executed verdict, proof of model intent, a unique semantic cause, or an identified culprit."))
+	return nil
+}
+
+// repairExitCode ports the exit-code ternary of src/cli-app.ts:2724: 1 for
+// the four failing statuses, 0 for every other (CODEX_UNAVAILABLE included).
+func repairExitCode(status string) int {
+	switch status {
+	case "BUNDLE_INVALID", "REPAIR_SETUP_FAILED", "REPAIR_VERIFICATION_FAILED", "WORKTREE_CLEANUP_FAILED":
+		return 1
+	}
+	return 0
+}
+
+// repairBundle ports the --bundle branch (src/cli-app.ts:2687-2730). The
+// options are evaluated in the TS literal's order; the default output reads
+// the clock (Date.now) only without --output.
+func (e *env) repairBundle(args []string) error {
+	var o codexloop.RepairOptions
+	bundleOption, err := requiredOption(args, "--bundle")
+	if err != nil {
+		return err
+	}
+	o.BundleDirectory = nodefs.Resolve(bundleOption)
+	if o.ExpectRoot, err = requiredOption(args, "--expect-root"); err != nil {
+		return err
+	}
+	repo, ok := option(args, "--repo")
+	if !ok {
+		repo = jsexc.Must(nodefs.Cwd())
+	}
+	o.Repository = nodefs.Resolve(repo)
+	output, ok := option(args, "--output")
+	if !ok {
+		output = nodefs.Join(".faultline", "repairs", "repair-"+strconv.FormatInt(clock.NowMillis(), 10))
+	}
+	o.OutputDirectory = nodefs.Resolve(output)
+	o.WithCodex = hasFlag(args, "--with-codex")
+	o.InstructionsOnly = hasFlag(args, "--instructions-only")
+	o.KeepWorktree = hasFlag(args, "--keep-worktree")
+	o.VerifyBundle = func(directory, expectRoot string) (bool, []string, *string) {
+		verification := gitproof.Verify(directory, expectRoot, true)
+		return verification.Valid, append([]string{}, verification.Errors...), verification.RootDigest
+	}
+	if o.WithCodex {
+		o.VerifyCandidate = codexloop.FrozenWitnessVerifier(sandbox.NativeRunner(), false)
+		o.Runner = codexloop.CLIRunner(hasFlag(args, "--allow-codex-full-auto"),
+			"Codex repair drafting requires explicit --allow-codex-full-auto in addition to --with-codex.", 180*time.Second)
+	}
+	result, err := codexloop.RepairWithCodex(o)
+	if err != nil {
+		return err
+	}
+	e.printJSON(result)
+	e.exitCode = repairExitCode(result.Get("status").Str())
 	return nil
 }

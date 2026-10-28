@@ -273,7 +273,6 @@ var unreachableLiterals = map[string]string{
 	"Collected repaired run digests were not distinct.": "each run id digests its attempt number, so the three always differ (src/prevention-from-artifacts.ts:535)",
 	// Slice 4c Task 18 (internal/cli/repair.go).
 	"Repair evidence packet changed during redaction and cannot be safely correlated to the verified investigation.": "src/cli-app.ts:2770: the packet holds only digests, fixed statements and counts, which redactValue never rewrites (a changed digest needs a secret-shaped packet field)",
-	"not yet ported: repair --bundle": "Task 20 replaces this stub with the Codex path (src/cli-app.ts:2678), which runs for real in TS; drop this row there",
 	// Slice 4c Task 10: not an error text. repair.ProposeBrief parses
 	// redactValue's result with bundle.ParseValue, whose input the flow
 	// analysis counts as a message, so redactValue's returns become sites.

@@ -150,6 +150,104 @@ func TestRepairedRunSeedsNameExecutionAndRuns(t *testing.T) {
 	}
 }
 
+// relocated.alias renames only the loose objects the case created, and
+// leaves out only an all-created fan-out directory and an EMPTY linked
+// worktree refs directory (slice 4c Task 20). Pre-existing objects, a
+// non-empty refs directory, a file named refs and a fan-out directory
+// holding anything else stay compared.
+func TestAliasScopes(t *testing.T) {
+	r := makeWriterRoots(t)
+	mk := func(rel string, dir bool, content string) {
+		p := filepath.Join(r.ws, filepath.FromSlash(rel))
+		if dir {
+			if err := os.MkdirAll(p, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	idNew := "ab" + strings.Repeat("1", 38)
+	idOld := "cd" + strings.Repeat("2", 38)
+	idOther := "ef" + strings.Repeat("3", 38)
+	mk(".git/objects/ab/"+idNew[2:], false, "x")
+	mk(".git/objects/cd/"+idOld[2:], false, "x")
+	mk(".git/objects/ef/"+idOther[2:], false, "x")
+	mk(".git/objects/ef/"+strings.Repeat("4", 38), false, "x")
+	mk(".git/worktrees/w1/refs", true, "")
+	mk(".git/worktrees/w2/refs/heads/x", false, "x")
+	mk(".git/worktrees/w3/refs", false, "x")
+	rel := &relocated{roots: r,
+		base:    &gitBase{objects: map[string]map[string]bool{".": {idOld: true}}},
+		created: map[string]map[string]string{".": {idNew: "blob", idOther: "blob"}},
+		ids:     map[string]string{idNew: "<BLOB:abcdef012345>", idOther: "<BLOB:111111111111>"}}
+	want := func(path, name string, shown bool) {
+		t.Helper()
+		if got, ok := rel.alias(path); got != name || ok != shown {
+			t.Errorf("%s: %q %v, want %q %v", path, got, ok, name, shown)
+		}
+	}
+	want(".git/objects/ab/"+idNew[2:], ".git/objects/<BLOB:abcdef012345>", true) // created loose object: named
+	want(".git/objects/cd/"+idOld[2:], ".git/objects/cd/"+idOld[2:], true)       // existed before: kept
+	want(".git/objects/ab", "", false)                                           // only created objects live there
+	want(".git/objects/cd", ".git/objects/cd", true)                             // a pre-existing object lives there
+	want(".git/objects/ef", ".git/objects/ef", true)                             // holds an object that is not created
+	want(".git/worktrees/w1/refs", "", false)                                    // empty directory: left out
+	want(".git/worktrees/w2/refs", ".git/worktrees/w2/refs", true)               // non-empty: compared
+	want(".git/worktrees/w3/refs", ".git/worktrees/w3/refs", true)               // a file: compared
+	want(".git/worktrees/w2/refs/heads/x", ".git/worktrees/w2/refs/heads/x", true)
+}
+
+// A linked worktree's gitdir file is compared by its masked text: the same
+// relationship at another case root matches, a different target does not.
+func TestWorktreeGitdirComparesMaskedText(t *testing.T) {
+	a, b := makeWriterRoots(t), makeWriterRoots(t)
+	path := ".git/worktrees/worktree/gitdir"
+	text := func(r writerRoots, tail string) []byte {
+		return []byte(filepath.Join(r.ws, ".faultline", "repairs", "repair-1", tail) + "\n")
+	}
+	da := relocation(t, a, nil, nil).fileDigest(path, text(a, "worktree/.git"))
+	db := relocation(t, b, nil, nil).fileDigest(path, text(b, "worktree/.git"))
+	if da != db {
+		t.Fatal("the same relationship at independent roots must compare equal")
+	}
+	if dc := relocation(t, b, nil, nil).fileDigest(path, text(b, "other/.git")); dc == db {
+		t.Fatal("a different target must differ")
+	}
+}
+
+// A heterogeneous bundle (two environment digests) gets the exec: seed from
+// the run's own policy digests, and no run: seed: its repaired runs are never
+// collected. A wrong policy digest names nothing.
+func TestRepairedRunSeedsHeterogeneous(t *testing.T) {
+	r := makeWriterRoots(t)
+	worktree := filepath.Join(r.root, "managed", "worktree")
+	records := []string{"git -C\x1f" + worktree}
+	d := func(c string) string { return "sha256:" + strings.Repeat(c, 64) }
+	run := `{"schemaVersion":"faultline.git-investigation.v1","frozenDigest":"` + d("a") + `","witnessDigest":"` + d("b") +
+		`","result":{"verdict":"PASS","reason":"PREDICATE_PASS"},"sandbox":{"policyDigest":"` + d("c") + `","environmentPolicyDigest":"` + d("d") + `"}}`
+	inv := `{"environment":{"distinctDigests":["` + d("e") + `","` + d("f") + `"]}}`
+	execution := func(policy string) string {
+		return canonicalDigest(t, `{"kind":"faultline.repair-verify-execution.v1","executor":"NATIVE_DOCKER","verdict":"PASS","reason":"PREDICATE_PASS","policyDigest":"`+policy+
+			`","environmentPolicyDigest":"`+d("d")+`","exitCode":0,"stdoutDigest":"sha256:773bb529c40df319318e7267118a3290e3fe3d67bac13808329f2e9a465b6a1f","stderrDigest":"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","worktree":"`+worktree+`","frozenDigest":"`+d("a")+`"}`)
+	}
+	commits := map[string]string{strings.Repeat("1", 40): strings.Repeat("2", 40)}
+	texts := map[string]string{"bundle/runs/x.json": run, "bundle/investigation.json": inv, "prevention-export.json": execution(d("9"))}
+	if got := repairedRunSeeds(t, r, records, commits, texts); len(got) != 0 {
+		t.Fatalf("an execution id built from another policy must name nothing: %v", got)
+	}
+	texts["prevention-export.json"] = execution(d("c"))
+	got := repairedRunSeeds(t, r, records, commits, texts)
+	if len(got) != 1 || got[0][1] != "exec:"+normalizeWriter(worktree, r) {
+		t.Fatalf("want only the exec: seed: %v", got)
+	}
+}
+
 func canonicalDigest(t *testing.T, text string) string {
 	t.Helper()
 	v, err := jsjson.Parse(text)

@@ -38,6 +38,7 @@ Protocol:
 | `broken-state` | `pass-fail`, except that `state.txt` = `broken` plays `compile-error` (stderr `witness.mjs:3` and `SyntaxError: Unexpected token '}'`, exit 1): an unstable state between a PASS and a FAIL state. |
 | `slow` | `pass-fail` after `sleep 1` on `run`, for the release-build clock check (`difftest/release`). |
 | `tmpdir-swap` | moves `$TMPDIR` to `$TMPDIR.moved` and leaves an empty file in its place (once), then stdout a `PREDICATE_PASS` result line, exit 0: fl's cleanup of its temporary root then fails `lstat` with ENOTDIR. |
+| `pass-fail-then-down` | `pass-fail` for the first nine `run`s (the three states of an `investigate git --from HEAD~2 --to HEAD`, three executions each), then the `daemon-down` refusal; it counts runs in `$FAULTLINE_FAKE_DOCKER_STATE` (a writer case sets it to `<TMP>`) or else beside the script. A case's `fl repair --bundle` after such an investigation meets a daemon that went away. |
 
 `fl runtime` (curated and project images) uses a second protocol: `docker
 image inspect --format {{json .RepoDigests}} <ref>`, `docker pull <tag>`
@@ -55,7 +56,7 @@ unsupported command: <cmd>`).
 | `runtime-slow` | `exec sleep 6`, past the 5 s inspect timeout | as `runtime-digest` | as `runtime-digest` |
 | `runtime-flood` | 70,000 bytes of stdout, past the 65,536-byte inspect cap | as `runtime-digest` | as `runtime-digest` |
 
-None of them reads `state.txt` except `pass-fail`, `odd-bad`, `pair-bad`, `broken-state` and the three that play `pass-fail` back. Long-running children are
+None of them reads `state.txt` except `pass-fail`, `odd-bad`, `pair-bad`, `broken-state` and the four that play `pass-fail` back. Long-running children are
 started with `exec`, so a SIGKILL to the pid the runner spawned (the
 recorder, which also execs) reaches the process holding the pipes. Keep the
 outputs fixed text: goldens compare them byte for byte.
