@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,17 +39,13 @@ var sidecarGatedFiles = []string{"internal/sidecar/hook.go", "internal/sidecar/r
 // reaches: races with the filesystem or a Git invariant. (Task 9 moves them
 // into coverage_test.go's unreachableLiterals.)
 var sidecarUnreachable = map[string]string{
-	"The sidecar ledger has no SESSION_STARTED event.":                     "a verified ledger always begins with SESSION_STARTED",
 	"A recorded checkpoint result requires a checkpoint digest.":           "checkpointResult is only called with a checkpoint for CHECKPOINT_RECORDED",
 	"The sidecar stop receipt omitted its checkpoint digest.":              "assertReceiptMatchesLedger compares the digest with the ledger's first and refuses a receipt without one",
 	"A checkpoint receipt requires a checkpoint digest.":                   "writeReceipt only gets a RECORDED result that carries its digest",
 	"A turn snapshot receipt requires a turn tree snapshot digest.":        "a TURN_SNAPSHOT_RECORDED result always carries its snapshot",
 	"Only Stop checkpoint outcomes can be persisted as a sidecar receipt.": "writeReceipt is only called with the four Stop statuses",
-	"FaultLine could not recover a stale sidecar lock:":                    "race only: the stale lock was lstat'ed in a writable recordings directory just before",
-	"valid recordings without comparable last-event timestamps.":           "every valid ledger has at least SESSION_STARTED, hence a last event",
 	"session-start":    "event id phase strings reach a message only through appendIfAbsent, which SessionStart does not use",
 	"session-baseline": "event id phase strings reach a message only through appendIfAbsent, which SessionStart does not use",
-	"FaultLine sidecar recordings must be a real directory, not a symlink or file.": "reached through a symlinked recordings directory by the storage code; the gated files only repeat it after a race",
 }
 
 // sidecarOutcomeJSON is oracle-sidecar.ts's sidecarOutcome: {result, stderr}
@@ -222,6 +219,15 @@ func applyHookOp(t *testing.T, work, cwd, session string, seq, step int, op gen.
 		os.Rename(ledgerPath, real)
 		os.Symlink(filepath.Base(real), ledgerPath)
 		cleanup = ledgerPath
+	case "x:ro-lock":
+		// A stale lock in a read-only recordings directory: open(O_EXCL)
+		// reports EEXIST, then the unlink is refused (EACCES, any non-root user).
+		lock := ledgerPath + ".sidecar.lock"
+		os.WriteFile(lock, []byte("stale\n"), 0o600)
+		mtime := time.UnixMilli(seededEpochMillis - sidecarStaleAge)
+		os.Chtimes(lock, mtime, mtime)
+		os.Chmod(recordings, 0o555)
+		cleanup = "ro:" + recordings
 	case "x:lock-dir":
 		os.Mkdir(ledgerPath+".sidecar.lock", 0o700)
 		cleanup = ledgerPath + ".sidecar.lock"
@@ -234,6 +240,14 @@ func applyHookOp(t *testing.T, work, cwd, session string, seq, step int, op gen.
 // sidecarRestore undoes a step's planted fresh lock or storage symlink.
 func sidecarRestore(target string) {
 	if target == "" {
+		return
+	}
+	if dir, ok := strings.CutPrefix(target, "ro:"); ok { // the planted read-only recordings directory
+		os.Chmod(dir, 0o700)
+		matches, _ := filepath.Glob(filepath.Join(dir, "*.sidecar.lock"))
+		for _, m := range matches {
+			os.Remove(m)
+		}
 		return
 	}
 	if info, err := os.Lstat(target); err == nil && info.Mode()&fs.ModeSymlink != 0 {
@@ -280,9 +294,12 @@ func sidecarManifest(dir string) string {
 }
 
 // maskSidecarPID replaces a side's own process id in a receipt stage name
-// (".<24 hex>.<pid>.tmp"), which differs between the two sides.
+// (".<24 lowercase hex>.<pid>.tmp", the pid being its own), which differs
+// between the two sides. Nothing else is touched: not another ".<pid>.tmp",
+// not another pid, not a stage key that is not 24 lowercase hex digits.
 func maskSidecarPID(s string, pid int) string {
-	return strings.ReplaceAll(s, "."+strconv.Itoa(pid)+".tmp", ".<PID>.tmp")
+	re := regexp.MustCompile(`(\.[a-f0-9]{24}\.)` + strconv.Itoa(pid) + `\.tmp`)
+	return re.ReplaceAllString(s, "${1}<PID>.tmp")
 }
 
 type sidecarStep struct{ result, inspect, manifest string }
@@ -317,17 +334,18 @@ func TestLiveSidecarHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := strings.TrimSpace(string(gitDir)) + ":/usr/bin:/bin"
-	const random, allStores = 400, 100
+	const random, randomStores = 400, 100
+	const allStores = randomStores + 3 // plus three stores of empty valid ledgers
 	directed := directedSequences()
 	total := random + len(directed)
-	n, first, stores := total, 0, allStores
+	n, first, stores, storesFrom := total, 0, allStores, 0
 	if window := os.Getenv("FAULTLINE_SIDECAR_SEQS"); window != "" {
 		a, b, ok := strings.Cut(window, ":")
 		var errA, errB error
 		first, errA = strconv.Atoi(a)
 		n, errB = strconv.Atoi(b)
-		if !ok || errA != nil || errB != nil || first < 0 || first >= n || n > total {
-			t.Fatalf("FAULTLINE_SIDECAR_SEQS=%q: want first:end with 0 <= first < end <= %d", window, total)
+		if !ok || errA != nil || errB != nil || first < 0 || first > n || n > total || (first == n && n != total) {
+			t.Fatalf("FAULTLINE_SIDECAR_SEQS=%q: want first:end with 0 <= first <= end <= %d", window, total)
 		}
 	}
 	// FAULTLINE_SIDECAR_STORES=<k> runs only k of the 100 stores (default 0
@@ -341,8 +359,15 @@ func TestLiveSidecarHooks(t *testing.T) {
 			}
 			stores = k
 		}
+		if v := os.Getenv("FAULTLINE_SIDECAR_STORES_FROM"); v != "" {
+			m, err := strconv.Atoi(v)
+			if err != nil || m < 0 || m > stores {
+				t.Fatalf("FAULTLINE_SIDECAR_STORES_FROM=%q: want 0..%d", v, stores)
+			}
+			storesFrom = m
+		}
 	}
-	fullRun := first == 0 && n == total && stores == allStores
+	fullRun := first == 0 && n == total && stores == allStores && storesFrom == 0
 
 	r := rand.New(rand.NewPCG(73, 6))
 	var seqs []sidecarSequence
@@ -415,18 +440,27 @@ func TestLiveSidecarHooks(t *testing.T) {
 			}
 			defer os.Chdir(startCwd)
 		}
+		pendingRestore := ""
 		pid := tsPid
 		if side == "go" {
 			pid = os.Getpid()
 		}
 		for si, step := range s.steps {
 			fresh := applyHookOp(t, work, cwd, s.session, i, si, step.Op, pid)
+			if pendingRestore != "" && fresh == "" {
+				fresh, pendingRestore = pendingRestore, ""
+			}
 			doc := step.Event.JSON(cwd)
 			value, perr := jsjson.Parse(string(doc))
 			if perr != nil {
 				// A malformed document never reaches recordObservedCodexHook:
 				// the CLI refuses it first (Task 8). Both sides skip it.
 				out = append(out, sidecarStep{result: "unparseable"})
+				// An op on a document the CLI refuses stays in place for the
+				// next step, which is what it is there for.
+				if fresh != "" {
+					pendingRestore = fresh
+				}
 				continue
 			}
 			var res, ins string
@@ -475,8 +509,18 @@ func TestLiveSidecarHooks(t *testing.T) {
 
 	total2 := n + stores
 	var storePlans []storePlan
-	for k := 0; k < stores; k++ {
-		storePlans = append(storePlans, randomStorePlan(r, k))
+	for k := 0; k < allStores; k++ {
+		if k < randomStores {
+			storePlans = append(storePlans, randomStorePlan(r, k))
+			continue
+		}
+		// One empty valid ledger, two, and one empty with a real one.
+		empty := func(n int) storeSession {
+			return storeSession{id: "store-" + strconv.Itoa(k) + "-" + strconv.Itoa(n), occurredAt: storeTimes[0], breakage: "empty"}
+		}
+		real := storeSession{id: "store-" + strconv.Itoa(k) + "-r", occurredAt: storeTimes[1]}
+		plan := []storePlan{{[]storeSession{empty(0)}}, {[]storeSession{empty(0), empty(1)}}, {[]storeSession{empty(0), real}}}[k-randomStores]
+		storePlans = append(storePlans, plan)
 	}
 	goResults := make([][]sidecarStep, total2)
 	jobs := make(chan int, total2)
@@ -547,7 +591,11 @@ func TestLiveSidecarHooks(t *testing.T) {
 			t.FailNow()
 		}
 	}
+	prev := -1
 	for i := first; i < total2; i++ {
+		if i >= n && i-n < storesFrom {
+			continue
+		}
 		if i < n {
 			tsResults[i] = run(i, "ts")
 		} else {
@@ -557,11 +605,14 @@ func TestLiveSidecarHooks(t *testing.T) {
 			t.FailNow()
 		}
 		jobs <- i
-		if i > first {
-			compare(i - 1)
+		if prev >= 0 {
+			compare(prev)
 		}
+		prev = i
 	}
-	compare(total2 - 1)
+	if prev >= 0 {
+		compare(prev)
+	}
 
 	if ts, goTick := oracleCall(t, c, "seededTick", "null"), clock.NowMillis()-seededEpochMillis; ts != strconv.FormatInt(goTick, 10) {
 		t.Fatalf("oracle clock at %s, Go clock at %d", ts, goTick)
@@ -581,7 +632,7 @@ func TestLiveSidecarHooks(t *testing.T) {
 	reached := map[string]int{}
 	for _, marker := range []string{
 		`"status":"SESSION_STARTED"`, `"status":"TURN_STARTED"`, `"status":"TOOL_USE_STARTED"`, `"status":"TOOL_USE_COMPLETED"`,
-		`"status":"CHECKPOINT_RECORDED"`, `"status":"CHECKPOINT_SKIPPED_DIRTY"`, `"status":"CHECKPOINT_SKIPPED_UNAVAILABLE"`,
+		`"status":"CHECKPOINT_RECORDED"`, `"status":"TURN_SNAPSHOT_RECORDED"`, `"status":"CHECKPOINT_SKIPPED_DIRTY"`, `"status":"CHECKPOINT_SKIPPED_UNAVAILABLE"`,
 		"Another FaultLine sidecar event is still recording", "EEXIST", "Contradictory sidecar stop receipt", "Invalid sidecar stop receipt",
 		`"state":"STALE"`, `"state":"ACTIVE"`, "FaultLine sidecar storage must be a real directory", "FaultLine snapshot warning",
 		"valid recordings share last-event time", "No valid Codex sidecar ledger found", `"validCandidateCount"`,
@@ -610,6 +661,12 @@ func sidecarRequireReached(t *testing.T, file, outputs string) {
 			continue
 		}
 		if _, ok := sidecarUnreachable[lit]; ok {
+			continue
+		}
+		// An unlink of a stale lock fails only for a user the read-only
+		// recordings directory binds (EACCES); root unlinks it. The
+		// x:ro-lock directed sequence reaches the refusal for any other user.
+		if lit == "FaultLine could not recover a stale sidecar lock:" && os.Geteuid() == 0 {
 			continue
 		}
 		reached := true
@@ -665,6 +722,7 @@ func runSidecarStore(t *testing.T, root string, plan storePlan, index int, side 
 			t.Error(err)
 			continue
 		}
+		created := l
 		l, err = ledger.Append(l, jsjson.MustObject("type", jsjson.MakeString("SESSION_STARTED"), "payload", jsjson.MustObject(
 			"transport", jsjson.MakeString("SIDE_CAR"), "workingDirectory", jsjson.MakeString(repo), "model", jsjson.MakeString("m"))),
 			ledger.AppendOptions{EventID: "e-" + s.id, OccurredAt: s.occurredAt, HasEventID: true, HasOccurredAt: true})
@@ -673,6 +731,9 @@ func runSidecarStore(t *testing.T, root string, plan storePlan, index int, side 
 			continue
 		}
 		file := filepath.Join(recordings, "codex-"+canonical.SHA256Hex(s.id)+".json")
+		if s.breakage == "empty" { // a ledger without events, which still verifies
+			l = created
+		}
 		// Written directly: WriteAtomic would read a UUID from the seeded
 		// clock on both phases and put the Go side's sequence out of step.
 		if err := os.WriteFile(file, []byte(jsjson.StringifyIndent(l, "  ")+"\n"), 0o644); err != nil {
@@ -758,7 +819,7 @@ func TestSidecarReachedFromDump(t *testing.T) {
 // rebuildSidecarLedger rewrites the session's ledger through ledger.Append
 // with every id and time explicit (no clock read), applying each variant:
 // drop-snapshot, drop-checkpoint, fail-outcome, rename-start,
-// snap-as-ckpt (the snapshot takes the checkpoint's id), ckpt-as-snap (the
+// empty (no events at all, which still verifies), snap-as-ckpt (the snapshot takes the checkpoint's id), ckpt-as-snap (the
 // checkpoint takes the snapshot's id) and other-session.
 func rebuildSidecarLedger(t *testing.T, path, session string, variants []string) {
 	t.Helper()
@@ -793,6 +854,9 @@ func rebuildSidecarLedger(t *testing.T, path, session string, variants []string)
 		case "TURN_TREE_SNAPSHOT":
 			snapID = e.Get("eventId").Str()
 		}
+	}
+	if has("empty") {
+		events = nil
 	}
 	for _, e := range events {
 		typ, id, event := e.Get("event", "type").Str(), e.Get("eventId").Str(), e.Get("event")
@@ -918,5 +982,37 @@ func directedSequences() [][]gen.HookStep {
 		base(op("x:receipt-symlink", "t-1"), stop("t-1")),
 		base(op("x:ledger-symlink", ""), prompt("t-2", "p2")),
 		base(op("x:lock-dir", ""), prompt("t-2", "p2")),
+		// TURN_SNAPSHOT_RECORDED: a completed turn with its snapshot, no
+		// checkpoint and no receipt.
+		base(op("remove-receipt", "t-1"), op("x:rebuild", "drop-checkpoint"), stop("t-1"), stop("t-1")),
+		// Hooks on a valid ledger without events (Create returns one).
+		{start, op("x:rebuild", "empty"), start, prompt("t-1", "p1"), stop("t-1"), pre("shell", "call-1")},
+		// The unlink of a stale lock refused (EACCES) in a read-only recordings directory.
+		{start, op("x:ro-lock", ""), prompt("t-1", "p1"), prompt("t-1", "p1")},
+	}
+}
+
+// maskSidecarPID masks only ".<24 lowercase hex>.<own pid>.tmp".
+func TestMaskSidecarPID(t *testing.T) {
+	key := strings.Repeat("ab12", 6) // 24 lowercase hex
+	cases := []struct{ name, in, want string }{
+		{"own pid", "x/." + key + ".4242.tmp", "x/." + key + ".<PID>.tmp"},
+		{"twice", "." + key + ".4242.tmp ." + key + ".4242.tmp", "." + key + ".<PID>.tmp ." + key + ".<PID>.tmp"},
+		{"wrong pid", "." + key + ".4243.tmp", "." + key + ".4243.tmp"},
+		{"pid prefix of another", "." + key + ".42420.tmp", "." + key + ".42420.tmp"},
+		{"unrelated .pid.tmp", "/tmp/data.4242.tmp", "/tmp/data.4242.tmp"},
+		{"short key", ".abc123.4242.tmp", ".abc123.4242.tmp"},
+		{"uppercase key", "." + strings.ToUpper(key) + ".4242.tmp", "." + strings.ToUpper(key) + ".4242.tmp"},
+		{"key one too long", "." + key + "a.4242.tmp", "." + key + "a.4242.tmp"},
+		{"different key stays comparable", "." + key + ".4242.tmp", "." + key + ".<PID>.tmp"},
+	}
+	for _, c := range cases {
+		if got := maskSidecarPID(c.in, 4242); got != c.want {
+			t.Errorf("%s: %q -> %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+	other := strings.Repeat("cd34", 6)
+	if maskSidecarPID("."+key+".4242.tmp", 4242) == maskSidecarPID("."+other+".4242.tmp", 4242) {
+		t.Error("two stage keys compare equal after masking")
 	}
 }
