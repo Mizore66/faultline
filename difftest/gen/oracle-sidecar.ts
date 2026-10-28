@@ -16,13 +16,15 @@ type Handler = (args: any) => unknown;
 // Runs fn with PATH and the given environment overrides ("" deletes a
 // variable) and process.stderr.write captured; JSON.stringify of
 // {result} or {threw, zod}, with the captured stderr.
-function sidecarOutcome(fn: () => unknown, path: string | undefined, env: Record<string, string> | undefined): string {
+function sidecarOutcome(fn: () => unknown, path: string | undefined, env: Record<string, string> | undefined, chdir?: string): string {
   const savedEnv: Record<string, string | undefined> = {};
   const overrides: Record<string, string> = { ...(env ?? {}), ...(path === undefined ? {} : { PATH: path }) };
   for (const [key, value] of Object.entries(overrides)) {
     savedEnv[key] = process.env[key];
     process.env[key] = value;
   }
+  const savedCwd = process.cwd();
+  if (chdir !== undefined) process.chdir(chdir);
   const originalWrite = process.stderr.write;
   let stderr = "";
   (process.stderr as any).write = (chunk: string | Uint8Array): boolean => {
@@ -37,6 +39,7 @@ function sidecarOutcome(fn: () => unknown, path: string | undefined, env: Record
     }
   } finally {
     process.stderr.write = originalWrite;
+    if (chdir !== undefined) process.chdir(savedCwd);
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -48,8 +51,10 @@ export const ops: Record<string, Handler> = {
   // Task 6 (TestLiveSidecarHooks): recordObservedCodexHook on `value`; env
   // overrides (FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY) and PATH are set for the
   // call only.
-  recordObservedCodexHook: ({ value, path, env }: { value: unknown; path?: string; env?: Record<string, string> }) =>
-    sidecarOutcome(() => recordObservedCodexHook(value), path, env),
+  // chdir runs the call with that working directory (a relative hook cwd
+  // resolves against it, as against the Go side's).
+  recordObservedCodexHook: ({ value, path, env, chdir }: { value: unknown; path?: string; env?: Record<string, string>; chdir?: string }) =>
+    sidecarOutcome(() => recordObservedCodexHook(value), path, env, chdir),
   inspectObservedCodexSidecar: ({ cwd, sessionId, path }: { cwd: string; sessionId?: string; path?: string }) =>
     sidecarOutcome(() => inspectObservedCodexSidecar(cwd, sessionId), path, undefined),
   resolveLatestSidecarLedgerPath: ({ cwd, path }: { cwd: string; path?: string }) =>
