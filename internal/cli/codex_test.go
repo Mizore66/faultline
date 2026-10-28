@@ -16,21 +16,13 @@ func TestCodexRouterFallsThrough(t *testing.T) {
 }
 
 // TestCodexRouterOrder pins src/cli-app.ts:2994-3028's order through the
-// stubs each branch reaches.
+// stubs each branch reaches (the snapshot branches: TestCodexSnapshotRouter).
 func TestCodexRouterOrder(t *testing.T) {
 	cases := []struct {
 		args []string
 		want string
 	}{
-		{[]string{"codex", "record"}, "record"},
-		{[]string{"codex", "record", "--dry-run"}, "record"},
-		{[]string{"record", "init"}, "record"},
 		{[]string{"codex", "sidecar", "--dry-run"}, "codex sidecar"},
-		{[]string{"codex", "snapshot", "gc", "--dry-run"}, "codex snapshot gc"},
-		{[]string{"codex", "snapshot", "--dry-run"}, "codex --dry-run"},
-		{[]string{"codex", "--snapshot", "--dry-run"}, "codex --dry-run"},
-		{[]string{"codex", "x", "--snapshot"}, "codex --snapshot"},
-		{[]string{"codex", "gc", "snapshot", "--snapshot"}, "codex --snapshot"},
 	}
 	for _, c := range cases {
 		_, stderr, code := run(c.args...)
