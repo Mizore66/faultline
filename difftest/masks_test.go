@@ -260,3 +260,62 @@ func canonicalDigest(t *testing.T, text string) string {
 	}
 	return d
 }
+
+// Two created objects whose names collapse to one alias (commits that differ
+// only in their timestamps) still change the tree digest: each aliased path
+// emits its own line, so duplicate multiplicity is compared even though the
+// entries map (files and modes diagnostics) keys by the alias.
+func TestAliasedDuplicatesChangeTheTreeDigest(t *testing.T) {
+	one, two := t.TempDir(), t.TempDir()
+	for _, p := range []string{filepath.Join(one, "a"), filepath.Join(two, "a"), filepath.Join(two, "b")} {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	same := func(string, []byte) string { return "same" }
+	collapse := func(string) (string, bool) { return "object", true } // a and b share one alias
+	if treeDigestAliased(one, same, collapse) == treeDigestAliased(two, same, collapse) {
+		t.Fatal("one aliased object and two aliased objects must differ in the tree digest")
+	}
+	if entries := treeEntriesAliased(t, two, same, collapse); len(entries) != 1 {
+		t.Fatalf("the entries map keys by alias, so the duplicate collapses (the digest keeps it): %v", entries)
+	}
+}
+
+// Only an EMPTY refs directory in a linked worktree's administrative
+// directory is left out: a symlink named refs (to an empty directory or
+// outside the case), an empty refs directory elsewhere, and a refs directory
+// one level too deep stay compared.
+func TestWorktreeRefsExclusionIsNarrow(t *testing.T) {
+	r := makeWriterRoots(t)
+	mkdir := func(rel string) {
+		if err := os.MkdirAll(filepath.Join(r.ws, filepath.FromSlash(rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mkdir(".git/worktrees/w1/refs")        // empty: left out
+	mkdir(".git/worktrees/target")         // a symlink target
+	mkdir(".git/refs")                     // empty, not a worktree's
+	mkdir(".git/worktrees/w4/nested/refs") // empty, one level too deep
+	mkdir("elsewhere/.git/worktrees/w5/refs")
+	outside := t.TempDir()
+	for name, target := range map[string]string{"w2": filepath.Join("..", "target"), "w3": outside} {
+		mkdir(".git/worktrees/" + name)
+		if err := os.Symlink(target, filepath.Join(r.ws, ".git", "worktrees", name, "refs")); err != nil {
+			t.Skip("symlink unavailable")
+		}
+	}
+	rel := &relocated{roots: r, base: &gitBase{objects: map[string]map[string]bool{}}, created: map[string]map[string]string{}, ids: map[string]string{}}
+	for path, shown := range map[string]bool{
+		".git/worktrees/w1/refs":           false, // the one excluded
+		".git/worktrees/w2/refs":           true,  // symlink to an empty directory
+		".git/worktrees/w3/refs":           true,  // symlink outside the case
+		".git/refs":                        true,
+		".git/worktrees/w4/nested/refs":    true,
+		"elsewhere/.git/worktrees/w5/refs": false, // another repository's linked worktree: same rule
+	} {
+		if name, ok := rel.alias(path); ok != shown || (ok && name != path) {
+			t.Errorf("%s: %q %v, want shown=%v", path, name, ok, shown)
+		}
+	}
+}

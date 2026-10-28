@@ -123,7 +123,7 @@ var unreachableLiterals = map[string]string{
 	// CLI paths frozen TS runs for real (Go throws `not yet ported`): no
 	// golden can compare them; internal/cli's unit tests pin the texts.
 	"not yet ported: help":                           "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
-	"not yet ported: %s":                             "every unported top-level command (codex, record, prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
+	"not yet ported: %s":                             "every unported top-level command (codex, record and prove in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
 	"not yet ported: investigate --ci-log/--resume":  "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: investigate turns":              "investigate turns runs in TS; TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: turn proof bundle verification": "a turn proof bundle verifies in TS; slice 2 does not port the turn verifier",
@@ -273,6 +273,35 @@ var unreachableLiterals = map[string]string{
 	"Collected repaired run digests were not distinct.": "each run id digests its attempt number, so the three always differ (src/prevention-from-artifacts.ts:535)",
 	// Slice 4c Task 18 (internal/cli/repair.go).
 	"Repair evidence packet changed during redaction and cannot be safely correlated to the verified investigation.": "src/cli-app.ts:2770: the packet holds only digests, fixed statements and counts, which redactValue never rewrites (a changed digest needs a secret-shaped packet field)",
+	// Slice 4c, internal/attest (task-7-report concern 1).
+	"Attestation path root must be a real directory:":     "the filesystem root is always a real directory",
+	"Attestation receipt path escaped its managed store.": "ReceiptIdSchema refuses every id that is a path first",
+	"Attestation staging file is not a regular file.":     "race only: the staged file was just created with open 'wx' and written by the same call",
+	// Slice 4c, internal/provenance (task-14-report concerns).
+	"receipt event is not permitted by the trust configuration": "both sides are z.literal(\"push\"), so the schemas refuse any other event before the comparison",
+	// Slice 4c, internal/repair store.go (task-9-report deviation 2).
+	"Refusing to publish an invalid repair brief package:":                   "a stage just written verifies unless the filesystem fails between the writes and the verify; an unreadable stage under umask 0477 also fails its removal, and that error is thrown instead (as for the prevention writer)",
+	"Repair brief output appeared during assembly and will not be replaced:": "race only: the output was refused when it existed before staging",
+	// Slice 4c, internal/repair live.go. These are the causes undici gives
+	// "fetch failed"; postJSON replaces them with errFetchFailed (live.go),
+	// so no output ever holds them. TestLiveProposeRepairBrief compares the
+	// outcome (fetch failed) against Node on a non-HTTP scheme, a redirect
+	// loop and credentials in Location.
+	"URL scheme must be a HTTP(S) scheme":                "the cause of fetch failed, replaced by errFetchFailed: never in the output",
+	"redirect count exceeded":                            "the cause of fetch failed, replaced by errFetchFailed: never in the output",
+	"cross origin not allowed for request mode \"cors\"": "the cause of fetch failed, replaced by errFetchFailed: never in the output",
+	"invalid deflate data":                               "inflate's error only makes readResponse report terminated (live.go), so the text is never printed; TestLiveResponseDecoders compares whether Node's zlib errors on each stream",
+	// Node 22 decodes a br response; Go does not and reports terminated
+	// (difftest/KNOWN_DIFFERENCES.md), so no case compares a br body.
+	"brotli is not supported": "a documented known difference: Node decodes br, and the Go text is never printed (the body read fails as terminated)",
+	// Slice 4c, internal/repair worktree.go (TestLiveRepairWorktree).
+	"must be a child of the managed repair root.":  "the four paths are fixed names joined to the managed root, so they are always its children",
+	"Repair managed root is not a real directory:": "race only: the managed root was created by mkdir just before",
+	"must not be a symbolic link:":                 "race only: git worktree add just created the worktree directory",
+	// Slice 4c, internal/codexloop/repair.go (TestSelectRepairBaseCommit and
+	// TestRepairBundleInvalid pin both texts).
+	"Proof bundle verification failed.":                              "Valid is len(errors)==0, so an invalid bundle always carries at least one error and the join is never empty",
+	"Verified investigation does not identify a repair base commit.": "a bundle the verifier accepted holds a resolved range whose descendant has a commit (semantic validation refuses a null range first)",
 	// Slice 4c Task 10: not an error text. repair.ProposeBrief parses
 	// redactValue's result with bundle.ParseValue, whose input the flow
 	// analysis counts as a message, so redactValue's returns become sites.
@@ -1070,6 +1099,8 @@ var gatedDirs = []string{
 	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
 	"internal/safegit", "internal/hostcmd", "internal/runtimeimage", "internal/doctor", "internal/allowlist", "internal/turnsnap",
 	"internal/incident",
+	// Slice 4c.
+	"internal/codexloop", "internal/repair", "internal/attest", "internal/provenance", "internal/jsdate",
 }
 
 // gatedLiterals is errorLiterals over every gatedDirs package.
@@ -1144,11 +1175,32 @@ var liveGatedFiles = map[string]string{
 	// generated worktrees and scripted verifiers.
 	"internal/bundle/prevention/repaired.go":      "TestLiveCommitRepairedWorktreeState",
 	"internal/bundle/prevention/repaired_runs.go": "TestLiveCollectRepairedRuns",
+	// Slice 4c: the library packages the tasks left to live tests. The
+	// "+"-joined names are the tests that together reach a file
+	// (requireReachedGroup); a narrowed or partial run cannot judge it.
+	"internal/attest/attest.go":         "TestLiveAttestationCreate+TestLiveAttestationStore",
+	"internal/provenance/provenance.go": "TestLiveProvenanceReceipt+TestLiveProvenanceBinding+TestLiveGhAttestation+TestLiveProvenanceWrite",
+	"internal/repair/store.go":          "TestLiveRepairBriefStore",
+	"internal/repair/live.go":           "TestLiveProposeRepairBrief",
+	"internal/repair/response.go":       "TestLiveExtractOpenAiResponseText",
+	"internal/repair/worktree.go":       "TestLiveRepairWorktree",
+	"internal/codexloop/repair.go":      "TestLiveRepairWithCodex",
+	"internal/codexloop/verifier.go":    "TestLiveRepairWithCodex",
+	"internal/codexloop/runner.go":      "TestLiveImplementCodexRunner",
+	// cpSync is Linux-only (libstdc++), so TestLiveCpSyncTree gates it only
+	// on a Linux run; nodefs is not a gatedDirs package.
+	"internal/nodefs/cp.go": "TestLiveCpSyncTree",
 	// Slice 4c Task 18: every Git bundle the verifier accepts is a completed,
 	// Docker-isolated proof with a transition and a witness digest, so the
 	// packet refusal is not reachable through the CLI.
 	"internal/repair/brief.go": "TestLiveRepairEvidencePacket",
 }
+
+// liveOnlyUnreachable are error texts in live-gated files outside gatedDirs
+// (so TestGoldensReachEveryErrorLiteral never sees them) that their live test
+// cannot reach, each with the reason; requireReached skips them.
+var liveOnlyUnreachable = map[string]string{
+	"Cannot copy an unknown file type:": "on Linux Go's os.Stat maps every S_IFMT type it can see (regular, directory, symlink, FIFO, socket, block and character device) to a mode bit and never sets fs.ModeIrregular (os/stat_linux.go, Go 1.27.3), and cp.go:251 throws only on ModeIrregular, so no Linux fixture reaches it (block and character devices copy, as cp.go:318 does). Whether frozen Node 22.22.2 ever reports this text for a type Go maps was NOT inspected: this is a statement about the Go port, not about Node."}
 
 // liveGated reports whether the file at pos (an absolute path, optionally
 // followed by :line) is live-gated.

@@ -57,17 +57,28 @@ jobs:
           status=0
           go test -count=1 -timeout 30m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
           go test -tags faultline_test -count=1 -timeout 120m -v ./... | tee -a "$RUNNER_TEMP/go.log" || status=$?
-          allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestWriterSameDirectory'
+          allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestWriterSameDirectory|TestCoverageWindows'
           case "$RUNNER_OS" in
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
             Windows)
               posix=$(tr -d '\r' < .github/scripts/windows-writer-skips.txt | grep -v '^#' | paste -sd '|' -)
-              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestLoadRejectsSymlinkDirectoryAndOversize|TestCaptureRefusesSymlink|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|$posix" ;;
+              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestLoadRejectsSymlinkDirectoryAndOversize|TestCaptureRefusesSymlink|TestEnsureRealDirectoryTree|TestWorktreeRefsExclusionIsNarrow|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|$posix" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status
         env:
           FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-24.04' && '1' || '' }}
+      - name: Release binary holds no test override
+        # internal/repair's FAULTLINE_TEST_OPENAI_URL override (the Go side of
+        # difftest/gen/fetch-shim.mjs) exists only in faultline_test builds.
+        # The tagged build must hold it (so the grep means something) and the
+        # untagged release build must not.
+        shell: bash
+        run: |
+          go build -o "$RUNNER_TEMP/fl-release" ./cmd/fl
+          go build -tags faultline_test -o "$RUNNER_TEMP/fl-tagged" ./cmd/fl
+          grep -aq FAULTLINE_TEST_OPENAI_URL "$RUNNER_TEMP/fl-tagged" || { echo "::error title=override::the tagged build lost FAULTLINE_TEST_OPENAI_URL, so this check proves nothing"; exit 1; }
+          if grep -aq FAULTLINE_TEST_OPENAI_URL "$RUNNER_TEMP/fl-release"; then echo "::error title=override::the release build holds FAULTLINE_TEST_OPENAI_URL"; exit 1; fi
 
   # The frozen TS oracle jobs (ubuntu-24.04, Node 22.22.2). The slow slice 2
   # tests run in jobs of their own, each naming its tests: check-skips.sh
@@ -149,6 +160,26 @@ jobs:
         # TestLivePreventionWrite, TestLiveAgentsMd and
         # TestLivePreventionFromArtifacts (about 4.5 minutes together locally,
         # most of it the TS Git proof verifier in PreventionFromArtifacts).
+        # Slice 4c adds TestLiveAttestationCreate, TestLiveAttestationStore,
+        # TestLiveCanonicalISO, TestLiveProvenanceReceipt,
+        # TestLiveProvenanceBinding, TestLiveGhAttestation,
+        # TestLiveProvenanceWrite, TestLiveRepairEvidencePacket,
+        # TestLiveValidateRepairBrief, TestLiveExtractOpenAiResponseText,
+        # TestLiveRepairBriefJSONSchema, TestLiveProposeRepairBrief,
+        # TestLiveResponseDecoders, TestLiveRepairBriefStore,
+        # TestLiveRepairWorktree, TestLiveResolveCodexRunner,
+        # TestLiveImplementCodexRunner, TestLiveRepairWithCodex,
+        # TestLiveCpSyncTree and TestLiveHardGuardDigests (the run listing
+        # picks them up). Measured locally in localhost/r73img (linux/arm64,
+        # Node 22.22.2, uid 1000), in bounded windows: about 85 s of test
+        # time for the 18-test historical selection of the window run (the CI list
+        # below names 20 tests) (TestLiveRepairWithCodex
+        # 16 s, TestLiveCpSyncTree 14 s, the rest under 7 s each). The
+        # whole job has NOT been measured on CI, so none moves to
+        # difftest-live-writers yet; do that if the job nears its 90 minutes.
+        # requireReachedGroup judges the attest, provenance and repair files
+        # only when all their tests ran in one process, which is this step;
+        # the check below fails the step when one reports LIVE-GROUP-UNVERIFIED.
         run: |
           unset FAULTLINE_TURNSNAP_CASES
           set -o pipefail
@@ -158,6 +189,10 @@ jobs:
           tests=$(paste -sd '|' "$RUNNER_TEMP/live.list")
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($tests)\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^(TestLiveCwdErrorsMatchNode/(chroot|self0600|parent0311|locked[0-9]+)|TestLiveTmpdirSetidMatchesNode|TestLiveFuseMatchesNode)$' "$RUNNER_TEMP/live.list" || status=1
+          if grep -q 'LIVE-GROUP-UNVERIFIED' "$RUNNER_TEMP/live.log"; then
+            grep 'LIVE-GROUP-UNVERIFIED' "$RUNNER_TEMP/live.log" | head -5 | while read -r line; do echo "::error title=live group::$line"; done
+            status=1
+          fi
           exit $status
       - name: Measured stack depths
         # TestLiveStackThresholdsMatchNode runs in the step above on
@@ -296,7 +331,7 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestEndToEndSlice3bWithoutNode TestWriterSameDirectory'
+          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestEndToEndSlice3bWithoutNode TestEndToEndSlice4cWithoutNode TestWriterSameDirectory'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 75m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
@@ -305,7 +340,14 @@ jobs:
   # Split from difftest-live-replay in slice 3a: the writer fault matrix grew
   # to about 13 minutes of strace cases with the init --yes paths (577 s on
   # CI in slice 3a). Slice 3b's incident and prevention writer paths add
-  # about 5 minutes, well inside the 60 minute go test timeout.
+  # about 5 minutes, well inside the 60 minute go test timeout. Slice 4c adds
+  # 111 cases (15 path entries, 37 path x syscall rows x 3 errnos: attest,
+  # provenance, repair brief, witness implement overlay and the repair command;
+  # 477 cases in all) that took about 11 minutes together in bounded
+  # linux/arm64 podman windows; the CI total is unmeasured, so the
+  # 60 minute go test timeout stays and is the number to check.
+  # repair-bundle-codex-ok faults only its repair invocation
+  # (faultLastInvocation).
   difftest-live-faults:
     name: difftest live writer faults and real Docker (frozen TS oracle)
     runs-on: ubuntu-24.04
@@ -381,6 +423,11 @@ jobs:
     # the darwin StatIdentity) and the incident draft store (about 80 s and
     # 3 s on macOS); the prevention live tests are platform-neutral and stay
     # in difftest-live.
+    # Slice 4c adds TestLiveResolveCodexRunner (existsSync and the PATH walk
+    # differ by platform; macOS is the one that matters) and
+    # TestLiveCpSyncTree (cpSync modes and the /private/var realpath). The
+    # latter models Node's libstdc++ C++ copy and skips on macOS, whose
+    # libc++ differs (KNOWN_DIFFERENCES), so only the arm64 Linux leg runs it.
     name: stack thresholds vs Node (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
@@ -405,10 +452,10 @@ jobs:
           set -o pipefail
           status=0
           unset FAULTLINE_TURNSNAP_CASES
-          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft'
+          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft TestLiveResolveCodexRunner TestLiveCpSyncTree'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 70m | tee "$RUNNER_TEMP/live.log" || status=$?
-          if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode|TestLiveProjectContext/sparse256MiB)$'; else allowed='^$'; fi
+          if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode|TestLiveProjectContext/sparse256MiB|TestLiveCpSyncTree)$'; else allowed='^$'; fi
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" "$allowed" "$RUNNER_TEMP/live.list" || status=1
           exit $status
       - name: Measured stack depths

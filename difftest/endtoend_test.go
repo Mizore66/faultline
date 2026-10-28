@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/repair"
 )
 
 // TestEndToEndWithoutNode is done criterion 3 of the slice 2 spec (4.2): the
@@ -321,4 +322,76 @@ func nodelessPath(t *testing.T, fakeDocker string, tools ...string) string {
 		t.Fatal("git is not on PATH")
 	}
 	return path
+}
+
+// TestEndToEndSlice4cWithoutNode is done criterion 3 of the slice 4c spec
+// (4.2): investigate git, repair --with-codex (the edits fake codex through
+// FAULTLINE_CODEX_BIN), verify of its prevention package, repair brief and
+// repair verify, prevention write --from-bundle on the repair's own runs,
+// and attest create and verify, all with no `node` on PATH. POSIX only: the
+// fake Docker and fake codex are sh scripts.
+func TestEndToEndSlice4cWithoutNode(t *testing.T) {
+	ws := scenarioWorkspace(t, "repair-repo")
+	codex := installFakeCodex(t, repoRoot(t), rootsOf(ws), "edits")
+	env := map[string]string{"PATH": nodelessPath(t, "pass-fail", "cat", "sh"), "FAULTLINE_CODEX_BIN": codex}
+	step := func(want int, args ...string) string {
+		t.Helper()
+		stdout, stderr, code := runFlIn(t, ws, env, args...)
+		if code != want {
+			t.Fatalf("fl %s: exit %d, want %d\n%s%s", strings.Join(args, " "), code, want, stdout, stderr)
+		}
+		return stdout
+	}
+	out := step(0, "investigate", "git", "--repo", "repo", "--from", "HEAD~2", "--to", "HEAD", "--proposal", "demo-1", "--image", pinnedImage)
+	bundle, root := jsonField(out, "proofBundle", "directory"), jsonField(out, "proofBundle", "rootDigest")
+
+	out = step(0, "repair", "--bundle", bundle, "--expect-root", root, "--repo", "repo", "--with-codex", "--allow-codex-full-auto")
+	if jsonField(out, "status") != "REPAIR_CANDIDATE_VERIFIED" || jsonField(out, "preventionExport", "classification") != "PREVENTION_VERIFIED" {
+		t.Fatalf("repair:\n%s", out)
+	}
+	pkg, pkgRoot, managed := jsonField(out, "preventionExport", "directory"), jsonField(out, "preventionExport", "rootDigest"), jsonField(out, "managedRoot")
+	if v := step(0, "verify", pkg, "--expect-root", pkgRoot); !strings.Contains(v, "\nPrevention verified\n") {
+		t.Fatalf("verify package:\n%s", v)
+	}
+
+	// The brief must cite this bundle's packet: the investigation digest
+	// covers the repository path, so a committed brief would not match.
+	invText, err := os.ReadFile(filepath.Join(bundle, "investigation.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := jsjson.Parse(string(invText))
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet, err := repair.CreateEvidencePacket(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := `{"schemaVersion":"faultline.repair-brief.v1","evidencePacketDigest":"` + packet.Get("packetDigest").Str() + `",` +
+		`"proposedInvariant":{"statement":"state.txt stays good","evidenceIds":["E1"]},"repairDirections":[{"statement":"restore good","evidenceIds":["E2"]}],` +
+		`"prevention":{"hardEnforcement":[{"statement":"add a CI check","evidenceIds":["E3"]}],"softGuidance":[]},"uncertainties":["inferred"]}`
+	if err := os.WriteFile(filepath.Join(ws, "brief.json"), []byte(brief), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out = step(0, "repair", "brief", "--bundle", bundle, "--expect-root", root, "--input", "brief.json")
+	if v := step(0, "repair", "verify", jsonField(out, "directory"), "--expect-digest", jsonField(out, "artifactDigest")); !strings.Contains(v, "\"valid\": true") {
+		t.Fatalf("repair verify:\n%s", v)
+	}
+
+	body, err := os.ReadFile(filepath.Join(pkg, "prevention.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, tree := jsonField(string(body), "repaired", "commit"), jsonField(string(body), "repaired", "tree")
+	out = step(0, "prevention", "write", "--from-bundle", bundle, "--expect-root", root, "--repaired-runs", filepath.Join(pkg, "repaired-runs.json"),
+		"--repaired-commit", commit, "--repaired-tree", tree, "--patch", filepath.Join(managed, "artifacts", "repair.patch"), "--repo", "repo")
+	if !strings.HasSuffix(out, "\nPrevention verified\n") {
+		t.Fatalf("prevention write:\n%s", out)
+	}
+
+	out = step(0, "attest", "create", "--bundle", bundle, "--receipt", "e2e-1", "--subject", "repo", "--issuer", "ci")
+	if v := step(0, "attest", "verify", "e2e-1", "--expect-digest", jsonField(out, "receiptDigest")); jsonField(v, "externalDigestStatus") != "MATCH" {
+		t.Fatalf("attest verify:\n%s", v)
+	}
 }

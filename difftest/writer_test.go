@@ -260,10 +260,15 @@ func inheritedOut(name string) bool {
 		name == "CI" || name == "OPENAI_API_KEY"
 }
 
-// installFakeCodex copies difftest/testdata/fakecodex/<name>/codex to
+// fakeCodexVariants are the variants of the one fake codex script
+// (difftest/testdata/fakecodex/codex); the TS twin is fakeCodexVariants in
+// difftest/gen/scenarios.ts.
+var fakeCodexVariants = []string{"edits", "noop", "probe-fail", "probe-empty", "probe-crlf", "exit-nonzero", "killed", "flood", "outside-edits", "symlink-edit"}
+
+// installFakeCodex copies difftest/testdata/fakecodex/codex to
 // <HOME>/fakecodex/codex (mode 0755) with the case's argv log path written
-// into its `log=` line, as writeRecorders does: fl runs codex with PATH as
-// its only environment variable. It returns the copy's path
+// into its `log=` line and <name> into its `variant=` line, as writeRecorders
+// does: fl runs codex with PATH as its only environment variable. It returns the copy's path
 // (scenarios.ts installFakeCodex).
 func installFakeCodex(t testing.TB, repo string, r writerRoots, name string) (bin string) {
 	t.Helper()
@@ -278,11 +283,12 @@ func installFakeCodex(t testing.TB, repo string, r writerRoots, name string) (bi
 // testing.TB.
 func installFakeCodexErr(repo string, r writerRoots, name string) (string, error) {
 	const line = "log=$FAULTLINE_ARGV_LOG\n"
-	template, err := os.ReadFile(filepath.Join(repo, "difftest", "testdata", "fakecodex", name, "codex"))
+	const variantLine = "variant=@VARIANT@\n"
+	template, err := os.ReadFile(filepath.Join(repo, "difftest", "testdata", "fakecodex", "codex"))
 	if err != nil {
 		return "", err
 	}
-	if !strings.Contains(string(template), line) || strings.Contains(r.argvLog, "'") {
+	if !slices.Contains(fakeCodexVariants, name) || !strings.Contains(string(template), line) || !strings.Contains(string(template), variantLine) || strings.Contains(r.argvLog, "'") {
 		return "", errors.New("fake codex " + name + " cannot take " + r.argvLog)
 	}
 	dir := filepath.Join(r.home, "fakecodex")
@@ -290,7 +296,7 @@ func installFakeCodexErr(repo string, r writerRoots, name string) (string, error
 		return "", err
 	}
 	bin := filepath.Join(dir, "codex")
-	if err := os.WriteFile(bin, []byte(strings.Replace(string(template), line, "log='"+r.argvLog+"'\n", 1)), 0o755); err != nil {
+	if err := os.WriteFile(bin, []byte(strings.Replace(strings.Replace(string(template), line, "log='"+r.argvLog+"'\n", 1), variantLine, "variant="+name+"\n", 1)), 0o755); err != nil {
 		return "", err
 	}
 	return bin, os.Chmod(bin, 0o755)

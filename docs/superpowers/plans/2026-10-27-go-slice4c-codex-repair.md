@@ -172,8 +172,8 @@ internal/cli/repair.go                   cli-app.ts:2672-2801
 internal/cli/witness.go                  + implement (cli-app.ts:1169-1203)
 internal/cli/cli.go                      + dispatch attest, provenance, repair
 difftest/gen/fetch-shim.mjs              TS preload: redirect https://api.openai.com/v1/responses to FAULTLINE_TEST_OPENAI_URL
-difftest/testdata/fakecodex/<name>/codex sh fakes (recorder style: log path written in)
-difftest/testdata/fakegh/<name>/gh       sh fakes
+difftest/testdata/fakecodex/codex        one sh fake for every variant (Task 21: a `variant=` line is written beside the log path)
+difftest/testdata/fakegh/<name>/gh       sets variant= and sources fakegh/lib.sh (Task 21)
 difftest/testdata/fakeopenai/<name>.json scripted Responses API replies
 difftest/fakeopenai.go                   the fake OpenAI server (Go side); difftest/gen/fake-openai.ts (TS side)
 difftest/gen/gen-writers.ts, difftest/writer_test.go   + fakeCodex/fakeGh/fakeOpenAI keys, <FILE:> in env, GITHUB_* dropped, cross-verify kinds, Git-object masks, repair seeds
@@ -2813,7 +2813,7 @@ func TestEndToEndSlice4cWithoutNode(t *testing.T) {
 - **Identity-less `commit-tree`:** git's error names the machine (correction 2).
 - **Not ported:** `captureAllowlistedEvent` and `prevention-from-turn`, only if 4a or 4b has not added it. The controller dedupes.
 
-- [ ] **Step 1: Add the fault paths and the end-to-end test; run them**
+- [x] **Step 1: Add the fault paths and the end-to-end test; run them** (done in bounded windows: 111 fault cases ran in linux/arm64 podman; the 39 repair-bundle-codex-ok ones compared the wrong (first) invocation until fix round 1 and PASS with the final invocation compared as uid 1000 with Node 22.22.2; the host `timeout`/`podman run ... timeout 280` form is replaced by per-command parent deadlines)
 
 Run: `go test -tags faultline_test ./difftest/ -run TestEndToEndSlice4cWithoutNode -v > /tmp/s4c-t21-e2e.log 2>&1; tail -5 /tmp/s4c-t21-e2e.log`
 Expected: PASS.
@@ -2826,7 +2826,7 @@ podman run --rm --userns=keep-id -u 1000 --cap-add SYS_PTRACE -v "$PWD":/w -w /w
 
 Expected: PASS. A mismatch is fixed in Go. A group that injects nothing is removed from its path's list, with a comment.
 
-- [ ] **Step 2: CI, the gates and the docs.** Then run the full gated local check in the background with polled logs (the command is in 3a Task 13's report):
+- [~] **Step 2: CI, the gates and the docs.** (CI, gates and docs done; the monolithic `FAULTLINE_COVERAGE_GATE=1` run is UNVERIFIED locally and left to the `go` job on ubuntu-24.04; a bounded per-window coverage check of the five new packages passed) Then run the full gated local check in the background with polled logs (the command is in 3a Task 13's report):
 
 ```bash
 FAULTLINE_COVERAGE_GATE=1 go test -tags faultline_test ./difftest/ -count=1 -timeout 120m > /tmp/s4c-t21-gate.log 2>&1 &
@@ -2835,7 +2835,7 @@ FAULTLINE_COVERAGE_GATE=1 go test -tags faultline_test ./difftest/ -count=1 -tim
 
 Expected: `ok`. A missed error site gets a writer case or a mutation template that reaches it, or an `unreachableLiterals` entry with its reason.
 
-- [ ] **Step 3: Full regeneration with no diff.** In podman as uid 1000, from a clean tree, regenerate everything with no `FAULTLINE_WRITERS_ONLY`:
+- [ ] **Step 3: Full regeneration with no diff.** (NOT DONE locally: the 45-minute regeneration exceeds the 5-minute command limit; three filtered writer regenerations of the 4c cases were byte-identical to the committed `writers.jsonl`; the full regeneration and `TestWriterReplay` stay with `difftest-goldens` and `difftest-live-replay` on hosted CI) In podman as uid 1000, from a clean tree, regenerate everything with no `FAULTLINE_WRITERS_ONLY`:
 
 ```bash
 git status --porcelain   # must be empty before
@@ -2846,7 +2846,7 @@ git status --porcelain difftest/testdata
 
 Expected: empty output. Every golden the tasks committed (each made with a `FAULTLINE_WRITERS_ONLY` filter) equals what a full run produces. Then run the full replay once on the result: `go test -tags faultline_test ./difftest/ -run TestWriterReplay -count=1 -timeout 90m`, in the background with polled logs. Expected: `ok`.
 
-- [ ] **Step 4: Commit; hand back to the controller to push** (the controller pushes as Mizore66 and reads CI)
+- [x] **Step 4: Commit; hand back to the controller to push** (committed on `s4c/t21`; no push was made) (the controller pushes as Mizore66 and reads CI)
 
 ```bash
 git add .github difftest docs

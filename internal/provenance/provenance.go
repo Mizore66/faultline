@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -138,9 +137,6 @@ var (
 		s.F("trustedRootFile", s.String(s.Trim(), s.MinLength(1), s.MaxLength(4_096))),
 		s.F("sourceDigest", s.Optional(gitObjectIDSchema)),
 	).Strict()
-
-	// The path split of ensureRealDirectoryTree (src/github-provenance.ts:269).
-	pathSeparators = regexp.MustCompile(`[\\/]+`)
 )
 
 func throw(message string) { jsexc.Throw(errors.New(message)) }
@@ -386,50 +382,9 @@ func IdentityFromEnvironment(workspace string) (identity jsjson.Value, err error
 	return identity, err
 }
 
-// safeSegment is resolveSafeDirectorySegment with its lstat error thrown.
-func safeSegment(path string) (string, bool) {
-	resolved, ok, err := safedir.ResolveSafeDirectorySegment(path)
-	if err != nil {
-		jsexc.Throw(err)
-	}
-	return resolved, ok
-}
-
-// Port of src/github-provenance.ts:266 ensureRealDirectoryTree: each
-// existing component is checked with lstat, never followed; a missing one
-// is created with mode 0700 after its parent was checked.
+// Port of src/github-provenance.ts:266 ensureRealDirectoryTree.
 func ensureRealDirectoryTree(directory string) {
-	absolute := nodefs.Resolve(directory)
-	current := nodefs.ParseRoot(absolute)
-	var parts []string
-	if suffix := nodefs.Relative(current, absolute); suffix != "" {
-		for _, p := range pathSeparators.Split(suffix, -1) {
-			if p != "" {
-				parts = append(parts, p)
-			}
-		}
-	}
-	if nodefs.Exists(current) {
-		safe, ok := safeSegment(current)
-		if !ok {
-			// The filesystem root is always a real directory.
-			throw(jsexc.Concat("Provenance root must be a real directory: ", current))
-		}
-		current = safe
-	}
-	for _, part := range parts {
-		current = nodefs.Join(current, part)
-		if !nodefs.Exists(current) {
-			if err := nodefs.Mkdir(current, 0o700); err != nil {
-				jsexc.Throw(err)
-			}
-		}
-		safe, ok := safeSegment(current)
-		if !ok {
-			throw(jsexc.Concat("Provenance output cannot traverse a symbolic link or non-directory: ", current))
-		}
-		current = safe
-	}
+	safedir.EnsureRealDirectoryTree(directory, "Provenance root must be a real directory: ", "Provenance output cannot traverse a symbolic link or non-directory: ")
 }
 
 // DefaultRoot ports defaultGithubProvenanceRoot (src/github-provenance.ts:285).

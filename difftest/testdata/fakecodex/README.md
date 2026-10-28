@@ -1,10 +1,12 @@
 # Fake Codex
 
-Each directory here holds one `codex` (a POSIX `sh` script) for the writer
+The single `codex` here (a POSIX `sh` script with one `variant=` line per
+copy) serves every variant below for the writer
 replay (`difftest/writer_test.go`, `difftest/gen/gen-writers.ts`), so no real
 Codex CLI ever answers. A writer template selects one with
 `"fakeCodex": "<name>"`: the case gets a copy at `<HOME>/fakecodex/codex`
-(mode 0755) with the case's argv log path written into its `log=` line, and
+(mode 0755) with the case's argv log path written into its `log=` line and
+the variant name into its `variant=@VARIANT@` line, and
 `FAULTLINE_CODEX_BIN` names it. `"fakeCodexOnPath": true` installs the
 `edits` copy the same way (or the `fakeCodex` one, when both are set) and
 puts `<HOME>/fakecodex` on `PATH` right after the recorders, without
