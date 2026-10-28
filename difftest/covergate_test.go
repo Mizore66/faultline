@@ -83,6 +83,9 @@ func coverageGate(repo, coverDir string) error {
 	// those packages: a bounded run of the cases that reach them cannot
 	// judge the others.
 	only := strings.Fields(strings.ReplaceAll(os.Getenv("FAULTLINE_COVER_ONLY"), ",", " "))
+	if err := refuseNarrowedGate(only); err != nil {
+		return err
+	}
 	for _, s := range sites {
 		rel, _ := filepath.Rel(repo, s.file)
 		rel = filepath.ToSlash(rel)
@@ -155,4 +158,28 @@ func TestCoverageWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("LIVE-GROUP-AUDIT coverage windows: every judged error site ran (restricted to %q)", os.Getenv("FAULTLINE_COVER_ONLY"))
+}
+
+// refuseNarrowedGate stops FAULTLINE_COVER_ONLY from narrowing a full
+// FAULTLINE_COVERAGE_GATE=1 judgment: only a bounded window report
+// (TestCoverageWindows) may restrict the packages.
+func refuseNarrowedGate(only []string) error {
+	if len(only) > 0 && os.Getenv("FAULTLINE_COVERAGE_GATE") == "1" {
+		return fmt.Errorf("FAULTLINE_COVER_ONLY narrows the packages judged and cannot be combined with FAULTLINE_COVERAGE_GATE=1")
+	}
+	return nil
+}
+
+func TestNarrowedGateIsRefused(t *testing.T) {
+	t.Setenv("FAULTLINE_COVERAGE_GATE", "1")
+	if refuseNarrowedGate([]string{"internal/repair"}) == nil {
+		t.Fatal("a narrowed full gate must be refused")
+	}
+	if refuseNarrowedGate(nil) != nil {
+		t.Fatal("an unnarrowed full gate is fine")
+	}
+	t.Setenv("FAULTLINE_COVERAGE_GATE", "")
+	if refuseNarrowedGate([]string{"internal/repair"}) != nil {
+		t.Fatal("a window report may restrict")
+	}
 }

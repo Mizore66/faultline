@@ -57,12 +57,12 @@ jobs:
           status=0
           go test -count=1 -timeout 30m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
           go test -tags faultline_test -count=1 -timeout 120m -v ./... | tee -a "$RUNNER_TEMP/go.log" || status=$?
-          allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestWriterSameDirectory'
+          allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestWriterSameDirectory|TestCoverageWindows'
           case "$RUNNER_OS" in
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
             Windows)
               posix=$(tr -d '\r' < .github/scripts/windows-writer-skips.txt | grep -v '^#' | paste -sd '|' -)
-              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestLoadRejectsSymlinkDirectoryAndOversize|TestCaptureRefusesSymlink|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|$posix" ;;
+              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestLoadRejectsSymlinkDirectoryAndOversize|TestCaptureRefusesSymlink|TestEnsureRealDirectoryTree|TestWorktreeRefsExclusionIsNarrow|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|$posix" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status

@@ -1200,8 +1200,7 @@ var liveGatedFiles = map[string]string{
 // (so TestGoldensReachEveryErrorLiteral never sees them) that their live test
 // cannot reach, each with the reason; requireReached skips them.
 var liveOnlyUnreachable = map[string]string{
-	"Cannot copy an unknown file type:": "needs a source that is neither a file, directory, link, socket nor FIFO: a block device, which only root can make (a character device, /dev/null, copies as OK on both sides and is a fixed case of TestLiveCpSyncTree)",
-}
+	"Cannot copy an unknown file type:": "on Linux Go's os.Stat maps every S_IFMT type it can see (regular, directory, symlink, FIFO, socket, block and character device) to a mode bit and never sets fs.ModeIrregular (os/stat_linux.go, Go 1.27.3), and cp.go:251 throws only on ModeIrregular, so no Linux fixture reaches it (block and character devices copy, as cp.go:318 does). Whether frozen Node 22.22.2 ever reports this text for a type Go maps was NOT inspected: this is a statement about the Go port, not about Node."}
 
 // liveGated reports whether the file at pos (an absolute path, optionally
 // followed by :line) is live-gated.

@@ -4,6 +4,8 @@ package difftest
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -125,12 +127,53 @@ var liveGroupState = struct {
 	sync.Mutex
 	outputs map[string]string
 	done    map[string]map[string]bool
-}{outputs: map[string]string{}, done: map[string]map[string]bool{}}
+	// checked are the files whose reach check ran (complete and unnarrowed).
+	checked map[string]bool
+}{outputs: map[string]string{}, done: map[string]map[string]bool{}, checked: map[string]bool{}}
+
+// noteGroup records that test top finished with out for file, whose group has
+// n tests, and says whether the group is now complete (and its outputs). A
+// complete, unnarrowed group is marked checked: the caller runs the reach
+// check at once.
+func noteGroup(file, top string, narrowed bool, out string, n int) (bool, string) {
+	liveGroupState.Lock()
+	defer liveGroupState.Unlock()
+	liveGroupState.outputs[file] += out + "\n"
+	if liveGroupState.done[file] == nil {
+		liveGroupState.done[file] = map[string]bool{}
+	}
+	liveGroupState.done[file][top] = true
+	complete := len(liveGroupState.done[file]) == n
+	if complete && !narrowed {
+		liveGroupState.checked[file] = true
+	}
+	return complete, liveGroupState.outputs[file]
+}
+
+// reportUnverifiedGroups prints the terminal LIVE-GROUP-UNVERIFIED lines the
+// CI log gate fails on, for the files a test called requireReachedGroup for
+// whose reach check never ran (a test of the group did not run, or a knob
+// narrowed it). TestMain calls it after m.Run, so a group that completed
+// later in the same process leaves none.
+func reportUnverifiedGroups(w io.Writer) {
+	liveGroupState.Lock()
+	var files []string
+	for file := range liveGroupState.done {
+		if !liveGroupState.checked[file] {
+			files = append(files, file)
+		}
+	}
+	liveGroupState.Unlock()
+	slices.Sort(files)
+	for _, file := range files {
+		fmt.Fprintf(w, "LIVE-GROUP-UNVERIFIED %s: needs %s in one unnarrowed run\n", file, liveGatedFiles[file])
+	}
+}
 
 // requireReachedGroup is requireReached for a file several live tests reach
 // together (liveGatedFiles names them "TestA+TestB"): each calls it at its
 // end, and the check runs once every named test has. A run that selects only
-// some of them cannot judge the file: it logs LIVE-GROUP-UNVERIFIED, and CI
+// some of them cannot judge the file: it logs LIVE-GROUP-PENDING, the process-end audit (reportUnverifiedGroups) prints the terminal LIVE-GROUP-UNVERIFIED, and CI
 // (which runs them all in one process) enforces the check. With
 // FAULTLINE_DUMP_LIVE_OUTPUTS=<dir> a narrowed run appends what it compared
 // to the file's dump and logs the literals still unreached by the union so
@@ -144,15 +187,7 @@ func requireReachedGroup(t *testing.T, file string) {
 		return
 	}
 	narrowed := os.Getenv("FAULTLINE_REPAIR_ONLY") != "" || os.Getenv("FAULTLINE_REPAIR_SKIP") != "" || os.Getenv("FAULTLINE_REPAIR_WT_CASES") != ""
-	liveGroupState.Lock()
-	liveGroupState.outputs[file] += recordedOutputs(t) + "\n"
-	if liveGroupState.done[file] == nil {
-		liveGroupState.done[file] = map[string]bool{}
-	}
-	liveGroupState.done[file][top] = true
-	complete := len(liveGroupState.done[file]) == len(tests)
-	outputs := liveGroupState.outputs[file]
-	liveGroupState.Unlock()
+	complete, outputs := noteGroup(file, top, narrowed, recordedOutputs(t), len(tests))
 	if dir := os.Getenv("FAULTLINE_DUMP_LIVE_OUTPUTS"); dir != "" && narrowed {
 		name := filepath.Join(dir, strings.ReplaceAll(file, "/", "_")+".txt")
 		f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -167,7 +202,7 @@ func requireReachedGroup(t *testing.T, file string) {
 		return
 	}
 	if !complete || narrowed {
-		t.Logf("LIVE-GROUP-UNVERIFIED %s: needs %s in one unnarrowed run", file, liveGatedFiles[file])
+		t.Logf("LIVE-GROUP-PENDING %s: waits for %s in one unnarrowed run (the process-end audit reports it if none completes it)", file, liveGatedFiles[file])
 		return
 	}
 	requireReached(t, file, outputs)

@@ -96,6 +96,7 @@ func TestMain(m *testing.M) {
 		exec.Command(flBinary, "help").Run()
 	}
 	code := m.Run()
+	reportUnverifiedGroups(os.Stderr)
 	if coverDir != "" {
 		if run := flag.Lookup("test.run"); code == 0 && run != nil && run.Value.String() == "" {
 			repo, _ := filepath.Abs("..")

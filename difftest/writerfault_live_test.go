@@ -184,12 +184,6 @@ var writerFaultPaths = []struct {
 // only single --from-bundle write, and the only one creating AGENTS.md.
 var faultFirstInvocation = map[string]bool{"prevention-write-bundle-ok": true}
 
-// faultLastInvocation are multi-invocation writer cases whose last invocation
-// alone is faulted and traced; the earlier ones run unfaulted, because the
-// last names their output (repair-bundle-codex-ok investigates, then
-// repairs).
-var faultLastInvocation = map[string]bool{"repair-bundle-codex-ok": true}
-
 // everyCallFaultPaths fail every call of a group, on any path. The fixture
 // mkdtemp of doctor --security (src/doctor.ts:605) cannot be faulted by
 // path: when the seeded mkdtempSync's mkdir fails other than EEXIST,
@@ -333,7 +327,7 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 		mask:     maskStagedPid,
 		command: func(r writerRoots, inv int, args []string) []string {
 			root = r.root
-			if faultLastInvocation[tpl.ID] && inv != len(tpl.Argv)-1 {
+			if inv != faultInvocation(tpl) {
 				return append(slices.Clone(command), args...)
 			}
 			quote := func(p string) string {
@@ -354,7 +348,7 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 			return append([]string{"sh", "-c", script, "sh"}, append(command, args...)...)
 		},
 	}
-	res := runWriterCaseWith(t, repo, tpl, run)[0]
+	res := faultResultOf(tpl, runWriterCaseWith(t, repo, tpl, run))
 	b, _ := os.ReadFile(trace)
 	return faultResult{res, strings.Count(string(b), "(INJECTED)"), strings.ReplaceAll(string(b), root+"/", "<R>/")}
 }
@@ -373,13 +367,13 @@ func discoverFaultPath(t *testing.T, repo string, tpl writerTemplate, glob strin
 	run := writerRun{
 		noVerify: true,
 		command: func(_ writerRoots, inv int, args []string) []string {
-			if faultLastInvocation[tpl.ID] && inv != len(tpl.Argv)-1 {
+			if inv != faultInvocation(tpl) {
 				return append(tsCommand(repo), args...)
 			}
 			return append([]string{"strace", "-f", "-qq", "-s", "4096", "-o", trace, "-e", "trace=" + discoveryCalls}, append(tsCommand(repo), args...)...)
 		},
 		mask: func(t *testing.T, r writerRoots, inv int, stdout, stderr string) (string, string) {
-			if faultLastInvocation[tpl.ID] && inv != len(tpl.Argv)-1 {
+			if inv != faultInvocation(tpl) {
 				return stdout, stderr // untraced
 			}
 			file, err := os.Open(trace)
@@ -423,7 +417,7 @@ func discoverFaultPath(t *testing.T, repo string, tpl writerTemplate, glob strin
 			return stdout, stderr
 		},
 	}
-	res := runWriterCaseWith(t, repo, tpl, run)[0]
+	res := faultResultOf(tpl, runWriterCaseWith(t, repo, tpl, run))
 	if found == "" {
 		t.Fatalf("%s: no traced path matches %s (exit %d)\n%s%s\ntraced: %s", tpl.ID, glob, res.Exit, res.Stdout, res.Stderr, strings.Join(slices.Compact(slices.Sorted(slices.Values(seen))), "\n"))
 	}
