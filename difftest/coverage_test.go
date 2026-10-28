@@ -123,7 +123,7 @@ var unreachableLiterals = map[string]string{
 	// CLI paths frozen TS runs for real (Go throws `not yet ported`): no
 	// golden can compare them; internal/cli's unit tests pin the texts.
 	"not yet ported: help":                           "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
-	"not yet ported: %s":                             "every unported top-level command (codex, record, prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
+	"not yet ported: %s":                             "every unported top-level command (prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
 	"not yet ported: investigate --ci-log/--resume":  "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: investigate turns":              "investigate turns runs in TS; TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: turn proof bundle verification": "a turn proof bundle verifies in TS; slice 2 does not port the turn verifier",
@@ -225,6 +225,15 @@ var unreachableLiterals = map[string]string{
 	"class treats surrogates, U+FFFD and astral characters differently": "jsre pattern refusal (TestUnsupportedPanics)",
 	"jsre: /%s/%s: unsupported flag %q":                                 "jsre refuses a flag the port does not implement; every pattern fl compiles is a constant with g or i",
 	"jsre: /%s/: match boundary inside a code point":                    "an internal invariant: RE2 over UTF-8 never ends a match inside a code point",
+
+	// Slice 4a: error literals of the sidecar files that no input reaches.
+	"A recorded checkpoint result requires a checkpoint digest.":           "checkpointResult is only called with a checkpoint for CHECKPOINT_RECORDED",
+	"The sidecar stop receipt omitted its checkpoint digest.":              "assertReceiptMatchesLedger compares the digest with the ledger's first and refuses a receipt without one",
+	"A checkpoint receipt requires a checkpoint digest.":                   "writeReceipt only gets a RECORDED result that carries its digest",
+	"A turn snapshot receipt requires a turn tree snapshot digest.":        "a TURN_SNAPSHOT_RECORDED result always carries its snapshot",
+	"Only Stop checkpoint outcomes can be persisted as a sidecar receipt.": "writeReceipt is only called with the four Stop statuses",
+	"session-start":    "event id phase strings reach a message only through appendIfAbsent, which SessionStart does not use",
+	"session-baseline": "event id phase strings reach a message only through appendIfAbsent, which SessionStart does not use",
 
 	// internal/projinit (slice 3a Task 10): SidecarCliCommand and
 	// CodexSidecarLedgerPath are shared with `fl codex sidecar`, not ported
@@ -1048,7 +1057,7 @@ var gatedDirs = []string{
 	"internal/witnessresult", "internal/redaction", "internal/witness", "internal/ledgerbind",
 	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
 	"internal/safegit", "internal/hostcmd", "internal/runtimeimage", "internal/doctor", "internal/allowlist", "internal/turnsnap",
-	"internal/incident",
+	"internal/incident", "internal/ledger", "internal/sidecar", "internal/snapgc",
 }
 
 // gatedLiterals is errorLiterals over every gatedDirs package.
@@ -1117,6 +1126,15 @@ var liveGatedFiles = map[string]string{
 	"internal/bundle/prevention/write.go":     "TestLivePreventionWrite",
 	"internal/bundle/prevention/agentsmd.go":  "TestLiveAgentsMd",
 	"internal/bundle/prevention/artifacts.go": "TestLivePreventionFromArtifacts",
+	// Slice 4a: the recording ledger writers, the snapshot collector and the
+	// sidecar hook state machine, on generated inputs and stores.
+	"internal/ledger/ledger.go":     "TestLiveLedgerWriters",
+	"internal/ledger/checkpoint.go": "TestLiveLedgerWriters",
+	"internal/snapgc/gc.go":         "TestLiveSnapshotGC",
+	"internal/sidecar/hook.go":      "TestLiveSidecarHooks",
+	"internal/sidecar/receipt.go":   "TestLiveSidecarHooks",
+	"internal/sidecar/lock.go":      "TestLiveSidecarHooks",
+	"internal/sidecar/inspect.go":   "TestLiveSidecarHooks",
 }
 
 // liveGated reports whether the file at pos (an absolute path, optionally

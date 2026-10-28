@@ -3,9 +3,12 @@
 package difftest
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -321,4 +324,117 @@ func nodelessPath(t *testing.T, fakeDocker string, tools ...string) string {
 		t.Fatal("git is not on PATH")
 	}
 	return path
+}
+
+// TestEndToEndSlice4aWithoutNode is done criterion 3 of the slice 4 spec
+// (4.2, PR 4a; spec 2.6): the recording commands chain end to end on the Go
+// binary with PATH holding only the Git directory and no `node`. It
+// installs the sidecar hook, starts a recording, attaches a turn with a
+// checkpoint, feeds the five hook events (--quiet), reads the sidecar
+// status, verifies both ledgers and collects the clean session's snapshots.
+func TestEndToEndSlice4aWithoutNode(t *testing.T) {
+	ws := scenarioWorkspace(t, "sidecar-repo")
+	env := map[string]string{"PATH": nodelessPath(t, "pass-fail")}
+	run := func(stdin string, args ...string) (string, string, int) {
+		t.Helper()
+		// The real clock (writerEnv's seeded one would repeat its ticks in
+		// every invocation) and TestMain's isolated HOME and Git settings.
+		cmd := osexec.Command(flBinary, args...)
+		cmd.Dir = ws
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "PATH=") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
+		cmd.Env = append(cmd.Env, "PATH="+env["PATH"])
+		cmd.Stdin = strings.NewReader(stdin)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		var exitErr *osexec.ExitError
+		if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
+			t.Fatalf("running fl: %v", err)
+		}
+		return stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()
+	}
+	must := func(stdin string, args ...string) string {
+		t.Helper()
+		stdout, stderr, code := run(stdin, args...)
+		if code != 0 {
+			t.Fatalf("fl %s: exit %d\n%s%s", strings.Join(args, " "), code, stdout, stderr)
+		}
+		return stdout
+	}
+	// The hook document install writes is untracked, and a checkpoint needs a
+	// clean worktree: keep it out of Git's status, as a user's own ignore would.
+	if err := os.MkdirAll(filepath.Join(ws, ".git", "info"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".git", "info", "exclude"), []byte(".codex/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := jsonField(must("", "codex", "sidecar", "install", "--repo", ".", "--command", "fl codex sidecar hook --quiet", "--yes"), "status"); got != "PROJECT_HOOKS_INSTALLED" {
+		t.Errorf("sidecar install: status %q, want PROJECT_HOOKS_INSTALLED", got)
+	}
+	if got := jsonField(must("", "record", "init", "--session", "e2e", "--repo", "."), "status"); got != "RECORDING_STARTED" {
+		t.Errorf("record init: status %q, want RECORDING_STARTED", got)
+	}
+	// attach has no --session: without --ledger it names recordings/session.json
+	// (src/cli-app.ts:256), not the ledger record init made.
+	attach := must("", "record", "attach", "--ledger", ".faultline/recordings/e2e.json", "--turn", "t-1", "--ordinal", "1", "--prompt-digest", "sha256:"+strings.Repeat("a", 64), "--repo", ".", "--checkpoint")
+	if got := jsonField(attach, "status"); got != "ATTACHED" {
+		t.Errorf("record attach: status %q, want ATTACHED\n%s", got, attach)
+	}
+	if got := jsonField(attach, "checkpoint"); got != "RECORDED" {
+		t.Errorf("record attach: checkpoint %q, want RECORDED\n%s", got, attach)
+	}
+	// The five hook events, one invocation each (--quiet).
+	base := `{"session_id":"s-1","cwd":` + strconv.Quote(ws) + `,"model":"gpt-5.6",`
+	for _, event := range []string{
+		`"hook_event_name":"SessionStart"}`,
+		`"hook_event_name":"UserPromptSubmit","turn_id":"t-1","prompt":"Keep state.txt good.","transcript_path":"/work/transcript.jsonl"}`,
+		`"hook_event_name":"PreToolUse","turn_id":"t-1","tool_name":"shell","tool_call_id":"c-1","tool_input":{"cmd":"ls"}}`,
+		`"hook_event_name":"PostToolUse","turn_id":"t-1","tool_name":"shell","tool_call_id":"c-1"}`,
+		`"hook_event_name":"Stop","turn_id":"t-1"}`,
+	} {
+		stdout, stderr, code := run(base+event+"\n", "codex", "sidecar", "hook", "--quiet")
+		if code != 0 || strings.TrimSpace(stdout) != `{"continue":true}` || strings.Contains(stdout+stderr, "did not record") {
+			t.Errorf("hook %.60s: exit %d\n%s%s", event, code, stdout, stderr)
+		}
+	}
+	status := must("", "codex", "sidecar", "status", "--repo", ".")
+	if got := jsonField(status, "status"); got != "SIDECAR_RECORDINGS_READY" {
+		t.Errorf("sidecar status: %q, want SIDECAR_RECORDINGS_READY\n%s", got, status)
+	}
+	if got := firstRecording(status, "latestStop", "status"); got != "CHECKPOINT_RECORDED" {
+		t.Errorf("sidecar status: latestStop.status %q, want CHECKPOINT_RECORDED\n%s", got, status)
+	}
+	if got := firstRecording(status, "latestStop", "receipt"); got != "DURABLE" {
+		t.Errorf("sidecar status: latestStop.receipt %q, want DURABLE\n%s", got, status)
+	}
+	for _, ledger := range []string{firstRecording(status, "ledgerPath"), ".faultline/recordings/e2e.json"} {
+		if ledger == "" {
+			t.Errorf("no ledger to verify\n%s", status)
+			continue
+		}
+		out := must("", "record", "verify", "--ledger", ledger)
+		if v, err := jsjson.Parse(out); err != nil || v.Get("valid").Kind() != jsjson.Bool || !v.Get("valid").Bool() {
+			t.Errorf("record verify %s: not valid: true\n%s", ledger, out)
+		}
+	}
+	if got := jsonField(must("", "codex", "snapshot", "gc", "--repo", "."), "status"); got != "ALREADY_EMPTY" {
+		t.Errorf("snapshot gc: status %q, want ALREADY_EMPTY", got)
+	}
+}
+
+// firstRecording is the string at path in the first entry of status's
+// recordings array.
+func firstRecording(status string, path ...string) string {
+	v, err := jsjson.Parse(status)
+	if err != nil || len(v.Get("recordings").Items()) == 0 {
+		return ""
+	}
+	if f := v.Get("recordings").Items()[0].Get(path...); f.Kind() == jsjson.String {
+		return f.Str()
+	}
+	return ""
 }

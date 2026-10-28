@@ -517,14 +517,8 @@ func TestLiveSnapshotGC(t *testing.T) {
 			}
 		}
 	}
-	// gc.go is live-gated: Task 9 adds it to liveGatedFiles (with
-	// internal/snapgc to gatedDirs); until then this test registers it for
-	// its own requireReached only.
+	// gc.go is live-gated (coverage_test.go liveGatedFiles).
 	const gated = "internal/snapgc/gc.go"
-	if liveGatedFiles[gated] == "" {
-		liveGatedFiles[gated] = "TestLiveSnapshotGC"
-		defer delete(liveGatedFiles, gated)
-	}
 	requireReached(t, gated, outputs)
 	liveSummary(t, "%d trees compared (each copied twice): %v", trees, counts)
 }
