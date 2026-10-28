@@ -10,29 +10,29 @@ import (
 
 func TestResolveRangeRefusals(t *testing.T) {
 	head := "1111111111111111111111111111111111111111"
-	if _, err := ResolveRange(head, nil, "", ""); err == nil || err.Error() != "HEAD is a root commit; select an explicit range instead of guessing a base" {
+	if _, err := ResolveRange(head, nil, nil); err == nil || err.Error() != "HEAD is a root commit; select an explicit range instead of guessing a base" {
 		t.Fatalf("root: %v", err)
 	}
 	two := []string{"2222222222222222222222222222222222222222", "3333333333333333333333333333333333333333"}
-	if _, err := ResolveRange(head, two, "", ""); err == nil || err.Error() != "HEAD has multiple parents; select an explicit range instead of guessing a parent" {
+	if _, err := ResolveRange(head, two, nil); err == nil || err.Error() != "HEAD has multiple parents; select an explicit range instead of guessing a parent" {
 		t.Fatalf("merge: %v", err)
 	}
-	if _, err := ResolveRange(head, nil, "abc", "abc"); err == nil || err.Error() != "incident range ancestor and descendant must be different" {
+	if _, err := ResolveRange(head, nil, &ExplicitRange{"abc", "abc"}); err == nil || err.Error() != "incident range ancestor and descendant must be different" {
 		t.Fatalf("degenerate: %v", err)
 	}
-	if _, err := ResolveRange(head, []string{head}, "", ""); err == nil || err.(*RangeError).Code != "DEGENERATE_RANGE" {
+	if _, err := ResolveRange(head, []string{head}, nil); err == nil || err.(*RangeError).Code != "DEGENERATE_RANGE" {
 		t.Fatalf("self parent: %v", err)
 	}
 }
 
 func TestResolveRangeSources(t *testing.T) {
 	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	got, err := ResolveRange(b, []string{a}, "", "")
+	got, err := ResolveRange(b, []string{a}, nil)
 	if err != nil || jsjson.Stringify(got) != `{"ancestor":"`+a+`","descendant":"`+b+`","source":"LOCAL_HEAD_PARENT"}` {
 		t.Fatalf("parent: %s %v", jsjson.Stringify(got), err)
 	}
 	// An explicit bracket wins over the observed facts, even a root HEAD.
-	got, err = ResolveRange(b, nil, "HEAD~1", "HEAD")
+	got, err = ResolveRange(b, nil, &ExplicitRange{"HEAD~1", "HEAD"})
 	if err != nil || jsjson.Stringify(got) != `{"ancestor":"HEAD~1","descendant":"HEAD","source":"EXPLICIT"}` {
 		t.Fatalf("explicit: %s %v", jsjson.Stringify(got), err)
 	}
@@ -111,17 +111,21 @@ func TestCreateDraftProposalBinding(t *testing.T) {
 	}
 }
 
-// TestCreateDraftResolvedRange checks that a resolved range (with source)
-// gives the same draft as the facts it came from.
-func TestCreateDraftResolvedRange(t *testing.T) {
+// TestCreateDraftRejectsResolvedRange pins that a resolved range (with its
+// `source` member) is not a draft input: createIncidentDraft's strict schema
+// rejects the unrecognized key, and CreateDraft no longer remaps it.
+func TestCreateDraftRejectsResolvedRange(t *testing.T) {
 	want, err := CreateDraft(sampleInput())
 	if err != nil {
 		t.Fatal(err)
 	}
+	if want.Get("range").Get("source").Kind() == jsjson.Undefined {
+		t.Fatal("draft range has no source")
+	}
 	in := sampleInput()
 	in.Range, in.LocalHead = want.Get("range"), jsjson.Value{}
-	got, err := CreateDraft(in)
-	if err != nil || jsjson.Stringify(got) != jsjson.Stringify(want) {
-		t.Fatalf("%s\n%s %v", jsjson.Stringify(got), jsjson.Stringify(want), err)
+	_, err = CreateDraft(in)
+	if err == nil || !strings.Contains(err.Error(), "source") || !strings.Contains(err.Error(), "nrecognized") {
+		t.Fatalf("resolved range accepted or wrong error: %v", err)
 	}
 }
