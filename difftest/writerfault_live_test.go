@@ -186,6 +186,34 @@ var writerFaultPaths = []struct {
 	{"turns-proof", "turn-binding", "ws/repo/.faultline/incidents/bindings/*.json", []string{"open", "write", "close"}, ""},
 	{"turns-minimize", "turn-minimization-temp", "ws/.faultline/minimizations/.*.faultline-git-minimization.tmp", []string{"open", "write", "close", "link", "unlink"}, ""},
 	{"turns-minimize", "turn-minimization-dir", "ws/.faultline/minimizations", []string{"mkdir"}, ""},
+	// Slice 4c (spec 2.6). Paths are relative to the case root; a rename is
+	// faulted through its source (x86_64 strace -P matches only rename(2)'s
+	// first argument). A group a fault-free run never fires is dropped, not
+	// faked.
+	// The attestation link: the 0700 store root, then the 0600 staged file
+	// that is hard-linked into place and unlinked (src/attestation.ts:262).
+	{"attest-create-git", "attest-store-root", "ws/.faultline/attestations", []string{"mkdir"}, ""},
+	{"attest-create-git", "attest-staged", "ws/.faultline/attestations/.attestation-*.tmp", []string{"open", "write", "fsync", "close", "link", "unlink"}, ""},
+	// The provenance receipt (0600 wx) under its 0700 root
+	// (src/github-provenance.ts:290).
+	{"provenance-create-ok", "receipt", "ws/.faultline/provenance/ci-receipt.json", []string{"open", "write", "close"}, ""},
+	{"provenance-create-ok", "provenance-root", "ws/.faultline/provenance", []string{"mkdir"}, ""},
+	// The repair brief stage, renamed into place (src/repair-brief-store.ts).
+	{"repair-brief-input-ok", "brief-stage", "ws/.faultline/repair-briefs/.repair-*.tmp", []string{"mkdir", "rename"}, ""},
+	{"repair-brief-input-ok", "brief-manifest", "ws/.faultline/repair-briefs/.repair-*.tmp/manifest.json", []string{"open", "write", "fsync", "close"}, ""},
+	{"repair-brief-input-ok", "brief-root", "ws/.faultline/repair-briefs", []string{"mkdir"}, ""},
+	// witness implement's two overlay files.
+	{"witness-implement-template", "overlay", "ws/overlay/witness.mjs", []string{"open", "write", "close"}, ""},
+	{"witness-implement-template", "overlay-readme", "ws/overlay/README.faultline.txt", []string{"open", "write", "close"}, ""},
+	// fl repair: the managed root, its artifacts, the temporary index git
+	// writes and fl removes, and the prevention stage and export. Only the
+	// repair invocation (the second) is faulted (faultLastInvocation).
+	{"repair-bundle-codex-ok", "managed-root", "ws/.faultline/repairs/repair-*", []string{"mkdir"}, ""},
+	{"repair-bundle-codex-ok", "repair-meta", "ws/.faultline/repairs/repair-*/artifacts/repair-meta.json", []string{"open", "write", "close"}, ""},
+	{"repair-bundle-codex-ok", "repair-patch", "ws/.faultline/repairs/repair-*/artifacts/repair.patch", []string{"open", "write", "close"}, ""},
+	{"repair-bundle-codex-ok", "repaired-index", "tmp/faultline-repair-*.index", []string{"unlink"}, ""},
+	{"repair-bundle-codex-ok", "prevention-stage", "ws/.faultline/prevention-proofs/.from-repair-*.tmp", []string{"mkdir", "rename"}, ""},
+	{"repair-bundle-codex-ok", "prevention-export", "ws/.faultline/repairs/repair-*/artifacts/prevention-export.json", []string{"open", "write", "close"}, ""},
 }
 
 // writerFaultPaths4a are the slice 4a writers (spec 2.6): the recording
@@ -211,11 +239,6 @@ var writerFaultPaths4a = []struct {
 	{"sidecar-hook-session-quiet", "sidecar-ledger-stage", "ws/.git/faultline/recordings/.codex-*.json.<PID>.*.tmp", []string{"open", "write", "fsync", "rename"}, ""},
 	{"sidecar-hook-full-turn", "receipt-stage", "ws/.git/faultline/recordings/.*.<PID>.tmp", []string{"open", "write", "close", "rename"}, "ws/.git/faultline/recordings/codex-stop-*.json"},
 }
-
-// faultLastInvocation are multi-invocation writer cases whose every
-// invocation runs but only the last runs under strace and is compared: the
-// stop receipt is written by the last hook of sidecar-hook-full-turn.
-var faultLastInvocation = map[string]bool{"sidecar-hook-full-turn": true}
 
 // faultFirstInvocation are multi-invocation writer cases whose first
 // invocation alone is faulted: prevention-write-bundle-ok's first is the
@@ -293,8 +316,8 @@ func TestLiveWriterFaults(t *testing.T) {
 			if ok && faultFirstInvocation[f.caseID] {
 				tpl.Argv = tpl.Argv[:1]
 			}
-			if !ok || (len(tpl.Argv) != 1 && !faultLastInvocation[f.caseID]) {
-				t.Fatalf("writer template %s missing or not a single invocation", f.caseID)
+			if !ok {
+				t.Fatalf("writer template %s missing", f.caseID)
 			}
 			tpl.Env = append(tpl.Env, [2]string{"GOMAXPROCS", "1"})
 			rel, ok := discovered[f.caseID+"|"+f.glob+"|"+f.fakeGit]
@@ -371,8 +394,6 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 	if ordinal == 0 {
 		ordinal = 1
 	}
-	lastOnly := faultLastInvocation[f.caseID]
-	last := len(tpl.Argv) - 1
 	trace := filepath.Join(t.TempDir(), "trace")
 	calls := faultCalls[f.call]
 	var root string
@@ -387,7 +408,7 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 		},
 		command: func(r writerRoots, inv int, args []string) []string {
 			root = r.root
-			if lastOnly && inv != last {
+			if inv != faultInvocation(tpl) {
 				return append(slices.Clone(command), args...)
 			}
 			rel := rel
@@ -414,8 +435,7 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 			return withFakeGit(repo, f.fakeGit, append([]string{"sh", "-c", script, "sh"}, append(command, args...)...))
 		},
 	}
-	results := runWriterCaseWith(t, repo, tpl, run)
-	res := results[len(results)-1]
+	res := faultResultOf(tpl, runWriterCaseWith(t, repo, tpl, run))
 	b, _ := os.ReadFile(trace)
 	return faultResult{res, strings.Count(string(b), "(INJECTED)"), strings.ReplaceAll(string(b), root+"/", "<R>/")}
 }
@@ -433,11 +453,17 @@ func discoverFaultPath(t *testing.T, repo string, tpl writerTemplate, glob, fake
 	var seen []string
 	run := writerRun{
 		noVerify: true,
-		command: func(_ writerRoots, _ int, args []string) []string {
+		command: func(_ writerRoots, inv int, args []string) []string {
+			if inv != faultInvocation(tpl) {
+				return append(tsCommand(repo), args...)
+			}
 			traced := append([]string{"strace", "-f", "-qq", "-s", "4096", "-o", trace, "-e", "trace=" + discoveryCalls}, append(tsCommand(repo), args...)...)
 			return withFakeGit(repo, fakeGit, traced)
 		},
-		mask: func(t *testing.T, r writerRoots, _ int, stdout, stderr string) (string, string) {
+		mask: func(t *testing.T, r writerRoots, inv int, stdout, stderr string) (string, string) {
+			if inv != faultInvocation(tpl) {
+				return stdout, stderr // untraced
+			}
 			file, err := os.Open(trace)
 			if err != nil {
 				t.Fatal(err)
@@ -479,7 +505,7 @@ func discoverFaultPath(t *testing.T, repo string, tpl writerTemplate, glob, fake
 			return stdout, stderr
 		},
 	}
-	res := runWriterCaseWith(t, repo, tpl, run)[0]
+	res := faultResultOf(tpl, runWriterCaseWith(t, repo, tpl, run))
 	if found == "" {
 		t.Fatalf("%s: no traced path matches %s (exit %d)\n%s%s\ntraced: %s", tpl.ID, glob, res.Exit, res.Stdout, res.Stderr, strings.Join(slices.Compact(slices.Sorted(slices.Values(seen))), "\n"))
 	}

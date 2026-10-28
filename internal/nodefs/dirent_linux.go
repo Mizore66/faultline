@@ -110,3 +110,9 @@ type rawDirent struct {
 	name string
 	typ  uint8
 }
+
+// scandirNames is scandir's names.
+func scandirNames(path string) ([]string, error) {
+	names, _, err := scandir(path)
+	return names, err
+}

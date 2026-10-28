@@ -4,8 +4,10 @@ import (
 	"errors"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/Mizore66/faultline/internal/clock"
+	"github.com/Mizore66/faultline/internal/codexloop"
 
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
@@ -76,7 +78,9 @@ func witnessCommand(e *env, args []string) error {
 	}
 	store := witnessStore(args)
 	switch action {
-	case "implement", "review":
+	case "implement":
+		return e.witnessImplement(store, args)
+	case "review":
 		return fail("not yet ported: witness %s", action)
 	case "policy":
 		return e.witnessPolicy(store, args, proposalID)
@@ -346,4 +350,43 @@ func (e *env) witnessPolicy(store string, args []string, action string) error {
 		return nil
 	}
 	return fail("Usage: fl witness policy freeze --policy-id <id> --frozen-by <actor> --command <exact> [--max-timeout <seconds>] | fl witness policy apply <proposal-id> --policy-id <id>")
+}
+
+// witnessImplement ports the "implement" case (src/cli-app.ts:1169-1203).
+// The incident is read with a raw readFileSync + JSON.parse, so its errors
+// are Node's own. --repo is resolved but unused, as in TS.
+func (e *env) witnessImplement(_ string, args []string) error {
+	incidentOption, err := requiredOption(args, "--incident")
+	if err != nil {
+		return err
+	}
+	incident := readRawJSON(incidentOption)
+	var o codexloop.ImplementOptions
+	o.Incident = incident
+	if o.ProposalID, err = requiredOption(args, "--proposal-id"); err != nil {
+		return err
+	}
+	o.Behavior = optionOr(args, "--behavior", "The human-reviewed predicate must hold.")
+	overlayOut, err := requiredOption(args, "--overlay-out")
+	if err != nil {
+		return err
+	}
+	o.OverlayOut = nodefs.Resolve(overlayOut)
+	o.Repository = repoOption(args)
+	if hasFlag(args, "--with-codex") {
+		o.Runner = codexloop.CLIRunner(hasFlag(args, "--allow-codex-full-auto"),
+			"Codex drafting requires explicit --allow-codex-full-auto in addition to --with-codex.", 120*time.Second)
+	}
+	result, err := codexloop.Implement(o)
+	if err != nil {
+		return err
+	}
+	e.printJSON(result)
+	status := result.Get("status").Str()
+	if status == "OVERLAY_DRAFTED" || status == "TEMPLATE_ONLY" {
+		e.exitCode = 0
+	} else {
+		e.exitCode = 1
+	}
+	return nil
 }

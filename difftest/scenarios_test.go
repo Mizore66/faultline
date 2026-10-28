@@ -103,6 +103,14 @@ var writerScenarios = map[string]bool{
 	"turn-sha256":            true,
 	"turn-sidecar":           true,
 	"turn-latest-ambiguous":  true,
+	"witness-implement":      true,
+	"attest-bundles":         true,
+	"provenance-ci":          true,
+	"provenance-signed":      true,
+	"repair-brief":           true,
+	"repair-package":         true,
+	"repair-repo":            true,
+	"repair-heterogeneous":   true,
 }
 
 // committedGitDir is what a scenario repository's .git directory is

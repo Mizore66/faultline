@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -870,7 +871,15 @@ func treeDigest(root string) string {
 // fileDigest (the writer replay's relocated digest; cases.ts treeDigest's
 // second argument).
 func treeDigestWith(root string, fileDigest func(rel string, b []byte) string) string {
-	var lines []string
+	return treeDigestAliased(root, fileDigest, func(rel string) (string, bool) { return rel, true })
+}
+
+// treeDigestAliased is treeDigestWith with each path named by alias (false
+// leaves the entry out). A renamed line goes last, sorted, since its order
+// would follow the object ids; an unchanged path keeps its place
+// (cases.ts treeDigest).
+func treeDigestAliased(root string, fileDigest func(rel string, b []byte) string, alias func(rel string) (string, bool)) string {
+	var lines, moved []string
 	var walk func(rel string)
 	walk = func(rel string) {
 		names, _ := nodefs.ReadDirNames(filepath.Join(root, filepath.FromSlash(rel)))
@@ -881,25 +890,36 @@ func treeDigestWith(root string, fileDigest func(rel string, b []byte) string) s
 			}
 			path := filepath.Join(root, filepath.FromSlash(r))
 			info, _ := os.Lstat(path)
+			shown, keep := alias(r)
+			add := func(kind, rest string) {
+				switch {
+				case !keep:
+				case shown == r:
+					lines = append(lines, kind+" "+shown+rest)
+				default:
+					moved = append(moved, kind+" "+shown+rest)
+				}
+			}
 			switch {
 			case info.Mode()&os.ModeSymlink != 0:
 				// Windows reports the link target with backslashes; the tree
 				// digest records the logical target as TS wrote it.
 				target, _ := os.Readlink(path)
-				lines = append(lines, "L "+r+" "+filepath.ToSlash(target))
+				add("L", " "+filepath.ToSlash(target))
 			case info.IsDir():
-				lines = append(lines, "D "+r)
+				add("D", "")
 				walk(r)
 			case !info.Mode().IsRegular(): // a FIFO: reading it would block
-				lines = append(lines, "S "+r)
+				add("S", "")
 			default:
 				b, _ := os.ReadFile(path)
-				lines = append(lines, "F "+r+" "+fileDigest(r, b))
+				add("F", " "+fileDigest(r, b))
 			}
 		}
 	}
 	walk("")
-	return canonical.SHA256Hex(strings.Join(lines, "\n"))
+	sort.Strings(moved)
+	return canonical.SHA256Hex(strings.Join(append(lines, moved...), "\n"))
 }
 
 var gitLabels = []string{

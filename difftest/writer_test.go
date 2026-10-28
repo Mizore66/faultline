@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -66,6 +67,16 @@ type writerTemplate struct {
 	// File is the template file the entry came from, relative to
 	// difftest/testdata ("writers.json", "writers.d/4a-harness.json").
 	File string
+	// Slice 4c fakes (gen-writers.ts WriterTemplate):
+	// difftest/testdata/fakecodex/codex (one script; the variant <FakeCodex> is
+	// written into its variant= line) as FAULTLINE_CODEX_BIN (or on
+	// PATH with FakeCodexOnPath), difftest/testdata/fakegh/<FakeGh> on PATH,
+	// and a fake OpenAI server answering from the workspace file FakeOpenAI.
+	FakeCodex, FakeGh, FakeOpenAI string
+	FakeCodexOnPath               bool
+	// openAIURL is the URL of the case's running fake OpenAI server
+	// (runWriterCaseWith sets it; not a writers.json key).
+	openAIURL string
 }
 
 // writerInput is one invocation's stdin: text (input, where <WS>, <TMP>,
@@ -115,8 +126,9 @@ type writerResult struct {
 }
 
 var (
-	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations", "input", "inputHex", "advanceClock"}
-	writerIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	writerTemplateKeys = []string{"id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations", "input", "inputHex", "advanceClock",
+		"fakeCodex", "fakeCodexOnPath", "fakeGh", "fakeOpenAI"}
+	writerIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	// fileEntry is a regular file's tree entry: its SHA-256, then its mode
 	// except on Windows.
 	fileEntry = regexp.MustCompile(`^[0-9a-f]{64}(?: [0-7]{1,4})?$`)
@@ -179,7 +191,9 @@ func loadWriterTemplateFile(t testing.TB, repo, file string, ids map[string]bool
 			}
 		}
 		tpl := writerTemplate{ID: o.Field("id").Str(), Scenario: o.Field("scenario").Str(), FakeDocker: o.Field("fakeDocker").Str(),
-			FakeTools: o.Field("fakeTools").Str(), PosixOnly: o.Field("posixOnly").Bool(), AdvanceClock: o.Field("advanceClock").Bool(), File: file}
+			FakeTools: o.Field("fakeTools").Str(), PosixOnly: o.Field("posixOnly").Bool(), AdvanceClock: o.Field("advanceClock").Bool(), File: file,
+			FakeCodex: o.Field("fakeCodex").Str(), FakeCodexOnPath: o.Field("fakeCodexOnPath").Bool(), FakeGh: o.Field("fakeGh").Str(),
+			FakeOpenAI: o.Field("fakeOpenAI").Str()}
 		if ids[tpl.ID] || !writerIDPattern.MatchString(tpl.ID) {
 			t.Fatalf("writer template id %q is duplicated or not lowercase kebab-case", tpl.ID)
 		}
@@ -390,11 +404,85 @@ func writeRecorders(t testing.TB, repo string, r writerRoots) {
 }
 
 // inheritedOut names the variables a writer case never inherits: git's own,
-// FaultLine's, and those src/ reads to detect CI or a live model
-// (difftest/gen/scenarios.ts inheritedOut).
+// FaultLine's, GitHub Actions' (provenance create reads GITHUB_SHA and the
+// rest: slice 4c correction 6), and those src/ reads to detect CI or a live
+// model (difftest/gen/scenarios.ts inheritedOut).
 func inheritedOut(name string) bool {
-	return strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "FAULTLINE_") ||
-		name == "CI" || name == "GITHUB_ACTIONS" || name == "OPENAI_API_KEY"
+	return strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "FAULTLINE_") || strings.HasPrefix(name, "GITHUB_") ||
+		name == "CI" || name == "OPENAI_API_KEY"
+}
+
+// fakeCodexVariants are the variants of the one fake codex script
+// (difftest/testdata/fakecodex/codex); the TS twin is fakeCodexVariants in
+// difftest/gen/scenarios.ts.
+var fakeCodexVariants = []string{"edits", "noop", "probe-fail", "probe-empty", "probe-crlf", "exit-nonzero", "killed", "flood", "outside-edits", "symlink-edit"}
+
+// installFakeCodex copies difftest/testdata/fakecodex/codex to
+// <HOME>/fakecodex/codex (mode 0755) with the case's argv log path written
+// into its `log=` line and <name> into its `variant=` line, as writeRecorders
+// does: fl runs codex with PATH as its only environment variable. It returns the copy's path
+// (scenarios.ts installFakeCodex).
+func installFakeCodex(t testing.TB, repo string, r writerRoots, name string) (bin string) {
+	t.Helper()
+	bin, err := installFakeCodexErr(repo, r, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// installFakeCodexErr is installFakeCodex for writerEnv, which has no
+// testing.TB.
+func installFakeCodexErr(repo string, r writerRoots, name string) (string, error) {
+	const line = "log=$FAULTLINE_ARGV_LOG\n"
+	const variantLine = "variant=@VARIANT@\n"
+	template, err := os.ReadFile(filepath.Join(repo, "difftest", "testdata", "fakecodex", "codex"))
+	if err != nil {
+		return "", err
+	}
+	if !slices.Contains(fakeCodexVariants, name) || !strings.Contains(string(template), line) || !strings.Contains(string(template), variantLine) || strings.Contains(r.argvLog, "'") {
+		return "", errors.New("fake codex " + name + " cannot take " + r.argvLog)
+	}
+	dir := filepath.Join(r.home, "fakecodex")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	bin := filepath.Join(dir, "codex")
+	if err := os.WriteFile(bin, []byte(strings.Replace(strings.Replace(string(template), line, "log='"+r.argvLog+"'\n", 1), variantLine, "variant="+name+"\n", 1)), 0o755); err != nil {
+		return "", err
+	}
+	return bin, os.Chmod(bin, 0o755)
+}
+
+// fakeCodexName is the fake codex a template installs ("" for none): its
+// fakeCodex, or edits for fakeCodexOnPath alone (scenarios.ts writerEnv).
+func fakeCodexName(tpl writerTemplate) string {
+	if tpl.FakeCodex == "" && tpl.FakeCodexOnPath {
+		return "edits"
+	}
+	return tpl.FakeCodex
+}
+
+// maskCodexPath masks, in a fake codex record's PATH= field, the inherited
+// PATH as <PATH>, then the case root as <ROOT> and the repository as <REPO>
+// (gen-writers.ts maskCodexPath): fl passes codex its whole PATH, which
+// differs between machines. Nothing else is touched.
+func maskCodexPath(record string, r writerRoots, repo, inheritedPath string) string {
+	if !strings.HasPrefix(record, "codex ") {
+		return record
+	}
+	args := strings.Split(record, "\x1f")
+	for i, a := range args {
+		value, ok := strings.CutPrefix(a, "PATH=")
+		if !ok {
+			continue
+		}
+		if inheritedPath != "" {
+			value = strings.ReplaceAll(value, inheritedPath, "<PATH>")
+		}
+		args[i] = "PATH=" + strings.ReplaceAll(strings.ReplaceAll(value, r.root, "<ROOT>"), repo, "<REPO>")
+	}
+	return strings.Join(args, "\x1f")
 }
 
 // writerEnv is difftest/gen/scenarios.ts writerEnv: the whole environment
@@ -421,10 +509,25 @@ func writerEnv(repo string, r writerRoots, seed string, tpl writerTemplate) []st
 			set(k, v)
 		}
 	}
-	// The recorders, the fake toolchain (difftest/testdata/faketools), the
-	// fake Docker, then the inherited PATH or only the template's
-	// pathTools (scenarios.ts writerEnv).
+	// The recorders, <HOME>/fakecodex (fakeCodexOnPath), the fake gh
+	// (difftest/testdata/fakegh), the fake toolchain
+	// (difftest/testdata/faketools), the fake Docker, then the inherited
+	// PATH or only the template's pathTools (scenarios.ts writerEnv). A
+	// failure panics, as in linkPathTools.
 	path := []string{r.recorder}
+	codex := ""
+	if name := fakeCodexName(tpl); name != "" {
+		var err error
+		if codex, err = installFakeCodexErr(repo, r, name); err != nil {
+			panic(err)
+		}
+		if tpl.FakeCodexOnPath {
+			path = append(path, filepath.Dir(codex))
+		}
+	}
+	if tpl.FakeGh != "" {
+		path = append(path, filepath.Join(repo, "difftest", "testdata", "fakegh", tpl.FakeGh))
+	}
 	if tpl.FakeTools != "" {
 		path = append(path, filepath.Join(repo, "difftest", "testdata", "faketools", tpl.FakeTools))
 	}
@@ -444,8 +547,21 @@ func writerEnv(repo string, r writerRoots, seed string, tpl writerTemplate) []st
 	} {
 		set(kv[0], kv[1])
 	}
+	if codex != "" && !tpl.FakeCodexOnPath {
+		set("FAULTLINE_CODEX_BIN", codex)
+	}
+	if tpl.openAIURL != "" {
+		set("FAULTLINE_TEST_OPENAI_URL", tpl.openAIURL)
+	}
+	// An env value that is exactly <FILE:rel> is the trimmed text of the
+	// workspace file rel when the invocation starts (gen-writers.ts
+	// invocationEnv).
 	for _, kv := range tpl.Env {
-		set(kv[0], substituteRoots(kv[1], r))
+		value, err := fileArgumentErr(substituteRoots(kv[1], r), r)
+		if err != nil {
+			panic(err)
+		}
+		set(kv[0], value)
 	}
 	out := make([]string, len(order))
 	for i, k := range order {
@@ -547,6 +663,14 @@ func substituteRoots(s string, r writerRoots) string {
 // their octal permission bits, except on Windows, which has none to compare.
 func treeEntries(t *testing.T, root string, fileDigest func(rel string, b []byte) string) map[string]string {
 	t.Helper()
+	return treeEntriesAliased(t, root, fileDigest, func(rel string) (string, bool) { return rel, true })
+}
+
+// treeEntriesAliased is treeEntries with each path named by alias (the
+// relocation's alias; false leaves the entry out), like gen-writers.ts
+// treeEntries' third parameter.
+func treeEntriesAliased(t *testing.T, root string, fileDigest func(rel string, b []byte) string, alias func(rel string) (string, bool)) map[string]string {
+	t.Helper()
 	out := map[string]string{}
 	var walk func(rel string)
 	walk = func(rel string) {
@@ -568,24 +692,30 @@ func treeEntries(t *testing.T, root string, fileDigest func(rel string, b []byte
 			if !windows {
 				mode = " " + strconv.FormatUint(uint64(info.Mode().Perm()), 8)
 			}
+			key, shown := alias(r)
+			set := func(entry string) {
+				if shown {
+					out[key] = entry
+				}
+			}
 			switch {
 			case info.Mode()&os.ModeSymlink != 0:
 				target, err := os.Readlink(path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				out[r] = "symlink:" + filepath.ToSlash(target)
+				set("symlink:" + filepath.ToSlash(target))
 			case info.IsDir():
-				out[r] = "dir" + mode
+				set("dir" + mode)
 				walk(r)
 			case !info.Mode().IsRegular():
-				out[r] = "special" + mode
+				set("special" + mode)
 			default:
 				b, err := os.ReadFile(path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				out[r] = fileDigest(r, b) + mode
+				set(fileDigest(r, b) + mode)
 			}
 		}
 	}
@@ -640,9 +770,14 @@ type relocated struct {
 	roots  writerRoots
 	names  map[string]string // digest hex -> provenance name
 	sorted []string
-	// objects are the Git objects the case created so far (caseObjects),
-	// nil for none.
-	objects *caseObjectNames
+	// base is what the case's repositories held before its first
+	// invocation (nil: no Git object or reflog masks). created is the
+	// objects the case made by repository directory, ids each one's
+	// content-addressed name, idsKeys the ids sorted.
+	base    *gitBase
+	created map[string]map[string]string
+	ids     map[string]string
+	idsKeys []string
 }
 
 var selfDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -683,17 +818,40 @@ var worktreeDigestMember = regexp.MustCompile(`"worktreeDigest":\s*"sha256:([0-9
 
 // relocation ports gen-writers.ts relocation: the digests in the tree that
 // depend on the case paths, each named by where it was first derived.
-func relocation(t *testing.T, r writerRoots, records []string) *relocated {
-	t.Helper()
-	return relocationWith(t, r, records, nil)
+// openAIRequestInputs are the input strings of the request bodies the fake
+// OpenAI server recorded ("" for a body that is not JSON or has no string
+// input), in log order (gen-writers.ts openAIRequestInputs).
+func openAIRequestInputs(records []string) []string {
+	var out []string
+	for _, record := range records {
+		if !strings.HasPrefix(record, "openai\x1f") {
+			continue
+		}
+		fields := strings.SplitN(record, "\x1f", 6)
+		input := ""
+		if len(fields) == 6 {
+			if v, err := jsjson.Parse(fields[5]); err == nil && v.Get("input").Kind() == jsjson.String {
+				input = v.Get("input").Str()
+			}
+		}
+		out = append(out, input)
+	}
+	return out
 }
 
-// relocationWith is relocation with the case's created Git objects
-// (gen-writers.ts relocation's objects argument): their ids are seeds like
-// the case root, text masks each by its name, and fileDigest applies the
-// loose-object and reflog rules.
-func relocationWith(t *testing.T, r writerRoots, records []string, objects *caseObjectNames) *relocated {
-	return relocationCarrying(t, r, records, objects, nil)
+func relocation(t *testing.T, r writerRoots, records []string, base *gitBase) *relocated {
+	t.Helper()
+	return relocationWith(t, r, records, base)
+}
+
+// relocationWith is relocation without carried digests (the names an
+// invocation derives itself); base is what the case's repositories held
+// before its first invocation, so the ids of the objects created since are
+// seeds like the case root, text masks each by its name, and fileDigest
+// applies the loose-object and reflog rules.
+func relocationWith(t *testing.T, r writerRoots, records []string, base *gitBase) *relocated {
+	t.Helper()
+	return relocationCarrying(t, r, records, base, nil)
 }
 
 // carriedNames ports gen-writers.ts carriedNames: for invocation inv's
@@ -727,12 +885,8 @@ func carriedNames(prev map[string]string, mutations []template, inv int, r write
 // "prior:"-prefixed, so a stale checksum and a rewritten one (the new
 // actual digest, named "file:...") stay distinguishable. Twin:
 // gen-writers.ts relocation's carried argument.
-func relocationCarrying(t *testing.T, r writerRoots, records []string, objects *caseObjectNames, carried map[string]string) *relocated {
+func relocationCarrying(t *testing.T, r writerRoots, records []string, base *gitBase, carried map[string]string) *relocated {
 	t.Helper()
-	var objectIDs []string
-	if objects != nil {
-		objectIDs = slices.Sorted(maps.Keys(objects.names))
-	}
 	type file struct {
 		rel   string
 		bytes []byte
@@ -776,7 +930,17 @@ func relocationCarrying(t *testing.T, r writerRoots, records []string, objects *
 	if _, err := os.Stat(r.ws); err == nil {
 		walk("")
 	}
-	rel := &relocated{roots: r, names: map[string]string{}, objects: objects}
+	rel := &relocated{roots: r, names: map[string]string{}, base: base, ids: map[string]string{}}
+	commits := map[string]string{} // created commit -> its tree
+	if base != nil {
+		rel.created = createdObjects(t, r.ws, base.objects)
+		for _, repo := range slices.Sorted(maps.Keys(rel.created)) {
+			names, trees := namedObjects(t, filepath.Join(r.ws, filepath.FromSlash(repo)), rel.created[repo], func(s string) string { return normalizeWriter(s, r) })
+			maps.Copy(rel.ids, names)
+			maps.Copy(commits, trees)
+		}
+		rel.idsKeys = slices.Sorted(maps.Keys(rel.ids))
+	}
 	var found []string
 	add := func(hex, name string) {
 		if _, ok := rel.names[hex]; !ok {
@@ -793,7 +957,7 @@ func relocationCarrying(t *testing.T, r writerRoots, records []string, objects *
 				return true
 			}
 		}
-		for _, id := range objectIDs {
+		for _, id := range rel.idsKeys {
 			if strings.Contains(text, id) {
 				return true
 			}
@@ -850,11 +1014,22 @@ func relocationCarrying(t *testing.T, r writerRoots, records []string, objects *
 	// appears in no file: name those digests after the masked path.
 	// The ids of the Git objects the case created are seeds too
 	// (gen-writers.ts relocation).
-	seeds := append([]string{r.root}, objectIDs...)
+	seeds := []string{r.root}
 	for _, path := range loggedCasePaths(records, r) {
 		digest := canonical.SHA256Hex(path)
 		add(digest, "path:"+normalizeWriter(path, r))
 		seeds = append(seeds, digest)
+	}
+	// The Git objects the case created are seeds (named by objectNames in
+	// text), and so are the repaired-run digests computed from them.
+	seeds = append(seeds, rel.idsKeys...)
+	texts := map[string]string{}
+	for _, f := range files {
+		texts[f.rel] = f.text
+	}
+	for _, seed := range repairedRunSeeds(t, r, records, commits, texts) {
+		add(seed[0], seed[1])
+		seeds = append(seeds, seed[0])
 	}
 	// A worktree no recorder logged (a fault before git ran in it) is still
 	// hashed into its run fact: name each worktreeDigest value not named
@@ -867,6 +1042,12 @@ func relocationCarrying(t *testing.T, r writerRoots, records []string, objects *
 			}
 		}
 	}
+	// The fake OpenAI server's records hold the request body, whose input
+	// is the evidence packet: its packetDigest covers the path-dependent
+	// investigationDigest, and a failed request leaves the packet in no
+	// file. Each is walked like a file's JSON as openai:<k>, without a file:
+	// name (gen-writers.ts relocation).
+	requests := openAIRequestInputs(records)
 	expand := func(frontier []string) {
 		for len(frontier) > 0 {
 			found = nil
@@ -877,6 +1058,14 @@ func relocationCarrying(t *testing.T, r writerRoots, records []string, objects *
 				add(canonical.SHA256HexBytes(f.bytes), "file:"+f.rel)
 				if v, err := jsjson.Parse(f.text); err == nil {
 					visit(v, f.rel, "")
+				}
+			}
+			for k, text := range requests {
+				if !slices.ContainsFunc(frontier, func(needle string) bool { return strings.Contains(text, needle) }) {
+					continue
+				}
+				if v, err := jsjson.Parse(text); err == nil {
+					visit(v, "openai:"+strconv.Itoa(k), "")
 				}
 			}
 			frontier = found
@@ -902,7 +1091,10 @@ func isRealDir(path string) bool {
 // text masks the case paths, then every path-dependent digest by its name
 // (gen-writers.ts relocation).
 func (rel *relocated) text(s string) string {
-	out := maskObjectIDs(normalizeWriter(s, rel.roots), rel.objects)
+	out := normalizeWriter(s, rel.roots)
+	for _, id := range rel.idsKeys {
+		out = strings.ReplaceAll(out, id, rel.ids[id])
+	}
 	for _, d := range rel.sorted {
 		out = strings.ReplaceAll(out, d, "<PATHDIGEST:"+rel.names[d]+">")
 	}
@@ -914,6 +1106,72 @@ func (rel *relocated) text(s string) string {
 	return out
 }
 
+// worktreeRefs is gen-writers.ts WORKTREE_REFS: the empty refs directory that
+// newer Git versions (2.54) make in a linked worktree's administrative
+// directory and older ones (2.39) do not.
+var worktreeRefs = regexp.MustCompile(`(?:^|/)\.git/worktrees/[^/]+/refs$`)
+
+// fanOutPath is gen-writers.ts FAN_OUT.
+var fanOutPath = regexp.MustCompile(`^(?:(.*)/)?\.git/objects/([0-9a-f]{2})$`)
+
+// alias names the entries whose paths hold a created object's id: a loose
+// object the case created (rel.created, named by rel.ids) is renamed to its
+// content name; an object that existed before the case, or one in the
+// turn-snapshot store, keeps its path. Two Git-layout entries are left out,
+// each only where its exact condition holds: a fan-out directory
+// .git/objects/<xx> that no object from before the case lives in and that
+// holds nothing but created loose objects (its name is an id prefix), and
+// the EMPTY directory .git/worktrees/<name>/refs that Git 2.54 makes in a
+// linked worktree's administrative directory and the pinned 2.39.5 does not.
+// A non-empty refs directory, a file or symlink of that name, and every
+// other path stay compared (gen-writers.ts relocation alias).
+func (rel *relocated) alias(path string) (string, bool) {
+	abs := filepath.Join(rel.roots.ws, filepath.FromSlash(path))
+	if worktreeRefs.MatchString(path) {
+		if info, err := os.Lstat(abs); err == nil && info.IsDir() {
+			if names, err := nodefs.ReadDirNames(abs); err == nil && len(names) == 0 {
+				return "", false
+			}
+		}
+		return path, true
+	}
+	if m := looseObject.FindStringSubmatch(path); m != nil {
+		repo := m[1]
+		if repo == "" {
+			repo = "."
+		}
+		if _, ok := rel.created[repo][m[2]+m[3]]; ok && rel.ids[m[2]+m[3]] != "" {
+			prefix := ""
+			if m[1] != "" {
+				prefix = m[1] + "/"
+			}
+			return prefix + ".git/objects/" + rel.ids[m[2]+m[3]], true
+		}
+	}
+	if m := fanOutPath.FindStringSubmatch(path); m != nil && rel.base != nil {
+		repo := m[1]
+		if repo == "" {
+			repo = "."
+		}
+		for id := range rel.base.objects[repo] {
+			if strings.HasPrefix(id, m[2]) {
+				return path, true
+			}
+		}
+		names, err := nodefs.ReadDirNames(abs)
+		if err != nil || len(names) == 0 {
+			return path, true
+		}
+		for _, name := range names {
+			if _, ok := rel.created[repo][m[2]+name]; !ok {
+				return path, true
+			}
+		}
+		return "", false
+	}
+	return path, true
+}
+
 // fileDigest hashes a Git index by what it records (gitIndexDigest), a
 // path-dependent file's masked text, and any other file's bytes.
 func (rel *relocated) fileDigest(path string, b []byte) string {
@@ -923,8 +1181,19 @@ func (rel *relocated) fileDigest(path string, b []byte) string {
 	if d, ok := snapshotObjectDigest(path); ok {
 		return d
 	}
-	if d, ok := createdObjectDigest(path, b, rel.objects, rel.text); ok {
+	if d, ok := rel.createdObjectDigest(path); ok {
 		return d
+	}
+	if rel.base != nil && reflogPath.MatchString(path) {
+		if was, ok := rel.base.logs[path]; !ok || was != canonical.SHA256HexBytes(b) {
+			return canonical.SHA256Hex(rel.text(maskReflogTimes(jsstr.DecodeUTF8(b))))
+		}
+	}
+	// A linked worktree's gitdir file holds the absolute path of the
+	// worktree's .git file (slice 4c Task 20, --keep-worktree): hashed by
+	// its text with the case paths masked (gen-writers.ts relocation).
+	if worktreeGitdir.MatchString(path) {
+		return canonical.SHA256Hex(rel.text(jsstr.DecodeUTF8(b)))
 	}
 	d := canonical.SHA256HexBytes(b)
 	if _, ok := rel.names[d]; !ok {
@@ -990,6 +1259,9 @@ func isGitIndex(rel string) bool {
 }
 
 var worktreeIndex = regexp.MustCompile(`(?:^|/)\.git/worktrees/[^/]+/index$`)
+
+// worktreeGitdir is gen-writers.ts WORKTREE_GITDIR.
+var worktreeGitdir = regexp.MustCompile(`(?:^|/)\.git/worktrees/[^/]+/gitdir$`)
 
 // gitIndexDigest ports gen-writers.ts gitIndexDigest: a Git index holds
 // stat data (times, inode, device) that differs between the TS and the Go
@@ -1092,11 +1364,13 @@ type writerRun struct {
 func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writerRun) []writerResult {
 	r := makeWriterRoots(t)
 	busyPort := holdBusyPort(t, tpl)
+	if tpl.FakeOpenAI != "" {
+		tpl.openAIURL = startFakeOpenAI(t, r.ws, tpl.FakeOpenAI, r.argvLog)
+	}
 	prepareWriterCase(t, repo, tpl, r)
-	// The Git objects the case starts from, recorded once its workspace is
-	// in place (gen-writers.ts runCase); objects are those it created so far.
-	start := caseObjectsBefore(t, r.ws)
-	objects := caseObjects(t, r, start)
+	// What the repositories hold before the first invocation: an object or a
+	// reflog is new to the case by comparison with it (gitBase).
+	base := snapshotGit(t, r.ws)
 	var out []writerResult
 	// The recorded paths accumulate over the case's invocations: a later
 	// invocation must keep masking the worktree digests an earlier one
@@ -1114,7 +1388,8 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 			resetNewModes(t, r.ws, existing)
 			applyWriterMutations(t, tpl, r, func(m template) bool { return mutationInv(m) == inv && m.str("op") == "chmod" })
 		}
-		before := treeEntries(t, r.ws, relocationCarrying(t, r, records, objects, carried).fileDigest)
+		beforeReloc := relocationCarrying(t, r, records, base, carried)
+		before := treeEntriesAliased(t, r.ws, beforeReloc.fileDigest, beforeReloc.alias)
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
@@ -1131,6 +1406,7 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		// (gen-writers.ts runCase; runCli ends the child's stdin the same
 		// way). exec ignores EPIPE when fl exits without reading it.
 		cmd.Stdin = bytes.NewReader(invocationInput(t, tpl, inv, r))
+		inheritedPath := os.Getenv("PATH")
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		var exitErr *exec.ExitError
@@ -1145,13 +1421,15 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 			outText, errText = run.mask(t, r, inv, outText, errText)
 		}
 		invocationRecords := readArgvLog(r.argvLog)
+		for i, record := range invocationRecords {
+			invocationRecords[i] = maskCodexPath(record, r, repo, inheritedPath)
+		}
 		records = append(records, invocationRecords...)
-		objects = caseObjects(t, r, start)
-		reloc := relocationCarrying(t, r, records, objects, carried)
-		prevNames = relocationWith(t, r, records, objects).names
-		after := treeEntries(t, r.ws, reloc.fileDigest)
+		reloc := relocationCarrying(t, r, records, base, carried)
+		prevNames = relocationWith(t, r, records, base).names
+		after := treeEntriesAliased(t, r.ws, reloc.fileDigest, reloc.alias)
 		res := writerResult{Inv: inv, Stdout: maskPlanDigests(reloc.text(outText), plans), Stderr: maskPlanDigests(reloc.text(errText), plans),
-			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestWith(r.ws, reloc.fileDigest), Modes: modesDigest(after), Files: changedFiles(before, after),
+			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestAliased(r.ws, reloc.fileDigest, reloc.alias), Modes: modesDigest(after), Files: changedFiles(before, after),
 			contents: map[string][]byte{}, tmpLeft: tmpLeft}
 		for _, record := range invocationRecords {
 			res.Argv = append(res.Argv, normalizeRecord(record, r, reloc))
@@ -1163,6 +1441,12 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		}
 		if pkg, root, ok := writtenPrevention(outText); ok && !run.noVerify {
 			crossVerify(t, repo, inv, tpl.ID, pkg, root)
+		}
+		if pkg, root, ok := writtenRepairPrevention(outText); ok && !run.noVerify {
+			crossVerify(t, repo, inv, tpl.ID, pkg, root)
+		}
+		if !run.noVerify {
+			crossVerifyArtifacts(t, repo, r, inv, tpl.ID, outText, args)
 		}
 		for rel, entry := range res.Files {
 			if fileEntry.MatchString(entry) {
@@ -1202,15 +1486,24 @@ func invocationInput(t testing.TB, tpl writerTemplate, inv int, r writerRoots) [
 // invocation that must pass --expect-root reads it (gen-writers.ts
 // fileArgument).
 func fileArgument(t *testing.T, arg string, r writerRoots) string {
-	rel, ok := strings.CutPrefix(arg, "<FILE:")
-	if !ok || !strings.HasSuffix(rel, ">") || strings.Contains(rel[:len(rel)-1], ">") {
-		return arg
-	}
-	b, err := os.ReadFile(filepath.Join(r.ws, filepath.FromSlash(rel[:len(rel)-1])))
+	value, err := fileArgumentErr(arg, r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return jsstr.Trim(string(b))
+	return value
+}
+
+// fileArgumentErr is fileArgument for writerEnv, which has no testing.TB.
+func fileArgumentErr(arg string, r writerRoots) (string, error) {
+	rel, ok := strings.CutPrefix(arg, "<FILE:")
+	if !ok || !strings.HasSuffix(rel, ">") || strings.Contains(rel[:len(rel)-1], ">") {
+		return arg, nil
+	}
+	b, err := os.ReadFile(filepath.Join(r.ws, filepath.FromSlash(rel[:len(rel)-1])))
+	if err != nil {
+		return "", err
+	}
+	return jsstr.Trim(string(b)), nil
 }
 
 // stdoutArgument replaces an argv string that is exactly
@@ -1727,6 +2020,118 @@ func writtenPrevention(stdout string) (dir, root string, ok bool) {
 	return d.Str(), r.Str(), true
 }
 
+// stdoutObject is stdout parsed as a JSON object (ok false otherwise).
+func stdoutObject(stdout string) (jsjson.Value, bool) {
+	v, err := jsjson.Parse(stdout)
+	return v, err == nil && v.Kind() == jsjson.Object
+}
+
+// writtenAttestation is the receipt an `fl attest create` run printed
+// (status ATTESTED): its path and receipt digest (gen-writers.ts
+// writtenAttestation).
+func writtenAttestation(stdout string) (path, receiptDigest string, ok bool) {
+	v, ok := stdoutObject(stdout)
+	p, d := v.Get("path"), v.Get("receiptDigest")
+	if !ok || v.Get("status").Str() != "ATTESTED" || v.Get("status").Kind() != jsjson.String || p.Kind() != jsjson.String || d.Kind() != jsjson.String {
+		return "", "", false
+	}
+	return p.Str(), d.Str(), true
+}
+
+// writtenRepairBrief is the package an `fl repair brief` run printed
+// (status PERSISTED): its directory and artifact digest (gen-writers.ts
+// writtenRepairBrief).
+func writtenRepairBrief(stdout string) (dir, artifactDigest string, ok bool) {
+	v, ok := stdoutObject(stdout)
+	d, a := v.Get("directory"), v.Get("artifactDigest")
+	if !ok || v.Get("status").Kind() != jsjson.String || v.Get("status").Str() != "PERSISTED" || d.Kind() != jsjson.String || a.Kind() != jsjson.String {
+		return "", "", false
+	}
+	return d.Str(), a.Str(), true
+}
+
+// writtenProvenanceReceipt is the receipt an `fl provenance create` run
+// printed (status AWAITING_GITHUB_ARTIFACT_ATTESTATION; gen-writers.ts
+// writtenProvenanceReceipt).
+func writtenProvenanceReceipt(stdout string) (path string, ok bool) {
+	v, ok := stdoutObject(stdout)
+	p := v.Get("path")
+	if !ok || v.Get("status").Kind() != jsjson.String || v.Get("status").Str() != "AWAITING_GITHUB_ARTIFACT_ATTESTATION" || p.Kind() != jsjson.String {
+		return "", false
+	}
+	return p.Str(), true
+}
+
+// writtenRepairPrevention is the prevention package an `fl repair
+// --bundle` run printed (preventionExport with ok: true): its directory and
+// root digest (gen-writers.ts writtenRepairPrevention).
+func writtenRepairPrevention(stdout string) (dir, rootDigest string, ok bool) {
+	v, ok := stdoutObject(stdout)
+	e := v.Get("preventionExport")
+	d, r := e.Get("directory"), e.Get("rootDigest")
+	if !ok || e.Kind() != jsjson.Object || e.Get("ok").Kind() != jsjson.Bool || !e.Get("ok").Bool() || d.Kind() != jsjson.String || r.Kind() != jsjson.String {
+		return "", "", false
+	}
+	return d.Str(), r.Str(), true
+}
+
+// crossVerifyArtifacts runs frozen TS's verifier on every attestation
+// receipt, repair brief and provenance receipt (with fake gh pass) Go
+// wrote, when FAULTLINE_NODE_ORACLE=1, as gen-writers.ts crossVerify does
+// on what TS wrote. args is the invocation's argv after substitution.
+func crossVerifyArtifacts(t *testing.T, repo string, r writerRoots, inv int, id, stdout string, args []string) {
+	t.Helper()
+	if os.Getenv("FAULTLINE_NODE_ORACLE") != "1" {
+		return
+	}
+	check := func(what string, ok func(out string) bool, tpl writerTemplate, argv ...string) {
+		out, code := runTSInCase(t, repo, r, id+":verify", tpl, argv...)
+		if code != 0 || !ok(out) {
+			t.Fatalf("%s|%d: TS %s Go wrote failed (exit %d)\n%s", id, inv, what, code, out)
+		}
+		tsCrossVerified.Add(1)
+	}
+	anyOutput := func(string) bool { return true }
+	if path, digest, ok := writtenAttestation(stdout); ok {
+		check("attest verify of the receipt", anyOutput, writerTemplate{}, "attest", "verify", strings.TrimSuffix(filepath.Base(path), ".json"),
+			"--store", filepath.Dir(path), "--expect-digest", digest)
+	}
+	if dir, digest, ok := writtenRepairBrief(stdout); ok {
+		check("repair verify of the brief", func(out string) bool { return strings.Contains(out, `"valid": true`) }, writerTemplate{},
+			"repair", "verify", dir, "--expect-digest", digest)
+	}
+	if path, ok := writtenProvenanceReceipt(stdout); ok {
+		bundle := ""
+		if i := slices.Index(args, "--bundle"); i >= 0 && i+1 < len(args) {
+			bundle = args[i+1]
+		} else {
+			t.Fatalf("%s|%d: a provenance receipt without --bundle in the argv", id, inv)
+		}
+		check("provenance verify of the receipt", anyOutput, writerTemplate{FakeGh: "pass"}, "provenance", "verify", "--bundle", bundle, "--receipt", path,
+			"--trust", filepath.Join(r.ws, "trust.json"), "--attestation-bundle", filepath.Join(r.ws, "attestation.sigstore.json"))
+	}
+}
+
+// runTSInCase runs frozen TS under the seed preload and the fetch shim in
+// the case workspace with the writer environment of tpl (gen-writers.ts
+// runCli), giving its stdout then stderr and its exit code.
+func runTSInCase(t *testing.T, repo string, r writerRoots, seed string, tpl writerTemplate, args ...string) (string, int) {
+	t.Helper()
+	gen := filepath.Join(repo, "difftest", "gen")
+	cmd := exec.Command("node", append([]string{"--import", "file://" + filepath.Join(gen, "seed.mjs"), "--import", "file://" + filepath.Join(gen, "fetch-shim.mjs"),
+		filepath.Join(repo, "dist", "cli.js")}, args...)...)
+	cmd.Dir = r.ws
+	tpl.ID = seed
+	cmd.Env = writerEnv(repo, r, seed, tpl)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	var exitErr *exec.ExitError
+	if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
+		t.Fatalf("running node: %v", err)
+	}
+	return stdout.String() + stderr.String(), cmd.ProcessState.ExitCode()
+}
+
 // proofDirectory is the bundle directory a successful investigate printed.
 func proofDirectory(t *testing.T, stdout string) string {
 	t.Helper()
@@ -1858,7 +2263,7 @@ func TestGitIndexRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	git("add", "a.txt")
-	reloc := relocation(t, r, nil)
+	reloc := relocation(t, r, nil, nil)
 	index := filepath.Join(r.ws, ".git", "index")
 	first, err := os.ReadFile(index)
 	if err != nil {
@@ -1943,19 +2348,25 @@ func TestDoctorHostileFsmonitorGolden(t *testing.T) {
 	}
 }
 
-// ---- Created Git objects (slice 4b Task 1; the same rule as slice 4c Task 2) ----
-// The Go twins of gen-writers.ts's "Created Git objects" block, which states
-// the rule: the objects a case creates in a workspace repository (listed
-// with the harness's own git before the first invocation and after each
-// one) are named <BLOB|TREE|COMMIT:h12> from their content with the case
-// paths and already-named ids masked, a commit without its author and
-// committer times; ids that existed before the case are never masked; a
-// created loose object is hashed as sha256("git-object:" + its name); a new
-// or changed reflog has its "<seconds> <zone>\t" replaced with "<TIME>\t";
-// and the ids are relocation seeds.
+// Created Git objects and repaired-run digests (slice 4c Task 2). A case that
+// makes a commit records the case directory in its README blob, so the blob,
+// the tree and the commit ids vary with where the case ran (the commit also
+// with the clock). Each object the case creates is named by its content with
+// the case paths masked (objectNames); the digests computed over those ids
+// (the repair verifier's executionId and each repaired run's runId) are
+// recomputed and named (repairedRunSeeds). gen-writers.ts has the twins.
 
-// harnessGit runs the harness's git on gitDir (gen-writers.ts harnessGit):
-// no fl environment, no argv log.
+// gitBase is what the case's repositories held before its first invocation
+// (gen-writers.ts GitBase): the object ids of each repository (by directory
+// relative to the workspace) and the byte digest of each reflog.
+type gitBase struct {
+	objects map[string]map[string]bool
+	logs    map[string]string
+}
+
+// harnessGit runs the harness's own git (not fl's, and not through the
+// recorder: the PATH is the inherited one, as in gitIndexDigest) on the
+// repository whose .git directory is gitDir.
 func harnessGit(gitDir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", append([]string{"-c", "core.fsmonitor=false", "--git-dir=" + gitDir}, args...)...)
 	cmd.Dir = gitDir
@@ -1963,12 +2374,55 @@ func harnessGit(gitDir string, args ...string) ([]byte, error) {
 	return cmd.Output()
 }
 
+// gitRepos lists the directories under ws, relative to ws ("." for ws
+// itself), that hold a .git directory (a linked worktree's .git file does
+// not count), sorted. gen-writers.ts findRepos is the twin.
+func gitRepos(t testing.TB, ws string) []string {
+	t.Helper()
+	var out []string
+	var walk func(rel string)
+	walk = func(rel string) {
+		dir := filepath.Join(ws, filepath.FromSlash(rel))
+		names, err := nodefs.ReadDirNames(dir)
+		if err != nil {
+			t.Fatalf("listing %s: %v", rel, err)
+		}
+		for _, name := range names {
+			path := filepath.Join(dir, name)
+			info, err := os.Lstat(path)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			if name == ".git" {
+				if rel == "" {
+					out = append(out, ".")
+				} else {
+					out = append(out, rel)
+				}
+				continue
+			}
+			if rel == "" {
+				walk(name)
+			} else {
+				walk(rel + "/" + name)
+			}
+		}
+	}
+	if _, err := os.Stat(ws); err == nil {
+		walk("")
+	}
+	return out
+}
+
+// objectIDPattern is a SHA-1 or SHA-256 object id (gen-writers.ts objectListing).
 var objectIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
-// objectListing is a repository's object ids and their types (none when git
-// cannot read it), without the turn-snapshot store's objects
-// (gen-writers.ts objectListing).
-func objectListing(repoDir string) map[string]string {
+// objectTypes is the id and type of every object repoDir's repository can
+// read, except those whose loose file lives in the turn-snapshot store
+// (.git/faultline/objects, an alternate of the repository): cat-file
+// --batch-all-objects lists them, and they already get snapshotObjectDigest.
+// A repository git cannot read lists nothing. gen-writers.ts objectTypes.
+func objectTypes(repoDir string) map[string]string {
 	gitDir := filepath.Join(repoDir, ".git")
 	out := map[string]string{}
 	listing, err := harnessGit(gitDir, "cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)")
@@ -1988,268 +2442,278 @@ func objectListing(repoDir string) map[string]string {
 	return out
 }
 
-// objectSet is the id set of repository repoDir, the directory holding .git
-// (gen-writers.ts objectSet).
+// objectSet is the id set of objectTypes (gen-writers.ts objectSet).
 func objectSet(t testing.TB, repoDir string) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
-	for id := range objectListing(repoDir) {
+	for id := range objectTypes(repoDir) {
 		out[id] = true
 	}
 	return out
 }
 
-// gitRepositories lists the workspace directories (relative, "." for ws
-// itself) that hold a .git directory, not entering any .git
-// (gen-writers.ts gitRepositories).
-func gitRepositories(ws string) []string {
-	var out []string
-	var walk func(rel string)
-	walk = func(rel string) {
-		dir := filepath.Join(ws, filepath.FromSlash(rel))
-		names, err := nodefs.ReadDirNames(dir)
-		if err != nil {
-			return
-		}
-		for _, name := range names {
-			info, err := os.Lstat(filepath.Join(dir, name))
-			if err != nil || !info.IsDir() {
-				continue
-			}
-			if name == ".git" {
-				out = append(out, rel)
-			} else if rel == "." {
-				walk(name)
-			} else {
-				walk(rel + "/" + name)
-			}
-		}
-	}
-	if _, err := os.Stat(ws); err == nil {
-		walk(".")
-	}
-	return out
-}
-
-// createdObjects maps each workspace repository to the objects it holds now
-// and did not hold in before, id to type (gen-writers.ts createdObjects).
+// createdObjects maps each repository directory (relative to ws) to the
+// objects it holds now that it did not hold in before, id to type
+// (gen-writers.ts createdObjects).
 func createdObjects(t testing.TB, ws string, before map[string]map[string]bool) map[string]map[string]string {
 	t.Helper()
 	out := map[string]map[string]string{}
-	for _, rel := range gitRepositories(ws) {
-		created := map[string]string{}
-		for id, typ := range objectListing(filepath.Join(ws, filepath.FromSlash(rel))) {
-			if !before[rel][id] {
-				created[id] = typ
+	for _, repo := range gitRepos(t, ws) {
+		for id, typ := range objectTypes(filepath.Join(ws, filepath.FromSlash(repo))) {
+			if before[repo][id] {
+				continue
 			}
-		}
-		if len(created) > 0 {
-			out[rel] = created
+			if out[repo] == nil {
+				out[repo] = map[string]string{}
+			}
+			out[repo][id] = typ
 		}
 	}
 	return out
 }
 
-// identTime is an author or committer line's trailing " <seconds> <zone>".
-var identTime = regexp.MustCompile(` [0-9]+ [+-][0-9]{4}$`)
+// reflogPath is a reflog: any file under a logs directory of a .git
+// directory (gen-writers.ts REFLOG).
+var reflogPath = regexp.MustCompile(`(?:^|/)\.git/(?:[^/]+/)*logs/.+$`)
 
-// objectNames names every created object of repository repoDir: blobs, then
-// trees, then commits, each from its `git cat-file -p` text with text()
-// and every already-named id masked (gen-writers.ts objectNames).
-func objectNames(t testing.TB, repoDir string, created map[string]string, text func(string) string) map[string]string {
+// reflogTime is a reflog line's "<seconds> <zone>\t".
+var reflogTime = regexp.MustCompile(`[0-9]+ [+-][0-9]{4}\t`)
+
+// maskReflogTimes replaces each line's "<seconds> <zone>\t" with "<TIME>\t".
+func maskReflogTimes(text string) string { return reflogTime.ReplaceAllString(text, "<TIME>\t") }
+
+// snapshotGit records what the workspace's repositories hold now: call it
+// after the case is built and before its first invocation.
+func snapshotGit(t testing.TB, ws string) *gitBase {
+	t.Helper()
+	base := &gitBase{objects: map[string]map[string]bool{}, logs: map[string]string{}}
+	for _, repo := range gitRepos(t, ws) {
+		dir := filepath.Join(ws, filepath.FromSlash(repo))
+		base.objects[repo] = objectSet(t, dir)
+		_ = filepath.WalkDir(filepath.Join(dir, ".git"), func(path string, d os.DirEntry, err error) error {
+			if err != nil || !d.Type().IsRegular() {
+				return nil
+			}
+			rel, err := filepath.Rel(ws, path)
+			if err != nil || !reflogPath.MatchString(filepath.ToSlash(rel)) {
+				return nil
+			}
+			b, err := os.ReadFile(path)
+			if err == nil {
+				base.logs[filepath.ToSlash(rel)] = canonical.SHA256HexBytes(b)
+			}
+			return nil
+		})
+	}
+	return base
+}
+
+var identityTime = regexp.MustCompile(` [0-9]+ [+-][0-9]{4}$`)
+
+// namedObjects names every created object of one repository, in dependency
+// order, and gives each created commit's tree id. Each name is
+// <BLOB:h12>, <TREE:h12> or <COMMIT:h12>, h12 being the first 12 hex digits
+// of the SHA-256 of "<type>\n" and the object's `git cat-file -p` text with
+// the case paths (text) and every already-named id masked. A commit's text
+// leaves out its author and committer times. An id that existed before the
+// case is never masked. gen-writers.ts namedObjects.
+func namedObjects(t testing.TB, repoDir string, created map[string]string, text func(string) string) (names, commitTree map[string]string) {
 	t.Helper()
 	gitDir := filepath.Join(repoDir, ".git")
-	names := map[string]string{}
-	masked := func(s string) string {
-		out := text(s)
-		for _, id := range slices.Sorted(maps.Keys(names)) {
-			out = strings.ReplaceAll(out, id, names[id])
+	names, commitTree = map[string]string{}, map[string]string{}
+	var name func(id string) string
+	name = func(id string) string {
+		typ, ok := created[id]
+		if !ok {
+			return id
 		}
-		return out
-	}
-	name := func(kind, body string) string {
-		return "<" + strings.ToUpper(kind) + ":" + canonical.SHA256Hex(kind + "\n" + body)[:12] + ">"
-	}
-	var visit func(id string, path map[string]bool)
-	visit = func(id string, path map[string]bool) {
-		if _, ok := names[id]; ok || path[id] {
-			return
+		if n, ok := names[id]; ok {
+			return n
 		}
-		inner := maps.Clone(path)
-		inner[id] = true
 		raw, err := harnessGit(gitDir, "cat-file", "-p", id)
 		if err != nil {
 			t.Fatalf("git cat-file -p %s in %s: %v", id, repoDir, err)
 		}
-		content := jsstr.DecodeUTF8(raw)
-		switch typ := created[id]; typ {
+		body := jsstr.DecodeUTF8(raw)
+		var label, material string
+		switch typ {
+		case "blob":
+			label, material = "BLOB", "blob\n"+text(body)
 		case "tree":
-			entries := strings.TrimSuffix(content, "\n")
-			for _, line := range strings.Split(entries, "\n") {
-				head, _, _ := strings.Cut(line, "\t")
-				if fields := strings.Split(head, " "); len(fields) > 2 {
-					if _, ok := created[fields[2]]; ok {
-						visit(fields[2], inner)
-					}
-				}
-			}
-			names[id] = name("tree", masked(entries))
-		case "commit":
-			headerText, message, found := strings.Cut(content, "\n\n")
-			if !found {
-				message = ""
-			}
+			label = "TREE"
 			var lines []string
-			for _, header := range strings.Split(headerText, "\n") {
-				key, value, _ := strings.Cut(header, " ")
-				switch key {
-				case "tree", "parent":
-					if _, ok := created[value]; ok {
-						visit(value, inner)
+			if body != "" {
+				lines = strings.Split(strings.TrimSuffix(body, "\n"), "\n")
+			}
+			for i, line := range lines {
+				if tab := strings.IndexByte(line, '\t'); tab >= 0 {
+					if fields := strings.SplitN(line[:tab], " ", 3); len(fields) == 3 {
+						fields[2] = name(fields[2])
+						lines[i] = strings.Join(fields, " ") + line[tab:]
 					}
-					lines = append(lines, key+" "+value)
-				case "author", "committer":
-					lines = append(lines, key+" "+identTime.ReplaceAllString(value, ""))
 				}
 			}
-			names[id] = name("commit", masked(strings.Join(append(lines, "", message), "\n")))
-		default:
-			names[id] = name(typ, masked(content))
-		}
-	}
-	ids := slices.Sorted(maps.Keys(created))
-	for _, kind := range []string{"blob", "tree", "commit"} {
-		for _, id := range ids {
-			if created[id] == kind {
-				visit(id, map[string]bool{})
+			material = "tree\n" + text(strings.Join(lines, "\n"))
+		case "commit":
+			label = "COMMIT"
+			header, message, _ := strings.Cut(body, "\n\n")
+			lines := strings.Split(header, "\n")
+			for i, line := range lines {
+				switch {
+				case strings.HasPrefix(line, "tree "):
+					commitTree[id] = line[5:]
+					lines[i] = "tree " + name(line[5:])
+				case strings.HasPrefix(line, "parent "):
+					lines[i] = "parent " + name(line[7:])
+				case strings.HasPrefix(line, "author "), strings.HasPrefix(line, "committer "):
+					lines[i] = identityTime.ReplaceAllString(line, "")
+				}
 			}
+			material = "commit\n" + text(strings.Join(lines, "\n")+"\n\n"+message)
+		default: // a tag: named by its text like a blob
+			label, material = "BLOB", typ+"\n"+text(body)
 		}
+		names[id] = "<" + label + ":" + canonical.SHA256Hex(material)[:12] + ">"
+		return names[id]
 	}
-	for _, id := range ids { // any other type (a tag) last
-		visit(id, map[string]bool{})
+	for _, id := range slices.Sorted(maps.Keys(created)) {
+		name(id)
 	}
+	return names, commitTree
+}
+
+// objectNames maps each created id to its name (gen-writers.ts objectNames).
+func objectNames(t testing.TB, repoDir string, created map[string]string, text func(string) string) map[string]string {
+	names, _ := namedObjects(t, repoDir, created, text)
 	return names
 }
 
-// caseObjectNames are the created objects' names (all repositories, for
-// text), per repository (for the loose-object rule), and the reflog digests
-// the case started from (gen-writers.ts CaseObjects).
-type caseObjectNames struct {
-	names   map[string]string
-	byRepo  map[string]map[string]string
-	reflogs map[string]string
+var looseObject = regexp.MustCompile(`^(?:(.*)/)?\.git/objects/([0-9a-f]{2})/([0-9a-f]{38}|[0-9a-f]{62})$`)
+
+// createdObjectDigest hashes a loose object the case created by its name,
+// like snapshotObjectDigest; one that existed before keeps its byte digest.
+func (rel *relocated) createdObjectDigest(path string) (string, bool) {
+	m := looseObject.FindStringSubmatch(path)
+	if m == nil {
+		return "", false
+	}
+	repo := m[1]
+	if repo == "" {
+		repo = "."
+	}
+	if _, ok := rel.created[repo][m[2]+m[3]]; !ok {
+		return "", false
+	}
+	return canonical.SHA256Hex("git-object:" + rel.ids[m[2]+m[3]]), true
 }
 
-// caseObjectsStart is what a case starts from: each repository's object set
-// and the reflog digests (gen-writers.ts CaseObjectsBefore).
-type caseObjectsStart struct {
-	sets    map[string]map[string]bool
-	reflogs map[string]string
-}
+// fakeDockerPassStdout is the pass-fail fake Docker's stdout for state=good.
+const fakeDockerPassStdout = "state=good\nFAULTLINE_WITNESS_RESULT={\"protocol\":\"faultline.witness-result.v1\",\"outcome\":\"PREDICATE_PASS\"}\n"
 
-var (
-	reflogPattern      = regexp.MustCompile(`(?:^|/)\.git/(?:[^\n]+/)?logs/[^\n]+$`)
-	looseObjectPattern = regexp.MustCompile(`^(?:([^\n]*)/)?\.git/objects/([0-9a-f]{2})/([0-9a-f]{38}|[0-9a-f]{62})$`)
-	reflogTime         = regexp.MustCompile(`[0-9]+ [+-][0-9]{4}\t`)
-)
-
-// reflogDigests are the SHA-256s of every reflog file under ws
-// (gen-writers.ts reflogDigests).
-func reflogDigests(ws string) map[string]string {
-	out := map[string]string{}
-	var walk func(rel string)
-	walk = func(rel string) {
-		names, err := nodefs.ReadDirNames(filepath.Join(ws, filepath.FromSlash(rel)))
-		if err != nil {
-			return
+// repairedRunSeeds computes the digests a repaired run binds to a created
+// commit and tree: for each repaired worktree a recorder logged and each
+// PASS run fact of a bundle in the workspace, the repair verifier's
+// executionId (src/codex-loop.ts:243) named exec:<masked worktree>; for each
+// created commit with its tree and each executionId, the runId of attempts 1
+// to 3 (src/prevention-from-artifacts.ts:525) named run:<attempt>. A
+// candidate that appears in no file is dropped; a wrong one is never named.
+// It returns [hex, name] pairs. gen-writers.ts repairedRunSeeds.
+func repairedRunSeeds(t testing.TB, r writerRoots, records []string, commits map[string]string, texts map[string]string) [][2]string {
+	t.Helper()
+	if len(commits) == 0 {
+		return nil
+	}
+	digest := func(keys []string, vals []jsjson.Value) string {
+		o := jsjson.NewObj()
+		for i, k := range keys {
+			o.Set(k, vals[i])
 		}
-		for _, name := range names {
-			r := name
-			if rel != "" {
-				r = rel + "/" + name
+		d, err := canonical.DigestJSON(jsjson.MakeObject(o))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	str := jsjson.MakeString
+	type pass struct {
+		policy, envPolicy, frozen, witness, environment string
+		hasEnvironment                                  bool
+	}
+	var passes []pass
+	for _, rel := range slices.Sorted(maps.Keys(texts)) {
+		bundle, ok := strings.CutSuffix(rel, ".json")
+		if !ok {
+			continue
+		}
+		dir, _ := path.Split(bundle)
+		if !strings.HasSuffix(dir, "runs/") {
+			continue
+		}
+		dir = strings.TrimSuffix(dir, "runs/")
+		run, err := jsjson.Parse(texts[rel])
+		if err != nil || run.Get("schemaVersion").Str() != "faultline.git-investigation.v1" ||
+			run.Get("result", "verdict").Str() != "PASS" || run.Get("result", "reason").Str() != "PREDICATE_PASS" {
+			continue
+		}
+		investigation, err := jsjson.Parse(texts[dir+"investigation.json"])
+		if err != nil {
+			continue
+		}
+		digests := investigation.Get("environment", "distinctDigests")
+		// A heterogeneous bundle has no single environment digest: the exec:
+		// seed still exists (the verifier ran), but no run: seed does (the
+		// repaired runs cannot be collected, so none is written).
+		environment := ""
+		hasEnvironment := digests.Kind() == jsjson.Array && len(digests.Items()) == 1 && digests.Items()[0].Kind() == jsjson.String
+		if hasEnvironment {
+			environment = digests.Items()[0].Str()
+		}
+		witness := run.Get("witnessDigest").Str()
+		if frozen, err := jsjson.Parse(texts[dir+"witness/frozen.json"]); err == nil && frozen.Get("witnessDigest").Kind() == jsjson.String {
+			witness = frozen.Get("witnessDigest").Str()
+		}
+		passes = append(passes, pass{run.Get("sandbox", "policyDigest").Str(), run.Get("sandbox", "environmentPolicyDigest").Str(),
+			run.Get("frozenDigest").Str(), witness, environment, hasEnvironment})
+	}
+	appears := func(hex string) bool {
+		for _, text := range texts {
+			if strings.Contains(text, hex) {
+				return true
 			}
-			path := filepath.Join(ws, filepath.FromSlash(r))
-			info, err := os.Lstat(path)
-			switch {
-			case err != nil:
-			case info.IsDir():
-				walk(r)
-			case info.Mode().IsRegular() && reflogPattern.MatchString(r):
-				if b, err := os.ReadFile(path); err == nil {
-					out[r] = canonical.SHA256HexBytes(b)
+		}
+		return false
+	}
+	var out [][2]string
+	seen := map[string]bool{}
+	stdoutDigest := "sha256:" + canonical.SHA256Hex(fakeDockerPassStdout)
+	stderrDigest := "sha256:" + canonical.SHA256Hex("")
+	for _, w := range loggedCasePaths(records, r) {
+		for _, p := range passes {
+			execution := digest(
+				[]string{"kind", "executor", "verdict", "reason", "policyDigest", "environmentPolicyDigest", "exitCode", "stdoutDigest", "stderrDigest", "worktree", "frozenDigest"},
+				[]jsjson.Value{str("faultline.repair-verify-execution.v1"), str("NATIVE_DOCKER"), str("PASS"), str("PREDICATE_PASS"), str(p.policy), str(p.envPolicy),
+					jsjson.MakeNumber(0), str(stdoutDigest), str(stderrDigest), str(w), str(p.frozen)})
+			if seen[execution] || !appears(execution[7:]) {
+				continue
+			}
+			seen[execution] = true
+			out = append(out, [2]string{execution[7:], "exec:" + normalizeWriter(w, r)})
+			if !p.hasEnvironment {
+				continue
+			}
+			for _, commit := range slices.Sorted(maps.Keys(commits)) {
+				for attempt := 1; attempt <= 3; attempt++ {
+					run := digest(
+						[]string{"schemaVersion", "attempt", "commit", "tree", "witnessDigest", "environmentDigest", "executionId", "detail"},
+						[]jsjson.Value{str("faultline.prevention-repaired-run.v1"), jsjson.MakeNumber(float64(attempt)), str(commit), str(commits[commit]), str(p.witness), str(p.environment),
+							str(execution), str("Frozen witness PREDICATE_PASS on repaired worktree (NATIVE_DOCKER).")})
+					if !seen[run] {
+						seen[run] = true
+						out = append(out, [2]string{run[7:], "run:" + strconv.Itoa(attempt)})
+					}
 				}
 			}
 		}
 	}
-	walk("")
 	return out
 }
-
-// caseObjectsBefore records each repository's object set and the reflog
-// digests once the case's workspace is in place (gen-writers.ts
-// caseObjectsBefore).
-func caseObjectsBefore(t testing.TB, ws string) caseObjectsStart {
-	t.Helper()
-	start := caseObjectsStart{sets: map[string]map[string]bool{}, reflogs: reflogDigests(ws)}
-	for _, rel := range gitRepositories(ws) {
-		start.sets[rel] = objectSet(t, filepath.Join(ws, filepath.FromSlash(rel)))
-	}
-	return start
-}
-
-// caseObjects lists and names what the case created so far (gen-writers.ts
-// caseObjects).
-func caseObjects(t testing.TB, r writerRoots, start caseObjectsStart) *caseObjectNames {
-	t.Helper()
-	out := &caseObjectNames{names: map[string]string{}, byRepo: map[string]map[string]string{}, reflogs: start.reflogs}
-	for rel, created := range createdObjects(t, r.ws, start.sets) {
-		repoNames := objectNames(t, filepath.Join(r.ws, filepath.FromSlash(rel)), created, func(s string) string { return normalizeWriter(s, r) })
-		out.byRepo[rel] = repoNames
-		maps.Copy(out.names, repoNames)
-	}
-	return out
-}
-
-// maskObjectIDs replaces each created object id in text with its name
-// (gen-writers.ts maskObjectIds).
-func maskObjectIDs(text string, objects *caseObjectNames) string {
-	if objects == nil {
-		return text
-	}
-	for _, id := range slices.Sorted(maps.Keys(objects.names)) {
-		text = strings.ReplaceAll(text, id, objects.names[id])
-	}
-	return text
-}
-
-// createdObjectDigest is the loose-object and reflog rules' digest of
-// workspace file rel; ok is false when neither applies (gen-writers.ts
-// createdObjectDigest).
-func createdObjectDigest(rel string, b []byte, objects *caseObjectNames, text func(string) string) (string, bool) {
-	if objects == nil {
-		return "", false
-	}
-	if m := looseObjectPattern.FindStringSubmatchIndex(rel); m != nil {
-		repo := "."
-		if m[2] >= 0 {
-			repo = rel[m[2]:m[3]]
-		}
-		name, ok := objects.byRepo[repo][rel[m[4]:m[5]]+rel[m[6]:m[7]]]
-		if !ok {
-			return "", false
-		}
-		return canonical.SHA256Hex("git-object:" + name), true
-	}
-	if reflogPattern.MatchString(rel) && objects.reflogs[rel] != canonical.SHA256HexBytes(b) {
-		lines := strings.Split(jsstr.DecodeUTF8(b), "\n")
-		for i, line := range lines {
-			if loc := reflogTime.FindStringIndex(line); loc != nil {
-				lines[i] = line[:loc[0]] + "<TIME>\t" + line[loc[1]:]
-			}
-		}
-		return canonical.SHA256Hex(text(strings.Join(lines, "\n"))), true
-	}
-	return "", false
-}
-
-// ---- end of the created Git objects rule ----

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake gh "pass" (README.md): `attestation verify <receipt> ...` prints the digest it loaded and exits 0.
+# The body is shared: ../lib.sh.
+variant=pass
+. "${0%/*}/../lib.sh"

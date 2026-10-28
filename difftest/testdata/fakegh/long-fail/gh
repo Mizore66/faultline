@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake gh "long-fail" (README.md): `attestation verify ...` prints 9,000 bytes on stdout and on stderr, exit 1.
+# The body is shared: ../lib.sh.
+variant=long-fail
+. "${0%/*}/../lib.sh"

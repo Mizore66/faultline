@@ -3,9 +3,13 @@
 package difftest
 
 import (
+	"bytes"
+	"errors"
 	"math/rand/v2"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +24,7 @@ import (
 	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
 // describeTree lists every entry under root with its mode, and each regular
@@ -469,6 +474,12 @@ func (ac artifactCase) oracleArgs() string {
 	if ac.o.HasThreadID {
 		args.Set("codexThreadId", jsjson.MakeString(ac.o.CodexThreadID))
 	}
+	if ac.o.HasRepairBaseTree {
+		args.Set("repairBaseTree", jsjson.MakeString(ac.o.RepairBaseTree))
+	}
+	if ac.o.HasHardGuardArtifactDigests {
+		args.Set("hardGuardArtifactDigests", stringArray(ac.o.HardGuardArtifactDigests))
+	}
 	return jsjson.Stringify(jsjson.MakeObject(args))
 }
 
@@ -562,7 +573,9 @@ func reparseValue(v jsjson.Value) jsjson.Value {
 // from the slice 2 base bundle git-unbound (and a few other bases, whose
 // first refusal differs) with generated repaired runs and flag variations
 // (the repaired commit and tree, the expected root, the patch, the Codex
-// thread id, a tampered bundle copy) with frozen TS's
+// thread id, a tampered bundle copy), plus 60 that pass repairBaseTree
+// (equal, different, empty) and hardGuardArtifactDigests (absent, empty,
+// three digests, an invalid one), which the CLI never passes, with frozen TS's
 // buildPreventionProofFromVerifiedArtifacts (after digestRepairPatchFile,
 // as the CLI calls them) and the Go port, and compares the input object or
 // the reasons (or THREW:). TS verifies the bundle on every call (about a
@@ -636,6 +649,49 @@ func TestLivePreventionFromArtifacts(t *testing.T) {
 			cases = append(cases, ac)
 		}
 	}
+	// The options the CLI never passes: repairBaseTree and the hard-guard
+	// digests, on git-unbound (whose first-bad tree is a1d82cc…).
+	firstBad := "a1d82cc5cc0c3976e651069980545f9fc85b0f25"
+	for extra, attempts := 0, 0; extra < 60 && attempts < 1500; attempts++ {
+		o := gitUnboundOptions(t, "git-unbound")
+		o.RepairedRuns = reparseValue(o.RepairedRuns)
+		label := "git-unbound"
+		if r.IntN(4) == 0 {
+			o.RepairedRuns = mutateRepairedRuns(r, o.RepairedRuns, &label)
+		}
+		if r.IntN(3) == 0 {
+			o.HasThreadID, o.CodexThreadID = true, []string{"thread-1", ""}[r.IntN(2)]
+		}
+		switch r.IntN(4) {
+		case 0:
+			o.HasRepairBaseTree, o.RepairBaseTree = true, firstBad
+			label += " base-equal"
+		case 1:
+			o.HasRepairBaseTree, o.RepairBaseTree = true, strings.Repeat("0", 40)
+			label += " base-different"
+		case 2:
+			o.HasRepairBaseTree, o.RepairBaseTree = true, ""
+			label += " base-empty"
+		}
+		switch r.IntN(4) {
+		case 0:
+			o.HasHardGuardArtifactDigests, o.HardGuardArtifactDigests = true, []string{}
+			label += " guards-empty"
+		case 1:
+			o.HasHardGuardArtifactDigests = true
+			o.HardGuardArtifactDigests = prevention.HardGuardDigestsFromStrings([]string{"a", "b", strconv.Itoa(r.IntN(4))})
+			label += " guards-three"
+		case 2:
+			o.HasHardGuardArtifactDigests, o.HardGuardArtifactDigests = true, []string{"not-a-digest"}
+			label += " guards-invalid"
+		}
+		ac := artifactCase{o: o, patch: patch, label: label}
+		if args := ac.oracleArgs(); !seen[args] {
+			seen[args] = true
+			cases = append(cases, ac)
+			extra++
+		}
+	}
 
 	// TS results, over several oracles.
 	const workers = 8
@@ -687,4 +743,571 @@ func TestLivePreventionFromArtifacts(t *testing.T) {
 	}
 	liveSummary(t, "--from-bundle builds: %v", outcomes)
 	requireReached(t, "internal/bundle/prevention/artifacts.go", recordedOutputs(t))
+}
+
+// hardGuardString is one generated hard-guard recommendation: empty, ASCII,
+// astral, a lone surrogate, or a mix.
+func hardGuardString(r *rand.Rand) string {
+	pick := []func() string{
+		func() string { return "" },
+		func() string { return []string{"no force push", "block rm -rf", "a", "b"}[r.IntN(4)] },
+		func() string { return "\U0001F600 guard" },
+		func() string { return jsstr.FromUTF16([]uint16{uint16(0xD800 + r.IntN(0x800))}) },
+		func() string { return jsstr.FromUTF16([]uint16{'x', 0xDC00, 'y', 0xD83D}) },
+		func() string { return "é́ " + strconv.Itoa(r.IntN(5)) },
+	}
+	return pick[r.IntN(len(pick))]()
+}
+
+// TestLiveHardGuardDigests runs 500 generated recommendation lists (empty
+// strings, duplicates, astral and lone-surrogate characters) through frozen
+// TS's hardGuardDigestsFromStrings and writeHardGuardDigestSidecar and the
+// Go ports. The sidecar is written into fresh directories, a read-only
+// directory, a missing one, and one whose sidecar path is a directory; the
+// returned digest (or THREW: text) and the directory trees, modes
+// included, are compared.
+func TestLiveHardGuardDigests(t *testing.T) {
+	oracle.Skip(t)
+	c := oracle.Start(t)
+	defer c.Close()
+	work, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := rand.New(rand.NewPCG(4, 5))
+	outcomes := map[string]int{}
+	for i := 0; i < 500; i++ {
+		values := make([]string, r.IntN(7))
+		for j := range values {
+			if j > 0 && r.IntN(4) == 0 {
+				values[j] = values[r.IntN(j)]
+			} else {
+				values[j] = hardGuardString(r)
+			}
+		}
+		args := jsjson.Stringify(jsjson.MustObject("values", stringArray(values)))
+		digests := prevention.HardGuardDigestsFromStrings(values)
+		want := oracleText(t, c, "hardGuardDigestsFromStrings", args)
+		recordOutput(t, want)
+		if got := jsjson.Stringify(stringArray(digests)); got != want {
+			t.Fatalf("case %d: %s\ngot  %s\nwant %s", i, args, got, want)
+		}
+		// The sidecar: the digests, or raw strings (the helper takes any).
+		if r.IntN(4) == 0 {
+			digests = values
+		}
+		ts, gs := filepath.Join(work, "ts", strconv.Itoa(i)), filepath.Join(work, "go", strconv.Itoa(i))
+		label := "fresh"
+		dir := func(root string) string { return filepath.Join(root, "d") }
+		setup := func(root string) { os.MkdirAll(dir(root), 0o755) }
+		switch r.IntN(10) {
+		case 0:
+			label = "read-only"
+			setup = func(root string) {
+				os.MkdirAll(dir(root), 0o755)
+				os.Chmod(dir(root), 0o555)
+			}
+		case 1:
+			label = "sidecar-is-directory"
+			setup = func(root string) { os.MkdirAll(filepath.Join(dir(root), "hard-guard-digests.json"), 0o755) }
+		case 2:
+			label = "missing"
+			setup = func(root string) { os.MkdirAll(root, 0o755) }
+		case 3:
+			label = "existing"
+			setup = func(root string) {
+				os.MkdirAll(dir(root), 0o755)
+				os.WriteFile(filepath.Join(dir(root), "hard-guard-digests.json"), []byte("old contents, longer than some\n"), 0o600)
+			}
+		}
+		setup(ts)
+		setup(gs)
+		sidecarArgs := jsjson.Stringify(jsjson.MustObject("directory", jsjson.MakeString(dir(ts)), "digests", stringArray(digests)))
+		want = strings.ReplaceAll(oracleText(t, c, "writeHardGuardDigestSidecar", sidecarArgs), ts, gs)
+		got, err := prevention.WriteHardGuardDigestSidecar(dir(gs), digests)
+		if err != nil {
+			got = "THREW:" + jsexc.Message(err)
+			outcomes["threw"]++
+		} else {
+			outcomes["written"]++
+		}
+		recordOutput(t, want)
+		if got != want {
+			t.Fatalf("case %d (%s): %s\ngot  %s\nwant %s", i, label, sidecarArgs, got, want)
+		}
+		a, b := describeTree(gs), describeTree(ts)
+		unlockTree(ts)
+		unlockTree(gs)
+		if a != b {
+			t.Fatalf("case %d (%s): trees differ:\ngo\n%s\nts\n%s", i, label, a, b)
+		}
+	}
+	liveSummary(t, "hard-guard sidecars: %v", outcomes)
+	requireReached(t, "internal/bundle/prevention/hardguard.go", recordedOutputs(t))
+}
+
+// repairFakeGits are fake gits for commitRepairedWorktreeState: each
+// misbehaves on one subcommand (the hardened env passes only PATH, so the
+// behaviour is the script's) and runs the real git otherwise.
+var repairFakeGits = map[string]string{
+	"hash-object-not-blob":   `hash-object) echo zz-not-a-blob; exit 0;;`,
+	"hash-object-silent":     `hash-object) exit 1;;`,
+	"commit-tree-not-oid":    `commit-tree) echo zz-not-an-oid; exit 0;;`,
+	"write-tree-silent":      `write-tree) exit 1;;`,
+	"write-tree-stdout":      `write-tree) echo "planted stdout"; exit 1;;`,
+	"ls-files-silent":        `ls-files) exit 3;;`,
+	"update-index-stderr":    `update-index) echo "error: planted update-index failure" >&2; exit 128;;`,
+	"read-tree-stderr-space": `read-tree) printf '  fatal: planted  \n\n' >&2; exit 128;;`,
+}
+
+// writeRepairFakeGit writes the fake for mode under dir and returns its
+// directory.
+func writeRepairFakeGit(t *testing.T, dir, mode string) string {
+	t.Helper()
+	fake := filepath.Join(dir, "fakegit-"+mode)
+	os.MkdirAll(fake, 0o755)
+	script := `#!/bin/sh
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+for a in "$@"; do
+  case "$a" in
+    -c|-C) continue;;
+    ` + repairFakeGits[mode] + `
+    *=*|/*) continue;;
+  esac
+done
+exec git "$@"
+`
+	if err := os.WriteFile(filepath.Join(fake, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return fake
+}
+
+// maskCommitTimes masks the author and committer seconds of a
+// `git cat-file -p` commit; the timezone offset is still compared.
+var commitTimePattern = regexp.MustCompile(`(?m)^((?:author|committer) .*) [0-9]+( [+-][0-9]{4})$`)
+
+func maskCommitTimes(s string) string {
+	return commitTimePattern.ReplaceAllString(s, "$1 <SECONDS>$2")
+}
+
+// TestLiveCommitRepairedWorktreeState runs frozen TS's
+// commitRepairedWorktreeState and the Go port at once on 120 generated
+// worktrees, on the same repository (each side has its own temporary index).
+// The cases cover:
+//   - executable bits, nested directories, symlinks (skipped), empty files
+//     and CRLF files;
+//   - nested .git entries and a linked worktree (its .git file);
+//   - names with leading spaces, backslashes, a leading "..", and non-UTF-8
+//     bytes (where the filesystem takes them);
+//   - deleted tracked files;
+//   - unreadable files, unreadable directories (mode 0), and readable but
+//     unsearchable directories (0o644, typed from d_type);
+//   - no identity (the machine's own fallback), an unknown base, and SHA-256
+//     repositories;
+//   - fake gits that print a non-object id or fail on one subcommand.
+//
+// The THREW: texts and the tree ids must be equal. The commits must be
+// equal, or equal under `git cat-file -p` with the seconds masked. The
+// repository's own index must be unchanged, and no temporary index may be
+// left behind.
+func TestLiveCommitRepairedWorktreeState(t *testing.T) {
+	oracle.Skip(t)
+	work, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both sides put their temporary index in this directory, where none
+	// may be left after a case.
+	indexDir := filepath.Join(work, "tmp")
+	os.Mkdir(indexDir, 0o755)
+	t.Setenv("TMPDIR", indexDir)
+	c := oracle.Start(t)
+	defer c.Close()
+	git := func(dir string, args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	modes := make([]string, 0, len(repairFakeGits))
+	for m := range repairFakeGits {
+		modes = append(modes, m)
+	}
+	sort.Strings(modes)
+	realPath := os.Getenv("PATH")
+	fakes := 0
+	t.Setenv("PATH", realPath) // restored after the test, whatever a case set
+	r := rand.New(rand.NewPCG(13, 4))
+	outcomes := map[string]int{}
+	names := []string{"a.txt", "b/c.txt", "b/d/e.sh", "z", "dir/x", "été.md", "space name"}
+	for i := 0; i < 120; i++ {
+		dir := filepath.Join(work, strconv.Itoa(i))
+		os.MkdirAll(dir, 0o755)
+		var label []string
+		init := []string{"init", "-q"}
+		if r.IntN(10) == 0 {
+			init = append(init, "--object-format=sha256")
+			label = append(label, "sha256")
+		}
+		git(dir, init...)
+		identity := r.IntN(12) != 0
+		if identity {
+			git(dir, "config", "user.name", "FaultLine Test")
+			git(dir, "config", "user.email", "faultline@example.test")
+		} else {
+			label = append(label, "no-identity")
+		}
+		write := func(rel string, data string, mode os.FileMode) {
+			p := filepath.Join(dir, filepath.FromSlash(rel))
+			os.MkdirAll(filepath.Dir(p), 0o755)
+			os.WriteFile(p, []byte(data), mode)
+			os.Chmod(p, mode)
+		}
+		var tracked []string
+		for _, n := range names {
+			if r.IntN(2) == 0 {
+				write(n, "base "+n+"\n", 0o644)
+				tracked = append(tracked, n)
+			}
+		}
+		extra := []string{" lead", " nbsp", "..dots", `back\slash`, "trail "}
+		for _, n := range extra {
+			if r.IntN(6) == 0 {
+				write(n, "x\n", 0o644)
+				tracked = append(tracked, n)
+				label = append(label, strconv.Quote(n))
+			}
+		}
+		if len(tracked) == 0 {
+			write("a.txt", "base\n", 0o644)
+			tracked = append(tracked, "a.txt")
+		}
+		git(dir, "add", "-A")
+		commitArgs := []string{"-c", "user.name=Seed", "-c", "user.email=seed@example.test", "commit", "-q", "-m", "base"}
+		git(dir, commitArgs...)
+		head := git(dir, "rev-parse", "HEAD")
+		root := dir
+		if r.IntN(10) == 0 {
+			root = filepath.Join(work, strconv.Itoa(i)+"-linked")
+			git(dir, "worktree", "add", "-q", "--detach", root, head)
+			label = append(label, "linked-worktree")
+		}
+		mutate := func(rel string, data string, mode os.FileMode) {
+			p := filepath.Join(root, filepath.FromSlash(rel))
+			os.MkdirAll(filepath.Dir(p), 0o755)
+			os.WriteFile(p, []byte(data), mode)
+			os.Chmod(p, mode)
+		}
+		for _, n := range tracked {
+			switch r.IntN(6) {
+			case 0:
+				os.Remove(filepath.Join(root, filepath.FromSlash(n)))
+				label = append(label, "deleted")
+			case 1:
+				mutate(n, "repaired "+n+"\r\n", 0o644)
+			case 2:
+				mutate(n, "repaired\n", []os.FileMode{0o755, 0o700, 0o744, 0o654, 0o601}[r.IntN(5)])
+				label = append(label, "exec")
+			case 3:
+				mutate(n, "", 0o644)
+				label = append(label, "empty")
+			}
+		}
+		for k := r.IntN(4); k > 0; k-- {
+			mutate("new/"+strconv.Itoa(k)+"/f"+strconv.Itoa(r.IntN(9)), "new\n", 0o644)
+		}
+		if r.IntN(2) == 0 {
+			mutate(".faultline-repair/README.md", "# repair brief\n", 0o644)
+		}
+		if r.IntN(4) == 0 {
+			os.Symlink("a.txt", filepath.Join(root, "link-file"))
+			os.Symlink("b", filepath.Join(root, "link-dir"))
+			os.Symlink("nowhere", filepath.Join(root, "link-dangling"))
+			label = append(label, "symlinks")
+		}
+		if r.IntN(8) == 0 {
+			mutate("sub/.git/config", "nested\n", 0o644)
+			mutate("sub/kept.txt", "kept\n", 0o644)
+			label = append(label, "nested-.git")
+		}
+		if r.IntN(10) == 0 {
+			if err := os.WriteFile(filepath.Join(root, "bad\xffname"), []byte("x\n"), 0o644); err == nil {
+				label = append(label, "non-utf8")
+			}
+		}
+		var locked []string
+		if r.IntN(14) == 0 {
+			mutate("secret/a", "a\n", 0o644)
+			mutate("secret/b", "b\n", 0o644)
+			os.Chmod(filepath.Join(root, "secret", "a"), 0)
+			os.Chmod(filepath.Join(root, "secret", "b"), 0)
+			label = append(label, "unreadable-files")
+		} else if r.IntN(14) == 0 {
+			mutate("locked/a", "a\n", 0o644)
+			os.Chmod(filepath.Join(root, "locked"), 0)
+			locked = append(locked, filepath.Join(root, "locked"))
+			label = append(label, "unreadable-dir")
+		} else if r.IntN(10) == 0 {
+			// Readable but not searchable: readdirSync still types the
+			// entries (from d_type), so TS fails on the lstat of the
+			// file or the scandir of the subdirectory.
+			mutate("unsearchable/a", "a\n", 0o644)
+			if r.IntN(2) == 0 {
+				mutate("unsearchable/sub/b", "b\n", 0o644)
+				label = append(label, "unsearchable-dir-with-subdir")
+			} else {
+				label = append(label, "unsearchable-dir")
+			}
+			os.Chmod(filepath.Join(root, "unsearchable"), 0o644)
+			locked = append(locked, filepath.Join(root, "unsearchable"))
+		}
+		base := head
+		switch r.IntN(15) {
+		case 0:
+			base = strings.Repeat("0", 40)
+			label = append(label, "unknown-base")
+		case 1:
+			base = "HEAD"
+			label = append(label, "base-HEAD")
+		case 2:
+			base = "--bogus"
+			label = append(label, "base-option")
+		}
+		var path string
+		switch r.IntN(8) {
+		case 0: // every mode in turn, so each failure is reached
+			mode := modes[fakes%len(modes)]
+			fakes++
+			path = writeRepairFakeGit(t, work, mode) + ":" + os.Getenv("PATH")
+			label = append(label, "fake:"+mode)
+		case 1:
+			if r.IntN(3) == 0 {
+				path = filepath.Join(work, "no-git-here")
+				label = append(label, "no-git")
+			}
+		}
+		args := jsjson.MustObject("worktreePath", jsjson.MakeString(root), "baseCommit", jsjson.MakeString(base))
+		if path != "" {
+			args.Obj().Set("path", jsjson.MakeString(path))
+		}
+		// The repository's own index must not change: both sides build in a
+		// temporary one.
+		realIndex := git(root, "rev-parse", "--path-format=absolute", "--git-path", "index")
+		indexBefore, _ := os.ReadFile(realIndex)
+		// The two run at once on the same repository: each has its own
+		// temporary index, and Git writes objects atomically. The fake's
+		// PATH reaches Go through the process environment and TS through
+		// the op's argument.
+		if path != "" {
+			os.Setenv("PATH", path)
+		}
+		var state prevention.RepairedState
+		var err error
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			state, err = prevention.CommitRepairedWorktreeState(root, base)
+		}()
+		want := oracleText(t, c, "commitRepairedWorktreeState", jsjson.Stringify(args))
+		wg.Wait()
+		os.Setenv("PATH", realPath)
+		recordOutput(t, want)
+		if indexAfter, _ := os.ReadFile(realIndex); !bytes.Equal(indexBefore, indexAfter) {
+			t.Fatalf("case %d (%s): %s changed", i, strings.Join(label, " "), realIndex)
+		}
+		for _, l := range locked {
+			os.Chmod(l, 0o755)
+		}
+		unlockTree(root)
+		os.Chmod(filepath.Join(root, "secret", "a"), 0o644)
+		os.Chmod(filepath.Join(root, "secret", "b"), 0o644)
+		desc := strings.Join(label, " ")
+		if strings.HasPrefix(want, "THREW:") {
+			outcomes["threw"]++
+			if err == nil {
+				t.Fatalf("case %d (%s): Go returned %+v, TS %s", i, desc, state, want)
+			}
+			if got := "THREW:" + jsexc.Message(err); got != want {
+				t.Fatalf("case %d (%s):\ngot  %q\nwant %q", i, desc, got, want)
+			}
+		} else {
+			outcomes["committed"]++
+			if err != nil {
+				t.Fatalf("case %d (%s): Go threw %q, TS %s", i, desc, jsexc.Message(err), want)
+			}
+			ts := parseOrFatal(t, want)
+			if ts.Get("tree").Str() != state.Tree {
+				t.Fatalf("case %d (%s): tree %s, TS %s", i, desc, state.Tree, want)
+			}
+			if tc := ts.Get("commit").Str(); tc != state.Commit {
+				outcomes["commit-differs-by-time"]++
+				a, b := maskCommitTimes(git(root, "cat-file", "-p", state.Commit)), maskCommitTimes(git(root, "cat-file", "-p", tc))
+				if a != b {
+					t.Fatalf("case %d (%s): commits differ:\ngo\n%s\nts\n%s", i, desc, a, b)
+				}
+			}
+		}
+		if left, _ := filepath.Glob(filepath.Join(indexDir, "faultline-repair-*")); len(left) != 0 {
+			t.Fatalf("case %d (%s): temporary index left: %v", i, desc, left)
+		}
+	}
+	liveSummary(t, "repaired worktree commits: %v", outcomes)
+	requireReached(t, "internal/bundle/prevention/repaired.go", recordedOutputs(t))
+}
+
+// repairedVerdict is one generated verifyOnce result: the JSON the TS
+// script returns and the Go Verdict for it ("THROW:" entries throw).
+func repairedVerdict(r *rand.Rand) (jsjson.Value, prevention.Verdict, string) {
+	details := []string{"", "PASS", "predicate passed \U0001F600", "lone " + jsstr.FromUTF16([]uint16{0xD800}), "é́ detail", strings.Repeat("d", 200)}
+	if r.IntN(14) == 0 {
+		msg := []string{"verifier crashed", "docker \U0001F433 gone", ""}[r.IntN(3)]
+		return jsjson.MakeString("THROW:" + msg), prevention.Verdict{}, msg
+	}
+	v := prevention.Verdict{OK: r.IntN(8) != 0, Detail: details[r.IntN(len(details))]}
+	o := jsjson.NewObj()
+	ok := jsjson.MakeBool(v.OK)
+	if r.IntN(10) == 0 { // a truthy or falsy non-boolean ok
+		if v.OK {
+			ok = []jsjson.Value{jsjson.MakeNumber(1), jsjson.MakeString("yes")}[r.IntN(2)]
+		} else {
+			ok = []jsjson.Value{jsjson.MakeNumber(0), jsjson.MakeString(""), jsjson.MakeNull()}[r.IntN(3)]
+		}
+	}
+	o.Set("ok", ok)
+	o.Set("detail", jsjson.MakeString(v.Detail))
+	hex := func(n int, digits string) string {
+		var b strings.Builder
+		for range n {
+			b.WriteByte(digits[r.IntN(len(digits))])
+		}
+		return b.String()
+	}
+	setID := func(id string) {
+		o.Set("executionId", jsjson.MakeString(id))
+		v.ExecutionID, v.HasExecutionID = id, true
+	}
+	switch r.IntN(12) {
+	case 0: // missing
+	case 1:
+		setID("sha256:" + hex(64, "0123456789ABCDEF"))
+	case 2:
+		setID("sha256:" + hex(63, "0123456789abcdef"))
+	case 3:
+		setID("sha512:" + hex(64, "0123456789abcdef"))
+	case 4: // not a string
+		o.Set("executionId", []jsjson.Value{jsjson.MakeNumber(7), jsjson.MakeNull()}[r.IntN(2)])
+	case 5:
+		setID("sha256:" + hex(64, "0123456789abcdef") + "\n")
+	default:
+		setID("sha256:" + hex(64, "0123456789abcdef"))
+	}
+	return jsjson.MakeObject(o), v, ""
+}
+
+// TestLiveCollectRepairedRuns runs 200 scripted verifyOnce sequences
+// (failures at each attempt, missing, malformed, uppercase and non-string
+// execution ids, non-boolean ok values, details with astral and
+// lone-surrogate characters, verifiers that throw) through frozen TS's
+// collectRepairedPreventionRuns and the Go port, on git-unbound, on the
+// heterogeneous base and on broken bundles (missing, unparsable or
+// schema-invalid witness and investigation files), and compares
+// JSON.stringify of the result or the THREW: text.
+func TestLiveCollectRepairedRuns(t *testing.T) {
+	oracle.Skip(t)
+	c := oracle.Start(t)
+	defer c.Close()
+	work, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bases := filepath.Join(oracle.RepoRoot(t), "difftest", "testdata", "bases")
+	broken := func(name string, edit func(dir string)) string {
+		dir := filepath.Join(work, name)
+		if err := os.CopyFS(dir, os.DirFS(filepath.Join(bases, "git-unbound"))); err != nil {
+			t.Fatal(err)
+		}
+		edit(dir)
+		return dir
+	}
+	bundles := []string{
+		filepath.Join(bases, "git-unbound"),
+		filepath.Join(bases, "git-shape-heterogeneous-proof"),
+		filepath.Join(bases, "git-two-states"),
+		filepath.Join(work, "missing"),
+		broken("no-investigation", func(d string) { os.Remove(filepath.Join(d, "investigation.json")) }),
+		broken("bad-frozen-json", func(d string) { os.WriteFile(filepath.Join(d, "witness", "frozen.json"), []byte("{\"a\":"), 0o644) }),
+		broken("bad-investigation-schema", func(d string) {
+			os.WriteFile(filepath.Join(d, "investigation.json"), []byte(`{"environment":{}}`), 0o644)
+		}),
+		broken("bad-both", func(d string) {
+			os.WriteFile(filepath.Join(d, "witness", "frozen.json"), []byte(`[]`), 0o644)
+			os.WriteFile(filepath.Join(d, "investigation.json"), []byte(`nope`), 0o644)
+		}),
+	}
+	r := rand.New(rand.NewPCG(13, 5))
+	outcomes := map[string]int{}
+	for i := 0; i < 200; i++ {
+		bundleDir := bundles[0]
+		if r.IntN(3) == 0 {
+			bundleDir = bundles[1+r.IntN(len(bundles)-1)]
+		}
+		commit := []string{strings.Repeat("c", 40), "", "commit \U0001F600", strings.Repeat("e", 64)}[r.IntN(4)]
+		tree := []string{strings.Repeat("7", 40), "tree" + jsstr.FromUTF16([]uint16{0xDC00})}[r.IntN(2)]
+		var tsVerdicts []jsjson.Value
+		var goVerdicts []prevention.Verdict
+		var throws []string
+		for range 3 {
+			js, v, throw := repairedVerdict(r)
+			tsVerdicts = append(tsVerdicts, js)
+			goVerdicts = append(goVerdicts, v)
+			throws = append(throws, throw)
+		}
+		// Most sequences pass the first attempts: make the earlier entries
+		// valid passes so the later failures are reached.
+		if r.IntN(2) == 0 {
+			for k := 0; k < 2; k++ {
+				id := "sha256:" + canonical.SHA256Hex(strconv.Itoa(i*3+k))
+				tsVerdicts[k] = jsjson.MustObject("ok", jsjson.MakeBool(true), "detail", jsjson.MakeString("pass"), "executionId", jsjson.MakeString(id))
+				goVerdicts[k] = prevention.Verdict{OK: true, Detail: "pass", ExecutionID: id, HasExecutionID: true}
+				throws[k] = ""
+			}
+		}
+		args := jsjson.MustObject("bundleDirectory", jsjson.MakeString(bundleDir), "repairedCommit", jsjson.MakeString(commit),
+			"repairedTree", jsjson.MakeString(tree), "verdicts", jsjson.MakeArray(tsVerdicts))
+		want := oracleText(t, c, "collectRepairedPreventionRuns", jsjson.Stringify(args))
+		recordOutput(t, want)
+		next := 0
+		runs, reasons, err := prevention.CollectRepairedRuns("unused", bundleDir, commit, tree, func() (prevention.Verdict, error) {
+			k := next
+			next++
+			if strings.HasPrefix(tsVerdicts[k].Str(), "THROW:") {
+				return prevention.Verdict{}, errors.New(throws[k])
+			}
+			return goVerdicts[k], nil
+		})
+		var got string
+		switch {
+		case err != nil:
+			got = "THREW:" + jsexc.Message(err)
+			outcomes["threw"]++
+		case reasons != nil:
+			got = jsjson.Stringify(jsjson.MustObject("ok", jsjson.MakeBool(false), "reasons", stringArray(reasons)))
+			outcomes["refused"]++
+		default:
+			got = jsjson.Stringify(jsjson.MustObject("ok", jsjson.MakeBool(true), "runs", runs))
+			outcomes["collected"]++
+		}
+		if got != want {
+			t.Fatalf("case %d: %s\ngot  %s\nwant %s", i, jsjson.Stringify(args), got, want)
+		}
+	}
+	liveSummary(t, "repaired run collections: %v", outcomes)
+	requireReached(t, "internal/bundle/prevention/repaired_runs.go", recordedOutputs(t))
 }

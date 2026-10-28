@@ -75,11 +75,24 @@ func TestMain(m *testing.M) {
 		os.Setenv("GOCOVERDIR", coverDir)
 		buildArgs = append(buildArgs, "-cover", "-coverpkg="+coverPkgs)
 	}
-	build := exec.Command("go", append(buildArgs, "github.com/Mizore66/faultline/cmd/fl")...)
-	build.Stdout, build.Stderr = os.Stderr, os.Stderr
-	if err := build.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "building fl:", err)
-		os.Exit(1)
+	if window := os.Getenv("FAULTLINE_COVER_WINDOW"); window != "" && os.Getenv("FAULTLINE_FL_BINARY") != "" {
+		// A bounded coverage window: a prebuilt -cover fl (cross-built on the
+		// host for a Go-less container) writes its counters into window, and
+		// TestCoverageWindows judges the union of several windows.
+		os.Setenv("GOCOVERDIR", window)
+	}
+	if prebuilt := os.Getenv("FAULTLINE_FL_BINARY"); prebuilt != "" && coverDir == "" {
+		// A container with no Go toolchain (localhost/r73img) runs a
+		// test binary and an fl cross-built with the same -tags
+		// faultline_test on the host.
+		flBinary = prebuilt
+	} else {
+		build := exec.Command("go", append(buildArgs, "github.com/Mizore66/faultline/cmd/fl")...)
+		build.Stdout, build.Stderr = os.Stderr, os.Stderr
+		if err := build.Run(); err != nil {
+			fmt.Fprintln(os.Stderr, "building fl:", err)
+			os.Exit(1)
+		}
 	}
 	if coverDir != "" {
 		// Write the coverage meta-data file once, before the replay: fl
@@ -88,6 +101,7 @@ func TestMain(m *testing.M) {
 		exec.Command(flBinary, "help").Run()
 	}
 	code := m.Run()
+	reportUnverifiedGroups(os.Stderr)
 	if coverDir != "" {
 		if run := flag.Lookup("test.run"); code == 0 && run != nil && run.Value.String() == "" {
 			repo, _ := filepath.Abs("..")

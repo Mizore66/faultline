@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake gh "flood" (README.md): `attestation verify <receipt> ...` writes 1,200,000 bytes to stdout, over spawnSync's 1 MiB default maxBuffer, so fl reports ENOBUFS.
+# The body is shared: ../lib.sh.
+variant=flood
+. "${0%/*}/../lib.sh"

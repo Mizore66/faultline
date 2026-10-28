@@ -17,6 +17,8 @@ if (seed) {
   const EPOCH = 1784203200000 + (offset === "" ? 0 : Number(offset));
   const ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let tick = 0, uuid = 0, tmp = 0;
+  // Read only by the oracle's repairWithCodex op (Go: clock.ConsumedForTest).
+  Object.defineProperty(globalThis, "__faultlineSeedCounters", { get: () => ({ ticks: tick, uuids: uuid }), configurable: true });
   const hash = (kind, n) => createHash("sha256").update(`${seed}\0${kind}\0${n}`, "utf8").digest();
   const RealDate = Date;
   class SeededDate extends RealDate {

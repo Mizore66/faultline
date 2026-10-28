@@ -1,0 +1,7 @@
+{
+  "symptom": "The repository state must not be bad.",
+  "ciLog": "state.txt became bad",
+  "repositoryLanguage": "Text",
+  "repositorySummary": "Temporary repository for the writer replay.",
+  "extra": true
+}

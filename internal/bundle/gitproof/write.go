@@ -43,11 +43,6 @@ func jsonBytes(v jsjson.Value) []byte {
 	return []byte(jsstr.ToUTF8(jsexc.Concat(bundle.Must(canonical.CanonicalJSON(v)), "\n")))
 }
 
-// splitPathParts is suffix.split(/[\\/]+/).filter(Boolean).
-func splitPathParts(suffix string) []string {
-	return strings.FieldsFunc(suffix, func(r rune) bool { return r == '/' || r == '\\' })
-}
-
 // safeSegment is resolveSafeDirectorySegment with its lstat error thrown.
 func safeSegment(path string) (string, bool) {
 	resolved, ok, err := safedir.ResolveSafeDirectorySegment(path)
@@ -57,47 +52,18 @@ func safeSegment(path string) (string, bool) {
 	return resolved, ok
 }
 
-// realDirectoryTree is ensureRealDirectoryTree: src/git-proof-bundle.ts:257
-// for the Git proof root, and src/proof-bundle.ts:73 (its own texts) when
-// proofBundle is set.
-func realDirectoryTree(directory string, proofBundle bool) {
-	absolute := nodefs.Resolve(directory)
-	root := nodefs.ParseRoot(absolute)
-	var parts []string
-	if suffix := nodefs.Relative(root, absolute); suffix != "" {
-		parts = splitPathParts(suffix)
-	}
-	current := root
-	if nodefs.Exists(current) {
-		safe, ok := safeSegment(current)
-		switch {
-		case !ok && proofBundle:
-			bundle.Throw(errors.New(jsexc.Concat("Proof bundle root cannot traverse a symbolic link or non-directory: ", current))) // race only (the Git proof walk refused it first)
-		case !ok:
-			bundle.Throw(errors.New(jsexc.Concat("Git proof root is not a real directory: ", current)))
-		}
-		current = safe
-	}
-	for _, part := range parts {
-		current = nodefs.Join(current, part)
-		if !nodefs.Exists(current) {
-			if err := nodefs.Mkdir(current, 0o700); err != nil {
-				bundle.Throw(err)
-			}
-		}
-		safe, ok := safeSegment(current)
-		switch {
-		case !ok && proofBundle:
-			bundle.Throw(errors.New(jsexc.Concat("Proof bundle root cannot traverse a symbolic link or non-directory: ", current))) // race only (the Git proof walk refused it first)
-		case !ok:
-			bundle.Throw(errors.New(jsexc.Concat("Git proof root cannot traverse a symbolic link or non-directory: ", current)))
-		}
-		current = safe
-	}
+// Port of src/git-proof-bundle.ts:257 ensureRealDirectoryTree.
+func ensureRealDirectoryTree(directory string) {
+	safedir.EnsureRealDirectoryTree(directory, "Git proof root is not a real directory: ", "Git proof root cannot traverse a symbolic link or non-directory: ")
 }
 
-// Port of src/git-proof-bundle.ts:257 ensureRealDirectoryTree.
-func ensureRealDirectoryTree(directory string) { realDirectoryTree(directory, false) }
+// proofBundleRealDirectoryTree is src/proof-bundle.ts:73 ensureRealDirectoryTree
+// (its own texts; the root text is unreachable here, the Git proof walk
+// refused it first).
+func proofBundleRealDirectoryTree(directory string) {
+	const text = "Proof bundle root cannot traverse a symbolic link or non-directory: "
+	safedir.EnsureRealDirectoryTree(directory, text, text)
+}
 
 // Port of src/git-proof-bundle.ts:279 isNested.
 func isNested(root, candidate string) bool {
@@ -113,15 +79,15 @@ func assertSafeProofOutput(outputDirectory, proofRoot string) string {
 	if nestedPath == "" || strings.HasPrefix(nestedPath, "..") || nodefs.IsAbsolute(nestedPath) {
 		bundle.Throw(errors.New(jsexc.Concat("Proof bundle output must be a child directory of ", root)))
 	}
-	realDirectoryTree(root, true)
-	realDirectoryTree(nodefs.Dirname(output), true)
+	proofBundleRealDirectoryTree(root)
+	proofBundleRealDirectoryTree(nodefs.Dirname(output))
 	current := root
 	if nodefs.Exists(current) {
 		if _, ok := safeSegment(current); !ok {
 			bundle.Throw(errors.New(jsexc.Concat("Proof bundle root cannot be a symbolic link: ", root)))
 		}
 	}
-	for _, part := range splitPathParts(nestedPath) {
+	for _, part := range strings.FieldsFunc(nestedPath, func(r rune) bool { return r == '/' || r == '\\' }) {
 		current = nodefs.Join(current, part)
 		if !nodefs.Exists(current) {
 			continue

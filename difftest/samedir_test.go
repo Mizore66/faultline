@@ -8,7 +8,6 @@ import (
 	"maps"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -83,8 +82,7 @@ func TestWriterSameDirectory(t *testing.T) {
 				}
 				return out
 			}
-			seed := "file://" + filepath.Join(repo, "difftest", "gen", "seed.mjs")
-			ts := run([]string{"node", "--import", seed, filepath.Join(repo, "dist", "cli.js")})
+			ts := run(tsCommand(repo))
 			goOut := run([]string{flBinary})
 			for i := range ts {
 				want, got := ts[i], goOut[i]

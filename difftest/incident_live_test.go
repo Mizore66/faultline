@@ -101,7 +101,7 @@ func liveExplicitRange(r *rand.Rand) jsjson.Value {
 	o := jsjson.MustObject("ancestor", ancestor, "descendant", descendant)
 	if incidentRare(r, 12) {
 		if r.IntN(2) == 0 {
-			o.Obj().Set("base", jsjson.MakeString("origin/main")) // not "source": DraftInput.Range maps a resolved range
+			o.Obj().Set("base", jsjson.MakeString("origin/main")) // not "source": a resolved range is no draft input
 		} else {
 			o.Obj().Delete("descendant")
 		}
@@ -338,7 +338,11 @@ func TestLiveIncidentDraft(t *testing.T) {
 		} else {
 			facts.Set("localHead", incident.LocalHeadFacts(head, parents))
 		}
-		resolved, err := incident.ResolveRange(head, parents, from, to)
+		var explicit *incident.ExplicitRange
+		if from != "" || to != "" {
+			explicit = &incident.ExplicitRange{Ancestor: from, Descendant: to}
+		}
+		resolved, err := incident.ResolveRange(head, parents, explicit)
 		liveCheck(t, c, "resolveIncidentRange", `{"facts":`+jsjson.Stringify(jsjson.MakeObject(facts))+"}", stringifiedOr(resolved, err))
 	}
 	// Facts the CLI never builds: neither member, and both.

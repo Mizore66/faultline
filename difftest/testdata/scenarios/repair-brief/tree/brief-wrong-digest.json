@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "faultline.repair-brief.v1",
+  "evidencePacketDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "proposedInvariant": {
+    "statement": "The repository state must not become bad.",
+    "evidenceIds": [
+      "E1",
+      "E2",
+      "E3"
+    ]
+  },
+  "repairDirections": [
+    {
+      "statement": "Restore the state that the passing commit had.",
+      "evidenceIds": [
+        "E1",
+        "E2"
+      ]
+    }
+  ],
+  "prevention": {
+    "hardEnforcement": [
+      {
+        "statement": "Guard the state transition with the frozen witness.",
+        "evidenceIds": [
+          "E1"
+        ]
+      }
+    ],
+    "softGuidance": [
+      {
+        "statement": "Review state changes with the witness output.",
+        "evidenceIds": [
+          "E2"
+        ]
+      }
+    ]
+  },
+  "uncertainties": [
+    "Other causes of the transition cannot be excluded."
+  ]
+}

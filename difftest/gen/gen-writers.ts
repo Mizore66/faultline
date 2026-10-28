@@ -10,10 +10,11 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { canonicalJson, digestJson, sha256 } from "../../src/canonical.js";
 import { PATH_OPS, applyMutation, expandRepeats, normalizeWriter, treeDigest, type Template } from "./cases.js";
-import { copyScenario, makeCaseRoots, refreshScenarioIndexes, resetModes, restoreScenarioModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots } from "./scenarios.js";
+import { startFakeOpenAI, type FakeOpenAI } from "./fake-openai.js";
+import { copyScenario, makeCaseRoots, refreshScenarioIndexes, resetModes, restoreScenarioModes, requireFreshBuild, requireOracleNode, runCli, writerEnv, type CaseRoots, type WriterFakes } from "./scenarios.js";
 
 // input / inputHex: each invocation's stdin (text, where <WS>, <TMP>, <HOME>
 // and <REPEAT:c:n> are expanded; or hex bytes), null or a missing entry an
@@ -23,9 +24,16 @@ import { copyScenario, makeCaseRoots, refreshScenarioIndexes, resetModes, restor
 export type WriterTemplate = {
   id: string; scenario: string; argv: string[][]; fakeDocker?: string; fakeTools?: string; pathTools?: string[]; env?: Record<string, string>;
   posixOnly?: boolean; mutations?: Template[]; input?: (string | null)[]; inputHex?: (string | null)[]; advanceClock?: boolean;
+  // Slice 4c fakes: difftest/testdata/fakecodex/codex (one script; the
+  // variant <fakeCodex> is written into its variant= line) as
+  // FAULTLINE_CODEX_BIN (or on PATH with fakeCodexOnPath),
+  // difftest/testdata/fakegh/<fakeGh> on PATH, and a fake OpenAI server
+  // answering from the workspace file fakeOpenAI (fake-openai.ts).
+  fakeCodex?: string; fakeCodexOnPath?: boolean; fakeGh?: string; fakeOpenAI?: string;
 };
 
-const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations", "input", "inputHex", "advanceClock"]);
+const TEMPLATE_KEYS = new Set(["id", "scenario", "argv", "fakeDocker", "fakeTools", "pathTools", "env", "posixOnly", "mutations", "input", "inputHex", "advanceClock",
+  "fakeCodex", "fakeCodexOnPath", "fakeGh", "fakeOpenAI"]);
 
 // TMPDIR_FAKE_DOCKERS are the fake Dockers that keep state in $TMPDIR on
 // purpose (difftest/testdata/fakedocker/README.md).
@@ -130,7 +138,8 @@ const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 // a file by its SHA-256, a symlink by its target, a directory, or anything
 // else (a FIFO); all but symlinks also carry their permission bits in octal
 // ("<sha256> 600", "dir 700"), since the stores are written 0600/0700.
-export function treeEntries(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes)): Map<string, string> {
+export function treeEntries(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes),
+  alias: (rel: string) => string | null = (rel) => rel): Map<string, string> {
   const out = new Map<string, string>();
   if (!existsSync(root)) return out;
   const walk = (rel: string) => {
@@ -139,10 +148,12 @@ export function treeEntries(root: string, fileDigest: (rel: string, bytes: Buffe
       const path = join(root, r);
       const stat = lstatSync(path);
       const mode = ` ${(stat.mode & 0o777).toString(8)}`;
-      if (stat.isSymbolicLink()) out.set(r, `symlink:${readlinkSync(path)}`);
-      else if (stat.isDirectory()) { out.set(r, `dir${mode}`); walk(r); }
-      else if (!stat.isFile()) out.set(r, `special${mode}`);
-      else out.set(r, `${fileDigest(r, readFileSync(path))}${mode}`);
+      const key = alias(r);
+      const set = (entry: string) => { if (key !== null) out.set(key, entry); };
+      if (stat.isSymbolicLink()) set(`symlink:${readlinkSync(path)}`);
+      else if (stat.isDirectory()) { set(`dir${mode}`); walk(r); }
+      else if (!stat.isFile()) set(`special${mode}`);
+      else set(`${fileDigest(r, readFileSync(path))}${mode}`);
     }
   };
   walk("");
@@ -199,11 +210,236 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 // generator verifies every bundle TS wrote against the root it printed, the
 // Go replay does the same, and TestWriterSameDirectory compares a subset
 // unmasked. The Go twin is relocation in difftest/writer_test.go.
-// objects, when given, are the Git objects the case created so far
-// (caseObjects): their ids are seeds like the case root, text() replaces
-// each with its <BLOB|TREE|COMMIT:h12> name, and fileDigest() applies the
-// loose-object and reflog rules (see "Created Git objects" below).
-export type Relocation = { names: Map<string, string>; text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string; objects?: CaseObjects };
+// names is each path-dependent digest's name (carriedNames reads the previous
+// invocation's).
+export type Relocation = { names: Map<string, string>; text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string; alias: (rel: string) => string | null };
+
+// Created Git objects and repaired-run digests (slice 4c Task 2). A case that
+// makes a commit records the case directory in its README blob, so the blob,
+// the tree and the commit ids vary with where the case ran (the commit also
+// with the clock). Each object the case creates is named by its content with
+// the case paths masked (objectNames); the digests computed over those ids
+// (the repair verifier's executionId and each repaired run's runId) are
+// recomputed and named (repairedRunSeeds). The Go twins are in
+// difftest/writer_test.go.
+
+// GitBase is what the case's repositories held before its first invocation:
+// the object ids of each repository (by directory relative to the workspace)
+// and the byte digest of each reflog.
+export type GitBase = { objects: Map<string, Set<string>>; logs: Map<string, string> };
+
+// OBJECT_ID is a SHA-1 or SHA-256 object id (the Go twin is objectIDPattern).
+const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const harnessGitEnv = (): NodeJS.ProcessEnv => ({ PATH: process.env.PATH ?? "", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" });
+
+// harnessGit runs the harness's own git (not fl's, and not through the
+// recorder: the PATH is the inherited one, as in gitIndexDigest) on the
+// repository whose .git directory is gitDir.
+function harnessGit(gitDir: string, args: string[]): Buffer | undefined {
+  try {
+    return execFileSync("git", ["-c", "core.fsmonitor=false", `--git-dir=${gitDir}`, ...args], {
+      cwd: gitDir, env: harnessGitEnv(), stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 28
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+// gitRepos lists the directories under ws, relative to ws ("." for ws
+// itself), that hold a .git directory (a linked worktree's .git file does
+// not count), sorted. The Go twin is gitRepos.
+export function gitRepos(ws: string): string[] {
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    for (const name of readdirSync(join(ws, rel)).sort(byCodeUnit)) {
+      const r = rel ? `${rel}/${name}` : name;
+      if (!lstatSync(join(ws, r)).isDirectory()) continue;
+      if (name === ".git") out.push(rel === "" ? "." : rel);
+      else walk(r);
+    }
+  };
+  if (existsSync(ws)) walk("");
+  return out;
+}
+
+// objectTypes is the id and type of every object repoDir's repository can
+// read, except those whose loose file lives in the turn-snapshot store
+// (.git/faultline/objects, an alternate of the repository): cat-file
+// --batch-all-objects lists them, and they already get snapshotObjectDigest.
+// A repository git cannot read lists nothing. The Go twin is objectTypes.
+export function objectTypes(repoDir: string): Map<string, string> {
+  const gitDir = join(repoDir, ".git");
+  const out = new Map<string, string>();
+  const listing = harnessGit(gitDir, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)"]);
+  if (listing === undefined) return out;
+  for (const line of listing.toString("utf8").split("\n")) {
+    const space = line.indexOf(" ");
+    if (space < 0) continue;
+    const id = line.slice(0, space);
+    if (!OBJECT_ID.test(id) || line.indexOf(" ", space + 1) >= 0) continue;
+    if (existsSync(join(gitDir, "faultline", "objects", id.slice(0, 2), id.slice(2)))) continue;
+    out.set(id, line.slice(space + 1));
+  }
+  return out;
+}
+export const objectSet = (repoDir: string): Set<string> => new Set(objectTypes(repoDir).keys());
+
+// createdObjects maps each repository directory (relative to ws) to the
+// objects it holds now that it did not hold in before, id to type.
+export function createdObjects(ws: string, before: Map<string, Set<string>>): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
+  for (const repo of gitRepos(ws)) {
+    for (const [id, type] of objectTypes(join(ws, repo))) {
+      if (before.get(repo)?.has(id)) continue;
+      if (!out.has(repo)) out.set(repo, new Map());
+      out.get(repo)!.set(id, type);
+    }
+  }
+  return out;
+}
+
+// REFLOG is a reflog: any file under a logs directory of a .git directory.
+const REFLOG = /(?:^|\/)\.git\/(?:[^/]+\/)*logs\/.+$/;
+// maskReflogTimes replaces each line's "<seconds> <zone>\t" with "<TIME>\t".
+const maskReflogTimes = (text: string): string => text.replace(/[0-9]+ [+-][0-9]{4}\t/g, "<TIME>\t");
+
+// snapshotGit records what the workspace's repositories hold now: call it
+// after the case is built and before its first invocation.
+export function snapshotGit(ws: string): GitBase {
+  const base: GitBase = { objects: new Map(), logs: new Map() };
+  for (const repo of gitRepos(ws)) {
+    base.objects.set(repo, objectSet(join(ws, repo)));
+    const walk = (rel: string) => {
+      for (const name of readdirSync(join(ws, rel)).sort(byCodeUnit)) {
+        const r = `${rel}/${name}`;
+        const stat = lstatSync(join(ws, r));
+        if (stat.isDirectory()) walk(r);
+        else if (stat.isFile() && REFLOG.test(r)) base.logs.set(r, sha256(readFileSync(join(ws, r))));
+      }
+    };
+    walk(repo === "." ? ".git" : `${repo}/.git`);
+  }
+  return base;
+}
+
+// namedObjects names every created object of one repository, in dependency
+// order, and gives each created commit's tree id. Each name is
+// <BLOB:h12>, <TREE:h12> or <COMMIT:h12>, h12 being the first 12 hex digits
+// of the SHA-256 of "<type>\n" and the object's `git cat-file -p` text with
+// the case paths (text) and every already-named id masked. A commit's text
+// leaves out its author and committer times. An id that existed before the
+// case is never masked. The Go twin is namedObjects.
+export function namedObjects(repoDir: string, created: Map<string, string>, text: (s: string) => string): { names: Map<string, string>; commitTree: Map<string, string> } {
+  const gitDir = join(repoDir, ".git");
+  const names = new Map<string, string>();
+  const commitTree = new Map<string, string>();
+  const name = (id: string): string => {
+    const type = created.get(id);
+    if (type === undefined) return id;
+    const known = names.get(id);
+    if (known !== undefined) return known;
+    const raw = harnessGit(gitDir, ["cat-file", "-p", id]);
+    if (raw === undefined) throw new Error(`git cat-file -p ${id} in ${repoDir} failed`);
+    const body = raw.toString("utf8");
+    let label: string;
+    let material: string;
+    if (type === "blob") {
+      label = "BLOB"; material = `blob\n${text(body)}`;
+    } else if (type === "tree") {
+      label = "TREE";
+      const lines = body === "" ? [] : (body.endsWith("\n") ? body.slice(0, -1) : body).split("\n");
+      for (const [i, line] of lines.entries()) {
+        const tab = line.indexOf("\t");
+        if (tab < 0) continue;
+        const fields = line.slice(0, tab).split(" ");
+        if (fields.length < 3) continue;
+        const rest = fields.slice(2).join(" ");
+        lines[i] = `${fields[0]} ${fields[1]} ${name(rest)}${line.slice(tab)}`;
+      }
+      material = `tree\n${text(lines.join("\n"))}`;
+    } else if (type === "commit") {
+      label = "COMMIT";
+      const split = body.indexOf("\n\n");
+      const header = split < 0 ? body : body.slice(0, split);
+      const message = split < 0 ? "" : body.slice(split + 2);
+      const lines = header.split("\n").map((line) => {
+        if (line.startsWith("tree ")) { commitTree.set(id, line.slice(5)); return `tree ${name(line.slice(5))}`; }
+        if (line.startsWith("parent ")) return `parent ${name(line.slice(7))}`;
+        if (line.startsWith("author ") || line.startsWith("committer ")) return line.replace(/ [0-9]+ [+-][0-9]{4}$/, "");
+        return line;
+      });
+      material = `commit\n${text(`${lines.join("\n")}\n\n${message}`)}`;
+    } else {
+      label = "BLOB"; material = `${type}\n${text(body)}`; // a tag: named by its text like a blob
+    }
+    const result = `<${label}:${sha256(material).slice(0, 12)}>`;
+    names.set(id, result);
+    return result;
+  };
+  for (const id of [...created.keys()].sort(byCodeUnit)) name(id);
+  return { names, commitTree };
+}
+
+// objectNames maps each created id to its name.
+export const objectNames = (repoDir: string, created: Map<string, string>, text: (s: string) => string): Map<string, string> => namedObjects(repoDir, created, text).names;
+
+// The pass-fail fake Docker's stdout for state=good.
+const FAKE_DOCKER_PASS_STDOUT = 'state=good\nFAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n';
+
+// repairedRunSeeds computes the digests a repaired run binds to a created
+// commit and tree: for each repaired worktree a recorder logged and each
+// PASS run fact of a bundle in the workspace, the repair verifier's
+// executionId (src/codex-loop.ts:243) named exec:<masked worktree>; for each
+// created commit with its tree and each executionId, the runId of attempts 1
+// to 3 (src/prevention-from-artifacts.ts:525) named run:<attempt>. A
+// candidate that appears in no file is dropped; a wrong one is never named.
+// It returns [hex, name] pairs. The Go twin is repairedRunSeeds.
+export function repairedRunSeeds(roots: CaseRoots, records: string[], commits: Map<string, string>, texts: Map<string, string>): [string, string][] {
+  if (commits.size === 0) return [];
+  const parse = (rel: string): any => { try { return JSON.parse(texts.get(rel) ?? ""); } catch { return undefined; } };
+  const passes: { policy: string; envPolicy: string; frozen: string; witness: string; environment: string | undefined }[] = [];
+  for (const rel of [...texts.keys()].sort(byCodeUnit)) {
+    const m = /^(.*\/)?runs\/[^/]+\.json$/.exec(rel);
+    if (!m) continue;
+    const dir = m[1] ?? "";
+    const run = parse(rel);
+    if (run?.schemaVersion !== "faultline.git-investigation.v1" || run.result?.verdict !== "PASS" || run.result?.reason !== "PREDICATE_PASS") continue;
+    const digests = parse(`${dir}investigation.json`)?.environment?.distinctDigests;
+    // A heterogeneous bundle has no single environment digest: the exec:
+    // seed still exists (the verifier ran), but no run: seed does.
+    const environment = Array.isArray(digests) && digests.length === 1 && typeof digests[0] === "string" ? digests[0] : undefined;
+    const frozen = parse(`${dir}witness/frozen.json`);
+    const witness = typeof frozen?.witnessDigest === "string" ? frozen.witnessDigest : String(run.witnessDigest ?? "");
+    passes.push({ policy: String(run.sandbox?.policyDigest ?? ""), envPolicy: String(run.sandbox?.environmentPolicyDigest ?? ""),
+      frozen: String(run.frozenDigest ?? ""), witness, environment });
+  }
+  const appears = (hex: string): boolean => [...texts.values()].some((text) => text.includes(hex));
+  const out: [string, string][] = [];
+  const seen = new Set<string>();
+  for (const w of loggedCasePaths(records, roots)) {
+    for (const p of passes) {
+      const execution = digestJson({
+        kind: "faultline.repair-verify-execution.v1", executor: "NATIVE_DOCKER", verdict: "PASS", reason: "PREDICATE_PASS",
+        policyDigest: p.policy, environmentPolicyDigest: p.envPolicy, exitCode: 0,
+        stdoutDigest: `sha256:${sha256(FAKE_DOCKER_PASS_STDOUT)}`, stderrDigest: `sha256:${sha256("")}`, worktree: w, frozenDigest: p.frozen
+      });
+      if (seen.has(execution) || !appears(execution.slice(7))) continue;
+      seen.add(execution);
+      out.push([execution.slice(7), `exec:${normalizeWriter(w, roots)}`]);
+      if (p.environment === undefined) continue;
+      for (const commit of [...commits.keys()].sort(byCodeUnit)) {
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+          const run = digestJson({
+            schemaVersion: "faultline.prevention-repaired-run.v1", attempt, commit, tree: commits.get(commit), witnessDigest: p.witness,
+            environmentDigest: p.environment, executionId: execution, detail: "Frozen witness PREDICATE_PASS on repaired worktree (NATIVE_DOCKER)."
+          });
+          if (!seen.has(run)) { seen.add(run); out.push([run.slice(7), `run:${attempt}`]); }
+        }
+      }
+    }
+  }
+  return out;
+}
 
 // A Git index (.git/index at any depth) holds stat data (times, inode,
 // device) that differs between the TS and the Go copy of a scenario, and
@@ -273,179 +509,6 @@ export function snapshotObjectDigest(rel: string): string | undefined {
 // The ids are also relocation seeds, so a file that holds one, and every
 // digest over it, gets a <PATHDIGEST:…> name. The Go twins are in
 // difftest/writer_test.go.
-const harnessGitEnv = (): NodeJS.ProcessEnv => ({ PATH: process.env.PATH ?? "", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" });
-function harnessGit(gitDir: string, args: string[]): Buffer {
-  return execFileSync("git", ["-c", "core.fsmonitor=false", `--git-dir=${gitDir}`, ...args], {
-    cwd: gitDir, env: harnessGitEnv(), stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 26
-  });
-}
-// objectListing is a repository's object ids and their types ({} when git
-// cannot read it), without the turn-snapshot store's objects.
-function objectListing(repoDir: string): Map<string, string> {
-  const gitDir = join(repoDir, ".git");
-  const out = new Map<string, string>();
-  let text: string;
-  try {
-    text = harnessGit(gitDir, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)"]).toString("utf8");
-  } catch {
-    return out;
-  }
-  for (const line of text.split("\n")) {
-    const [id, type] = line.split(" ");
-    if (id === undefined || type === undefined || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(id)) continue;
-    if (existsSync(join(gitDir, "faultline", "objects", id.slice(0, 2), id.slice(2)))) continue;
-    out.set(id, type);
-  }
-  return out;
-}
-// objectSet is the id set of repository repoDir (the directory holding .git).
-export function objectSet(repoDir: string): Set<string> {
-  return new Set(objectListing(repoDir).keys());
-}
-// gitRepositories lists the workspace directories (relative, "." for ws
-// itself) that hold a .git directory; a .git directory is not entered.
-export function gitRepositories(ws: string): string[] {
-  const out: string[] = [];
-  const walk = (rel: string) => {
-    const dir = rel === "." ? ws : join(ws, rel);
-    let entries: string[];
-    try { entries = readdirSync(dir); } catch { return; } // an unreadable directory holds no repository we can list
-    for (const name of entries.sort(byCodeUnit)) {
-      const stat = lstatSync(join(dir, name));
-      if (!stat.isDirectory()) continue;
-      if (name === ".git") out.push(rel);
-      else walk(rel === "." ? name : `${rel}/${name}`);
-    }
-  };
-  if (existsSync(ws)) walk(".");
-  return out;
-}
-// createdObjects maps each workspace repository to the objects it holds now
-// and did not hold in before (its set at case start; none for a repository
-// that did not exist), id → type.
-export function createdObjects(ws: string, before: Map<string, Set<string>>): Map<string, Map<string, string>> {
-  const out = new Map<string, Map<string, string>>();
-  for (const rel of gitRepositories(ws)) {
-    const had = before.get(rel) ?? new Set<string>();
-    const created = new Map<string, string>();
-    for (const [id, type] of objectListing(rel === "." ? ws : join(ws, rel))) if (!had.has(id)) created.set(id, type);
-    if (created.size > 0) out.set(rel, created);
-  }
-  return out;
-}
-const OBJECT_KINDS = ["blob", "tree", "commit"] as const;
-const IDENT_TIME = / [0-9]+ [+-][0-9]{4}$/;
-// objectNames names every created object of repository repoDir (see the rule
-// above); text masks the case paths.
-export function objectNames(repoDir: string, created: Map<string, string>, text: (s: string) => string): Map<string, string> {
-  const gitDir = join(repoDir, ".git");
-  const names = new Map<string, string>();
-  const masked = (s: string): string => {
-    let out = text(s);
-    for (const id of [...names.keys()].sort(byCodeUnit)) out = out.split(id).join(names.get(id)!);
-    return out;
-  };
-  const name = (kind: string, body: string) => `<${kind.toUpperCase()}:${sha256(`${kind}\n${body}`).slice(0, 12)}>`;
-  const visit = (id: string, path: Set<string>): void => {
-    if (names.has(id) || path.has(id)) return;
-    const type = created.get(id)!;
-    const content = harnessGit(gitDir, ["cat-file", "-p", id]).toString("utf8");
-    if (type === "tree") {
-      const entries = content.endsWith("\n") ? content.slice(0, -1) : content;
-      for (const line of entries.split("\n")) {
-        const ref = line.split("\t")[0]!.split(" ")[2];
-        if (ref !== undefined && created.has(ref)) visit(ref, new Set([...path, id]));
-      }
-      names.set(id, name("tree", masked(entries)));
-    } else if (type === "commit") {
-      const split = content.indexOf("\n\n");
-      const headers = (split < 0 ? content : content.slice(0, split)).split("\n");
-      const message = split < 0 ? "" : content.slice(split + 2);
-      const lines: string[] = [];
-      for (const header of headers) {
-        const [key, ...rest] = header.split(" ");
-        const value = rest.join(" ");
-        if (key === "tree" || key === "parent") {
-          if (created.has(value)) visit(value, new Set([...path, id]));
-          lines.push(`${key} ${value}`);
-        } else if (key === "author" || key === "committer") {
-          lines.push(`${key} ${value.replace(IDENT_TIME, "")}`);
-        }
-      }
-      names.set(id, name("commit", masked(`${[...lines, "", message].join("\n")}`)));
-    } else {
-      names.set(id, name(type, masked(content)));
-    }
-  };
-  for (const kind of OBJECT_KINDS) {
-    for (const id of [...created.keys()].filter((i) => created.get(i) === kind).sort(byCodeUnit)) visit(id, new Set());
-  }
-  // Any other type (a tag) last.
-  for (const id of [...created.keys()].sort(byCodeUnit)) visit(id, new Set());
-  return names;
-}
-// CaseObjects are the created objects' names (all repositories, for text),
-// per repository (for the loose-object rule), and the reflog digests the
-// case started from.
-export type CaseObjects = { names: Map<string, string>; byRepo: Map<string, Map<string, string>>; reflogs: Map<string, string> };
-export type CaseObjectsBefore = { sets: Map<string, Set<string>>; reflogs: Map<string, string> };
-const REFLOG = /(?:^|\/)\.git\/(?:[^\n]+\/)?logs\/[^\n]+$/;
-const LOOSE_OBJECT = /^(?:([^\n]*)\/)?\.git\/objects\/([0-9a-f]{2})\/([0-9a-f]{38}|[0-9a-f]{62})$/;
-// reflogDigests are the SHA-256s of every reflog file under ws.
-function reflogDigests(ws: string): Map<string, string> {
-  const out = new Map<string, string>();
-  const walk = (rel: string) => {
-    let entries: string[];
-    try { entries = readdirSync(join(ws, rel)); } catch { return; }
-    for (const name of entries.sort(byCodeUnit)) {
-      const r = rel ? `${rel}/${name}` : name;
-      const stat = lstatSync(join(ws, r));
-      if (stat.isDirectory()) walk(r);
-      else if (stat.isFile() && REFLOG.test(r)) out.set(r, sha256(readFileSync(join(ws, r))));
-    }
-  };
-  if (existsSync(ws)) walk("");
-  return out;
-}
-// caseObjectsBefore records what the case starts from: each repository's
-// object set and the reflog digests (after the case setup, before the
-// first invocation).
-export function caseObjectsBefore(ws: string): CaseObjectsBefore {
-  return { sets: new Map(gitRepositories(ws).map((rel) => [rel, objectSet(rel === "." ? ws : join(ws, rel))])), reflogs: reflogDigests(ws) };
-}
-// caseObjects lists and names what the case created so far.
-export function caseObjects(roots: CaseRoots, before: CaseObjectsBefore): CaseObjects {
-  const names = new Map<string, string>();
-  const byRepo = new Map<string, Map<string, string>>();
-  for (const [rel, created] of createdObjects(roots.ws, before.sets)) {
-    const repoNames = objectNames(rel === "." ? roots.ws : join(roots.ws, rel), created, (s) => normalizeWriter(s, roots));
-    byRepo.set(rel, repoNames);
-    for (const [id, n] of repoNames) names.set(id, n);
-  }
-  return { names, byRepo, reflogs: before.reflogs };
-}
-// maskObjectIds replaces each created object id in text with its name.
-export function maskObjectIds(text: string, objects: CaseObjects | undefined): string {
-  if (objects === undefined) return text;
-  let out = text;
-  for (const id of [...objects.names.keys()].sort(byCodeUnit)) out = out.split(id).join(objects.names.get(id)!);
-  return out;
-}
-// createdObjectDigest is the loose-object and reflog rules' digest of a
-// workspace file, or undefined when neither applies.
-export function createdObjectDigest(rel: string, bytes: Buffer, objects: CaseObjects | undefined, text: (s: string) => string): string | undefined {
-  if (objects === undefined) return undefined;
-  const loose = LOOSE_OBJECT.exec(rel);
-  if (loose) {
-    const name = objects.byRepo.get(loose[1] ?? ".")?.get(`${loose[2]}${loose[3]}`);
-    return name === undefined ? undefined : sha256(`git-object:${name}`);
-  }
-  if (REFLOG.test(rel) && objects.reflogs.get(rel) !== sha256(bytes)) {
-    const lines = bytes.toString("utf8").split("\n").map((line) => line.replace(/[0-9]+ [+-][0-9]{4}\t/, "<TIME>\t"));
-    return sha256(text(lines.join("\n")));
-  }
-  return undefined;
-}
 // checkObjectNames is TestBridgeCommitNamesIgnoreTimeButNotTreeOrMessage's
 // twin, run on start-up: two bridge commits of one tree and message made at
 // different times get one name, another message another, and the tree that
@@ -536,6 +599,29 @@ export function carriedNames(prev: Map<string, string>, mutations: Template[], i
   return out;
 }
 
+// openAIRequestInputs are the input strings of the request bodies the fake
+// OpenAI server recorded ("" for a body that is not JSON or has no string
+// input), in log order. The Go twin is openAIRequestInputs in
+// difftest/writer_test.go.
+export function openAIRequestInputs(records: string[]): string[] {
+  return records.filter((record) => record.startsWith("openai\x1f")).map((record) => {
+    const body = record.split("\x1f").slice(5).join("\x1f");
+    try {
+      const input = (JSON.parse(body) as { input?: unknown }).input;
+      return typeof input === "string" ? input : "";
+    } catch {
+      return "";
+    }
+  });
+}
+
+const WORKTREE_GITDIR = /(?:^|\/)\.git\/worktrees\/[^/]+\/gitdir$/;
+// WORKTREE_REFS is the empty refs directory that newer Git versions (2.54)
+// make in a linked worktree's administrative directory and older ones (2.39)
+// do not: Git's own layout, left out of the comparison.
+const WORKTREE_REFS = /(?:^|\/)\.git\/worktrees\/[^/]+\/refs$/;
+const LOOSE_OBJECT = /^(?:(.*)\/)?\.git\/objects\/([0-9a-f]{2})\/([0-9a-f]{38}|[0-9a-f]{62})$/;
+const FAN_OUT =/^(?:(.*)\/)?\.git\/objects\/([0-9a-f]{2})$/;
 // relocation's carried argument: digest hex -> name of digests that named a
 // root-dependent file or value BEFORE an invocation's flip-byte/replace-text
 // edit of that file (carriedNames). Bundle artifacts that still cite the
@@ -545,8 +631,7 @@ export function carriedNames(prev: Map<string, string>, mutations: Template[], i
 // current tree does not already name it, and always "prior:"-prefixed, so a
 // stale checksum and a rewritten one (the new actual digest, "file:...")
 // stay distinguishable. The Go twin is relocationCarrying.
-export function relocation(roots: CaseRoots, records: string[] = [], objects?: CaseObjects, carried?: Map<string, string>): Relocation {
-  const objectIds = objects === undefined ? [] : [...objects.names.keys()].sort(byCodeUnit);
+export function relocation(roots: CaseRoots, records: string[] = [], base?: GitBase, carried?: Map<string, string>): Relocation {
   const files: [string, Buffer, string][] = [];
   const walk = (rel: string) => {
     for (const name of readdirSync(join(roots.ws, rel)).sort(byCodeUnit)) {
@@ -561,9 +646,18 @@ export function relocation(roots: CaseRoots, records: string[] = [], objects?: C
   };
   if (existsSync(roots.ws)) walk("");
   const names = new Map<string, string>();
+  const ids = new Map<string, string>(); // created object id -> its name
+  const commits = new Map<string, string>(); // created commit -> its tree
+  const created = base ? createdObjects(roots.ws, base.objects) : new Map<string, Map<string, string>>();
+  for (const [repo, objects] of [...created].sort(([a], [b]) => byCodeUnit(a, b))) {
+    const named = namedObjects(join(roots.ws, repo), objects, (s) => normalizeWriter(s, roots));
+    for (const [id, name] of named.names) ids.set(id, name);
+    for (const [commit, tree] of named.commitTree) commits.set(commit, tree);
+  }
+  const idKeys = [...ids.keys()].sort(byCodeUnit);
   let found: string[] = [];
   const add = (hex: string, name: string) => { if (!names.has(hex)) { names.set(hex, name); found.push(hex); } };
-  const tainted = (text: string) => text.includes(roots.root) || [...names.keys()].some((d) => text.includes(d)) || objectIds.some((id) => text.includes(id));
+  const tainted = (text: string) => text.includes(roots.root) || [...names.keys()].some((d) => text.includes(d)) || idKeys.some((id) => text.includes(id));
   const visit = (value: unknown, rel: string, pointer: string): void => {
     if (value === null || typeof value !== "object") return;
     if (!tainted(canonicalJson(value))) return;
@@ -583,11 +677,18 @@ export function relocation(roots: CaseRoots, records: string[] = [], objects?: C
   // The ids of the Git objects the case created (a bridge commit's id holds
   // the wall-clock time) are seeds too: a file that holds one, and every
   // digest over it, gets a name.
-  const seeds = [roots.root, ...objectIds];
+  const seeds = [roots.root];
   for (const path of loggedCasePaths(records, roots)) {
     const digest = sha256(Buffer.from(path, "utf8"));
     add(digest, `path:${normalizeWriter(path, roots)}`);
     seeds.push(digest);
+  }
+  // The Git objects the case created are seeds (named by objectNames in
+  // text), and so are the repaired-run digests computed from them.
+  seeds.push(...idKeys);
+  for (const [hex, name] of repairedRunSeeds(roots, records, commits, new Map(files.map(([rel, , text]) => [rel, text])))) {
+    add(hex, name);
+    seeds.push(hex);
   }
   // A worktree no recorder logged (a fault before git ran in it) is still
   // hashed into its run fact: name each worktreeDigest value not named
@@ -599,6 +700,12 @@ export function relocation(roots: CaseRoots, records: string[] = [], objects?: C
       k += 1;
     }
   }
+  // The fake OpenAI server's records hold the request body, whose input is
+  // the evidence packet: its packetDigest covers the path-dependent
+  // investigationDigest, and a failed request leaves the packet in no file.
+  // Each is walked like a file's JSON as openai:<k> (the k-th openai
+  // record), without a file: name.
+  const requests = openAIRequestInputs(records);
   const expand = (start: string[]): void => {
     let frontier = start;
     while (frontier.length > 0) {
@@ -607,6 +714,10 @@ export function relocation(roots: CaseRoots, records: string[] = [], objects?: C
         if (!frontier.some((needle) => text.includes(needle))) continue;
         add(sha256(bytes), `file:${rel}`);
         try { visit(JSON.parse(text), rel, ""); } catch { /* not JSON */ }
+      }
+      for (const [k, text] of requests.entries()) {
+        if (!frontier.some((needle) => text.includes(needle))) continue;
+        try { visit(JSON.parse(text), `openai:${k}`, ""); } catch { /* not JSON */ }
       }
       frontier = found;
     }
@@ -618,23 +729,61 @@ export function relocation(roots: CaseRoots, records: string[] = [], objects?: C
   expand(found);
   const sorted = [...names.keys()].sort(byCodeUnit);
   const text = (s: string): string => {
-    let out = maskObjectIds(normalizeWriter(s, roots), objects);
+    let out = normalizeWriter(s, roots);
+    for (const id of idKeys) out = out.split(id).join(ids.get(id)!);
     for (const d of sorted) out = out.split(d).join(`<PATHDIGEST:${names.get(d)}>`);
     // The proof page also prints a digest abbreviated (git-proof-view.ts
     // shortDigest: its first and last 8 hex digits).
     for (const d of sorted) out = out.split(`${d.slice(0, 8)}...${d.slice(-8)}`).join(`<PATHDIGEST:${names.get(d)}:short>`);
     return out;
   };
+  // alias names the entries whose paths hold a created object's id: a loose
+  // object the case created is renamed to its content name; an object that
+  // existed before the case, or one in the turn-snapshot store, keeps its
+  // path. Two Git-layout entries are left out, each only where its exact
+  // condition holds: a fan-out directory .git/objects/<xx> that no object
+  // from before the case lives in and that holds nothing but created loose
+  // objects (its name is an id prefix), and the EMPTY directory
+  // .git/worktrees/<name>/refs that Git 2.54 makes in a linked worktree's
+  // administrative directory and the pinned 2.39.5 does not. A non-empty
+  // refs directory, a file or symlink of that name, and every other path
+  // stay compared. The Go twin is relocated.alias.
+  const alias = (rel: string): string | null => {
+    const abs = join(roots.ws, rel);
+    if (WORKTREE_REFS.test(rel)) {
+      return lstatSync(abs).isDirectory() && readdirSync(abs).length === 0 ? null : rel;
+    }
+    const loose = LOOSE_OBJECT.exec(rel);
+    if (loose && ids.has(`${loose[2]}${loose[3]}`) && created.get(loose[1] ?? ".")?.has(`${loose[2]}${loose[3]}`)) {
+      return `${loose[1] === undefined ? "" : `${loose[1]}/`}.git/objects/${ids.get(`${loose[2]}${loose[3]}`)}`;
+    }
+    const fan = FAN_OUT.exec(rel);
+    if (fan && base) {
+      const repo = fan[1] ?? ".";
+      if ([...(base.objects.get(repo) ?? [])].some((id) => id.startsWith(fan[2]!))) return rel;
+      const names = readdirSync(abs);
+      if (names.length > 0 && names.every((name) => created.get(repo)?.has(`${fan[2]}${name}`))) return null;
+    }
+    return rel;
+  };
   return {
     names,
     text,
-    ...(objects === undefined ? {} : { objects }),
+    alias,
     fileDigest: (rel, bytes) => {
       if (isGitIndex(rel)) return gitIndexDigest(dirname(join(roots.ws, rel)), bytes);
       const object = snapshotObjectDigest(rel);
       if (object !== undefined) return object;
-      const created = createdObjectDigest(rel, bytes, objects, text);
-      if (created !== undefined) return created;
+      const loose = LOOSE_OBJECT.exec(rel);
+      if (loose && ids.has(`${loose[2]}${loose[3]}`) && created.get(loose[1] ?? ".")?.has(`${loose[2]}${loose[3]}`)) {
+        return sha256(`git-object:${ids.get(`${loose[2]}${loose[3]}`)}`);
+      }
+      if (base && REFLOG.test(rel) && base.logs.get(rel) !== sha256(bytes)) return sha256(text(maskReflogTimes(bytes.toString("utf8"))));
+      // A linked worktree's gitdir file holds the absolute path of the
+      // worktree's .git file (slice 4c Task 20, --keep-worktree): hashed by
+      // its text with the case paths masked. The Go twin is fileDigest in
+      // difftest/writer_test.go.
+      if (WORKTREE_GITDIR.test(rel)) return sha256(text(bytes.toString("utf8")));
       return names.has(sha256(bytes)) ? sha256(text(bytes.toString("utf8"))) : sha256(bytes);
     }
   };
@@ -703,17 +852,108 @@ export function writtenPrevention(stdout: string): { directory: string; rootDige
   }
 }
 
+// parsedObject is stdout parsed as a JSON object, or undefined.
+function parsedObject(stdout: string): Record<string, unknown> | undefined {
+  try {
+    const v = JSON.parse(stdout) as unknown;
+    return v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// writtenAttestation is the receipt an `fl attest create` invocation
+// reports (status ATTESTED): its path and receipt digest. The Go twin is
+// writtenAttestation in difftest/writer_test.go.
+export function writtenAttestation(stdout: string): { path: string; receiptDigest: string } | undefined {
+  const v = parsedObject(stdout);
+  if (v?.status !== "ATTESTED" || typeof v.path !== "string" || typeof v.receiptDigest !== "string") return undefined;
+  return { path: v.path, receiptDigest: v.receiptDigest };
+}
+
+// writtenRepairBrief is the package an `fl repair brief` invocation reports
+// (status PERSISTED): its directory and artifact digest. The Go twin is
+// writtenRepairBrief in difftest/writer_test.go.
+export function writtenRepairBrief(stdout: string): { directory: string; artifactDigest: string } | undefined {
+  const v = parsedObject(stdout);
+  if (v?.status !== "PERSISTED" || typeof v.directory !== "string" || typeof v.artifactDigest !== "string") return undefined;
+  return { directory: v.directory, artifactDigest: v.artifactDigest };
+}
+
+// writtenProvenanceReceipt is the receipt an `fl provenance create`
+// invocation reports (status AWAITING_GITHUB_ARTIFACT_ATTESTATION). The Go
+// twin is writtenProvenanceReceipt in difftest/writer_test.go.
+export function writtenProvenanceReceipt(stdout: string): { path: string } | undefined {
+  const v = parsedObject(stdout);
+  if (v?.status !== "AWAITING_GITHUB_ARTIFACT_ATTESTATION" || typeof v.path !== "string") return undefined;
+  return { path: v.path };
+}
+
+// writtenRepairPrevention is the prevention package an `fl repair --bundle`
+// invocation reports (preventionExport with ok: true): its directory and
+// root digest. The Go twin is writtenRepairPrevention in
+// difftest/writer_test.go.
+export function writtenRepairPrevention(stdout: string): { directory: string; rootDigest: string } | undefined {
+  const exported = parsedObject(stdout)?.preventionExport as Record<string, unknown> | null | undefined;
+  if (exported === null || typeof exported !== "object" || exported.ok !== true || typeof exported.directory !== "string" || typeof exported.rootDigest !== "string") return undefined;
+  return { directory: exported.directory, rootDigest: exported.rootDigest };
+}
+
+// checkDetectors is the start-up self-check of the artifact detectors (the
+// Go twin is TestWrittenArtifactDetectors in difftest/fakes_test.go).
+function checkDetectors(): void {
+  const attestation = writtenAttestation("{\n  \"status\": \"ATTESTED\",\n  \"path\": \"/s/r1.json\",\n  \"receiptDigest\": \"sha256:aa\"\n}\n");
+  if (attestation?.path !== "/s/r1.json" || attestation.receiptDigest !== "sha256:aa") throw new Error("writtenAttestation self-check failed");
+  if (writtenRepairBrief("{\"status\":\"PERSISTED\"}\n") !== undefined) throw new Error("writtenRepairBrief self-check failed: no directory is not a brief");
+  const prevention = writtenRepairPrevention(`{"status":"REPAIR_CANDIDATE_VERIFIED","preventionExport":{"ok":true,"directory":"/p","rootDigest":"sha256:bb"}}`);
+  if (prevention?.directory !== "/p" || prevention.rootDigest !== "sha256:bb") throw new Error("writtenRepairPrevention self-check failed");
+  if (writtenRepairPrevention(`{"preventionExport":{"ok":false,"reasons":["x"]}}`) !== undefined) throw new Error("writtenRepairPrevention self-check failed: a failed export is not a package");
+}
+
+// optionValue is the value after flag in argv (cli-app.ts option), or
+// undefined.
+function optionValue(argv: string[], flag: string): string | undefined {
+  const index = argv.indexOf(flag);
+  return index >= 0 ? argv[index + 1] : undefined;
+}
+
 // crossVerify runs TS `fl verify` on every bundle (slice 2 spec 2.4) and
-// every prevention package TS wrote; TestWriterReplay does the same with Go
-// on the ones Go wrote. It runs after the invocation's argv log is read, so
-// its git calls are not recorded.
-async function crossVerify(id: string, inv: number, roots: CaseRoots, stdout: string): Promise<void> {
-  const prevention = writtenPrevention(stdout);
+// every prevention package TS wrote, and the TS verifier of every
+// attestation receipt, repair brief, provenance receipt (with fake gh
+// `pass`) and repair-written prevention package; TestWriterReplay does the
+// same with TS on the ones Go wrote. It runs after the invocation's argv log
+// is read, so its git and gh calls are not recorded. argv is the
+// invocation's, after substitution. The Go twin is crossVerify in
+// difftest/writer_test.go.
+async function crossVerify(id: string, inv: number, roots: CaseRoots, stdout: string, argv: string[]): Promise<void> {
+  const fail = (what: string, r: { exit: number; stdout: string; stderr: string }) => new Error(`${id}|${inv}: TS ${what} TS wrote failed (exit ${r.exit})\n${r.stdout}${r.stderr}`);
+  const env = (fakes: WriterFakes = {}) => writerEnv(roots, `${id}:verify`, undefined, {}, undefined, undefined, fakes);
+  const prevention = writtenPrevention(stdout) ?? writtenRepairPrevention(stdout);
   const directory = prevention?.directory ?? writtenBundle(stdout);
-  if (directory === undefined) return;
-  const root = prevention?.rootDigest ?? (JSON.parse(stdout) as { proofBundle: { rootDigest: string } }).proofBundle.rootDigest;
-  const r = await runCli(roots, ["verify", directory, "--expect-root", root], writerEnv(roots, `${id}:verify`, undefined, {}));
-  if (r.exit !== 0 || !r.stdout.startsWith("Integrity: VALID\n") || !r.stdout.includes("\nExternal root: MATCH\n")) throw new Error(`${id}|${inv}: TS verify of the bundle TS wrote failed (exit ${r.exit})\n${r.stdout}${r.stderr}`);
+  if (directory !== undefined) {
+    const root = prevention?.rootDigest ?? (JSON.parse(stdout) as { proofBundle: { rootDigest: string } }).proofBundle.rootDigest;
+    const r = await runCli(roots, ["verify", directory, "--expect-root", root], env());
+    if (r.exit !== 0 || !r.stdout.startsWith("Integrity: VALID\n") || !r.stdout.includes("\nExternal root: MATCH\n")) throw fail("verify of the bundle", r);
+  }
+  const attestation = writtenAttestation(stdout);
+  if (attestation !== undefined) {
+    const receiptId = basename(attestation.path).replace(/\.json$/, "");
+    const r = await runCli(roots, ["attest", "verify", receiptId, "--store", dirname(attestation.path), "--expect-digest", attestation.receiptDigest], env());
+    if (r.exit !== 0) throw fail("attest verify of the receipt", r);
+  }
+  const brief = writtenRepairBrief(stdout);
+  if (brief !== undefined) {
+    const r = await runCli(roots, ["repair", "verify", brief.directory, "--expect-digest", brief.artifactDigest], env());
+    if (r.exit !== 0 || !r.stdout.includes('"valid": true')) throw fail("repair verify of the brief", r);
+  }
+  const receipt = writtenProvenanceReceipt(stdout);
+  if (receipt !== undefined) {
+    const bundle = optionValue(argv, "--bundle");
+    if (bundle === undefined) throw new Error(`${id}|${inv}: a provenance receipt without --bundle in the argv`);
+    const r = await runCli(roots, ["provenance", "verify", "--bundle", bundle, "--receipt", receipt.path, "--trust", join(roots.ws, "trust.json"),
+      "--attestation-bundle", join(roots.ws, "attestation.sigstore.json")], env({ fakeGh: "pass" }));
+    if (r.exit !== 0) throw fail("provenance verify of the receipt", r);
+  }
 }
 
 // BUSY_PORT in an argv string is the port of a listener the case holds on
@@ -728,6 +968,31 @@ export const BUSY_PORT = "<BUSYPORT>";
 export function fileArgument(arg: string, roots: CaseRoots): string {
   const m = /^<FILE:([^>]+)>$/.exec(arg);
   return m ? readFileSync(join(roots.ws, m[1]!), "utf8").trim() : arg;
+}
+
+// invocationEnv is a template's env for one invocation: <WS>, <TMP> and
+// <HOME> substituted, and a value that is exactly <FILE:rel> replaced by
+// the trimmed text of the workspace file rel when the invocation starts, as
+// fileArgument does for argv (a provenance case's GITHUB_SHA). The Go twin
+// is the env loop in writerEnv, difftest/writer_test.go.
+export function invocationEnv(t: WriterTemplate, roots: CaseRoots): Record<string, string> {
+  return Object.fromEntries(Object.entries(t.env ?? {}).map(([k, v]) => [k, fileArgument(substitute(v, roots), roots)]));
+}
+
+// maskCodexPath masks, in a fake codex record's PATH= field, the harness's
+// inherited PATH as <PATH>, then the case root as <ROOT> and the
+// repository as <REPO> (the recorder, fake codex and fake tool
+// directories): fl passes codex its whole PATH, which differs between
+// machines. Nothing else is touched. The Go twin is maskCodexPath in
+// difftest/writer_test.go.
+export function maskCodexPath(record: string, roots: CaseRoots, repoDir: string, inheritedPath: string): string {
+  if (!record.startsWith("codex ")) return record;
+  return record.split("\x1f").map((arg) => {
+    if (!arg.startsWith("PATH=")) return arg;
+    let value = arg.slice("PATH=".length);
+    if (inheritedPath !== "") value = value.split(inheritedPath).join("<PATH>");
+    return `PATH=${value.split(roots.root).join("<ROOT>").split(repoDir).join("<REPO>")}`;
+  }).join("\x1f");
 }
 
 // An argv string that is exactly <STDOUT:n:/json/pointer> becomes the
@@ -814,7 +1079,10 @@ const tmpFailures: string[] = [];
 async function runCase(t: WriterTemplate): Promise<string[]> {
   const roots = makeCaseRoots();
   const busy = await holdBusyPort(t);
+  let openAI: FakeOpenAI | undefined;
   try {
+    if (t.fakeOpenAI !== undefined) openAI = await startFakeOpenAI(roots.ws, t.fakeOpenAI, roots.argvLog);
+    const fakes: WriterFakes = { fakeCodex: t.fakeCodex, fakeCodexOnPath: t.fakeCodexOnPath, fakeGh: t.fakeGh, openAIURL: openAI?.url };
     copyScenario(t.scenario, roots.ws);
     // chmod mutations run after resetModes, which would undo them (the Go
     // twin is prepareWriterCase). A mutation with inv runs just before that
@@ -830,17 +1098,15 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     // generated as root would drift.
     if (mutations.some((m) => m.op === "chmod") && process.getuid?.() === 0) throw new Error(`${t.id}: chmod cases must be generated by a non-root user`);
     for (const m of setup) if (m.op === "chmod") apply(m);
-    const env = Object.fromEntries(Object.entries(t.env ?? {}).map(([k, v]) => [k, substitute(v, roots)]));
     const lines: string[] = [];
     // The recorded paths accumulate over the case's invocations: a later
     // invocation must keep masking the worktree digests an earlier one
     // wrote into a file (the Go twin is runWriterCase).
     const records: string[] = [];
     const stdouts: string[] = [];
-    // The Git objects the case starts from (the Go twin records them after
-    // prepareWriterCase too); objects are those it created so far.
-    const start = caseObjectsBefore(roots.ws);
-    let objects = caseObjects(roots, start);
+    // What the repositories hold before the first invocation (the Go twin
+    // is snapshotGit in runWriterCaseWith).
+    const base = snapshotGit(roots.ws);
     let prevNames = new Map<string, string>(); // the previous invocation's names (carriedNames)
     for (const [inv, argv] of t.argv.entries()) {
       // This invocation's mutations: the others, then the new entries' modes
@@ -853,26 +1119,27 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
         for (const m of due) if (m.op === "chmod") apply(m);
       }
       const carried = due.length > 0 ? carriedNames(prevNames, mutations, inv, roots) : undefined;
-      const before = treeEntries(roots.ws, relocation(roots, records, objects, carried).fileDigest);
+      const beforeReloc = relocation(roots, records, base, carried);
+      const before = treeEntries(roots.ws, beforeReloc.fileDigest, beforeReloc.alias);
       rmSync(roots.argvLog, { force: true });
       const clock = invocationSeed(t, inv);
-      const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)),
-        writerEnv(roots, clock.seed, t.fakeDocker, { ...env, ...clock.env }, t.fakeTools, t.pathTools), invocationInput(t, inv, roots));
+      const args = argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts));
+      const r = await runCli(roots, args, writerEnv(roots, clock.seed, t.fakeDocker, { ...invocationEnv(t, roots), ...clock.env }, t.fakeTools, t.pathTools, fakes),
+        invocationInput(t, inv, roots));
       // Temporary files fl makes (mkdtemp roots, the snapshot index, the
       // doctor --security fixture) must be gone, as in Go.
       const leftovers = checksTmpdir(t) ? tmpLeftovers(roots) : [];
       if (leftovers.length > 0) tmpFailures.push(`${t.id}|${inv}: TS left ${leftovers.join(", ")} in TMPDIR`);
       stdouts.push(r.stdout);
       const plans = planDigests(r.stdout);
-      const invocationRecords = readArgvLog(roots.argvLog);
+      const invocationRecords = readArgvLog(roots.argvLog).map((record) => maskCodexPath(record, roots, repo, process.env.PATH ?? ""));
       records.push(...invocationRecords);
-      objects = caseObjects(roots, start);
-      const reloc = relocation(roots, records, objects, carried);
-      prevNames = relocation(roots, records, objects).names;
-      const after = treeEntries(roots.ws, reloc.fileDigest);
-      const tree = treeDigest(roots.ws, reloc.fileDigest);
+      const reloc = relocation(roots, records, base, carried);
+      prevNames = relocation(roots, records, base).names;
+      const after = treeEntries(roots.ws, reloc.fileDigest, reloc.alias);
+      const tree = treeDigest(roots.ws, reloc.fileDigest, reloc.alias);
       // After the tree and the argv log are read, like the Go replay.
-      await crossVerify(t.id, inv, roots, r.stdout);
+      await crossVerify(t.id, inv, roots, r.stdout, args);
       // Windows runs no sh recorder: a case that records argv is POSIX-only.
       if (invocationRecords.length > 0 && !t.posixOnly) throw new Error(`${t.id}: records git/docker argv but is not posixOnly`);
       lines.push(JSON.stringify({
@@ -884,6 +1151,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     return lines;
   } finally {
     for (const server of busy.servers) server.close();
+    await openAI?.close();
     restoreWritable(roots.root);
     rmSync(roots.root, { recursive: true, force: true });
   }
@@ -931,6 +1199,7 @@ for (const file of templateFiles) {
   }
 }
 checkTemplates(templates);
+checkDetectors();
 const results: string[][] = new Array(templates.length);
 // FAULTLINE_WRITERS_ONLY=<regex> regenerates only the cases whose id
 // matches and keeps every other case's lines from the committed goldens,

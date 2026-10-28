@@ -161,3 +161,12 @@ func RandRead(b []byte) {
 		copy(b[i:], h[:])
 	}
 }
+
+// ConsumedForTest reports how many time reads (Now and NowMillis share one
+// counter) and UUIDs the seeded sequence has handed out; seed.mjs exposes the
+// same two counters as globalThis.__faultlineSeedCounters.
+func ConsumedForTest() (ticks, uuids int) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return int(state.tick), int(state.uuid)
+}

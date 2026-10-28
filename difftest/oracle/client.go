@@ -54,7 +54,8 @@ func Start(t testing.TB) *Client {
 	return start(t, "")
 }
 
-// StartSeeded launches the oracle under difftest/gen/seed.mjs with
+// StartSeeded launches the oracle under difftest/gen/seed.mjs (then
+// difftest/gen/fetch-shim.mjs, as every oracle start) with
 // FAULTLINE_TEST_SEED=seed, so its randomUUID, Date and mkdtemp follow the
 // same sequence as Go's clock after clock.ResetForTest(seed). The oracle's
 // counters only advance, so a test must use one oracle per seed.
@@ -72,6 +73,10 @@ func start(t testing.TB, seed string) *Client {
 		args = append(args, "--import", "./difftest/gen/seed.mjs")
 		env = append(env, "FAULTLINE_TEST_SEED="+seed)
 	}
+	// After seed.mjs, as gen-writers.ts runCli loads it: fetch-shim.mjs
+	// sends https://api.openai.com/v1/responses to FAULTLINE_TEST_OPENAI_URL
+	// when that is set (a fake OpenAI server), and is harmless otherwise.
+	args = append(args, "--import", "./difftest/gen/fetch-shim.mjs")
 	cmd := exec.Command("pnpm", append(args, "difftest/gen/node-oracle.ts")...)
 	cmd.Dir = RepoRoot(t)
 	cmd.Env = env

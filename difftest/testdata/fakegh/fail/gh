@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake gh "fail" (README.md): `attestation verify ...` fails as an issuer mismatch does (CRLF on stderr), exit 1.
+# The body is shared: ../lib.sh.
+variant=fail
+. "${0%/*}/../lib.sh"

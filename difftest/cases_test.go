@@ -219,7 +219,7 @@ func TestRelocationNamesUnloggedWorktreeDigest(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(r.ws, ".faultline", "minimizations", "m.json"), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		got := relocation(t, r, nil).text(text)
+		got := relocation(t, r, nil, nil).text(text)
 		if want := "<PATHDIGEST:worktree:.faultline/minimizations/m.json#0>"; !strings.Contains(got, want) || strings.Contains(got, digest) {
 			t.Errorf("%s: %s", root, got)
 		}
@@ -458,7 +458,7 @@ func TestRelocationWalksSidecarRecordings(t *testing.T) {
 		os.MkdirAll(filepath.Dir(path), 0o755)
 		os.WriteFile(path, []byte(text), 0o644)
 	}
-	reloc := relocation(t, r, nil)
+	reloc := relocation(t, r, nil, nil)
 	var names []string
 	for _, n := range reloc.names {
 		names = append(names, n)

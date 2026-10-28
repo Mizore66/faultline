@@ -81,9 +81,11 @@ Each `fl` invocation starts at the seed epoch with UUID counter 0, so a second `
 
 The sidecar's 2 s lock wait runs on the seeded clock: `withSidecarLock` reads `Date.now()` three times per 25 ms retry, and each read advances one millisecond, so a held fresh lock is reported after about 667 retries, about 17 s of real time, on both sides. A fresh planted lock is never stale (its real mtime is after the seed epoch), and its `lock.ageMilliseconds` is `0`; one planted with `set-mtime` 2000-01-01 always is stale.
 
-### 2.2 Commit ids
+### 2.2 Commit ids and created Git objects
 
 `git commit-tree` takes author and committer time from the clock, and the hardened git environment passes only `PATH`, so the commit ids written by the turn-to-minimization bridge and by `commitRepairedWorktreeState` differ between runs. A new `<COMMIT>` mask replaces a commit id only when `git cat-file -p` of that id, on its own side, gives the expected tree, parents and message. A commit with a wrong tree, parent or message is left unmasked and fails the comparison. The rule is identical in `difftest/gen/gen-writers.ts` and `difftest/writer_test.go`, like slice 3a's `<PLANDIGEST>`.
+
+**PR 4c (plan correction 1).** A commit mask alone is not enough for `repair`: the repaired worktree holds `.faultline-repair/README.md`, whose text names the absolute managed root, so the blob, the tree and the commit ids all vary with the case directory. 4c masks every object a case creates (`<COMMIT:…>`, `<TREE:…>`, `<BLOB:…>`, checked with `git cat-file -p` on the side that made it), renames created loose objects and reflog lines by that name, and recomputes two relocation seeds from their real fields: the verifier's `exec:` id and the repaired runs' `run:` ids. An object that existed before the case or lives in the turn-snapshot store keeps its id; author and committer names, emails, tree, parents and message stay significant, and only timestamps are normalized.
 
 ### 2.3 Inputs and fakes
 
@@ -93,6 +95,9 @@ The sidecar's 2 s lock wait runs on the seeded clock: `withSidecarLock` reads `D
 - **Fake `codex`** selected with `FAULTLINE_CODEX_BIN` (which TS already honours): answers `--version`; `exec --full-auto` applies scripted edits. Variants: probe failure, non-zero exit, timeout, edits outside the allowed files.
 - **Fake `gh`** on `PATH`: `attestation verify` returns a scripted pass or failure.
 - **Fake OpenAI**: a local HTTP server the harness starts. TS reaches it through a new preload `difftest/gen/fetch-shim.mjs` that redirects `https://api.openai.com/v1/responses`; Go through a base-URL override that exists only under the `faultline_test` build tag. Release builds keep TS's hard-coded URL. Scripted responses: valid, malformed, wrong citations, HTTP errors.
+- **Fake `codex`** selected with `FAULTLINE_CODEX_BIN` (which TS already honours): answers `--version`; `exec --full-auto` applies scripted edits. Variants: probe failure, non-zero exit, killed by SIGTERM (a timeout cannot be a golden: 120 s and 180 s are too slow, so the writer goldens get `exitCode: null` from a fake that kills itself and the timeout itself is compared live against `spawnSync`), edits outside the allowed files.
+- **Fake `gh`** on `PATH`: `attestation verify` returns a scripted pass or failure (variants `pass`, `fail`, `long-fail`, `flood`; one shared body, `difftest/testdata/fakegh/lib.sh`). The fake `codex` is likewise one script with a `variant=` line.
+- **Fake OpenAI**: a local HTTP server the harness starts. TS reaches it through a new preload `difftest/gen/fetch-shim.mjs` that redirects `https://api.openai.com/v1/responses`; Go through a base-URL override (`FAULTLINE_TEST_OPENAI_URL`) that exists only under the `faultline_test` build tag. Release builds keep TS's hard-coded URL, and the `go` CI job greps the untagged binary for the name. Scripted responses: valid, malformed, wrong citations, HTTP errors.
 - **Hook event sequences**: generated JSON documents for `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `Stop`, including redelivery, a dirty tree, no HEAD, a contradictory receipt, a planted stale lock and a symlinked `.git/faultline`.
 
 ### 2.4 Cases
@@ -113,7 +118,8 @@ The sidecar's 2 s lock wait runs on the seeded clock: `withSidecarLock` reads `D
 
 - The strace fault matrix gains the new writer paths: the ledger temporary file and rename, the ledger lock, sidecar stop receipts, the turn bundle stage, the repair brief stage and the attestation link. Renames are faulted through their source path (slice 3a CI: on x86_64, `strace -P` matches only `rename(2)`'s first argument). The 4a rows (record init and checkpoint, `codex --snapshot`, snapshot gc and the sidecar hooks) run through `TestLiveWriterFaults`. The harness gained `faultLastInvocation` (every invocation runs; only the last runs under strace and is compared: the stop receipt of `sidecar-hook-full-turn`) and per-side receipt stages (the stage key is recomputed from each side's case root before it is faulted, and `<STAGEKEY>` masks it in the compared output).
 - The 4b rows (`turns-proof`, `turns-minimize`) fault the paths a fault-free TS trace discovers; a group that never fires is dropped, not faked (none was dropped in 4b). Two rows need a per-side call ordinal (`faultOrdinals`, `difftest/faultordinal_test.go`): the verifier's seeded `mkdtemp` (TS retries a failed mkdir with the real one, so every mkdir from its ordinal is failed in TS and the seeded name in Go; 2 injections in TS, 1 in Go) and the binding rewrite's `close` (the third `close` of the file on each side; a failed close of the preceding READ aborts Node with a native assertion, listed in KNOWN_DIFFERENCES). The `index-pack` file row runs under the `fail-unpack` fake git.
-- One end-to-end test without Node per PR (4a: `TestEndToEndSlice4aWithoutNode`; its `record attach` names the ledger with `--ledger`, since `attach` has no `--session` and otherwise addresses `recordings/session.json`, `src/cli-app.ts:256`): 4a `record init` → hook events → `record verify`; 4b the same, then `investigate turns` → `fl verify` → `prove transition`; 4c `repair --bundle` with the fake `codex` → `repair verify` → `prevention write` → `attest create` → `attest verify`.
+- One end-to-end test without Node per PR (4a: `TestEndToEndSlice4aWithoutNode`; its `record attach` names the ledger with `--ledger`, since `attach` has no `--session` and otherwise addresses `recordings/session.json`, `src/cli-app.ts:256`): 4a `record init` → hook events → `record verify`; 4b the same, then `investigate turns` → `fl verify` → `prove transition`; 4c (`TestEndToEndSlice4cWithoutNode`, as reordered by plan correction 4) `investigate git` → `repair --bundle` with the fake `codex` → `verify` of its package → `repair brief --input` → `repair verify` → `prevention write --from-bundle` on the repair's own runs → `attest create` → `attest verify`.
+- 4c's fault paths (15 path entries, 37 path x syscall rows, 111 cases with the three errnos) include the attestation store root and staged file, the provenance receipt and root, the repair brief stage, manifest and root, the two `witness implement` overlay files, and the repair managed root, `repair-meta.json`, `repair.patch`, the temporary index, the prevention stage and `prevention-export.json`; `repair-bundle-codex-ok` is a two-invocation case of which only the last (repair) invocation is faulted.
 
 ### 2.7 Not compared byte for byte
 
@@ -131,9 +137,9 @@ Go keeps TS's choice at each call site:
 
 - **git**, always `spawnSync`. Hardened (`safegit.HostCommand()` with the stripped environment): the ledger checkpoint (60 s timeout) and the sidecar storage lookup (no timeout); turn-snapshot capture reuses `turnsnap`. Not hardened, with the full inherited environment: `codex --snapshot` (`git -C …`, `src/git-snapshot.ts:18`) and the turn-to-minimization bridge (`rev-parse`, `commit-tree` with `-c user.name=FaultLine -c user.email=faultline@example.invalid`).
 - **Docker**, through slice 2's sandbox: 3 runs per state in `investigate turns`; the repair verifier's 1 + 3 runs.
-- **`codex` CLI**: `FAULTLINE_CODEX_BIN`, else `codex` on `PATH`; a `--version` probe, then `spawnSync(bin, ["exec", "--full-auto", prompt], {input: prompt})` with an environment of `PATH` (plus `ComSpec` and `SystemRoot` on Windows); 120 s for `witness implement`, 180 s for `repair`.
+- **`codex` CLI**: `FAULTLINE_CODEX_BIN`, else `codex` on `PATH` (which never fails to resolve: `resolveOnPath` falls back to the bare name, so `Codex CLI was not found on PATH` is unreachable and unported); a `--version` probe, then `spawnSync(bin, ["exec", "--full-auto", prompt], {input: prompt})` with an environment of `PATH` (plus `ComSpec` and `SystemRoot` on Windows); 120 s for `witness implement`, 180 s for `repair`.
 - **`gh attestation verify`**, synchronous, with the offline `--bundle` and `--custom-trusted-root` flags.
-- **OpenAI**, `repair brief --live` only: one POST to the Responses API with a strict json_schema `text.format`, `Authorization: Bearer $OPENAI_API_KEY`.
+- **OpenAI**, `repair brief --live` only: one POST to the Responses API with a strict json_schema `text.format`, `Authorization: Bearer $OPENAI_API_KEY`. Go's client reproduces undici's request and outcomes (TLS roots, `Accept-Encoding`, proxies and redirects differ: KNOWN_DIFFERENCES).
 
 ### 3.3 Writes
 
@@ -175,15 +181,15 @@ When a write or a child process fails part way, Go leaves the same files behind 
 
 ### 3.5 Codex and repair
 
-- `--allow-codex-full-auto` is checked inside the runner; without it the result is `CODEX_UNAVAILABLE` (exit 1 for `witness implement`, exit 0 for `repair`).
-- `repair` uses the repository recorded in the investigation before `--repo`; `codexThreadId` is always `null` from the CLI.
+- `--allow-codex-full-auto` is checked inside the runner; without it the result is `CODEX_UNAVAILABLE` with `transport: "NONE"` and the note `Codex CLI could not be started: …` (exit 1 for `witness implement`, exit 0 for `repair`); a failed `collectRepairPatch` is reported the same way.
+- `repair` uses the repository recorded in the investigation before `--repo` (a committed base records a repository that does not exist, so every successful case investigates first in the same workspace; `commit-tree` needs a `[user]` identity in the repository config, and its absence is compared only by a same-machine live test); `codexThreadId` is always `null` from the CLI.
 - `repair brief` takes exactly one of `--live`/`--input` and exactly one of `--bundle`/`--investigation`; evidence schema v1 is refused as legacy; `--live` without `OPENAI_API_KEY` throws TS's text.
 - A `PreToolUse`/`PostToolUse` for a turn that was never started fails with `Stop was observed before the matching UserPromptSubmit event.` (`turnOrdinalForStartedTurn`, `src/codex-sidecar.ts:440`): TS reuses that message for a different cause, and Go reproduces the text.
 - `provenance create` requires the `GITHUB_*` environment and refuses locally; run and execution ids are sorted with `localeCompare`.
 
 ### 3.6 Expected KNOWN_DIFFERENCES entries
 
-Added as confirmed: the commit-id mask (Section 2.2); the `<STAGEKEY>` and `<LOCKAGE>` masks (Section 2.1); the seeded lock wait costing about 17 s of real time on both sides (not an output difference); the turn pack bytes following git and zlib, SHA-256 turn bundles and the bridge (TS behaviour reproduced), the turn stack and spread sites with their measured platforms; `captureAllowlistedEvent` and `prevention-from-turn` not ported; batch staging deferred past parity.
+Added as confirmed: the commit-id mask and the created-object masks (Section 2.2); the `<STAGEKEY>` and `<LOCKAGE>` masks (Section 2.1); the seeded lock wait costing about 17 s of real time on both sides (not an output difference); the turn pack bytes following git and zlib, SHA-256 turn bundles and the bridge (TS behaviour reproduced), the turn stack and spread sites with their measured platforms; the live repair brief HTTP differences (TLS roots, `Accept-Encoding` and Brotli, proxies, redirects, header size); Codex timeouts compared live; the identity-less `commit-tree` error; `captureAllowlistedEvent` and `prevention-from-turn` not ported; batch staging deferred past parity.
 
 ## 4. CI and done criteria
 
