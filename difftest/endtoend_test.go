@@ -3,9 +3,12 @@
 package difftest
 
 import (
+	"encoding/base64"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -321,4 +324,163 @@ func nodelessPath(t *testing.T, fakeDocker string, tools ...string) string {
 		t.Fatal("git is not on PATH")
 	}
 	return path
+}
+
+// TestEndToEndSlice4bWithoutNode is done criterion 3 of the slice 4 spec
+// (4.2, PR 4b; spec 2.6): the turn commands chain end to end on the Go binary
+// with no `node` on PATH (git's own directory and the pass-fail fake Docker).
+// A frozen witness, a recorded Codex session (SessionStart, a prompt, an edit
+// of state.txt to bad that is committed, Stop) whose hook events go in on
+// stdin, `investigate turns --latest` (EXPERIMENTAL_TURN), `fl verify` with the
+// external root, and `prove transition`, whose minimization bridge commit has
+// the baseline tree and verifies under `minimize verify`. POSIX only.
+func TestEndToEndSlice4bWithoutNode(t *testing.T) {
+	ws := scenarioWorkspace(t, "sidecar-repo")
+	r := rootsOf(ws)
+	env := map[string]string{"PATH": nodelessPath(t, "pass-fail", "cat")}
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := osexec.Command("git", append([]string{"-c", "user.name=E2E", "-c", "user.email=e2e@example.test"}, args...)...)
+		cmd.Dir = ws
+		cmd.Env = append(os.Environ(), "PATH="+env["PATH"], "HOME="+r.home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+filepath.Join(r.home, "empty.gitconfig"))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	step := func(want int, args ...string) string {
+		t.Helper()
+		stdout, stderr, code := runFlIn(t, ws, env, args...)
+		if code != want {
+			t.Fatalf("fl %s: exit %d, want %d\n%s%s", strings.Join(args, " "), code, want, stdout, stderr)
+		}
+		return stdout
+	}
+	status := func(want, stdout string, args ...string) {
+		t.Helper()
+		if got := jsonField(stdout, "status"); got != want {
+			t.Fatalf("fl %s: status %q, want %s\n%s", strings.Join(args, " "), got, want, stdout)
+		}
+	}
+
+	// scenarios.ts PROPOSAL_INPUT, written as proposal.json.
+	overlay := base64.StdEncoding.EncodeToString([]byte("export const faultLineWitness = 'approved-exact-bytes';\n"))
+	proposal := `{
+  "proposalId": "demo-1",
+  "incidentPacket": {
+    "symptom": "The repository state must not be bad.",
+    "ciLog": "state.txt became bad",
+    "repositoryLanguage": "Text",
+    "repositorySummary": "Temporary repository for the writer replay."
+  },
+  "witness": {
+    "behavior": "state.txt must not be bad",
+    "command": "node witness.mjs",
+    "overlays": [
+      {
+        "path": "witness.mjs",
+        "bytesBase64": "` + overlay + `"
+      }
+    ],
+    "policy": {
+      "network": "disabled",
+      "credentials": "redacted",
+      "timeoutSeconds": 30
+    }
+  }
+}
+`
+	// Outside the repository: the turn-tree snapshot refuses the proposal's base64 overlay as a high-entropy token.
+	proposalFile := filepath.Join(r.root, "proposal.json")
+	if err := os.WriteFile(proposalFile, []byte(proposal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"witness", "propose", "--input", proposalFile}
+	status("PROPOSED", step(0, args...), args...)
+	args = []string{"witness", "approve", "demo-1", "--approved-by", "r@example.test"}
+	status("APPROVED", step(0, args...), args...)
+	args = []string{"witness", "freeze", "demo-1", "--repo", "."}
+	status("FROZEN", step(0, args...), args...)
+
+	args = []string{"record", "init", "--session", "e2e", "--repo", "."}
+	status("RECORDING_STARTED", step(0, args...), args...)
+
+	// Each hook is its own process on the seeded clock: invocation n runs
+	// n hours on (as a writer case with advanceClock), so the ledger's
+	// timestamps never go backwards between events.
+	invocation := 0
+	hook := func(event string, fields string) {
+		t.Helper()
+		invocation++
+		body := `{"session_id":"s-1","cwd":` + strconv.Quote(ws) + `,"model":"gpt-5.6","hook_event_name":"` + event + `"` + fields + "}\n"
+		cmd := osexec.Command(flBinary, "codex", "sidecar", "hook", "--quiet")
+		cmd.Dir = ws
+		cmd.Env = writerEnv(repoRoot(t), r, t.Name()+"/"+strconv.Itoa(invocation), writerTemplate{ID: t.Name(), FakeDocker: "pass-fail",
+			Env: [][2]string{{"PATH", env["PATH"]}, {"FAULTLINE_TEST_CLOCK_OFFSET_MS", strconv.Itoa(invocation * 3_600_000)}}})
+		cmd.Stdin = strings.NewReader(body)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("hook %s: %v\n%s%s", event, err, stdout.String(), stderr.String())
+		}
+		if strings.TrimSpace(stdout.String()) != `{"continue":true}` || strings.Contains(stdout.String()+stderr.String(), "did not record") {
+			t.Fatalf("hook %s: stdout %q stderr %q", event, stdout.String(), stderr.String())
+		}
+	}
+	hook("SessionStart", "")
+	hook("UserPromptSubmit", `,"turn_id":"t-1","prompt":"Make state.txt bad.","transcript_path":"/work/transcript.jsonl"`)
+	if err := os.WriteFile(filepath.Join(ws, "state.txt"), []byte("bad\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "state.txt")
+	git("commit", "-q", "-m", "bad")
+	hook("Stop", `,"turn_id":"t-1"`)
+
+	args = []string{"codex", "sidecar", "status", "--repo", "."}
+	out := step(0, args...)
+	status("SIDECAR_RECORDINGS_READY", out, args...)
+	v, err := jsjson.Parse(out)
+	if err != nil || len(v.Get("recordings").Items()) != 1 {
+		t.Fatalf("sidecar status recordings:\n%s", out)
+	}
+	ledger := v.Get("recordings").Items()[0].Get("ledgerPath").Str()
+	if ledger == "" {
+		t.Fatalf("no ledgerPath:\n%s", out)
+	}
+	if got := step(0, "record", "verify", "--ledger", ledger); !strings.Contains(got, `"valid": true`) {
+		t.Fatalf("record verify:\n%s", got)
+	}
+
+	const bundleDir = ".faultline/turn-proof-bundles/e2e"
+	out = step(0, "investigate", "turns", "--repo", ".", "--latest", "--proposal", "demo-1", "--image", pinnedImage, "--output", bundleDir)
+	if jsonField(out, "ledger", "ledgerPath") != ledger || jsonField(out, "proofBundle", "evidenceGrade") != "EXPERIMENTAL_TURN" {
+		t.Fatalf("investigate turns:\n%s", out)
+	}
+	root := jsonField(out, "proofBundle", "rootDigest")
+	if root == "" {
+		t.Fatalf("no rootDigest:\n%s", out)
+	}
+	got := step(0, "verify", bundleDir, "--expect-root", root)
+	for _, want := range []string{"Integrity: VALID", "Evidence grade: EXPERIMENTAL_TURN", "External root: MATCH"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("verify: no %q\n%s", want, got)
+		}
+	}
+
+	out = step(0, "prove", "transition", bundleDir, "--repo", ".", "--proposal", "demo-1", "--image", pinnedImage)
+	before := jsonField(out, "minimization", "bridge", "beforeCommit")
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(before) {
+		t.Fatalf("minimization.bridge.beforeCommit %q:\n%s", before, out)
+	}
+	if tree := git("rev-parse", before+"^{tree}"); tree != git("rev-parse", "HEAD~1^{tree}") {
+		t.Errorf("bridge beforeCommit tree %s is not the baseline tree %s", tree, git("rev-parse", "HEAD~1^{tree}"))
+	}
+	path := jsonField(out, "minimization", "path")
+	if path == "" {
+		t.Fatalf("no minimization.path:\n%s", out)
+	}
+	if got := step(0, "minimize", "verify", path); !strings.Contains(got, `"valid": true`) {
+		t.Fatalf("minimize verify:\n%s", got)
+	}
 }
