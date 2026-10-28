@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"regexp"
-	"runtime"
 	"strings"
 
 	"github.com/Mizore66/faultline/internal/bundle"
@@ -153,26 +152,6 @@ func splitSeparators(path string) []string {
 	return strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' })
 }
 
-// pathRoot is path.parse(p).root.
-func pathRoot(absolute string) string {
-	if runtime.GOOS != "windows" {
-		if strings.HasPrefix(absolute, "/") {
-			return "/"
-		}
-		return ""
-	}
-	if strings.HasPrefix(absolute, `\\`) {
-		parts := strings.SplitN(absolute[2:], `\`, 3)
-		if len(parts) >= 2 {
-			return `\\` + parts[0] + `\` + parts[1] + `\`
-		}
-	}
-	if len(absolute) >= 3 && absolute[1] == ':' {
-		return absolute[:3]
-	}
-	return `\`
-}
-
 func safeSegment(path string) (string, bool) {
 	safe, ok, err := safedir.ResolveSafeDirectorySegment(path)
 	if err != nil {
@@ -183,30 +162,7 @@ func safeSegment(path string) (string, bool) {
 
 // Port of src/authenticated-witness-approval.ts:146 ensureRealDirectoryTree.
 func ensureRealDirectoryTree(directory string) {
-	absolute := nodefs.Resolve(directory)
-	root := pathRoot(absolute)
-	parts := splitSeparators(nodefs.Relative(root, absolute))
-	current := root
-	if nodefs.Exists(current) {
-		safe, ok := safeSegment(current)
-		if !ok {
-			throw(jsexc.Concat("Witness approval root must be a real directory: ", current))
-		}
-		current = safe
-	}
-	for _, part := range parts {
-		current = nodefs.Join(current, part)
-		if !nodefs.Exists(current) {
-			if err := nodefs.Mkdir(current, 0o700); err != nil {
-				jsexc.Throw(err)
-			}
-		}
-		safe, ok := safeSegment(current)
-		if !ok {
-			throw(jsexc.Concat("Witness approval path cannot traverse a symbolic link or non-directory: ", current))
-		}
-		current = safe
-	}
+	safedir.EnsureRealDirectoryTree(directory, "Witness approval root must be a real directory: ", "Witness approval path cannot traverse a symbolic link or non-directory: ")
 }
 
 // Port of src/authenticated-witness-approval.ts:165 assertExistingSafeDirectories.

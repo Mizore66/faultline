@@ -5,7 +5,39 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/Mizore66/faultline/internal/jsexc"
 )
+
+func TestEnsureRealDirectoryTree(t *testing.T) {
+	dir, rerr := filepath.EvalSymlinks(t.TempDir())
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	nested := filepath.Join(dir, "a", "b")
+	if err := jsexc.Try(func() { EnsureRealDirectoryTree(nested, "root: ", "walk: ") }); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(nested); err != nil || !st.IsDir() {
+		t.Fatalf("not created: %v", err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(nested, link); err != nil {
+		t.Skip("symlink unavailable")
+	}
+	err := jsexc.Try(func() { EnsureRealDirectoryTree(filepath.Join(link, "c"), "root: ", "walk: ") })
+	if err == nil || err.Error() != "walk: "+link {
+		t.Fatalf("symlink: %v", err)
+	}
+	file := filepath.Join(dir, "file")
+	if werr := os.WriteFile(file, nil, 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	err = jsexc.Try(func() { EnsureRealDirectoryTree(filepath.Join(file, "c"), "root: ", "walk: ") })
+	if err == nil || err.Error() != "walk: "+file {
+		t.Fatalf("file: %v", err)
+	}
+}
 
 func TestResolveSafeDirectorySegment(t *testing.T) {
 	dir := t.TempDir()

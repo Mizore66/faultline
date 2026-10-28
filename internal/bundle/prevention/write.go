@@ -56,50 +56,9 @@ func stringValues(values []string) jsjson.Value {
 	return jsjson.MakeArray(out)
 }
 
-// splitPathParts is suffix.split(/[\\/]+/).filter(Boolean).
-func splitPathParts(suffix string) []string {
-	return strings.FieldsFunc(suffix, func(r rune) bool { return r == '/' || r == '\\' })
-}
-
-// safeSegment is resolveSafeDirectorySegment with its lstat error thrown.
-func safeSegment(path string) (string, bool) {
-	resolved, ok, err := safedir.ResolveSafeDirectorySegment(path)
-	if err != nil {
-		bundle.Throw(err)
-	}
-	return resolved, ok
-}
-
-// Port of src/prevention-proof.ts:158 ensureRealDirectoryTree (the Git
-// writer's clone, gitproof/write.go, with the prevention texts).
+// Port of src/prevention-proof.ts:158 ensureRealDirectoryTree.
 func ensureRealDirectoryTree(directory string) {
-	absolute := nodefs.Resolve(directory)
-	root := nodefs.ParseRoot(absolute)
-	var parts []string
-	if suffix := nodefs.Relative(root, absolute); suffix != "" {
-		parts = splitPathParts(suffix)
-	}
-	current := root
-	if nodefs.Exists(current) {
-		safe, ok := safeSegment(current)
-		if !ok {
-			bundle.Throw(errors.New(jsexc.Concat("Prevention proof root is not a real directory: ", current)))
-		}
-		current = safe
-	}
-	for _, part := range parts {
-		current = nodefs.Join(current, part)
-		if !nodefs.Exists(current) {
-			if err := nodefs.Mkdir(current, 0o700); err != nil {
-				bundle.Throw(err)
-			}
-		}
-		safe, ok := safeSegment(current)
-		if !ok {
-			bundle.Throw(errors.New(jsexc.Concat("Prevention proof output cannot traverse a symbolic link or non-directory: ", current)))
-		}
-		current = safe
-	}
+	safedir.EnsureRealDirectoryTree(directory, "Prevention proof root is not a real directory: ", "Prevention proof output cannot traverse a symbolic link or non-directory: ")
 }
 
 // Port of src/prevention-proof.ts:180 isNested.
