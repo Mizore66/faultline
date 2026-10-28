@@ -7,18 +7,13 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Mizore66/faultline/internal/bundle"
-	"github.com/Mizore66/faultline/internal/canonical"
-	"github.com/Mizore66/faultline/internal/gitinv"
 	"github.com/Mizore66/faultline/internal/jscase"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodefs"
-	"github.com/Mizore66/faultline/internal/nodeproc"
 	"github.com/Mizore66/faultline/internal/safedir"
-	"github.com/Mizore66/faultline/internal/safegit"
-	s "github.com/Mizore66/faultline/internal/schema"
+	"github.com/Mizore66/faultline/internal/sidecar"
 )
 
 // HookCommand ports src/cli-app.ts:1607 SidecarHookCommand; HasWindows
@@ -308,145 +303,10 @@ func WriteHookConfig(repo string, cfg jsjson.Value) (err error) {
 	return nil
 }
 
-// sidecarIdentifierSchema ports src/codex-sidecar.ts:62 IdentifierSchema.
-var sidecarIdentifierSchema = s.String(s.MinLength(1), s.MaxLength(160),
-	s.Regex(s.Pattern(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`), "Identifier contains unsupported characters"))
-
-// runHardenedGit ports src/codex-sidecar.ts:234: spawnSync git with
-// HOST_COMMAND_SAFE_GIT_CONFIG, -C repository and the hardened environment
-// (Node's default 1 MiB maxBuffer); its trimmed stdout.
-func runHardenedGit(repository string, args ...string) (string, error) {
-	argv := append(safegit.HostCommand(), "-C", repository)
-	argv = append(argv, args...)
-	env := gitinv.HardenedGitEnvironment(gitinv.HardenedOptions{})
-	if runtime.GOOS != "windows" {
-		for i := range env {
-			env[i] = jsstr.ToUTF8(env[i])
-		}
-	}
-	r := nodeproc.SpawnSyncWith("git", argv, nodeproc.SpawnSyncOptions{Env: env})
-	if r.Err != nil || r.Status == nil || *r.Status != 0 {
-		detail := jsstr.DecodeUTF8(r.Stderr)
-		if r.Err != nil {
-			detail = jsexc.Concat(detail, r.Err.Error())
-		}
-		detail = jsstr.Trim(detail)
-		if detail == "" {
-			status := "unknown"
-			if r.Status != nil {
-				status = jsjson.FormatNumber(float64(*r.Status))
-			}
-			detail = "exit " + status
-		}
-		return "", errors.New(jsexc.Concat("FaultLine could not safely inspect this Git worktree: ", detail))
-	}
-	return jsstr.Trim(jsstr.DecodeUTF8(r.Stdout)), nil
-}
-
-// assertSafeDirectory ports src/codex-sidecar.ts:248.
-func assertSafeDirectory(path, label string) error {
-	info, err := nodefs.Lstat(path)
-	if err != nil {
-		return errors.New(jsexc.Concat(label, " is unavailable: ", jsexc.Message(err)))
-	}
-	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
-		return errors.New(label + " must be a real directory, not a symlink or file.") // coverage gate: race only (safeDirectoryExists or realpathSync accepted the same path just before)
-	}
-	return nil
-}
-
-// safeDirectoryExists ports src/codex-sidecar.ts:260.
-func safeDirectoryExists(path, label string) (bool, error) {
-	info, err := nodefs.Lstat(path)
-	if err != nil {
-		if isENOENT(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
-		return false, errors.New(label + " must be a real directory, not a symlink or file.")
-	}
-	return true, nil
-}
-
-// existingSafeChild is src/codex-sidecar.ts:274 ensureSafeChildDirectory
-// with create false, for a child safeDirectoryExists just accepted.
-func existingSafeChild(parent, name, label string) (string, error) {
-	if err := assertSafeDirectory(parent, "FaultLine Git metadata directory"); err != nil {
-		return "", err
-	}
-	child := nodefs.Join(parent, name)
-	exists, err := safeDirectoryExists(child, label)
-	if err != nil {
-		return "", err
-	}
-	if !exists {
-		return child, nil
-	}
-	if err := assertSafeDirectory(child, label); err != nil {
-		return "", err
-	}
-	return child, nil
-}
-
-// recordingDirectory ports src/codex-sidecar.ts:297 recordingDirectory with
-// create false: the recordings directory under the Git common directory,
-// created by no one here.
-func recordingDirectory(cwd string) (string, error) {
-	top, err := runHardenedGit(cwd, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return "", err
-	}
-	repositoryRoot := nodefs.Resolve(top)
-	reported, err := runHardenedGit(repositoryRoot, "rev-parse", "--git-common-dir")
-	if err != nil {
-		return "", err
-	}
-	if reported == "" {
-		return "", errors.New("Git did not report a common metadata directory for this worktree.")
-	}
-	gitDirectory, err := nodefs.RealpathSync(nodefs.Resolve(repositoryRoot, reported))
-	if err != nil {
-		return "", errors.New(jsexc.Concat("FaultLine could not resolve Git metadata storage: ", jsexc.Message(err)))
-	}
-	if err := assertSafeDirectory(gitDirectory, "FaultLine Git metadata directory"); err != nil {
-		return "", err
-	}
-	faultLinePath := nodefs.Join(gitDirectory, "faultline")
-	exists, err := safeDirectoryExists(faultLinePath, "FaultLine sidecar storage")
-	if err != nil {
-		return "", err
-	}
-	if !exists {
-		return nodefs.Join(faultLinePath, "recordings"), nil
-	}
-	faultLineDirectory, err := existingSafeChild(gitDirectory, "faultline", "FaultLine sidecar storage")
-	if err != nil {
-		return "", err
-	}
-	recordingsPath := nodefs.Join(faultLineDirectory, "recordings")
-	exists, err = safeDirectoryExists(recordingsPath, "FaultLine sidecar recordings")
-	if err != nil {
-		return "", err
-	}
-	if !exists {
-		return recordingsPath, nil
-	}
-	return existingSafeChild(faultLineDirectory, "recordings", "FaultLine sidecar recordings")
-}
-
 // CodexSidecarLedgerPath ports src/codex-sidecar.ts:334
 // codexSidecarLedgerPath: the opaque ledger file name of a session under
-// the Git common directory's recordings.
-func CodexSidecarLedgerPath(cwd, sessionID string) (path string, err error) {
-	defer jsexc.Catch(func(e error) { path, err = "", e })
-	if _, err := bundle.ParseValue(jsjson.MakeString(sessionID), sidecarIdentifierSchema); err != nil {
-		return "", err
-	}
-	directory, err := recordingDirectory(cwd)
-	if err != nil {
-		return "", err
-	}
-	return nodefs.Join(directory, jsexc.Concat("codex-", canonical.SHA256Hex(sessionID), ".json")), nil
+// the Git common directory's recordings. The storage code lives in
+// internal/sidecar; this forwards to it.
+func CodexSidecarLedgerPath(cwd, sessionID string) (string, error) {
+	return sidecar.LedgerPath(cwd, sessionID)
 }
