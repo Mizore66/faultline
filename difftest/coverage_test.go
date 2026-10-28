@@ -123,7 +123,7 @@ var unreachableLiterals = map[string]string{
 	// CLI paths frozen TS runs for real (Go throws `not yet ported`): no
 	// golden can compare them; internal/cli's unit tests pin the texts.
 	"not yet ported: help":                          "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
-	"not yet ported: %s":                            "every unported top-level command (codex, record, prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
+	"not yet ported: %s":                            "every unported top-level command (codex, record, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
 	"not yet ported: investigate --ci-log/--resume": "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: witness propose --live":        "witness propose --live calls OpenAI in TS (slice 5); TestWitnessProposeSampleAndUnported pins the text",
 	"not yet ported: witness %s":                    "witness implement/review call a model in TS; TestWitnessProposeSampleAndUnported pins the text",
@@ -269,7 +269,9 @@ var unreachableLiterals = map[string]string{
 	"Turn proof bundle artifact exceeds FaultLine's read limit:": "reached by Task 7/8 goldens; remove when they land",
 
 	// turnproof/verify.go and semantics.go (Task 7).
-	"Turn proof bundle directory does not exist": "fl verify reads manifest.json first, so a missing directory is routed to the demo verifier and never reaches the turn verifier; internal/bundle/turnproof TestVerifyMissingDirectory pins it",
+	// proveTransitionCommand's `|| "unknown error"` (cli-app.ts:2299): every invalid Verification carries an error (a missing directory, a failed
+	// check or the catch-all "verification failed safely" all push one), so the empty join is a defensive fallback.
+	"unknown error": "verifyTurnInvestigationProofBundle returns valid:false only with at least one pushed error (turn-proof-bundle.ts:823,964-970); prove's empty-join fallback is unreachable",
 
 	// turnproof/pack.go (TestLiveTurnTreesPack's requireReached):
 	"Turn tree pack enumeration produced no Git objects.":         "rev-list --objects <tree> always lists the tree itself",
