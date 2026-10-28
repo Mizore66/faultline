@@ -14,12 +14,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mizore66/faultline/difftest/gen"
 	"github.com/Mizore66/faultline/difftest/oracle"
+	"github.com/Mizore66/faultline/internal/bundle"
+	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/bundle/turnproof"
+	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
+	"github.com/Mizore66/faultline/internal/schema"
+	"github.com/Mizore66/faultline/internal/turninv"
 )
 
 // catalogBytes generates one hashes.txt covering the kinds of line, line end
@@ -383,4 +389,183 @@ func TestLiveTurnTreesPack(t *testing.T) {
 	if full {
 		requireReached(t, "internal/bundle/turnproof/pack.go", outputs.String())
 	}
+}
+
+// turnSemanticsInputs are the parsed (investigation, frozen witness, ledger)
+// texts of one of Task 2's two turn bases.
+type turnBaseTexts struct{ result, frozen, ledger string }
+
+// resignTurnRuns rewrites runId (the digest of the run without it) on each
+// run the way the recorder signs it, so a mutated run still passes the
+// runId check and reaches the checks behind it.
+func resignTurnRuns(result jsjson.Value) {
+	for _, run := range result.Get("runs").Items() {
+		if run.Kind() != jsjson.Object {
+			continue
+		}
+		d, err := canonical.DigestJSON(bundle.Without(run, "runId"))
+		if err == nil {
+			run.Obj().Set("runId", jsjson.MakeString(d))
+		}
+	}
+}
+
+// setTurnEnum sets one schema-valid alternative of a field the semantics
+// check: status, repository or ledgerDigest null, executionTrust, the
+// homogeneity (with a runtimeMapping entry dropped).
+func setTurnEnum(r *rand.Rand, text string) string {
+	v, err := jsjson.Parse(text)
+	if err != nil || v.Kind() != jsjson.Object {
+		return text
+	}
+	set := func(o jsjson.Value, key string, value jsjson.Value) {
+		if o.Kind() == jsjson.Object {
+			o.Obj().Set(key, value)
+		}
+	}
+	str := jsjson.MakeString
+	switch r.IntN(6) {
+	case 0:
+		set(v, "status", str([]string{"INVALID_WITNESS", "NO_TURN_SNAPSHOTS", "EXECUTION_ERROR", "ENVIRONMENT_CHANGED", "DUPLICATE_TURN_SNAPSHOTS", "SANDBOX_UNAVAILABLE", "COMPLETED"}[r.IntN(7)]))
+	case 1:
+		set(v, "repository", jsjson.MakeNull())
+	case 2:
+		set(v, "ledgerDigest", jsjson.MakeNull())
+	case 3:
+		set(v.Get("proof"), "executionTrust", str([]string{"INJECTED_RUNNER", "UNSAFE_LOCAL"}[r.IntN(2)]))
+	case 4:
+		set(v, "environmentHomogeneity", str([]string{"HETEROGENEOUS", "EMPTY"}[r.IntN(2)]))
+		if m := v.Get("runtimeMapping"); m.Kind() == jsjson.Object && r.IntN(2) == 0 {
+			if keys := m.Obj().Keys(); len(keys) > 0 {
+				m.Obj().Delete(keys[r.IntN(len(keys))])
+			}
+		}
+	case 5:
+		set(v.Get("proof"), "dockerIsolated", jsjson.MakeBool(r.IntN(2) == 0))
+	}
+	return jsjson.Stringify(v)
+}
+
+// mutateTurnResult applies one of: a leaf corrupted or swapped, runs or
+// states reordered, runs re-signed.
+func mutateTurnResult(r *rand.Rand, text string) string {
+	switch r.IntN(8) {
+	case 6, 7:
+		return setTurnEnum(r, text)
+	case 0, 1:
+		return gen.CorruptLeaf(r, text)
+	case 2, 3:
+		return gen.SwapLeaf(r, text)
+	}
+	v, err := jsjson.Parse(text)
+	if err != nil {
+		return text
+	}
+	field := "runs"
+	if r.IntN(2) == 0 {
+		field = "states"
+	}
+	if items := v.Get(field).Items(); len(items) > 1 {
+		i, j := r.IntN(len(items)), r.IntN(len(items))
+		items[i], items[j] = items[j], items[i]
+	}
+	if r.IntN(2) == 0 {
+		resignTurnRuns(v)
+	}
+	return jsjson.Stringify(v)
+}
+
+// TestLiveTurnSemantics compares validateTurnInvestigationProofSemantics and
+// bindTurnLifecycle on 3,000 mutations of Task 2's two turn bases. Only
+// inputs the schemas accept are compared (the verifier never gets others).
+func TestLiveTurnSemantics(t *testing.T) {
+	c := oracle.Start(t)
+	defer c.Close()
+	r := rand.New(rand.NewPCG(47, 7))
+	var bases []turnBaseTexts
+	for _, b := range []string{"turn-two-states", "turn-non-monotonic"} {
+		s := seedTexts(t, b+"/investigation.json", b+"/witness/frozen.json", b+"/lifecycle/ledger.json")
+		bases = append(bases, turnBaseTexts{s[0], s[1], s[2]})
+	}
+	var outputs strings.Builder
+	compared, errorsSeen, bound, threw := 0, 0, 0, 0
+	for i := 0; compared < 3000 && i < 30000; i++ {
+		base := bases[r.IntN(len(bases))]
+		resultText, frozenText := base.result, base.frozen
+		for m := r.IntN(3); m >= 0; m-- {
+			resultText = mutateTurnResult(r, resultText)
+		}
+		if r.IntN(4) == 0 {
+			frozenText = gen.CorruptLeaf(r, frozenText)
+		} else if r.IntN(8) == 0 {
+			frozenText = gen.SwapLeaf(r, frozenText)
+		}
+		resultValue, err := jsjson.Parse(resultText)
+		if err != nil {
+			continue
+		}
+		result, _, ok := schema.Parse(turninv.ResultSchema, resultValue)
+		if !ok {
+			continue
+		}
+		frozenValue, err := jsjson.Parse(frozenText)
+		if err != nil {
+			continue
+		}
+		frozen, _, ok := schema.Parse(gitproof.FrozenWitnessSchema, frozenValue)
+		if !ok {
+			continue
+		}
+		compared++
+		got := turnOutcome(semanticsValue(result, frozen), nil)
+		want := oracleText(t, c, "validateTurnSemantics", `{"result":`+jsjson.Stringify(result)+`,"frozen":`+jsjson.Stringify(frozen)+`}`)
+		if got != want {
+			t.Fatalf("validateTurnSemantics(%s, %s):\ngot  %s\nwant %s", jsjson.Stringify(result), jsjson.Stringify(frozen), got, want)
+		}
+		outputs.WriteString(want + "\n")
+		errorsSeen += len(semanticsValue(result, frozen).Items())
+
+		// bindTurnLifecycle on the same result and a possibly corrupted ledger.
+		ledgerText := base.ledger
+		switch r.IntN(4) {
+		case 0:
+			ledgerText = gen.CorruptLeaf(r, ledgerText)
+		case 1:
+			ledgerText = gen.SwapLeaf(r, ledgerText)
+		}
+		ledgerValue, err := jsjson.Parse(ledgerText)
+		if err != nil {
+			continue
+		}
+		binding, ledger, bindErr := turnproof.BindTurnLifecycle(ledgerValue, result)
+		if bindErr != nil {
+			threw++
+		} else {
+			bound++
+		}
+		var gotBind jsjson.Value
+		if bindErr == nil {
+			gotBind = jsjson.MustObject("binding", binding, "ledger", ledger)
+		}
+		gotText := turnOutcome(gotBind, bindErr)
+		wantBind := oracleText(t, c, "bindTurnLifecycle", `{"ledger":`+jsjson.Stringify(ledgerValue)+`,"result":`+jsjson.Stringify(result)+`}`)
+		if gotText != wantBind {
+			t.Fatalf("bindTurnLifecycle:\ngot  %s\nwant %s", gotText, wantBind)
+		}
+		outputs.WriteString(wantBind + "\n")
+	}
+	if compared < 3000 {
+		t.Fatalf("only %d parsing inputs", compared)
+	}
+	liveSummary(t, "%d turn semantics inputs (%d messages), bindTurnLifecycle %d bound %d threw", compared, errorsSeen, bound, threw)
+	requireReached(t, "internal/bundle/turnproof/semantics.go", outputs.String())
+}
+
+func semanticsValue(result, frozen jsjson.Value) jsjson.Value {
+	errs := turnproof.ValidateProofSemantics(result, frozen)
+	items := make([]jsjson.Value, len(errs))
+	for i, e := range errs {
+		items[i] = jsjson.MakeString(e)
+	}
+	return jsjson.MakeArray(items)
 }

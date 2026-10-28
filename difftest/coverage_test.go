@@ -121,13 +121,12 @@ var unreachableLiterals = map[string]string{
 	// error struct literals, which errorSites did not collect before.
 	// CLI paths frozen TS runs for real (Go throws `not yet ported`): no
 	// golden can compare them; internal/cli's unit tests pin the texts.
-	"not yet ported: help":                           "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
-	"not yet ported: %s":                             "every unported top-level command (codex, record, prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
-	"not yet ported: investigate --ci-log/--resume":  "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
-	"not yet ported: investigate turns":              "investigate turns runs in TS; TestInvestigateUsageAndGuards pins the text",
-	"not yet ported: turn proof bundle verification": "a turn proof bundle verifies in TS; slice 2 does not port the turn verifier",
-	"not yet ported: witness propose --live":         "witness propose --live calls OpenAI in TS (slice 5); TestWitnessProposeSampleAndUnported pins the text",
-	"not yet ported: witness %s":                     "witness implement/review call a model in TS; TestWitnessProposeSampleAndUnported pins the text",
+	"not yet ported: help":                          "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
+	"not yet ported: %s":                            "every unported top-level command (codex, record, prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
+	"not yet ported: investigate --ci-log/--resume": "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
+	"not yet ported: investigate turns":             "investigate turns runs in TS; TestInvestigateUsageAndGuards pins the text",
+	"not yet ported: witness propose --live":        "witness propose --live calls OpenAI in TS (slice 5); TestWitnessProposeSampleAndUnported pins the text",
+	"not yet ported: witness %s":                    "witness implement/review call a model in TS; TestWitnessProposeSampleAndUnported pins the text",
 	"%s must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).": "Go-only flags (KNOWN_DIFFERENCES: Codex thread IDs): TS ignores them, so no golden can hold the refusal; TestInvestigateUsageAndGuards pins it",
 	// Witness store invariants and earlier refusals.
 	"Reviewer public key could not be exported as SPKI DER.":               "x509.MarshalPKIXPublicKey of an Ed25519 key never fails; Node's export of a parsed Ed25519 key neither",
@@ -270,6 +269,9 @@ var unreachableLiterals = map[string]string{
 	// turnproof/files.go: reached by Task 7/8 goldens; remove each row when
 	// they land (the gate then reports the row as stale).
 	"Turn proof bundle artifact exceeds FaultLine's read limit:": "reached by Task 7/8 goldens; remove when they land",
+
+	// turnproof/verify.go and semantics.go (Task 7).
+	"Turn proof bundle directory does not exist": "fl verify reads manifest.json first, so a missing directory is routed to the demo verifier and never reaches the turn verifier; internal/bundle/turnproof TestVerifyMissingDirectory pins it",
 
 	// turnproof/pack.go (TestLiveTurnTreesPack's requireReached):
 	"Turn tree pack enumeration produced no Git objects.":         "rev-list --objects <tree> always lists the tree itself",
@@ -1153,6 +1155,9 @@ var liveGatedFiles = map[string]string{
 	// Slice 4b Task 5: the turn hash catalog and the portable tree pack.
 	"internal/bundle/turnproof/catalog.go": "TestLiveTurnHashCatalog",
 	"internal/bundle/turnproof/pack.go":    "TestLiveTurnTreesPack",
+	// Slice 4b Task 7: the turn proof semantics and lifecycle binding, on
+	// 3,000 mutations of the two turn bases.
+	"internal/bundle/turnproof/semantics.go": "TestLiveTurnSemantics",
 	// Slice 4b Task 3: turn states, reconstruction, transitions and attribution.
 	"internal/turninv/states.go": "TestLiveTurnStates",
 	// Slice 4b Task 4: the turn-minimization bridge, on generated

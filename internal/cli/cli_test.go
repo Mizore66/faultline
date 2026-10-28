@@ -2,6 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +61,14 @@ func TestOption(t *testing.T) {
 	}
 	if !hasFlag(args, "--expect-root") || hasFlag(args, "--nope") {
 		t.Fatal("hasFlag")
+	}
+}
+
+func TestVerifyTurnBundleLines(t *testing.T) {
+	_, here, _, _ := runtime.Caller(0)
+	stdout, _, code := run("verify", filepath.Join(filepath.Dir(here), "..", "..", "difftest", "testdata", "bases", "turn-two-states"))
+	if code != 0 || !strings.HasPrefix(stdout, "Turn proof self-consistency: VALID\nEvidence grade: EXPERIMENTAL_TURN\nDeclared files checked: 14\nBundle root: sha256:") ||
+		!strings.HasSuffix(stdout, "\nExternal root: NOT_PROVIDED\n") {
+		t.Fatalf("%d %q", code, stdout)
 	}
 }
