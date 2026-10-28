@@ -116,7 +116,7 @@ func investigateCommand(e *env, args []string) error {
 		return fail("not yet ported: investigate --ci-log/--resume")
 	}
 	if first == "turns" {
-		return fail("not yet ported: investigate turns")
+		return turnsCommand(e, args)
 	}
 	if first != "git" {
 		return fail("%s", investigateUsage)

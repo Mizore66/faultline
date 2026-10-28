@@ -113,6 +113,7 @@ var unreachableLiterals = map[string]string{
 	"Git minimization result already exists and will not be replaced:":                     "race only: the CLI's safeManagedFileOutput refused an existing output just before",
 	"minimization result changed beyond FaultLine's verification read limit while reading": "race only: lstat just reported a size within the limit",
 	"Generated Git proof bundle failed verification:":                                      "race only: the bundle fl just wrote verifies unless it changes underneath",
+	"Generated turn proof bundle failed verification:":                                     "unreachable: turnproof.Write already verifies the staged bundle against its own root before publishing, so the Verify that follows cannot fail unless the bundle changes underneath (the Git bundle text above is the same check)",
 	"Generated incident proof bundle failed verification:":                                 "race only: the bundle incident continue just wrote verifies unless it changes underneath (the Git bundle text above is the same check)",
 	"Refusing to render a Git proof bundle that changed during verification:":              "race only: the bundle is verified twice in a row",
 	"Unable to read verified":                                                              "race only: the file was just verified, so it exists and parses",
@@ -124,7 +125,6 @@ var unreachableLiterals = map[string]string{
 	"not yet ported: help":                          "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
 	"not yet ported: %s":                            "every unported top-level command (codex, record, prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
 	"not yet ported: investigate --ci-log/--resume": "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
-	"not yet ported: investigate turns":             "investigate turns runs in TS; TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: witness propose --live":        "witness propose --live calls OpenAI in TS (slice 5); TestWitnessProposeSampleAndUnported pins the text",
 	"not yet ported: witness %s":                    "witness implement/review call a model in TS; TestWitnessProposeSampleAndUnported pins the text",
 	"%s must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).": "Go-only flags (KNOWN_DIFFERENCES: Codex thread IDs): TS ignores them, so no golden can hold the refusal; TestInvestigateUsageAndGuards pins it",
@@ -278,8 +278,6 @@ var unreachableLiterals = map[string]string{
 	// Slice 4b Task 4: the turn-minimization bridge (live-gated by
 	// TestLiveTurnBridge) and minimizeFromTurnInvestigation.
 	"Transition index must be a non-negative integer (got": "minimizeFromTurnInvestigation refuses a non-integer or negative --transition first (`--transition must be a non-negative integer.`), so fl never passes one to selectTurnTransition; TestLiveTurnBridge compares it on direct calls",
-	"--transition must be a non-negative integer.":         "reached by Task 9/10 goldens (investigate turns --minimize, prove transition); remove when they land",
-	"Counterfactual minimization from a turn boundary reuses Git-path machinery on synthetic commits. The parent turn package remains EXPERIMENTAL_TURN until TURN_PROOF promotion criteria are met.": "reached by Task 9/10 goldens (investigate turns --minimize, prove transition); remove when they land",
 
 	// turnproof/write.go (TestLiveTurnProofWriter's requireReached):
 	"Turn proof root is not a real directory:":                                    "the filesystem root is always a real directory",
