@@ -274,6 +274,10 @@ var unreachableLiterals = map[string]string{
 	// Slice 4c Task 18 (internal/cli/repair.go).
 	"Repair evidence packet changed during redaction and cannot be safely correlated to the verified investigation.": "src/cli-app.ts:2770: the packet holds only digests, fixed statements and counts, which redactValue never rewrites (a changed digest needs a secret-shaped packet field)",
 	"not yet ported: repair --bundle": "Task 20 replaces this stub with the Codex path (src/cli-app.ts:2678), which runs for real in TS; drop this row there",
+	// Slice 4c Task 10: not an error text. repair.ProposeBrief parses
+	// redactValue's result with bundle.ParseValue, whose input the flow
+	// analysis counts as a message, so redactValue's returns become sites.
+	"<FAULTLINE_UNSUPPORTED_VALUE:undefined>": "redactValue's placeholder for an undefined value, not an error; the only CLI path that redacts an undefined value is fl witness propose --input without incidentPacket (cli-app.ts:1377-1385, witness.go:258-279), which exercises it (golden propose-input-no-packet: Expected object, received string) but fails in zod before the placeholder text can print, so no golden can contain the literal",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),

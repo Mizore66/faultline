@@ -439,7 +439,6 @@ TestWriterReplay/posix/repair-brief-input-expect-root-bad
 TestWriterReplay/posix/repair-brief-input-unknown-id
 TestWriterReplay/posix/repair-brief-input-wrong-digest
 TestWriterReplay/posix/repair-brief-input-secret
-TestWriterReplay/posix/repair-brief-input-placeholder
 TestWriterReplay/posix/repair-brief-input-bad-json
 TestWriterReplay/posix/repair-brief-input-missing-file
 TestWriterReplay/posix/repair-brief-input-output

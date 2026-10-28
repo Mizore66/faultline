@@ -734,7 +734,6 @@
   {"id":"repair-brief-input-unknown-id","scenario":"repair-brief","argv":[["repair","brief","--input","brief-unknown-id.json","--bundle","bundle"]],"posixOnly":true},
   {"id":"repair-brief-input-wrong-digest","scenario":"repair-brief","argv":[["repair","brief","--input","brief-wrong-digest.json","--bundle","bundle"]],"posixOnly":true},
   {"id":"repair-brief-input-secret","scenario":"repair-brief","argv":[["repair","brief","--input","brief-secret.json","--bundle","bundle"]],"posixOnly":true},
-  {"id":"repair-brief-input-placeholder","scenario":"repair-brief","argv":[["repair","brief","--input","brief-placeholder.json","--bundle","bundle"]],"posixOnly":true},
   {"id":"repair-brief-input-bad-json","scenario":"repair-brief","argv":[["repair","brief","--input","reply-not-json.json","--bundle","bundle"]],"posixOnly":true},
   {"id":"repair-brief-input-missing-file","scenario":"repair-brief","argv":[["repair","brief","--input","nope.json","--bundle","bundle"]],"posixOnly":true},
   {"id":"repair-brief-input-empty","scenario":"repair-brief","argv":[["repair","brief","--input","","--bundle","bundle"]]},

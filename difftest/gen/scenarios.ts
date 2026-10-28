@@ -1065,10 +1065,6 @@ function repairBriefFiles(): Record<string, string> {
   return {
     "brief.json": jsonText(ok),
     "brief-unknown-id.json": jsonText(brief(packet.packetDigest, ["E1", "E2", "E9"])),
-    // schemaVersion holds redactValue's placeholder text for an undefined value
-    // (src/redaction.ts:330), so the zod message prints it as `received`. This
-    // reaches the text only: redactValue cannot see an undefined candidate.
-    "brief-placeholder.json": jsonText({ ...ok, schemaVersion: "<FAULTLINE_UNSUPPORTED_VALUE:undefined>" }),
     "brief-wrong-digest.json": jsonText(brief(`sha256:${"0".repeat(64)}`, ["E1", "E2", "E3"])),
     "brief-secret.json": jsonText(brief(packet.packetDigest, ["E1", "E2", "E3"], ["Rotate the credential: pass", "word=", secretValue, " in the CI settings."].join(""))),
     "reply-ok.json": reply(200, "application/json", responseWith([JSON.stringify(ok)])),
