@@ -168,14 +168,16 @@ var writerFaultPaths = []struct {
 	{"turns-proof", "turn-stage-root", "ws/.faultline/turn-proof-bundles/.turns-*.staging-*/ROOT.sha256", []string{"open", "write", "close"}, ""},
 	// turn-pack-verify-tmp is the verifier's seeded mkdtemp: TS retries a failed
 	// mkdir with the real mkdtemp (difftest/gen/seed.mjs), which -P cannot
-	// match, so faultOrdinals fails every mkdir from the ordinal at which the
-	// fault-free trace makes it, on both sides.
+	// match. faultOrdinals therefore fails TS's mkdir calls from its 19th on
+	// with no path filter (2 injections: the seeded name, then the real one),
+	// and Go's first mkdir of the seeded name under -P (1 injection).
 	// Fires only on the index-pack fallback, which the fail-unpack fake git forces.
 	{"turns-proof", "turn-pack-index-file", "tmp/faultline-turn-proof-pack-*/objects/pack/turn-trees.pack", []string{"open", "write"}, "fail-unpack"},
 	// The binding freeze made is read twice before it is rewritten. A failed
-	// close of a READ aborts Node with its native assertion (a stack trace Go
-	// cannot reproduce; retained evidence in the task 11 follow-up report), so
-	// the close fault targets the rewrite's close through faultOrdinals.
+	// close of a READ aborts both Node and Go with the same assertion header
+	// (nodefs.ReadText -> jsexc.FatalCheck); only Node's native and JS stack
+	// traces differ (KNOWN_DIFFERENCES). The close fault here targets the
+	// rewrite's close (the third close of the file) through faultOrdinals.
 	{"turns-proof", "turn-binding", "ws/repo/.faultline/incidents/bindings/*.json", []string{"open", "write", "close"}, ""},
 	{"turns-minimize", "turn-minimization-temp", "ws/.faultline/minimizations/.*.faultline-git-minimization.tmp", []string{"open", "write", "close", "link", "unlink"}, ""},
 	{"turns-minimize", "turn-minimization-dir", "ws/.faultline/minimizations", []string{"mkdir"}, ""},

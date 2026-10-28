@@ -29,22 +29,23 @@ type faultOrdinal struct {
 //
 // turns-proof/turn-binding/close: investigate turns reads the binding freeze
 // made twice (open, read, close each; a failed close of a read aborts Node
-// with a native assertion Go cannot reproduce, see KNOWN_DIFFERENCES) and
-// then rewrites it (open O_WRONLY, write, close). The writer's close is the
-// third close of the file on each side (TS: one thread; Go under GOMAXPROCS=1
-// as the fault run sets it). Measured by the fault-free traces retained in the
-// follow-up report.
+// with the same assertion header in Node and Go, differing only in stack
+// traces, see KNOWN_DIFFERENCES) and then rewrites it (open O_WRONLY, write,
+// close). The writer's close is the third close of the file on each side
+// (fault-free podman traces on linux/arm64, Node 22.22.2; Go ran under
+// GOMAXPROCS=1 as the fault run sets it). The check is per thread (strace
+// counts when= per thread), so a different thread layout fails the ordinal
+// assertion rather than passing on another operation.
 var faultOrdinals = map[string]faultOrdinal{
 	"turns-proof/turn-binding/close": {ts: 3, goSide: 3, onlyCalls: true},
 	// turns-proof/turn-pack-verify-tmp/mkdir: the verifier's temporary bare
 	// repository (src/turn-proof-bundle.ts mkdtempSync). It is neither side's
 	// first mkdir: the bundle root, the stage and the investigation root come
-	// first, so failing every mkdir would fail those instead. Measured in a
-	// fault-free podman trace (retained in the follow-up report): TS's main
-	// thread makes it its 19th mkdir call. Go makes it by the same seeded name on
-	// a thread that varies between runs (strace counts when= per thread), so
-	// Go is faulted by path (goSide is the call's ordinal in that thread of
-	// the fault-free trace, kept for the record).
+	// first, so failing every mkdir would fail those instead. In a fault-free
+	// linux/arm64 podman trace TS's main thread makes it its 19th mkdir call
+	// (ts: 19, applied as when=19+ with no path filter). Go makes it by the
+	// same seeded name on a thread that varies between runs, so Go is faulted
+	// by path with its default ordinal (goSide: 1 is that when=1 under -P).
 	"turns-proof/turn-pack-verify-tmp/mkdir": {ts: 19, goSide: 1, from: true, onPath: "tmp/faultline-turn-proof-pack-"},
 }
 
