@@ -287,6 +287,7 @@ func TestLiveCpSyncTree(t *testing.T) {
 			}
 		}
 		counts[kind]++
+		recordOutput(t, want)
 		if fixed >= 0 {
 			t.Logf("fixed %q: %.60q", cpFixedCases[fixed].name, want)
 		}
@@ -299,4 +300,7 @@ func TestLiveCpSyncTree(t *testing.T) {
 		}
 	}
 	t.Logf("outcomes: %v", counts)
+	if os.Getenv("FAULTLINE_CP_CASES") == "" {
+		requireReached(t, "internal/nodefs/cp.go", recordedOutputs(t))
+	}
 }

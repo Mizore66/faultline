@@ -116,6 +116,83 @@ func requireReached(t *testing.T, file, outputs string) {
 	}
 }
 
+// liveGroupState accumulates, per file, the outputs of the live tests that
+// together gate it (liveGatedFiles names them "TestA+TestB").
+var liveGroupState = struct {
+	sync.Mutex
+	outputs map[string]string
+	done    map[string]map[string]bool
+}{outputs: map[string]string{}, done: map[string]map[string]bool{}}
+
+// requireReachedGroup is requireReached for a file several live tests reach
+// together (liveGatedFiles names them "TestA+TestB"): each calls it at its
+// end, and the check runs once every named test has. A run that selects only
+// some of them cannot judge the file: it logs LIVE-GROUP-UNVERIFIED, and CI
+// (which runs them all in one process) enforces the check. With
+// FAULTLINE_DUMP_LIVE_OUTPUTS=<dir> a narrowed run appends what it compared
+// to the file's dump and logs the literals still unreached by the union so
+// far, so bounded local windows can be audited without a monolithic run.
+func requireReachedGroup(t *testing.T, file string) {
+	t.Helper()
+	tests := strings.Split(liveGatedFiles[file], "+")
+	top, _, _ := strings.Cut(t.Name(), "/")
+	if !slices.Contains(tests, top) {
+		t.Errorf("%s names %q, not %s", file, liveGatedFiles[file], top)
+		return
+	}
+	narrowed := os.Getenv("FAULTLINE_REPAIR_ONLY") != "" || os.Getenv("FAULTLINE_REPAIR_SKIP") != "" || os.Getenv("FAULTLINE_REPAIR_WT_CASES") != ""
+	liveGroupState.Lock()
+	liveGroupState.outputs[file] += recordedOutputs(t) + "\n"
+	if liveGroupState.done[file] == nil {
+		liveGroupState.done[file] = map[string]bool{}
+	}
+	liveGroupState.done[file][top] = true
+	complete := len(liveGroupState.done[file]) == len(tests)
+	outputs := liveGroupState.outputs[file]
+	liveGroupState.Unlock()
+	if dir := os.Getenv("FAULTLINE_DUMP_LIVE_OUTPUTS"); dir != "" && narrowed {
+		name := filepath.Join(dir, strings.ReplaceAll(file, "/", "_")+".txt")
+		f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		f.WriteString(recordedOutputs(t) + "\n")
+		f.Close()
+		union, _ := os.ReadFile(name)
+		t.Logf("LIVE-GROUP-AUDIT %s: unreached by the dumped union so far: %q", file, unreachedLiterals(t, file, string(union)))
+		return
+	}
+	if !complete || narrowed {
+		t.Logf("LIVE-GROUP-UNVERIFIED %s: needs %s in one unnarrowed run", file, liveGatedFiles[file])
+		return
+	}
+	requireReached(t, file, outputs)
+}
+
+// unreachedLiterals are file's error literals that neither outputs nor a
+// golden produced and unreachableLiterals does not waive.
+func unreachedLiterals(t *testing.T, file, outputs string) []string {
+	t.Helper()
+	repo := oracle.RepoRoot(t)
+	outputs += goldenText(t, repo)
+	var out []string
+	for lit := range errorLiterals(t, filepath.Join(repo, filepath.FromSlash(file))) {
+		if _, ok := unreachableLiterals[lit]; ok {
+			continue
+		}
+		reached := true
+		for _, frag := range messageFragments(lit) {
+			reached = reached && strings.Contains(outputs, jsjson.Quote(frag)[1:len(jsjson.Quote(frag))-1])
+		}
+		if !reached {
+			out = append(out, lit)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // liveSummary logs how much a long live test compared, marked so that CI
 // turns it into a check-run notice (proof that the test ran in full).
 func liveSummary(t *testing.T, format string, args ...any) {

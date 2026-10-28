@@ -316,11 +316,13 @@ func TestLiveImplementCodexRunner(t *testing.T) {
 			}
 			want = strings.ReplaceAll(want, nodeOut, "<OUT>")
 			gotText := strings.ReplaceAll(jsjson.Stringify(got), goOut, "<OUT>")
+			recordOutput(t, want)
 			if gotText != want {
 				t.Errorf("node %s\ngo   %s", want, gotText)
 			}
 		})
 	}
+	requireReachedGroup(t, "internal/codexloop/runner.go")
 }
 
 // --- Slice 4c Task 16: repairWithCodex and the frozen-witness verifier ---
@@ -984,6 +986,7 @@ func TestLiveRepairWithCodex(t *testing.T) {
 			if len(diffs) > 0 {
 				t.Errorf("workspace tree differs in %d entries:\n%s", len(diffs), strings.Join(diffs, "\n"))
 			}
+			recordOutput(t, ts.result)
 			statuses[gone.status]++
 			if gone.export != "" {
 				exports[gone.export]++
@@ -1013,4 +1016,7 @@ func TestLiveRepairWithCodex(t *testing.T) {
 		})
 	}
 	t.Logf("LIVE-SUMMARY statuses %v exports %v", statuses, exports)
+	for _, file := range []string{"internal/codexloop/repair.go", "internal/codexloop/verifier.go"} {
+		requireReachedGroup(t, file)
+	}
 }

@@ -507,6 +507,7 @@ func TestLiveRepairBriefStore(t *testing.T) {
 		unlockTree(ts)
 		unlockTree(gs)
 	}
+	requireReached(t, "internal/repair/store.go", recordedOutputs(t))
 	liveSummary(t, "repair brief store: %d written, %d refused; %d verified packages valid of 400", written, refused, valid)
 
 	// Every reachable store text and the verifier's outcomes must have been

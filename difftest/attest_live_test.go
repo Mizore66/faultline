@@ -275,6 +275,7 @@ func TestLiveAttestationCreate(t *testing.T) {
 		args := jsjson.Stringify(jsjson.MustObject("input", attestInputValue(in)))
 		want := oracleText(t, c, "createBundleAttestation", args)
 		outputs.WriteString(want + "\n")
+		recordOutput(t, want)
 		record, err := attest.Create(in)
 		got := threwOr(record, err)
 		if got != want {
@@ -300,6 +301,7 @@ func TestLiveAttestationCreate(t *testing.T) {
 			vargs := attestVerifyArgs(mutated, expected)
 			want := oracleText(t, c, "verifyBundleAttestation", vargs)
 			outputs.WriteString(want + "\n")
+			recordOutput(t, want)
 			var got string
 			if err := jsexc.Try(func() { got = attestVerification(attest.Verify(mutated, expected)) }); err != nil {
 				got = "THREW:" + jsexc.Message(err)
@@ -317,6 +319,7 @@ func TestLiveAttestationCreate(t *testing.T) {
 		"must be a valid canonical UTC ISO-8601 timestamp", "externally supplied receipt digest is not a sha256 digest",
 		"attestation schema validation failed: ", "receiptDigest does not match the canonical receipt contents",
 		"externally supplied receipt digest does not match", `"externalDigestStatus":"MATCH"`)
+	requireReachedGroup(t, "internal/attest/attest.go")
 	liveSummary(t, "attestation create: %d created, %d refused; %d verified", created, refused, verified)
 }
 
@@ -499,6 +502,7 @@ func TestLiveAttestationStore(t *testing.T) {
 			args := jsjson.MustObject(append([]any{"cwd", jsjson.MakeString(ts), "store", storeArg, "root", jsjson.MakeString(root)}, fields...)...)
 			want := strings.ReplaceAll(oracleText(t, c, op, jsjson.Stringify(args)), ts, gs)
 			outputs.WriteString(want + "\n")
+			recordOutput(t, want)
 			return want
 		}
 		inGo := func(f func()) {
@@ -566,6 +570,7 @@ func TestLiveAttestationStore(t *testing.T) {
 	if os.Getuid() != 0 {
 		requireAttestReached(t, outputs.String(), "EACCES: permission denied, open ")
 	}
+	requireReachedGroup(t, "internal/attest/attest.go")
 	liveSummary(t, "attestation store: %d written, %d refused", written, refused)
 }
 

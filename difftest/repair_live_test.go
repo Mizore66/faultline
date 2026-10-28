@@ -543,6 +543,7 @@ func TestLiveExtractOpenAiResponseText(t *testing.T) {
 	if len(reached) != 11 {
 		t.Errorf("reached %d outcomes, want the 10 errors and a text: %v", len(reached), reached)
 	}
+	requireReached(t, "internal/repair/response.go", recordedOutputs(t))
 }
 
 func TestLiveRepairBriefJSONSchema(t *testing.T) {
@@ -563,6 +564,9 @@ type repairReply struct {
 	headers  [][2]string
 	body     []byte
 	redirect int // a 3xx status sent first, with Location /v1/final
+	// location, when set, replaces that Location: %HOST% is the request host
+	// and a redirect to /v1/responses itself never ends.
+	location string
 }
 
 type repairServer struct {
@@ -578,8 +582,12 @@ func (s *repairServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h := func(name string) string { return strings.Join(r.Header.Values(name), ",") }
 	s.records = append(s.records, strings.Join([]string{"openai", r.Method, r.URL.Path, h("Authorization"), h("Content-Type"),
 		h("Accept"), h("Accept-Language"), h("Sec-Fetch-Mode"), h("User-Agent"), h("Accept-Encoding"), string(body)}, "\x1f"))
-	if s.reply.redirect != 0 && r.URL.Path == "/v1/responses" {
-		w.Header().Set("Location", "/v1/final")
+	if s.reply.redirect != 0 && (r.URL.Path == "/v1/responses" || s.reply.location != "") {
+		location := "/v1/final"
+		if s.reply.location != "" {
+			location = strings.ReplaceAll(s.reply.location, "%HOST%", r.Host)
+		}
+		w.Header().Set("Location", location)
 		w.WriteHeader(s.reply.redirect)
 		return
 	}
@@ -752,6 +760,12 @@ func randomRepairReply(r *rand.Rand, packet jsjson.Value) (string, repairReply) 
 		return "multi-coding", ok
 	case 22:
 		ok.redirect = []int{301, 302, 303, 307, 308}[r.IntN(5)]
+		if r.IntN(3) == 0 {
+			// The causes undici gives fetch failed, which postJSON replaces:
+			// a non-HTTP scheme, a loop past 20 hops, credentials in Location.
+			ok.location = []string{"ftp://example.test/x", "/v1/responses", "http://u:p@%HOST%/v1/final"}[r.IntN(3)]
+			return "redirect-error", ok
+		}
 		return "redirect", ok
 	case 23:
 		return "status-" + strconv.Itoa(k), repairReply{status: []int{201, 204, 299, 300, 304, 199 + 1}[r.IntN(6)], body: ok.body}
@@ -863,6 +877,7 @@ func TestLiveProposeRepairBrief(t *testing.T) {
 		if got != want {
 			t.Fatalf("case %d (%s, model %q, key %s):\ngot  %s\nwant %s", i, kind, model, repairText(key), got, want)
 		}
+		recordOutput(t, jsjson.Quote(want))
 		if !slices.Equal(goRecords, tsRecords) {
 			t.Fatalf("case %d (%s): requests differ:\ngo %q\nts %q", i, kind, goRecords, tsRecords)
 		}
@@ -897,6 +912,7 @@ func TestLiveProposeRepairBrief(t *testing.T) {
 	if !reached["valid -> brief"] {
 		t.Error("never produced a brief")
 	}
+	requireReached(t, "internal/repair/live.go", recordedOutputs(t))
 }
 
 // repairStreams are compressed inputs: every zlib level and strategy, as
@@ -1273,6 +1289,7 @@ func TestLiveRepairWorktree(t *testing.T) {
 			if g.tree != w.tree {
 				t.Fatalf("trees:\n--- go\n%s\n--- node\n%s", g.tree, w.tree)
 			}
+			recordOutput(t, w.out+"\n"+w.cleanup+"\n"+w.patch)
 			kindsSeen[tc.kind]++
 			if tc.kind == "gitdir-deleted" || tc.kind == "empty-managed-root" || tc.kind == "bad-id" {
 				t.Logf("node: create %.150q cleanup %.300q", w.out, w.cleanup)
@@ -1280,4 +1297,7 @@ func TestLiveRepairWorktree(t *testing.T) {
 		})
 	}
 	t.Logf("cases per kind: %v", kindsSeen)
+	if os.Getenv("FAULTLINE_REPAIR_WT_CASES") == "" {
+		requireReached(t, "internal/repair/worktree.go", recordedOutputs(t))
+	}
 }

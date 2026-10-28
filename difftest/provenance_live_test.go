@@ -453,6 +453,7 @@ func TestLiveProvenanceReceipt(t *testing.T) {
 	var outputs strings.Builder
 	for _, w := range warmProvenanceBases(t, c, names, dirs, provGoodCI(sha1)) {
 		outputs.WriteString(w + "\n")
+		recordOutput(t, w)
 	}
 	syncCheck("after the bases")
 
@@ -473,6 +474,7 @@ func TestLiveProvenanceReceipt(t *testing.T) {
 		for i, ic := range cases {
 			w := want.Items()[i].Str()
 			outputs.WriteString(w + "\n")
+			recordOutput(t, w)
 			identity, err := goIdentity(ic)
 			if got := threwOr(identity, err); got != w {
 				t.Fatalf("base %s identity %d %s:\ngot  %s\nwant %s", name, i, jsjson.Stringify(ic.value()), got, w)
@@ -494,6 +496,7 @@ func TestLiveProvenanceReceipt(t *testing.T) {
 			cargs := provCreateArgs(dirs[name], ci, createdAt, nil)
 			want := oracleText(t, c, "createGithubProvenanceReceiptFromView", cargs)
 			outputs.WriteString(want + "\n")
+			recordOutput(t, want)
 			if got := provCreate(dirs[name], ci, createdAt); got != want {
 				t.Fatalf("base %s receipt %d (%s):\ngot  %s\nwant %s", name, i, cargs, got, want)
 			}
@@ -541,6 +544,7 @@ func TestLiveProvenanceReceipt(t *testing.T) {
 		args := jsjson.Stringify(jsjson.MakeObject(o))
 		want := oracleText(t, c, "createGithubProvenanceReceiptFromView", args)
 		outputs.WriteString(want + "\n")
+		recordOutput(t, want)
 		receipt, err := provenance.CreateFromView(view, ci, createdAt)
 		if got := threwOr(receipt, err); got != want {
 			t.Fatalf("edited view %d:\ngot  %s\nwant %s", i, got, want)
@@ -563,6 +567,7 @@ func TestLiveProvenanceReceipt(t *testing.T) {
 		"GitHub provenance requires a verified native-Docker proof bundle.", "GitHub provenance requires at least one recorded execution.",
 		"expected a digest-pinned container image", "expected sha256:<64 lowercase hex characters>",
 		"Refusing to render an invalid Git proof bundle: ", `"receiptDigest":"sha256:`, `"runAttempt":1,`)
+	requireReachedGroup(t, "internal/provenance/provenance.go")
 	liveSummary(t, "provenance receipt: %d identities (%d refused), %d receipts, %d edited views", identities, refused, receipts, edited)
 }
 
@@ -857,6 +862,7 @@ func TestLiveProvenanceBinding(t *testing.T) {
 		args := jsjson.Stringify(jsjson.MustObject("bundle", vstr(bundle), "receipt", receipt, "trust", trust))
 		want := oracleText(t, c, "verifyGithubProvenanceBinding", args)
 		outputs.WriteString(want + "\n")
+		recordOutput(t, want)
 		var got string
 		if err := jsexc.Try(func() { got = jsjson.Stringify(provenance.VerifyBinding(bundle, receipt, trust)) }); err != nil {
 			got = "THREW:" + jsexc.Message(err)
@@ -877,6 +883,7 @@ func TestLiveProvenanceBinding(t *testing.T) {
 		"receipt workflow reference is not the configured signer workflow at the configured source ref",
 		"receipt source commit does not match the configured source digest",
 		"GitHub provenance binding verification failed safely: ", `{"valid":true,`, `"proofRootDigest":null,"receipt":`)
+	requireReachedGroup(t, "internal/provenance/provenance.go")
 	liveSummary(t, "provenance binding: 600 cases, %d valid", valid)
 }
 
@@ -1060,6 +1067,7 @@ func TestLiveGhAttestation(t *testing.T) {
 		want := oracleText(t, c, op, args)
 		wantLog := readLog()
 		outputs.WriteString(want + "\n")
+		recordOutput(t, want)
 		var got string
 		withPath(path, func() { got = jsjson.Stringify(goCall()) })
 		gotLog := readLog()
@@ -1086,6 +1094,7 @@ func TestLiveGhAttestation(t *testing.T) {
 		args := jsjson.Stringify(jsjson.MustObject("path", vstr(f)))
 		want := oracleText(t, c, "readGithubArtifactAttestationTrust", args)
 		outputs.WriteString(want + "\n")
+		recordOutput(t, want)
 		trust, err := provenance.ReadTrust(f)
 		got := "THREW:"
 		if err != nil {
@@ -1109,6 +1118,7 @@ func TestLiveGhAttestation(t *testing.T) {
 		"--deny-self-hosted-runners", "GitHub attestation trust configuration must be a regular non-symlink file",
 		"The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received ",
 		"GitHub attestation trust configuration exceeds the 1000000-byte limit", "GitHub attestation trust configuration is not valid JSON: ")
+	requireReachedGroup(t, "internal/provenance/provenance.go")
 	liveSummary(t, "gh attestation: 40 runs, %d passed", passed)
 }
 
@@ -1249,6 +1259,7 @@ func TestLiveProvenanceWrite(t *testing.T) {
 			o.Set("root", vstr(abs(ts, root)))
 			want := strings.ReplaceAll(oracleText(t, c, "writeGithubProvenanceReceipt", jsjson.Stringify(jsjson.MakeObject(o))), ts, gs)
 			outputs.WriteString(want + "\n")
+			recordOutput(t, want)
 			if useCwd {
 				if err := os.Chdir(gs); err != nil {
 					t.Fatal(err)
@@ -1277,5 +1288,6 @@ func TestLiveProvenanceWrite(t *testing.T) {
 		"GitHub provenance output must be a file beneath ", "Provenance output cannot traverse a symbolic link or non-directory: ",
 		"GitHub provenance receipt already exists and will not be replaced: ", "EACCES: permission denied, open ",
 		"expected sha256:<64 lowercase hex characters>")
+	requireReachedGroup(t, "internal/provenance/provenance.go")
 	liveSummary(t, "provenance write: 120 layouts, %d written", written)
 }

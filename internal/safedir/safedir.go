@@ -101,10 +101,10 @@ func RelativeTrustedSystemPath(from, to string) (string, error) {
 // src/prevention-proof.ts:158, src/repair-brief-store.ts:108,
 // src/authenticated-witness-approval.ts:146, src/github-provenance.ts:266):
 // each existing component is checked with lstat, never followed; a missing one
-// is created with mode 0700 after its parent was checked. rootText and
-// traverseText are the callers' exception message prefixes (including the
+// is created with mode 0700 after its parent was checked. rootMessage and
+// traverseMessage are the callers' exception message prefixes (including the
 // trailing ": "); every thrown value is an error and panics through jsexc.
-func EnsureRealDirectoryTree(directory, rootText, traverseText string) {
+func EnsureRealDirectoryTree(directory, rootMessage, traverseMessage string) {
 	absolute := nodefs.Resolve(directory)
 	root := nodefs.ParseRoot(absolute)
 	var parts []string
@@ -115,7 +115,7 @@ func EnsureRealDirectoryTree(directory, rootText, traverseText string) {
 	if nodefs.Exists(current) {
 		safe, ok := safeSegmentThrow(current)
 		if !ok {
-			jsexc.Throw(errors.New(jsexc.Concat(rootText, current)))
+			jsexc.Throw(errors.New(jsexc.Concat(rootMessage, current)))
 		}
 		current = safe
 	}
@@ -128,7 +128,7 @@ func EnsureRealDirectoryTree(directory, rootText, traverseText string) {
 		}
 		safe, ok := safeSegmentThrow(current)
 		if !ok {
-			jsexc.Throw(errors.New(jsexc.Concat(traverseText, current)))
+			jsexc.Throw(errors.New(jsexc.Concat(traverseMessage, current)))
 		}
 		current = safe
 	}
