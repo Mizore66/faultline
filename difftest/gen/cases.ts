@@ -550,8 +550,9 @@ export function normalizeWriter(text: string, roots: { ws: string; tmp: string; 
   // A sidecar receipt stage (.<sha256(receipt path)[0:24]>.<pid>.tmp): its
   // key hashes the absolute receipt path (codex-sidecar.ts writeJsonAtomic).
   out = out.replace(/\.([0-9a-f]{24})\.([0-9]+)\.tmp/g, ".<STAGEKEY>.<pid>.tmp");
-  // sidecar status's lock age (codex-sidecar.ts sidecarLockHealth).
-  out = out.replace(/"ageMilliseconds": [0-9]+/g, '"ageMilliseconds": "<LOCKAGE>"');
+  // sidecar status's ACTIVE lock age (codex-sidecar.ts sidecarLockHealth). A
+  // STALE age is seeded by set-mtime and stays compared.
+  out = out.replace(/("state": "ACTIVE",\s*"ageMilliseconds": )[0-9]+/g, '$1"<LOCKAGE>"');
   return maskGitOutput(out, true);
 }
 

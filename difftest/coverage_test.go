@@ -230,16 +230,7 @@ var unreachableLiterals = map[string]string{
 	// CodexSidecarLedgerPath are shared with `fl codex sidecar`, not ported
 	// yet; `fl init` passes only `--cli <resolved path>` and the fixed
 	// session id.
-	"must not be empty.": "assertSidecarCommandText runs on --command/--command-windows only, which `fl init` never passes (fl codex sidecar config/install)",
-	"Provide exactly one of --cli <built-cli.js> or --command <stable-hook-command>.": "fl init calls sidecarCliCommand with exactly [--cli, path] (fl codex sidecar config/install)",
-	"--command-windows": "the --command-windows label of assertSidecarCommandText, reached only through fl codex sidecar config/install",
-	"--command-windows is only valid with an explicit --command; --cli generates both platform commands safely.": "fl init never passes --command-windows to sidecarCliCommand (fl codex sidecar config/install)",
-	"faultline-install-check":                                       "the fixed session id HookTarget passes to codexSidecarLedgerPath: an argument, not output",
-	"FaultLine observes this Codex session":                         "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
-	"FaultLine records an observed Codex turn":                      "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
-	"FaultLine records tool-use attribution (digests only)":         "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
-	"FaultLine records tool-use completion (digests only)":          "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
-	"FaultLine captures a clean observed checkpoint when available": "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"faultline-install-check":          "the fixed session id HookTarget passes to codexSidecarLedgerPath: an argument, not output",
 	"is unavailable:":                  "race only: assertSafeDirectory lstats a directory realpathSync or safeDirectoryExists has just accepted",
 	"FaultLine Git metadata directory": "race only: the label of assertSafeDirectory on the realpath of git's common directory, which exists when git reports it",
 	"Git did not report a common metadata directory for this worktree.": "git rev-parse --git-common-dir prints a path or fails",
