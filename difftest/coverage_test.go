@@ -1077,7 +1077,7 @@ var gatedDirs = []string{
 	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
 	"internal/safegit", "internal/hostcmd", "internal/runtimeimage", "internal/doctor", "internal/allowlist", "internal/turnsnap",
 	"internal/incident",
-	// Slice 4b Task 6 (planned for Task 11): every file is live-gated.
+	// Slice 4b: every file is live-gated (TestLiveTurnStates, TestLiveInvestigateTurns).
 	"internal/turninv",
 }
 

@@ -22,6 +22,9 @@ import (
 // the case names that matches it is the one faulted, on both sides.
 type writerFault struct {
 	caseID, label, glob, call, errno string
+	// fakeGit names a difftest/testdata/fakegit directory put first on PATH
+	// for both sides (and the fault-free discovery run).
+	fakeGit string
 	// everyCall fails every call of the group on any path instead of the
 	// first one on the discovered path (see writerFaultPaths).
 	everyCall bool
@@ -54,28 +57,29 @@ const discoveryCalls = "open,openat,openat2,rename,renameat,renameat2,link,linka
 var writerFaultPaths = []struct {
 	caseID, label, glob string
 	calls               []string
+	fakeGit             string
 }{
-	{"propose-input", "witness-record", "ws/.faultline/witnesses/proposals/*.json", []string{"open", "write", "close"}},
-	{"policy-freeze", "policy", "ws/.faultline/witnesses/standing-policies/*.json", []string{"open", "write", "close"}},
-	{"ratify", "ratification", "ws/.faultline/witnesses/ratifications/*.json", []string{"open", "write", "close"}},
-	{"freeze", "binding", "ws/.faultline/incidents/bindings/*.json", []string{"open", "write", "close"}},
-	{"ledger-bind", "ledger-staged", "ws/.bound-new.json.<PID>.*.tmp", []string{"open", "write", "close", "rename"}},
-	{"minimize-git", "minimization-temp", "ws/.faultline/minimizations/.*.faultline-git-minimization.tmp", []string{"open", "write", "close", "link", "unlink"}},
-	{"investigate-two-states", "stage-manifest", "ws/.faultline/git-proof-bundles/.*.staging-*/manifest.json", []string{"open", "write", "close"}},
-	{"investigate-two-states", "stage-root", "ws/.faultline/git-proof-bundles/.*.staging-*/ROOT.sha256", []string{"open", "write", "close"}},
-	{"investigate-two-states", "stage-rename", "ws/.faultline/git-proof-bundles/.*.staging-*", []string{"rename"}},
-	{"investigate-two-states", "overlay-staged", "tmp/*/worktrees/*/.faultline-overlay-*", []string{"open", "write", "close", "rename"}},
-	{"commit-proof-preview", "preview-html", "ws/docs/*.html", []string{"open", "write", "close"}},
+	{"propose-input", "witness-record", "ws/.faultline/witnesses/proposals/*.json", []string{"open", "write", "close"}, ""},
+	{"policy-freeze", "policy", "ws/.faultline/witnesses/standing-policies/*.json", []string{"open", "write", "close"}, ""},
+	{"ratify", "ratification", "ws/.faultline/witnesses/ratifications/*.json", []string{"open", "write", "close"}, ""},
+	{"freeze", "binding", "ws/.faultline/incidents/bindings/*.json", []string{"open", "write", "close"}, ""},
+	{"ledger-bind", "ledger-staged", "ws/.bound-new.json.<PID>.*.tmp", []string{"open", "write", "close", "rename"}, ""},
+	{"minimize-git", "minimization-temp", "ws/.faultline/minimizations/.*.faultline-git-minimization.tmp", []string{"open", "write", "close", "link", "unlink"}, ""},
+	{"investigate-two-states", "stage-manifest", "ws/.faultline/git-proof-bundles/.*.staging-*/manifest.json", []string{"open", "write", "close"}, ""},
+	{"investigate-two-states", "stage-root", "ws/.faultline/git-proof-bundles/.*.staging-*/ROOT.sha256", []string{"open", "write", "close"}, ""},
+	{"investigate-two-states", "stage-rename", "ws/.faultline/git-proof-bundles/.*.staging-*", []string{"rename"}, ""},
+	{"investigate-two-states", "overlay-staged", "tmp/*/worktrees/*/.faultline-overlay-*", []string{"open", "write", "close", "rename"}, ""},
+	{"commit-proof-preview", "preview-html", "ws/docs/*.html", []string{"open", "write", "close"}, ""},
 	// Slice 3a (spec 3.3). The project config: rewritten in place under a
 	// recursive mkdir of .faultline (src/config.ts:64).
-	{"runtime-resolve-node", "config", "ws/.faultline/config.json", []string{"open", "write", "close"}},
-	{"runtime-resolve-node", "config-dir", "ws/.faultline", []string{"mkdir"}},
+	{"runtime-resolve-node", "config", "ws/.faultline/config.json", []string{"open", "write", "close"}, ""},
+	{"runtime-resolve-node", "config-dir", "ws/.faultline", []string{"mkdir"}, ""},
 	// The runtime mapping and the recursive mkdir of its parent, whose first
 	// mkdir of maps/2026 fails ENOENT and climbs to maps
 	// (src/runtime-mapping-file.ts:61).
-	{"runtime-mapping-nested-output", "mapping", "ws/maps/2026/mapping.json", []string{"open", "write", "close"}},
-	{"runtime-mapping-nested-output", "mapping-parent", "ws/maps/2026", []string{"mkdir"}},
-	{"runtime-mapping-nested-output", "mapping-grandparent", "ws/maps", []string{"mkdir"}},
+	{"runtime-mapping-nested-output", "mapping", "ws/maps/2026/mapping.json", []string{"open", "write", "close"}, ""},
+	{"runtime-mapping-nested-output", "mapping-parent", "ws/maps/2026", []string{"mkdir"}, ""},
+	{"runtime-mapping-nested-output", "mapping-grandparent", "ws/maps", []string{"mkdir"}, ""},
 	// fl init --yes: .faultlineignore (wx, src/project-init.ts:124), then the
 	// turn-snapshot pre-warm: the object store and its alternates entry
 	// (src/turn-snapshot.ts:207), the temporary index git writes by renaming
@@ -85,70 +89,93 @@ var writerFaultPaths = []struct {
 	// has no SEN_rename case), while arm64 has only renameat, which -P
 	// matches on either path (CI round 1: on x86_64 the index path made no
 	// call to fail).
-	{"init-yes-dirty", "ignore-file", "ws/.faultlineignore", []string{"open", "write", "close"}},
-	{"init-yes-dirty", "snapshot-objects-info", "ws/.git/faultline/objects/info", []string{"mkdir"}},
-	{"init-yes-dirty", "snapshot-objects-pack", "ws/.git/faultline/objects/pack", []string{"mkdir"}},
-	{"init-yes-dirty", "alternates", "ws/.git/objects/info/alternates", []string{"open", "write", "close"}},
-	{"init-yes-dirty", "snapshot-index", "tmp/faultline-turn-tree-*.index", []string{"unlink"}},
-	{"init-yes-dirty", "snapshot-index-lock", "tmp/faultline-turn-tree-*.index.lock", []string{"rename"}},
-	{"init-yes-dirty", "snapshot-cache", "ws/.git/faultline/turn-snapshot-cache.json", []string{"open", "write", "close"}},
+	{"init-yes-dirty", "ignore-file", "ws/.faultlineignore", []string{"open", "write", "close"}, ""},
+	{"init-yes-dirty", "snapshot-objects-info", "ws/.git/faultline/objects/info", []string{"mkdir"}, ""},
+	{"init-yes-dirty", "snapshot-objects-pack", "ws/.git/faultline/objects/pack", []string{"mkdir"}, ""},
+	{"init-yes-dirty", "alternates", "ws/.git/objects/info/alternates", []string{"open", "write", "close"}, ""},
+	{"init-yes-dirty", "snapshot-index", "tmp/faultline-turn-tree-*.index", []string{"unlink"}, ""},
+	{"init-yes-dirty", "snapshot-index-lock", "tmp/faultline-turn-tree-*.index.lock", []string{"rename"}, ""},
+	{"init-yes-dirty", "snapshot-cache", "ws/.git/faultline/turn-snapshot-cache.json", []string{"open", "write", "close"}, ""},
 	// The standing policy (0600 wx) and its 0700 directories
 	// (src/standing-approval-policy.ts:154).
-	{"init-standing", "standing-policy", "ws/.faultline/witnesses/standing-policies/*.json", []string{"open", "write", "close"}},
-	{"init-standing", "standing-policy-dir", "ws/.faultline/witnesses/standing-policies", []string{"mkdir"}},
-	{"init-standing", "witness-store-dir", "ws/.faultline/witnesses", []string{"mkdir"}},
+	{"init-standing", "standing-policy", "ws/.faultline/witnesses/standing-policies/*.json", []string{"open", "write", "close"}, ""},
+	{"init-standing", "standing-policy-dir", "ws/.faultline/witnesses/standing-policies", []string{"mkdir"}, ""},
+	{"init-standing", "witness-store-dir", "ws/.faultline/witnesses", []string{"mkdir"}, ""},
 	// The project hook document (0600 wx) under a 0700 .codex
 	// (src/cli-app.ts:1743).
-	{"init-cli", "hooks", "ws/.codex/hooks.json", []string{"open", "write", "close"}},
-	{"init-cli", "codex-dir", "ws/.codex", []string{"mkdir"}},
+	{"init-cli", "hooks", "ws/.codex/hooks.json", []string{"open", "write", "close"}, ""},
+	{"init-cli", "codex-dir", "ws/.codex", []string{"mkdir"}, ""},
 	// doctor --security: the fixture's removal in the finally
 	// (src/doctor.ts:743), and the malicious hook file, its chmod and its
 	// unlink inside that removal.
-	{"doctor-security", "fixture", "tmp/faultline-doctor-security-*", []string{"unlink"}},
-	{"doctor-security", "hook", "tmp/faultline-doctor-security-*/malicious-hooks/pre-commit", []string{"open", "write", "close", "chmod", "unlink"}},
+	{"doctor-security", "fixture", "tmp/faultline-doctor-security-*", []string{"unlink"}, ""},
+	{"doctor-security", "hook", "tmp/faultline-doctor-security-*/malicious-hooks/pre-commit", []string{"open", "write", "close", "chmod", "unlink"}, ""},
 	// Slice 3b (spec 3.3). No 3b writer unlinks in a fault-free run (the
 	// stage removals run only after a failure), so no unlink group.
 	// fl incident start: the witness proposal (0600 wx under the 0700 store
 	// a recursive mkdir makes, src/witness-lock.ts:254), then the draft
 	// (0600 wx) under directories made one segment at a time
 	// (src/incident-store.ts:37).
-	{"incident-start-command", "draft", "ws/repo/.faultline/incidents/drafts/*.json", []string{"open", "write", "close"}},
-	{"incident-start-command", "drafts-dir", "ws/repo/.faultline/incidents/drafts", []string{"mkdir"}},
-	{"incident-start-command", "incidents-dir", "ws/repo/.faultline/incidents", []string{"mkdir"}},
-	{"incident-start-command", "proposal", "ws/repo/.faultline/witnesses/proposals/*.json", []string{"open", "write", "close"}},
-	{"incident-start-command", "witness-store-dir", "ws/repo/.faultline/witnesses", []string{"mkdir"}},
-	{"incident-start-command", "repo-faultline-dir", "ws/repo/.faultline", []string{"mkdir"}},
+	{"incident-start-command", "draft", "ws/repo/.faultline/incidents/drafts/*.json", []string{"open", "write", "close"}, ""},
+	{"incident-start-command", "drafts-dir", "ws/repo/.faultline/incidents/drafts", []string{"mkdir"}, ""},
+	{"incident-start-command", "incidents-dir", "ws/repo/.faultline/incidents", []string{"mkdir"}, ""},
+	{"incident-start-command", "proposal", "ws/repo/.faultline/witnesses/proposals/*.json", []string{"open", "write", "close"}, ""},
+	{"incident-start-command", "witness-store-dir", "ws/repo/.faultline/witnesses", []string{"mkdir"}, ""},
+	{"incident-start-command", "repo-faultline-dir", "ws/repo/.faultline", []string{"mkdir"}, ""},
 	// fl incident continue: the session binding (0600, overwritten,
 	// src/incident-binding.ts:105). With none yet, its first open is the
 	// write; an existing one is read first, so only its write is faulted.
-	{"incident-continue-unapproved", "binding", "ws/repo/.faultline/incidents/bindings/*.json", []string{"open", "write", "close"}},
-	{"incident-continue-unapproved", "bindings-dir", "ws/repo/.faultline/incidents/bindings", []string{"mkdir"}},
-	{"incident-continue-inherit-digest", "binding-overwrite", "ws/repo/.faultline/incidents/bindings/*.json", []string{"write"}},
+	{"incident-continue-unapproved", "binding", "ws/repo/.faultline/incidents/bindings/*.json", []string{"open", "write", "close"}, ""},
+	{"incident-continue-unapproved", "bindings-dir", "ws/repo/.faultline/incidents/bindings", []string{"mkdir"}, ""},
+	{"incident-continue-inherit-digest", "binding-overwrite", "ws/repo/.faultline/incidents/bindings/*.json", []string{"write"}, ""},
 	// The continuation's bundle: its root directory, the stage (mkdir and
 	// the rename into place, faulted through the stage, its source) and a
 	// staged file (src/git-proof-bundle.ts:1060).
-	{"incident-continue-inherit-digest", "bundles-dir", "ws/repo/.faultline/git-proof-bundles", []string{"mkdir"}},
-	{"incident-continue-inherit-digest", "bundle-stage", "ws/repo/.faultline/git-proof-bundles/.*.staging-*", []string{"mkdir", "rename"}},
-	{"incident-continue-inherit-digest", "bundle-stage-manifest", "ws/repo/.faultline/git-proof-bundles/.*.staging-*/manifest.json", []string{"open", "write", "close"}},
+	{"incident-continue-inherit-digest", "bundles-dir", "ws/repo/.faultline/git-proof-bundles", []string{"mkdir"}, ""},
+	{"incident-continue-inherit-digest", "bundle-stage", "ws/repo/.faultline/git-proof-bundles/.*.staging-*", []string{"mkdir", "rename"}, ""},
+	{"incident-continue-inherit-digest", "bundle-stage-manifest", "ws/repo/.faultline/git-proof-bundles/.*.staging-*/manifest.json", []string{"open", "write", "close"}, ""},
 	// fl prevention write --from-bundle (src/prevention-proof.ts:470): the
 	// proof root's directories, the 0700 stage, its 0600 wx files with
 	// fsync (the first and the last), the stage's own fsync (open and fsync
 	// errors swallowed), the rename and the parent directory's fsync
 	// (swallowed); then AGENTS.md, created under a recursive mkdir of the
 	// repository, its errors swallowed (src/cli-app.ts:2539).
-	{"prevention-write-bundle-ok", "proof-root-parent", "ws/.faultline", []string{"mkdir"}},
-	{"prevention-write-bundle-ok", "proof-root", "ws/.faultline/prevention-proofs", []string{"mkdir", "open", "fsync"}},
-	{"prevention-write-bundle-ok", "stage", "ws/.faultline/prevention-proofs/.prevention-*.tmp", []string{"mkdir", "open", "fsync", "rename"}},
-	{"prevention-write-bundle-ok", "stage-readme", "ws/.faultline/prevention-proofs/.prevention-*.tmp/README.md", []string{"open", "write", "fsync", "close"}},
-	{"prevention-write-bundle-ok", "stage-repaired-runs", "ws/.faultline/prevention-proofs/.prevention-*.tmp/repaired-runs.json", []string{"open", "write", "fsync", "close"}},
-	{"prevention-write-bundle-ok", "agents", "ws/AGENTS.md", []string{"open", "write", "close"}},
-	{"prevention-write-bundle-ok", "agents-dir", "ws", []string{"mkdir"}},
+	{"prevention-write-bundle-ok", "proof-root-parent", "ws/.faultline", []string{"mkdir"}, ""},
+	{"prevention-write-bundle-ok", "proof-root", "ws/.faultline/prevention-proofs", []string{"mkdir", "open", "fsync"}, ""},
+	{"prevention-write-bundle-ok", "stage", "ws/.faultline/prevention-proofs/.prevention-*.tmp", []string{"mkdir", "open", "fsync", "rename"}, ""},
+	{"prevention-write-bundle-ok", "stage-readme", "ws/.faultline/prevention-proofs/.prevention-*.tmp/README.md", []string{"open", "write", "fsync", "close"}, ""},
+	{"prevention-write-bundle-ok", "stage-repaired-runs", "ws/.faultline/prevention-proofs/.prevention-*.tmp/repaired-runs.json", []string{"open", "write", "fsync", "close"}, ""},
+	{"prevention-write-bundle-ok", "agents", "ws/AGENTS.md", []string{"open", "write", "close"}, ""},
+	{"prevention-write-bundle-ok", "agents-dir", "ws", []string{"mkdir"}, ""},
 	// fl prevention write --input, whose write errors throw instead of
 	// becoming PREVENTION_EXPORT_FAILED; and an existing AGENTS.md, read
 	// (the first open) before it is rewritten.
-	{"prevention-write-input-summary", "stage", "ws/.faultline/prevention-proofs/.s.*.tmp", []string{"mkdir", "rename"}},
-	{"prevention-write-input-summary", "stage-prevention", "ws/.faultline/prevention-proofs/.s.*.tmp/prevention.json", []string{"open", "write", "fsync", "close"}},
-	{"prevention-write-input-agents-append", "agents-existing", "ws/AGENTS.md", []string{"open", "write"}},
+	{"prevention-write-input-summary", "stage", "ws/.faultline/prevention-proofs/.s.*.tmp", []string{"mkdir", "rename"}, ""},
+	{"prevention-write-input-summary", "stage-prevention", "ws/.faultline/prevention-proofs/.s.*.tmp/prevention.json", []string{"open", "write", "fsync", "close"}, ""},
+	{"prevention-write-input-agents-append", "agents-existing", "ws/AGENTS.md", []string{"open", "write"}, ""},
+	// Slice 4b (spec 2.6): fl investigate turns and its --minimize bridge.
+	// The bundle is written under .faultline/turn-proof-bundles (the stage's
+	// mkdir and the rename into place faulted through the stage, its source),
+	// after the verifier's temporary pack repository; the session binding
+	// freeze left is rewritten; the minimization goes through its temp file.
+	{"turns-proof", "turn-root", "ws/.faultline/turn-proof-bundles", []string{"mkdir"}, ""},
+	{"turns-proof", "turn-stage", "ws/.faultline/turn-proof-bundles/.turns-*.staging-*", []string{"mkdir", "rename"}, ""},
+	{"turns-proof", "turn-stage-manifest", "ws/.faultline/turn-proof-bundles/.turns-*.staging-*/manifest.json", []string{"open", "write", "close"}, ""},
+	{"turns-proof", "turn-stage-pack", "ws/.faultline/turn-proof-bundles/.turns-*.staging-*/source/trees.pack", []string{"open", "write", "close"}, ""},
+	{"turns-proof", "turn-stage-source-dir", "ws/.faultline/turn-proof-bundles/.turns-*.staging-*/source", []string{"mkdir"}, ""},
+	{"turns-proof", "turn-stage-root", "ws/.faultline/turn-proof-bundles/.turns-*.staging-*/ROOT.sha256", []string{"open", "write", "close"}, ""},
+	// Dropped, not faked: the verifier's temporary pack repository
+	// (tmp/faultline-turn-proof-pack-*, mkdir). TS's seeded mkdtemp retries a
+	// failed mkdir with the real one (difftest/gen/seed.mjs), so a first-call
+	// fault leaves TS exit 0 while Go refuses.
+	// Fires only on the index-pack fallback, which the fail-unpack fake git forces.
+	{"turns-proof", "turn-pack-index-file", "tmp/faultline-turn-proof-pack-*/objects/pack/turn-trees.pack", []string{"open", "write"}, "fail-unpack"},
+	// The binding freeze made is read first, and a failed close of that read
+	// aborts Node with its native assertion (a stack trace Go cannot
+	// reproduce), so the close group is dropped like the seeded mkdtemp's.
+	{"turns-proof", "turn-binding", "ws/repo/.faultline/incidents/bindings/*.json", []string{"open", "write"}, ""},
+	{"turns-minimize", "turn-minimization-temp", "ws/.faultline/minimizations/.*.faultline-git-minimization.tmp", []string{"open", "write", "close", "link", "unlink"}, ""},
+	{"turns-minimize", "turn-minimization-dir", "ws/.faultline/minimizations", []string{"mkdir"}, ""},
 }
 
 // faultFirstInvocation are multi-invocation writer cases whose first
@@ -174,7 +201,7 @@ func writerFaultMatrix() []writerFault {
 	for _, p := range writerFaultPaths {
 		for _, call := range p.calls {
 			for _, errno := range errnos {
-				out = append(out, writerFault{caseID: p.caseID, label: p.label, glob: p.glob, call: call, errno: errno})
+				out = append(out, writerFault{caseID: p.caseID, label: p.label, glob: p.glob, call: call, errno: errno, fakeGit: p.fakeGit})
 			}
 		}
 	}
@@ -224,10 +251,10 @@ func TestLiveWriterFaults(t *testing.T) {
 				t.Fatalf("writer template %s missing or not a single invocation", f.caseID)
 			}
 			tpl.Env = append(tpl.Env, [2]string{"GOMAXPROCS", "1"})
-			rel, ok := discovered[f.caseID+"|"+f.glob]
+			rel, ok := discovered[f.caseID+"|"+f.glob+"|"+f.fakeGit]
 			if !ok {
-				rel = discoverFaultPath(t, repo, tpl, f.glob)
-				discovered[f.caseID+"|"+f.glob] = rel
+				rel = discoverFaultPath(t, repo, tpl, f.glob, f.fakeGit)
+				discovered[f.caseID+"|"+f.glob+"|"+f.fakeGit] = rel
 			}
 			ts := runTSWithFault(t, repo, tpl, f, rel)
 			goRes := runGoWithFault(t, repo, tpl, f, rel)
@@ -314,7 +341,7 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 				}
 			}
 			script += " -e trace=" + calls + " -e inject=" + calls + ":error=" + f.errno + ":when=1" + when + " -- \"$@\""
-			return append([]string{"sh", "-c", script, "sh"}, append(command, args...)...)
+			return withFakeGit(repo, f.fakeGit, append([]string{"sh", "-c", script, "sh"}, append(command, args...)...))
 		},
 	}
 	res := runWriterCaseWith(t, repo, tpl, run)[0]
@@ -328,7 +355,7 @@ var tracedPath = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 // discoverFaultPath runs the case under TS without a fault, tracing file
 // syscalls, and returns the first path (relative to the case root) matching
 // glob, with the process id in it written <PID>.
-func discoverFaultPath(t *testing.T, repo string, tpl writerTemplate, glob string) string {
+func discoverFaultPath(t *testing.T, repo string, tpl writerTemplate, glob, fakeGit string) string {
 	t.Helper()
 	trace := filepath.Join(t.TempDir(), "trace")
 	var found string
@@ -336,7 +363,8 @@ func discoverFaultPath(t *testing.T, repo string, tpl writerTemplate, glob strin
 	run := writerRun{
 		noVerify: true,
 		command: func(_ writerRoots, _ int, args []string) []string {
-			return append([]string{"strace", "-f", "-qq", "-s", "4096", "-o", trace, "-e", "trace=" + discoveryCalls}, append(tsCommand(repo), args...)...)
+			traced := append([]string{"strace", "-f", "-qq", "-s", "4096", "-o", trace, "-e", "trace=" + discoveryCalls}, append(tsCommand(repo), args...)...)
+			return withFakeGit(repo, fakeGit, traced)
 		},
 		mask: func(t *testing.T, r writerRoots, _ int, stdout, stderr string) (string, string) {
 			file, err := os.Open(trace)
@@ -386,4 +414,15 @@ func discoverFaultPath(t *testing.T, repo string, tpl writerTemplate, glob strin
 	}
 	t.Logf("%s: faulting %s", tpl.ID, found)
 	return found
+}
+
+// withFakeGit runs command with difftest/testdata/fakegit/<fake> first on
+// PATH (the fake git fails one subcommand and runs the real git otherwise),
+// as a case template's fakeGit does; with no fake it is command itself.
+func withFakeGit(repo, fake string, command []string) []string {
+	if fake == "" {
+		return command
+	}
+	dir := filepath.Join(repo, "difftest", "testdata", "fakegit", fake)
+	return append([]string{"sh", "-c", `PATH='` + dir + `':"$PATH"; export PATH; exec "$@"`, "sh"}, command...)
 }

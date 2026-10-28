@@ -99,8 +99,13 @@ jobs:
         # porcelain also catches untracked files (a new base's golden). The
         # writer scenarios and goldens come from this pinned Node under the
         # seed preload (difftest/gen/seed.mjs); the corpus goldens from
-        # redactText on every benchmarks/secret-scanner-corpus case.
+        # redactText on every benchmarks/secret-scanner-corpus case. Slice 4b
+        # regenerates the two turn bases first (gen-bases.ts rewrites their
+        # trees and packs, deterministic by construction), so a drift in the
+        # turn bases fails this job too (spec 4.1); the Git bases stay
+        # committed snapshots.
         run: |
+          pnpm exec tsx difftest/gen/gen-bases.ts turn-two-states turn-non-monotonic
           pnpm exec tsx difftest/gen/gen-goldens.ts
           pnpm exec tsx difftest/gen/scenarios.ts
           pnpm exec tsx difftest/gen/gen-writers.ts
@@ -147,6 +152,11 @@ jobs:
         # only over all 150 cases, so FAULTLINE_TURNSNAP_CASES stays unset.
         # Slice 3b adds TestLiveIncidentSuggest, TestLiveIncidentDraft,
         # TestLivePreventionWrite, TestLiveAgentsMd and
+        # Slice 4b adds TestLiveTurnStates, TestLiveInvestigateTurns,
+        # TestLiveTurnHashCatalog, TestLiveTurnTreesPack, TestLiveTurnSemantics,
+        # TestLiveTurnProofWriter and TestLiveTurnBridge through this
+        # derivation; their CI durations are not measured yet, so the job
+        # timeout is not re-checked against a podman measurement.
         # TestLivePreventionFromArtifacts (about 4.5 minutes together locally,
         # most of it the TS Git proof verifier in PreventionFromArtifacts).
         run: |
@@ -296,7 +306,7 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestEndToEndSlice3bWithoutNode TestWriterSameDirectory'
+          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestEndToEndSlice3bWithoutNode TestEndToEndSlice4bWithoutNode TestWriterSameDirectory'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 75m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
@@ -305,7 +315,12 @@ jobs:
   # Split from difftest-live-replay in slice 3a: the writer fault matrix grew
   # to about 13 minutes of strace cases with the init --yes paths (577 s on
   # CI in slice 3a). Slice 3b's incident and prevention writer paths add
-  # about 5 minutes, well inside the 60 minute go test timeout.
+  # about 5 minutes, well inside the 60 minute go test timeout. Slice 4b adds
+  # the turns-proof and turns-minimize rows (23 path and syscall-group pairs
+  # by 3 errnos = 69 cases, 435 in all; the index-pack file row runs under the
+  # fail-unpack fake git; the verifier's temporary-repository mkdir and the
+  # binding read's close are dropped, see the writerFaultPaths comments); their
+  # CI duration is not measured yet (about 5 s per case locally in podman).
   difftest-live-faults:
     name: difftest live writer faults and real Docker (frozen TS oracle)
     runs-on: ubuntu-24.04
@@ -380,7 +395,9 @@ jobs:
     # /private/var realpath, isInsideDirectory's dev/ino fallback through
     # the darwin StatIdentity) and the incident draft store (about 80 s and
     # 3 s on macOS); the prevention live tests are platform-neutral and stay
-    # in difftest-live.
+    # in difftest-live. Slice 4b adds TestLiveInvestigateTurns (turn
+    # reconstruction, spec 4.1) and, through the two threshold tests, their
+    # turn rows.
     name: stack thresholds vs Node (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
@@ -405,7 +422,7 @@ jobs:
           set -o pipefail
           status=0
           unset FAULTLINE_TURNSNAP_CASES
-          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft'
+          tests='TestLiveInvestigateTurns TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 70m | tee "$RUNNER_TEMP/live.log" || status=$?
           if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode|TestLiveProjectContext/sparse256MiB)$'; else allowed='^$'; fi
