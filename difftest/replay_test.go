@@ -70,6 +70,12 @@ func TestMain(m *testing.M) {
 		os.Setenv("GOCOVERDIR", coverDir)
 		buildArgs = append(buildArgs, "-cover", "-coverpkg="+coverPkgs)
 	}
+	if window := os.Getenv("FAULTLINE_COVER_WINDOW"); window != "" && os.Getenv("FAULTLINE_FL_BINARY") != "" {
+		// A bounded coverage window: a prebuilt -cover fl (cross-built on the
+		// host for a Go-less container) writes its counters into window, and
+		// TestCoverageWindows judges the union of several windows.
+		os.Setenv("GOCOVERDIR", window)
+	}
 	if prebuilt := os.Getenv("FAULTLINE_FL_BINARY"); prebuilt != "" && coverDir == "" {
 		// A container with no Go toolchain (localhost/r73img) runs a
 		// test binary and an fl cross-built with the same -tags
