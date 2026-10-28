@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -16,18 +17,11 @@ func TestCodexRouterFallsThrough(t *testing.T) {
 }
 
 // TestCodexRouterOrder pins src/cli-app.ts:2994-3028's order through the
-// stubs each branch reaches (the snapshot branches: TestCodexSnapshotRouter).
+// sidecar usage error (the snapshot branches: TestCodexSnapshotRouter):
+// `fl codex sidecar --dry-run` reaches the sidecar, not the dry run.
 func TestCodexRouterOrder(t *testing.T) {
-	cases := []struct {
-		args []string
-		want string
-	}{
-		{[]string{"codex", "sidecar", "--dry-run"}, "codex sidecar"},
-	}
-	for _, c := range cases {
-		_, stderr, code := run(c.args...)
-		if want := "FaultLine error: not yet ported: " + c.want + "\nNext: pnpm fl help\n"; code != 1 || stderr != want {
-			t.Errorf("%q: %d %q", c.args, code, stderr)
-		}
+	_, stderr, code := run("codex", "sidecar", "--dry-run")
+	if code != 1 || !strings.HasPrefix(stderr, "FaultLine error: "+sidecarUsage+"\n") {
+		t.Errorf("%d %q", code, stderr)
 	}
 }

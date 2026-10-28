@@ -1043,7 +1043,7 @@ func normalizeWriter(text string, roots writerRoots) string {
 	})
 	out = stagedPID.ReplaceAllString(out, ".<pid>.$1.tmp")
 	out = stageKey.ReplaceAllString(out, ".<STAGEKEY>.<pid>.tmp")
-	out = lockAge.ReplaceAllString(out, `"ageMilliseconds": "<LOCKAGE>"`)
+	out = lockAge.ReplaceAllString(out, `${1}"<LOCKAGE>"`)
 	out = maskGitOutput(out, true)
 	if runtime.GOOS == "windows" {
 		for _, m := range masks {
@@ -1064,9 +1064,10 @@ var stagedPID = regexp.MustCompile(`\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{
 // path, its pid is the process's.
 var stageKey = regexp.MustCompile(`\.([0-9a-f]{24})\.([0-9]+)\.tmp`)
 
-// lockAge masks sidecar status's lock.ageMilliseconds (codex-sidecar.ts
-// sidecarLockHealth), which a seed cannot fix.
-var lockAge = regexp.MustCompile(`"ageMilliseconds": [0-9]+`)
+// lockAge masks sidecar status's ACTIVE lock.ageMilliseconds
+// (codex-sidecar.ts sidecarLockHealth), which a seed cannot fix. A STALE age
+// is seeded by set-mtime and stays compared.
+var lockAge = regexp.MustCompile(`("state": "ACTIVE",\s*"ageMilliseconds": )[0-9]+`)
 
 // maskGitOutput replaces git's temporary verifier directories with <GITTMP>
 // and, with maskGit, git's own diagnostics after each gitLabels failure.
