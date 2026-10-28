@@ -629,6 +629,11 @@ func TestLiveSidecarHooks(t *testing.T) {
 			t.Errorf("no generated step reached %q", marker)
 		}
 	}
+	// Any window that runs the interrupted-turn directed sequence must show
+	// its status (the marker loop above only checks full runs).
+	if at := unavailableDirected(random); first <= at && at < n && reached[`"status":"CHECKPOINT_SKIPPED_UNAVAILABLE"`] == 0 {
+		t.Errorf("directed sequence %d did not reach CHECKPOINT_SKIPPED_UNAVAILABLE", at)
+	}
 	if fullRun {
 		for _, f := range sidecarGatedFiles {
 			sidecarRequireReached(t, f, outputs)
@@ -966,8 +971,16 @@ func directedSequences() [][]gen.HookStep {
 		{start, op("x:rebuild", "empty"), start, prompt("t-1", "p1"), stop("t-1"), pre("shell", "call-1")},
 		// The unlink of a stale lock refused (EACCES) in a read-only recordings directory.
 		{start, op("x:ro-lock", ""), prompt("t-1", "p1"), prompt("t-1", "p1")},
+		// CHECKPOINT_SKIPPED_UNAVAILABLE (hook.go "interrupted transaction"):
+		// a completed turn with neither snapshot, checkpoint nor receipt.
+		// Appended last so that every earlier sequence keeps its index.
+		base(op("remove-receipt", "t-1"), op("x:rebuild", "drop-snapshot,drop-checkpoint"), stop("t-1")),
 	}
 }
+
+// unavailableDirected is the index, among the sequences, of the directed
+// sequence that must reach CHECKPOINT_SKIPPED_UNAVAILABLE (the last one).
+func unavailableDirected(random int) int { return random + len(directedSequences()) - 1 }
 
 // maskSidecarPID masks only ".<24 lowercase hex>.<own pid>.tmp".
 func TestMaskSidecarPID(t *testing.T) {
