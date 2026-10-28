@@ -90,19 +90,27 @@ export function inheritedOut(name: string): boolean {
   return name.startsWith("GIT_") || name.startsWith("FAULTLINE_") || name.startsWith("GITHUB_") || ["CI", "OPENAI_API_KEY"].includes(name);
 }
 
-// installFakeCodex copies difftest/testdata/fakecodex/<name>/codex to
+// fakeCodexVariants are the variants of the one fake codex script
+// (difftest/testdata/fakecodex/codex); the Go twin is fakeCodexVariants in
+// difftest/writer_test.go.
+export const fakeCodexVariants = ["edits", "noop", "probe-fail", "probe-empty", "probe-crlf", "exit-nonzero", "killed", "flood", "outside-edits", "symlink-edit"];
+const variantLine = "variant=@VARIANT@\n";
+
+// installFakeCodex copies difftest/testdata/fakecodex/codex to
 // <HOME>/fakecodex/codex (mode 0755) with the case's argv log path written
-// into its `log=` line, as writeRecorders does: fl runs codex with PATH as
+// into its `log=` line and <name> into its `variant=` line, as writeRecorders does: fl runs codex with PATH as
 // its only environment variable. It returns the copy's path. The Go twin is
 // installFakeCodex in difftest/writer_test.go.
 export function installFakeCodex(roots: CaseRoots, name: string): string {
-  const template = readFileSync(join(fakeCodexDir, name, "codex"), "utf8");
+  const template = readFileSync(join(fakeCodexDir, "codex"), "utf8");
   const line = "log=$FAULTLINE_ARGV_LOG\n";
-  if (!template.includes(line) || roots.argvLog.includes("'")) throw new Error(`fake codex ${name} cannot take ${roots.argvLog}`);
+  if (!fakeCodexVariants.includes(name) || !template.includes(line) || !template.includes(variantLine) || roots.argvLog.includes("'")) {
+    throw new Error(`fake codex ${name} cannot take ${roots.argvLog}`);
+  }
   const dir = join(roots.home, "fakecodex");
   mkdirSync(dir, { recursive: true, mode: 0o755 });
   const bin = join(dir, "codex");
-  writeFileSync(bin, template.replace(line, `log='${roots.argvLog}'\n`), { mode: 0o755 });
+  writeFileSync(bin, template.replace(line, `log='${roots.argvLog}'\n`).replace(variantLine, `variant=${name}\n`), { mode: 0o755 });
   chmodSync(bin, 0o755);
   return bin;
 }

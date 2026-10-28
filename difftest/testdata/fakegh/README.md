@@ -1,6 +1,7 @@
 # Fake gh
 
-Each directory here holds one `gh` (a POSIX `sh` script) that the writer
+Each directory here holds one `gh` (a POSIX `sh` script that sets `variant=` and
+sources the shared body, `lib.sh`) that the writer
 replay (`difftest/writer_test.go`, `difftest/gen/gen-writers.ts`) puts on
 `PATH` after the recorders, so no real GitHub CLI ever answers. A writer
 template selects one with `"fakeGh": "<name>"`. fl runs `gh` with its whole

@@ -1,31 +1,5 @@
 #!/bin/sh
 # Fake gh "pass" (README.md): `attestation verify <receipt> ...` prints the digest it loaded and exits 0.
-# The writer replay puts this directory on PATH after the recorders
-# (difftest/gen/scenarios.ts writerEnv, difftest/writer_test.go writerEnv).
-# gh inherits fl's whole environment, so the record goes to
-# $FAULTLINE_ARGV_LOG: "gh " + the arguments joined by \037, terminated by
-# \036.
-self=$(cd "${0%/*}" && pwd -P)
-log=$FAULTLINE_ARGV_LOG
-if [ -n "$log" ]; then
-  record="gh "
-  sep=
-  for arg in "$@"; do record="$record$sep$arg"; sep=$(printf '\037'); done
-  printf '%s\036' "$record" >> "$log"
-fi
-# rep prints $1 repeated $2 times.
-rep() {
-  s=$1 n=$2 r=
-  while [ "$n" -gt 0 ]; do
-    if [ $((n % 2)) = 1 ]; then r=$r$s; fi
-    s=$s$s n=$((n / 2))
-  done
-  printf '%s' "$r"
-}
-if [ "$1 $2" = "attestation verify" ] && [ $# -ge 3 ]; then
-  digest=$( (sha256sum "$3" 2>/dev/null || shasum -a 256 "$3" 2>/dev/null || /usr/bin/shasum -a 256 "$3") | { read -r hex _; printf %s "$hex"; })
-  printf 'Loaded digest sha256:%s for file://%s\n' "$digest" "$3"
-  exit 0
-fi
-printf 'fake gh (pass): unsupported command: %s\n' "$*" >&2
-exit 125
+# The body is shared: ../lib.sh.
+variant=pass
+. "${0%/*}/../lib.sh"
