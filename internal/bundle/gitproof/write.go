@@ -140,6 +140,11 @@ func assertSafeProofOutput(outputDirectory, proofRoot string) string {
 	return output
 }
 
+// AssertSafeProofOutput exports assertSafeProofOutput for the turn writer.
+func AssertSafeProofOutput(outputDirectory, proofRoot string) string {
+	return assertSafeProofOutput(outputDirectory, proofRoot)
+}
+
 // Port of src/git-proof-bundle.ts:288 prepareFreshOutput.
 func prepareFreshOutput(outputDirectory, proofRoot string) string {
 	root := nodefs.Resolve(proofRoot)
