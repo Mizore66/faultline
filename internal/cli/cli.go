@@ -98,6 +98,8 @@ func dispatch(e *env, args []string) error {
 		return preventionCommand(e, rest)
 	case command == "codex":
 		return codexCommand(e, rest)
+	case command == "prove":
+		return proveCommand(e, rest)
 	case command == "record":
 		return recordCommand(e, rest)
 	case topLevelCommands[command]:

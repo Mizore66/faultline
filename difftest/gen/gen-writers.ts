@@ -203,7 +203,7 @@ export function changedFiles(before: Map<string, string>, after: Map<string, str
 // (caseObjects): their ids are seeds like the case root, text() replaces
 // each with its <BLOB|TREE|COMMIT:h12> name, and fileDigest() applies the
 // loose-object and reflog rules (see "Created Git objects" below).
-export type Relocation = { text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string; objects?: CaseObjects };
+export type Relocation = { names: Map<string, string>; text: (s: string) => string; fileDigest: (rel: string, bytes: Buffer) => string; objects?: CaseObjects };
 
 // A Git index (.git/index at any depth) holds stat data (times, inode,
 // device) that differs between the TS and the Go copy of a scenario, and
@@ -520,7 +520,32 @@ export function loggedCasePaths(records: string[], roots: CaseRoots): string[] {
   return out;
 }
 
-export function relocation(roots: CaseRoots, records: string[] = [], objects?: CaseObjects): Relocation {
+// carriedNames: for invocation inv's flip-byte and replace-text mutations
+// ONLY (rename, chmod and the rest carry nothing), the previous invocation's
+// names of the mutated file itself (file:<rel>, json:<rel>#..., self:<rel>#...),
+// prefixed "prior:". The Go twin is carriedNames in difftest/writer_test.go.
+export function carriedNames(prev: Map<string, string>, mutations: Template[], inv: number, roots: CaseRoots): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of mutations) {
+    if (m.inv !== inv || (m.op !== "flip-byte" && m.op !== "replace-text")) continue;
+    const file = substitute(m.file!, roots);
+    for (const [d, n] of prev) {
+      if (n === `file:${file}` || n.startsWith(`json:${file}#`) || n.startsWith(`self:${file}#`)) out.set(d, `prior:${n}`);
+    }
+  }
+  return out;
+}
+
+// relocation's carried argument: digest hex -> name of digests that named a
+// root-dependent file or value BEFORE an invocation's flip-byte/replace-text
+// edit of that file (carriedNames). Bundle artifacts that still cite the
+// pre-edit digest (hashes.txt, manifest.json) would otherwise hold an unnamed
+// root-dependent digest, so Go and TS (whose roots differ in length) would
+// disagree on their file digests. A carried digest is named only when the
+// current tree does not already name it, and always "prior:"-prefixed, so a
+// stale checksum and a rewritten one (the new actual digest, "file:...")
+// stay distinguishable. The Go twin is relocationCarrying.
+export function relocation(roots: CaseRoots, records: string[] = [], objects?: CaseObjects, carried?: Map<string, string>): Relocation {
   const objectIds = objects === undefined ? [] : [...objects.names.keys()].sort(byCodeUnit);
   const files: [string, Buffer, string][] = [];
   const walk = (rel: string) => {
@@ -574,16 +599,23 @@ export function relocation(roots: CaseRoots, records: string[] = [], objects?: C
       k += 1;
     }
   }
-  let frontier = seeds;
-  while (frontier.length > 0) {
-    found = [];
-    for (const [rel, bytes, text] of files) {
-      if (!frontier.some((needle) => text.includes(needle))) continue;
-      add(sha256(bytes), `file:${rel}`);
-      try { visit(JSON.parse(text), rel, ""); } catch { /* not JSON */ }
+  const expand = (start: string[]): void => {
+    let frontier = start;
+    while (frontier.length > 0) {
+      found = [];
+      for (const [rel, bytes, text] of files) {
+        if (!frontier.some((needle) => text.includes(needle))) continue;
+        add(sha256(bytes), `file:${rel}`);
+        try { visit(JSON.parse(text), rel, ""); } catch { /* not JSON */ }
+      }
+      frontier = found;
     }
-    frontier = found;
-  }
+  };
+  expand(seeds);
+  // Second pass: carried digests the current tree does not name.
+  found = [];
+  for (const d of [...(carried?.keys() ?? [])].sort(byCodeUnit)) add(d, carried!.get(d)!);
+  expand(found);
   const sorted = [...names.keys()].sort(byCodeUnit);
   const text = (s: string): string => {
     let out = maskObjectIds(normalizeWriter(s, roots), objects);
@@ -594,6 +626,7 @@ export function relocation(roots: CaseRoots, records: string[] = [], objects?: C
     return out;
   };
   return {
+    names,
     text,
     ...(objects === undefined ? {} : { objects }),
     fileDigest: (rel, bytes) => {
@@ -808,6 +841,7 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
     // prepareWriterCase too); objects are those it created so far.
     const start = caseObjectsBefore(roots.ws);
     let objects = caseObjects(roots, start);
+    let prevNames = new Map<string, string>(); // the previous invocation's names (carriedNames)
     for (const [inv, argv] of t.argv.entries()) {
       // This invocation's mutations: the others, then the new entries' modes
       // reset, then the chmods (as at setup).
@@ -818,7 +852,8 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
         resetNewModes(roots.ws, existing);
         for (const m of due) if (m.op === "chmod") apply(m);
       }
-      const before = treeEntries(roots.ws, relocation(roots, records, objects).fileDigest);
+      const carried = due.length > 0 ? carriedNames(prevNames, mutations, inv, roots) : undefined;
+      const before = treeEntries(roots.ws, relocation(roots, records, objects, carried).fileDigest);
       rmSync(roots.argvLog, { force: true });
       const clock = invocationSeed(t, inv);
       const r = await runCli(roots, argv.map((a) => stdoutArgument(fileArgument(substitute(a, roots).split(BUSY_PORT).join(busy.port), roots), stdouts)),
@@ -832,7 +867,8 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       const invocationRecords = readArgvLog(roots.argvLog);
       records.push(...invocationRecords);
       objects = caseObjects(roots, start);
-      const reloc = relocation(roots, records, objects);
+      const reloc = relocation(roots, records, objects, carried);
+      prevNames = relocation(roots, records, objects).names;
       const after = treeEntries(roots.ws, reloc.fileDigest);
       const tree = treeDigest(roots.ws, reloc.fileDigest);
       // After the tree and the argv log are read, like the Go replay.

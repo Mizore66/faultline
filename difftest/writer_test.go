@@ -693,6 +693,41 @@ func relocation(t *testing.T, r writerRoots, records []string) *relocated {
 // the case root, text masks each by its name, and fileDigest applies the
 // loose-object and reflog rules.
 func relocationWith(t *testing.T, r writerRoots, records []string, objects *caseObjectNames) *relocated {
+	return relocationCarrying(t, r, records, objects, nil)
+}
+
+// carriedNames ports gen-writers.ts carriedNames: for invocation inv's
+// flip-byte and replace-text mutations ONLY (rename, chmod and the rest
+// carry nothing), the previous invocation's names of the mutated file
+// itself (file:<rel>, json:<rel>#..., self:<rel>#...), prefixed "prior:".
+func carriedNames(prev map[string]string, mutations []template, inv int, r writerRoots) map[string]string {
+	out := map[string]string{}
+	for _, raw := range mutations {
+		op := raw.str("op")
+		if mutationInv(raw) != inv || (op != "flip-byte" && op != "replace-text") {
+			continue
+		}
+		file := substituteDeep(jsjson.MakeObject(raw.fields), r).Obj().Field("file").Str()
+		for d, n := range prev {
+			if n == "file:"+file || strings.HasPrefix(n, "json:"+file+"#") || strings.HasPrefix(n, "self:"+file+"#") {
+				out[d] = "prior:" + n
+			}
+		}
+	}
+	return out
+}
+
+// relocationCarrying is relocationWith plus carried: digest hex -> name of
+// digests that named a root-dependent file or value BEFORE an invocation's
+// flip-byte/replace-text edit of that file (carriedNames). Bundle artifacts
+// that still cite the pre-edit digest (hashes.txt, manifest.json) would
+// otherwise hold an unnamed root-dependent digest, so Go and TS (whose
+// roots differ in length) disagree on their file digests. A carried digest
+// is named only when the current tree does not already name it, and always
+// "prior:"-prefixed, so a stale checksum and a rewritten one (the new
+// actual digest, named "file:...") stay distinguishable. Twin:
+// gen-writers.ts relocation's carried argument.
+func relocationCarrying(t *testing.T, r writerRoots, records []string, objects *caseObjectNames, carried map[string]string) *relocated {
 	t.Helper()
 	var objectIDs []string
 	if objects != nil {
@@ -832,19 +867,28 @@ func relocationWith(t *testing.T, r writerRoots, records []string, objects *case
 			}
 		}
 	}
-	for frontier := seeds; len(frontier) > 0; {
-		found = nil
-		for _, f := range files {
-			if !slices.ContainsFunc(frontier, func(needle string) bool { return strings.Contains(f.text, needle) }) {
-				continue
+	expand := func(frontier []string) {
+		for len(frontier) > 0 {
+			found = nil
+			for _, f := range files {
+				if !slices.ContainsFunc(frontier, func(needle string) bool { return strings.Contains(f.text, needle) }) {
+					continue
+				}
+				add(canonical.SHA256HexBytes(f.bytes), "file:"+f.rel)
+				if v, err := jsjson.Parse(f.text); err == nil {
+					visit(v, f.rel, "")
+				}
 			}
-			add(canonical.SHA256HexBytes(f.bytes), "file:"+f.rel)
-			if v, err := jsjson.Parse(f.text); err == nil {
-				visit(v, f.rel, "")
-			}
+			frontier = found
 		}
-		frontier = found
 	}
+	expand(seeds)
+	// Second pass: carried digests the current tree does not name.
+	found = nil
+	for _, d := range slices.Sorted(maps.Keys(carried)) {
+		add(d, carried[d])
+	}
+	expand(found)
 	rel.sorted = slices.Sorted(maps.Keys(rel.names))
 	return rel
 }
@@ -1058,16 +1102,19 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 	// invocation must keep masking the worktree digests an earlier one
 	// wrote into a file (gen-writers.ts runCase).
 	var records, stdouts []string
+	var prevNames map[string]string // the previous invocation's names (carriedNames)
 	for inv, argv := range tpl.Argv {
 		// This invocation's mutations: the others, then the new entries'
 		// modes reset, then the chmods (gen-writers.ts runCase).
+		var carried map[string]string
 		if slices.ContainsFunc(tpl.Mutations, func(m template) bool { return mutationInv(m) == inv }) {
+			carried = carriedNames(prevNames, tpl.Mutations, inv, r)
 			existing := pathsUnder(t, r.ws)
 			applyWriterMutations(t, tpl, r, func(m template) bool { return mutationInv(m) == inv && m.str("op") != "chmod" })
 			resetNewModes(t, r.ws, existing)
 			applyWriterMutations(t, tpl, r, func(m template) bool { return mutationInv(m) == inv && m.str("op") == "chmod" })
 		}
-		before := treeEntries(t, r.ws, relocationWith(t, r, records, objects).fileDigest)
+		before := treeEntries(t, r.ws, relocationCarrying(t, r, records, objects, carried).fileDigest)
 		os.Remove(r.argvLog)
 		args := make([]string, len(argv))
 		for i, a := range argv {
@@ -1100,7 +1147,8 @@ func runWriterCaseWith(t *testing.T, repo string, tpl writerTemplate, run writer
 		invocationRecords := readArgvLog(r.argvLog)
 		records = append(records, invocationRecords...)
 		objects = caseObjects(t, r, start)
-		reloc := relocationWith(t, r, records, objects)
+		reloc := relocationCarrying(t, r, records, objects, carried)
+		prevNames = relocationWith(t, r, records, objects).names
 		after := treeEntries(t, r.ws, reloc.fileDigest)
 		res := writerResult{Inv: inv, Stdout: maskPlanDigests(reloc.text(outText), plans), Stderr: maskPlanDigests(reloc.text(errText), plans),
 			Exit: cmd.ProcessState.ExitCode(), Tree: treeDigestWith(r.ws, reloc.fileDigest), Modes: modesDigest(after), Files: changedFiles(before, after),
