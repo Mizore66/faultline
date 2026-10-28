@@ -26,9 +26,8 @@ import (
 	"github.com/Mizore66/faultline/internal/schema"
 )
 
-// ledgerWriterGatedFiles are the files TestLiveLedgerWriters gates. Task 9
-// moves them into liveGatedFiles; until then the test adds them for its
-// own run.
+// ledgerWriterGatedFiles are the files TestLiveLedgerWriters gates (they are
+// in coverage_test.go's liveGatedFiles).
 var ledgerWriterGatedFiles = []string{"internal/ledger/ledger.go", "internal/ledger/checkpoint.go"}
 
 // ledgerOutcome renders a Go result like oracle-ledger.ts's outcome():
@@ -755,12 +754,6 @@ func goScriptedCapture(repository string, steps []scriptStep, scripted bool) str
 // runner.
 func TestLiveLedgerWriters(t *testing.T) {
 	oracle.Skip(t)
-	for _, f := range ledgerWriterGatedFiles {
-		if liveGatedFiles[f] == "" {
-			liveGatedFiles[f] = "TestLiveLedgerWriters"
-			defer delete(liveGatedFiles, f)
-		}
-	}
 	gitDir, err := exec.Command("git", "--exec-path").Output()
 	if err != nil {
 		t.Fatal(err)

@@ -57,7 +57,7 @@ jobs:
           status=0
           go test -count=1 -timeout 30m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
           go test -tags faultline_test -count=1 -timeout 120m -v ./... | tee -a "$RUNNER_TEMP/go.log" || status=$?
-          allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestWriterSameDirectory'
+          allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestWriterSameDirectory|TestSidecarReachedFromDump'
           case "$RUNNER_OS" in
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
             Windows)
@@ -149,6 +149,14 @@ jobs:
         # TestLivePreventionWrite, TestLiveAgentsMd and
         # TestLivePreventionFromArtifacts (about 4.5 minutes together locally,
         # most of it the TS Git proof verifier in PreventionFromArtifacts).
+        # Slice 4a adds TestLiveLedgerWriters (about 35 s locally),
+        # TestLiveSnapshotGC (about 6 s) and TestLiveSidecarHooks: 400 random
+        # and 21 directed hook sequences and 103 stores. In podman (uid 1000)
+        # the first 420 sequences ran as 17 windows of 10 to 30 sequences in 6 to
+        # 13 s each, except the first 10, which hold the fresh-lock
+        # sequences (about 17 s per step and side) and took 81 s; the 103
+        # stores took 5 s. The full test stays well inside this step's
+        # 60 minute go test timeout.
         run: |
           unset FAULTLINE_TURNSNAP_CASES
           set -o pipefail
@@ -296,7 +304,7 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestEndToEndSlice3bWithoutNode TestWriterSameDirectory'
+          tests='TestWriterReplay TestThreadIDsBindUnderRoot TestInvestigateRefusalLeavesNoStage TestEndToEndWithoutNode TestEndToEndSlice3aWithoutNode TestEndToEndSlice3bWithoutNode TestEndToEndSlice4aWithoutNode TestWriterSameDirectory'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 75m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
@@ -356,6 +364,10 @@ jobs:
         run: |
           set -o pipefail
           status=0
+          # TestLiveWriterFaults has 468 cases: 366 from slices 2 and 3 and 102
+          # from slice 4a (record- 39, codex- 24, sidecar- 39; in podman as
+          # uid 1000 they took 26 s, 11 s and 96 s). Every group of the spec
+          # 2.6 table fired, so none was dropped.
           tests='TestLiveWriterFaults TestLiveRealDocker TestLiveRealDockerProjectBuild'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_REAL_DOCKER=1 FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
@@ -381,6 +393,9 @@ jobs:
     # the darwin StatIdentity) and the incident draft store (about 80 s and
     # 3 s on macOS); the prevention live tests are platform-neutral and stay
     # in difftest-live.
+    # Slice 4a adds the sidecar hook state machine (TestLiveSidecarHooks): on
+    # macOS /var is /private/var, so the storage realpath walk differs from
+    # Linux (spec 4.1).
     name: stack thresholds vs Node (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
@@ -405,7 +420,7 @@ jobs:
           set -o pipefail
           status=0
           unset FAULTLINE_TURNSNAP_CASES
-          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft'
+          tests='TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft TestLiveSidecarHooks'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 70m | tee "$RUNNER_TEMP/live.log" || status=$?
           if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode|TestLiveProjectContext/sparse256MiB)$'; else allowed='^$'; fi

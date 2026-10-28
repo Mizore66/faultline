@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
+	"github.com/Mizore66/faultline/internal/canonical"
 )
 
 // writerFault fails the first call of one syscall group on one writer path
@@ -25,6 +26,11 @@ type writerFault struct {
 	// everyCall fails every call of the group on any path instead of the
 	// first one on the discovered path (see writerFaultPaths).
 	everyCall bool
+	// stageOf, for a receipt stage ".<sha256(receipt path)[0:24]>.<pid>.tmp",
+	// is the glob of the receipt file it stages: the key differs between the
+	// two case directories, so the faulted path is rebuilt per side from the
+	// receipt's discovered name (spec 2.6, correction 1).
+	stageOf string
 }
 
 func (f writerFault) name() string { return f.caseID + "/" + f.label + "/" + f.call + "-" + f.errno }
@@ -151,6 +157,35 @@ var writerFaultPaths = []struct {
 	{"prevention-write-input-agents-append", "agents-existing", "ws/AGENTS.md", []string{"open", "write"}},
 }
 
+// writerFaultPaths4a are the slice 4a writers (spec 2.6): the recording
+// ledger, its append lock and stage, the snapshot collector and the sidecar
+// hooks. A group that never fires in a fault-free run is left out, not faked.
+var writerFaultPaths4a = []struct {
+	caseID, label, glob string
+	calls               []string
+	stageOf             string
+}{
+	{"record-init", "recordings-dir", "ws/.faultline/recordings", []string{"mkdir"}, ""},
+	{"record-init", "ledger-stage", "ws/.faultline/recordings/.s-1.json.<PID>.*.tmp", []string{"open", "write", "fsync", "close", "rename"}, ""},
+	{"record-checkpoint", "append-lock", "ws/ledger.json.lock", []string{"open", "close", "unlink"}, ""},
+	{"record-checkpoint", "append-stage", "ws/.ledger.json.<PID>.*.tmp", []string{"open", "write", "fsync", "rename"}, ""},
+	{"codex-snapshot-clean", "snapshot-dir", "ws/.faultline/recordings", []string{"mkdir"}, ""},
+	{"codex-snapshot-clean", "snapshot-file", "ws/.faultline/recordings/*.json", []string{"open", "write", "close"}, ""},
+	{"codex-gc-force", "object-store", "ws/.git/faultline/objects/*/*", []string{"unlink"}, ""},
+	{"codex-gc-force", "alternates-remove", "ws/.git/objects/info/alternates", []string{"unlink"}, ""},
+	{"codex-gc-alternates-other-entries", "alternates-rewrite", "ws/.git/objects/info/alternates", []string{"open", "write"}, ""},
+	{"sidecar-hook-session-quiet", "storage", "ws/.git/faultline", []string{"mkdir"}, ""},
+	{"sidecar-hook-session-quiet", "recordings", "ws/.git/faultline/recordings", []string{"mkdir"}, ""},
+	{"sidecar-hook-session-quiet", "sidecar-lock", "ws/.git/faultline/recordings/codex-*.json.sidecar.lock", []string{"open", "close", "unlink"}, ""},
+	{"sidecar-hook-session-quiet", "sidecar-ledger-stage", "ws/.git/faultline/recordings/.codex-*.json.<PID>.*.tmp", []string{"open", "write", "fsync", "rename"}, ""},
+	{"sidecar-hook-full-turn", "receipt-stage", "ws/.git/faultline/recordings/.*.<PID>.tmp", []string{"open", "write", "close", "rename"}, "ws/.git/faultline/recordings/codex-stop-*.json"},
+}
+
+// faultLastInvocation are multi-invocation writer cases whose every
+// invocation runs but only the last runs under strace and is compared: the
+// stop receipt is written by the last hook of sidecar-hook-full-turn.
+var faultLastInvocation = map[string]bool{"sidecar-hook-full-turn": true}
+
 // faultFirstInvocation are multi-invocation writer cases whose first
 // invocation alone is faulted: prevention-write-bundle-ok's first is the
 // only single --from-bundle write, and the only one creating AGENTS.md.
@@ -175,6 +210,13 @@ func writerFaultMatrix() []writerFault {
 		for _, call := range p.calls {
 			for _, errno := range errnos {
 				out = append(out, writerFault{caseID: p.caseID, label: p.label, glob: p.glob, call: call, errno: errno})
+			}
+		}
+	}
+	for _, p := range writerFaultPaths4a {
+		for _, call := range p.calls {
+			for _, errno := range errnos {
+				out = append(out, writerFault{caseID: p.caseID, label: p.label, glob: p.glob, call: call, errno: errno, stageOf: p.stageOf})
 			}
 		}
 	}
@@ -220,7 +262,7 @@ func TestLiveWriterFaults(t *testing.T) {
 			if ok && faultFirstInvocation[f.caseID] {
 				tpl.Argv = tpl.Argv[:1]
 			}
-			if !ok || len(tpl.Argv) != 1 {
+			if !ok || (len(tpl.Argv) != 1 && !faultLastInvocation[f.caseID]) {
 				t.Fatalf("writer template %s missing or not a single invocation", f.caseID)
 			}
 			tpl.Env = append(tpl.Env, [2]string{"GOMAXPROCS", "1"})
@@ -229,8 +271,17 @@ func TestLiveWriterFaults(t *testing.T) {
 				rel = discoverFaultPath(t, repo, tpl, f.glob)
 				discovered[f.caseID+"|"+f.glob] = rel
 			}
-			ts := runTSWithFault(t, repo, tpl, f, rel)
-			goRes := runGoWithFault(t, repo, tpl, f, rel)
+			var perSide func(root string) string
+			if f.stageOf != "" {
+				receipt, ok := discovered[f.caseID+"|"+f.stageOf]
+				if !ok {
+					receipt = discoverFaultPath(t, repo, tpl, f.stageOf)
+					discovered[f.caseID+"|"+f.stageOf] = receipt
+				}
+				perSide = func(root string) string { return stagePerSide(root, receipt) }
+			}
+			ts := runWithFault(t, repo, tpl, f, rel, tsCommand(repo), perSide)
+			goRes := runWithFault(t, repo, tpl, f, rel, []string{flBinary}, perSide)
 			if ts.injected == 0 {
 				t.Fatalf("TS made no %s call on %s to fail", f.call, rel)
 			}
@@ -259,16 +310,19 @@ type faultResult struct {
 	trace string
 }
 
-func runTSWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, rel string) faultResult {
-	return runWithFault(t, repo, tpl, f, rel, tsCommand(repo))
-}
-
-func runGoWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, rel string) faultResult {
-	return runWithFault(t, repo, tpl, f, rel, []string{flBinary})
+// stagePerSide is the receipt stage of the case rooted at root for the
+// receipt at receiptRel (relative to the root of the case it was discovered
+// in): writeJsonAtomic's ".<sha256(receipt path)[0:24]>.<pid>.tmp" beside it
+// (src/codex-sidecar.ts:529), with <PID> for the process id.
+func stagePerSide(root, receiptRel string) string {
+	abs := root + "/" + receiptRel
+	return path.Join(path.Dir(receiptRel), "."+canonical.SHA256Hex(abs)[:24]+".<PID>.tmp")
 }
 
 // stagedPid is the process id in a ledger binding's staged name
 // (src/ledger-binding.ts:540 `.${basename}.${pid}.${uuid}.tmp`).
+var stageKeyPid = regexp.MustCompile(`\.[0-9a-f]{24}\.[0-9]+\.tmp`)
+
 var stagedPid = regexp.MustCompile(`(\.[^./]+\.json)\.[0-9]+(\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp)`)
 
 // maskStagedPid masks the pid in staged names in text and renames any such
@@ -280,25 +334,43 @@ func maskStagedPid(t *testing.T, r writerRoots, _ int, stdout, stderr string) (s
 			if err := os.Rename(p, filepath.Join(filepath.Dir(p), stagedPid.ReplaceAllString(d.Name(), "$1.<PID>$2"))); err != nil {
 				t.Fatal(err)
 			}
+		} else if err == nil && stageKeyPid.MatchString(d.Name()) {
+			if err := os.Rename(p, filepath.Join(filepath.Dir(p), stageKeyPid.ReplaceAllString(d.Name(), ".<STAGEKEY>.<PID>.tmp"))); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return nil
 	})
-	return stagedPid.ReplaceAllString(stdout, "$1.<PID>$2"), stagedPid.ReplaceAllString(stderr, "$1.<PID>$2")
+	stdout, stderr = stagedPid.ReplaceAllString(stdout, "$1.<PID>$2"), stagedPid.ReplaceAllString(stderr, "$1.<PID>$2")
+	return stageKeyPid.ReplaceAllString(stdout, ".<STAGEKEY>.<PID>.tmp"), stageKeyPid.ReplaceAllString(stderr, ".<STAGEKEY>.<PID>.tmp")
 }
 
 // runWithFault runs the case's invocation with command under strace -D (the
 // tracee keeps the shell's pid, so a staged name holding the pid is known
 // before it runs), failing the first call of f's group on rel.
-func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, rel string, command []string) faultResult {
+//
+// perSide, when set, rebuilds rel for the case root (a receipt stage's key
+// differs between the sides). With faultLastInvocation only the last
+// invocation runs under strace; its result is returned.
+func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, rel string, command []string, perSide func(root string) string) faultResult {
 	t.Helper()
+	lastOnly := faultLastInvocation[f.caseID]
+	last := len(tpl.Argv) - 1
 	trace := filepath.Join(t.TempDir(), "trace")
 	calls := faultCalls[f.call]
 	var root string
 	run := writerRun{
 		noVerify: true,
 		mask:     maskStagedPid,
-		command: func(r writerRoots, _ int, args []string) []string {
+		command: func(r writerRoots, inv int, args []string) []string {
 			root = r.root
+			if lastOnly && inv != last {
+				return append(slices.Clone(command), args...)
+			}
+			rel := rel
+			if perSide != nil {
+				rel = perSide(r.root)
+			}
 			quote := func(p string) string {
 				return "'" + strings.ReplaceAll(p, "<PID>", `'"$$"'`) + "'"
 			}
@@ -317,7 +389,8 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 			return append([]string{"sh", "-c", script, "sh"}, append(command, args...)...)
 		},
 	}
-	res := runWriterCaseWith(t, repo, tpl, run)[0]
+	results := runWriterCaseWith(t, repo, tpl, run)
+	res := results[len(results)-1]
 	b, _ := os.ReadFile(trace)
 	return faultResult{res, strings.Count(string(b), "(INJECTED)"), strings.ReplaceAll(string(b), root+"/", "<R>/")}
 }

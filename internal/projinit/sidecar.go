@@ -33,7 +33,7 @@ func assertSidecarCommandText(value, label string) (string, error) {
 		return "", errors.New(jsexc.Concat(label, " must not be empty."))
 	}
 	if controlChars(command) {
-		return "", errors.New(jsexc.Concat(label, " cannot contain a NUL byte or a line break.")) // coverage gate: unported caller (--command, fl codex sidecar config/install)
+		return "", errors.New(jsexc.Concat(label, " cannot contain a NUL byte or a line break."))
 	}
 	return command, nil
 }
@@ -109,7 +109,7 @@ func option(args []string, flag string) (string, bool) {
 func requiredOption(args []string, flag string) (string, error) {
 	value, ok := option(args, flag)
 	if !ok || value == "" || strings.HasPrefix(value, "--") {
-		return "", errors.New("Missing required option: " + flag) // coverage gate: unported caller (fl init passes --cli an absolute path; fl codex sidecar config/install)
+		return "", errors.New("Missing required option: " + flag)
 	}
 	return value, nil
 }
