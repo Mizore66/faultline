@@ -44,6 +44,14 @@ import (
 // Also turn-specific: turn-ledger-hash, turn-ledger-snapshot-edit,
 // turn-lifecycle-transport, turn-manifest-codex-thread.
 //
+// Reach of verifier branches the rows above did not run (coverage gate,
+// position-keyed): turn-hash-line-dotdot-name ("Artifact path escapes its
+// bundle", files.go safeArtifactPath), turn-manifest-frozen-digest (manifest
+// frozen or witness digest vs the frozen witness artifact),
+// turn-transition-artifact (transition artifact vs the investigation
+// catalog, transitions/0000.json edited and rehashed) and
+// turn-witness-command (frozen witness verification failure).
+//
 // Platform note (plan correction 11): on POSIX the drive-letter path of row 4
 // is a safe relative path and reads as ENOENT; on Windows it is unsafe. The
 // template is posixOnly.
@@ -60,6 +68,7 @@ var turnCorpusTemplates = []string{
 	"turn-grade-turn-proof", "turn-grade-none", "turn-label-legacy", "turn-label-commit", "turn-strip-grade", "turn-schema-as-git",
 	"turn-deep-literal-shallow", "turn-deep-literal-overflow",
 	"turn-ledger-hash", "turn-ledger-snapshot-edit", "turn-lifecycle-transport", "turn-manifest-codex-thread",
+	"turn-hash-line-dotdot-name", "turn-manifest-frozen-digest", "turn-transition-artifact", "turn-witness-command",
 }
 
 // TestTurnCorpusCoversEveryRow requires every turn template named above to

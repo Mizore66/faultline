@@ -676,3 +676,4 @@ TestWriterReplay/posix/repair-bundle-codex-symlink-edit
 TestWriterReplay/posix/repair-bundle-codex-daemon-down
 TestWriterReplay/posix/repair-bundle-codex-heterogeneous
 TestWriterReplay/posix/repair-bundle-codex-prevention-root-file
+TestWriterReplay/posix/sidecar-hook-git-readonly

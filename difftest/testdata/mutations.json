@@ -308,5 +308,9 @@
   {"id": "turn-manifest-codex-thread", "op": "json-edit", "file": "manifest.json", "jsonPath": ["codex"], "value": {"repairThreadId": "t-1"}, "rehash": true, "bases": ["turn-two-states"]},
   {"id": "turn-run-duplicate", "op": "json-edit", "file": "investigation.json", "jsonPath": ["runs", 1], "valueFrom": ["runs", 0], "resignTurn": true, "rehash": true, "bases": ["turn-two-states"]},
   {"id": "turn-run-unsigned-edit", "op": "json-edit", "file": "investigation.json", "jsonPath": ["runs", 0, "durationMs"], "value": 1, "rehash": true, "bases": ["turn-two-states"]},
-  {"id": "turn-git-fail-index-pack", "op": "fake-git", "fakeGit": "fail-index-pack", "bases": ["turn-two-states"]}
+  {"id": "turn-git-fail-index-pack", "op": "fake-git", "fakeGit": "fail-index-pack", "bases": ["turn-two-states"]},
+  {"id": "turn-hash-line-dotdot-name", "op": "prepend-bytes", "file": "hashes.txt", "hex": "6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616120202e2e780a", "bases": ["turn-two-states"]},
+  {"id": "turn-manifest-frozen-digest", "op": "json-edit", "file": "manifest.json", "jsonPath": ["frozenDigest"], "rehash": true, "bases": ["turn-two-states"], "value": "sha256:7777777777777777777777777777777777777777777777777777777777777777"},
+  {"id": "turn-transition-artifact", "op": "json-edit", "file": "transitions/0000.json", "jsonPath": ["kind"], "rehash": true, "bases": ["turn-two-states"], "value": "FAIL_TO_PASS"},
+  {"id": "turn-witness-command", "op": "json-edit", "file": "witness/frozen.json", "jsonPath": ["proposal", "witness", "command"], "rehash": true, "bases": ["turn-two-states"], "value": "node other.mjs"}
 ]
