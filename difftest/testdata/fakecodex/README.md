@@ -17,8 +17,11 @@ variable, which is why the log path is written into the copy
 Record: every call appends one record to the log: `codex ` + the arguments
 joined by `\037`, then `STDIN=<stdin bytes>`, `PATH=<$PATH>` and
 `ENV=<the names of the other environment variables, sorted, joined by ",">`
-(without `PWD`, `OLDPWD`, `SHLVL` and `_`, which `sh` sets on its own),
-terminated by `\036`.
+(without `PWD`, `OLDPWD`, `SHLVL` and `_`, which `sh` sets on its own, and
+without `AWKPATH` or `AWKLIBPATH` when the script's shell did not have them:
+some awks add those two to their own environment, so their presence is read
+from the shell before awk runs, and a name fl really passes, even empty, is
+recorded), terminated by `\036`.
 
 Protocol:
 

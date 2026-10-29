@@ -6,8 +6,8 @@
 # PATH as its only environment variable. Every call appends one record:
 # "codex " + the arguments joined by \037, then STDIN=<stdin bytes>,
 # PATH=<$PATH> and ENV=<the other variables' names, sorted, joined by ",">
-# (without PWD, OLDPWD, SHLVL and _, which sh sets on its own), terminated
-# by \036.
+# (without PWD, OLDPWD, SHLVL and _, which sh sets on its own, and without
+# AWKPATH or AWKLIBPATH when only awk added them), terminated by \036.
 # Variants: edits noop probe-fail probe-empty probe-crlf exit-nonzero killed
 # flood outside-edits symlink-edit.
 variant=@VARIANT@
@@ -25,10 +25,14 @@ tool() {
 us=$(printf '\037')
 stdin=$("$(tool cat)"; printf x)
 stdin=${stdin%x}
-names=$("$(tool awk)" 'BEGIN {
+# Some awks (gawk) add AWKPATH and AWKLIBPATH to their own ENVIRON. Presence is
+# snapshotted from this shell before awk runs: a name is skipped only when this
+# shell did not have it, so one fl really passed (even empty) is still recorded.
+names=$("$(tool awk)" -v "awkpath_set=${AWKPATH+x}" -v "awklibpath_set=${AWKLIBPATH+x}" 'BEGIN {
   n = 0
   for (k in ENVIRON) {
     if (k == "PATH" || k == "PWD" || k == "OLDPWD" || k == "SHLVL" || k == "_") continue
+    if ((k == "AWKPATH" && awkpath_set == "") || (k == "AWKLIBPATH" && awklibpath_set == "")) continue
     i = n++
     while (i > 0 && names[i - 1] > k) { names[i] = names[i - 1]; i-- }
     names[i] = k

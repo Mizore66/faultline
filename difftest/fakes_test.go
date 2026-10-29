@@ -34,6 +34,51 @@ func TestFakeCodexRecordsArgvStdinAndEnv(t *testing.T) {
 	}
 }
 
+// TestFakeCodexEnvIgnoresOnlyHelperAddedAwkNames: some awks (gawk on the
+// hosted Ubuntu images) add AWKPATH and AWKLIBPATH to their own ENVIRON. The
+// record must not count them when the fake's shell never had them, and must
+// still count them, even empty, when fl really passed them.
+func TestFakeCodexEnvIgnoresOnlyHelperAddedAwkNames(t *testing.T) {
+	realAwk, err := exec.LookPath("awk")
+	if err != nil {
+		t.Skip("no awk")
+	}
+	repo := repoRoot(t)
+	for _, tc := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"helper-added-only", nil, ""},
+		{"unrelated-name", []string{"FL_UNRELATED=1"}, "FL_UNRELATED"},
+		{"passed-empty", []string{"AWKPATH=", "AWKLIBPATH="}, "AWKLIBPATH,AWKPATH"},
+		{"passed-nonempty", []string{"AWKPATH=/p", "AWKLIBPATH=/l"}, "AWKLIBPATH,AWKPATH"},
+		{"passed-awkpath-only", []string{"AWKPATH="}, "AWKPATH"},
+		{"passed-awklibpath-only", []string{"AWKLIBPATH=/l", "FL_UNRELATED=1"}, "AWKLIBPATH,FL_UNRELATED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := makeWriterRoots(t)
+			bin := installFakeCodex(t, repo, r, "edits")
+			wrap := t.TempDir()
+			script := "#!/bin/sh\nAWKPATH=/helper AWKLIBPATH=/helper\nexport AWKPATH AWKLIBPATH\nexec '" + realAwk + "' \"$@\"\n"
+			if err := os.WriteFile(filepath.Join(wrap, "awk"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(bin, "exec", "--full-auto", "fix it")
+			cmd.Dir = t.TempDir()
+			cmd.Env = append([]string{"PATH=" + wrap + string(os.PathListSeparator) + os.Getenv("PATH")}, tc.env...)
+			cmd.Stdin = strings.NewReader("fix it")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%v: %s", err, out)
+			}
+			records := readArgvLog(r.argvLog)
+			if len(records) != 1 || !strings.HasSuffix(records[0], "\x1fENV="+tc.want) {
+				t.Fatalf("want ENV=%s: %q", tc.want, records)
+			}
+		})
+	}
+}
+
 func TestFakeOpenAIRecordsRequestAndReplies(t *testing.T) {
 	ws := t.TempDir()
 	os.WriteFile(filepath.Join(ws, "reply.json"), []byte(`{"status":500,"contentType":"text/plain","body":"upstream down"}`), 0o644)
