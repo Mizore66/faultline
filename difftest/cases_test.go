@@ -3,6 +3,7 @@
 package difftest
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -173,6 +174,82 @@ func TestSlashesAfter(t *testing.T) {
 	if _, slash := slashesAfter("<WS>/a", "<WS>", true); !slash {
 		t.Error("slashesAfter did not report a '/' after the mask")
 	}
+}
+
+// slashesAfter must stop at the quote that closes a path and keep the text
+// around it. The real shapes are `fl codex sidecar config --cli` output on
+// Windows: a JSON-escaped closing double quote (\"), an apostrophe inside a
+// double-quoted path (it's), and the shell's '"'"' apostrophe escape inside a
+// single-quoted one (JSON-escaped: '\"'\"').
+func TestSlashesAfterQuoting(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"escaped closing double quote", `"node \"<WS>\\tool.js\" codex"`, `"node \"<WS>/tool.js\" codex"`},
+		{"apostrophe inside double quotes", `"node \"<WS>\\it's\\tool.js\" codex"`, `"node \"<WS>/it's/tool.js\" codex"`},
+		{"shell apostrophe escape", `"node '<WS>\\it'\"'\"'s\\tool.js' codex"`, `"node '<WS>/it'\"'\"'s/tool.js' codex"`},
+		// Controls: ordinary boundaries and text beyond the path stay.
+		{"single-quoted path", `open '<WS>\c\d' next\x`, `open '<WS>/c/d' next\x`},
+		{"escaped path then quote", `"<WS>\\a\\b.json" \\x`, `"<WS>/a/b.json" \\x`},
+		{"apostrophe ends an unquoted path", `x=<WS>\a'y\b`, `x=<WS>/a'y\b`},
+		{"apostrophe ends a single-quoted path", `'<WS>\a'b\c'`, `'<WS>/a'b\c'`},
+		{"escaped quote not after a path stays", `{"a": "<WS>\\x", "b": "q\"r\\s"}`, `{"a": "<WS>/x", "b": "q\"r\\s"}`},
+	} {
+		if got, _ := slashesAfter(tc.in, "<WS>", true); got != tc.want {
+			t.Errorf("%s:\n got %s\nwant %s", tc.name, got, tc.want)
+		}
+	}
+	// The plain-text form (no JSON escaping) keeps the same single-quote rule.
+	if got, _ := slashesAfter(`'<WS>\a'"'"'b\c' z\d`, "<WS>", false); got != `'<WS>/a'"'"'b/c' z\d` {
+		t.Errorf("plain: %s", got)
+	}
+}
+
+// jsonString is s as a JSON string literal (a Windows path doubles its "\").
+func jsonString(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// A Windows case root holds "\", which the sidecar recording stores doubled
+// (JSON). Relocation must still see the recording as path-dependent. A POSIX
+// directory may be named with a backslash, so this runs everywhere.
+func TestRelocationSeesJSONEscapedRoot(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, `win\root`)
+	r := writerRoots{root: root, ws: filepath.Join(root, "ws")}
+	rec := filepath.Join(r.ws, ".git", "faultline", "recordings", "codex-x.json")
+	if err := os.MkdirAll(filepath.Dir(rec), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rec, []byte(`{"workingDirectory": `+jsonString(t, r.ws)+`}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mustRead(t, rec)), `win\\root`) {
+		t.Fatalf("fixture does not hold the doubled root: %s", mustRead(t, rec))
+	}
+	var names []string
+	for _, n := range relocation(t, r, nil, nil).names {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	if want := []string{"file:.git/faultline/recordings/codex-x.json", "json:.git/faultline/recordings/codex-x.json#"}; !slices.Equal(names, want) {
+		t.Errorf("%q, want %q", names, want)
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // The Windows go job's skip guard lists the writer cases it may skip by
@@ -450,8 +527,8 @@ func TestSymlinkAndMtimeMutations(t *testing.T) {
 func TestRelocationWalksSidecarRecordings(t *testing.T) {
 	r := makeWriterRoots(t)
 	for rel, text := range map[string]string{
-		".git/faultline/recordings/codex-x.json":  `{"workingDirectory": "` + r.ws + `"}`,
-		".git/faultline/turn-snapshot-cache.json": `{"repositoryRoot": "` + r.ws + `"}`,
+		".git/faultline/recordings/codex-x.json":  `{"workingDirectory": ` + jsonString(t, r.ws) + `}`,
+		".git/faultline/turn-snapshot-cache.json": `{"repositoryRoot": ` + jsonString(t, r.ws) + `}`,
 		".git/config": r.ws,
 	} {
 		path := filepath.Join(r.ws, filepath.FromSlash(rel))

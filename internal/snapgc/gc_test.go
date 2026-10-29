@@ -3,6 +3,7 @@ package snapgc
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -67,7 +68,9 @@ func TestPurgeKeepsOtherAlternatesAndCountsFilesOnly(t *testing.T) {
 	if err != nil || string(b) != "/x/objects\n" {
 		t.Fatalf("%q %v", b, err)
 	}
-	if info, _ := os.Stat(alternates); info.Mode().Perm() != 0o600 {
+	// Windows has no POSIX permission bits (chmod only toggles read-only and
+	// the mode reads back 0666), so only there the 0600 assertion is not made.
+	if info, _ := os.Stat(alternates); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("mode %o", info.Mode().Perm())
 	}
 }

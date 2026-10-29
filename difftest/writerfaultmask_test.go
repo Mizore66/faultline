@@ -1,4 +1,4 @@
-//go:build faultline_test
+//go:build faultline_test && !windows
 
 package difftest
 

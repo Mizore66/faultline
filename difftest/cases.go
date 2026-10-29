@@ -1157,6 +1157,13 @@ func maskGitOutput(text string, maskGit bool) string {
 // slashesAfter rewrites the Windows separators in the path that follows each
 // mask, up to a boundary, to "/"; with jsonEscaped, a "\\" (an escaped
 // separator) counts as one. It reports whether a "/" was already there.
+//
+// What ends the path depends on how the mask is quoted, since a Windows path
+// may hold an apostrophe: after a JSON-escaped double quote (\") the path
+// runs to the escaped closing quote, whose backslash is not a separator, and
+// an apostrophe is part of it; after a single quote it runs to the closing
+// one, and the shell's '"'" escape (JSON-escaped: '\"'\"') is part of the
+// path. Anywhere else the first quote or space ends it.
 func slashesAfter(text, mask string, jsonEscaped bool) (string, bool) {
 	var b strings.Builder
 	forwardSlash := false
@@ -1168,20 +1175,64 @@ func slashesAfter(text, mask string, jsonEscaped bool) (string, bool) {
 			break
 		}
 		b.WriteString(out[:i+len(mask)])
+		opener := byte(0)
+		switch before := out[:i]; {
+		case jsonEscaped && strings.HasSuffix(before, `\"`):
+			opener = 'e'
+		case strings.HasSuffix(before, "'"):
+			opener = '\''
+		}
 		rest := out[i+len(mask):]
+		var path strings.Builder
 		end := 0
-		for end < len(rest) && !isBoundary(rest[end]) {
+		for end < len(rest) {
+			c := rest[end]
+			if jsonEscaped && strings.HasPrefix(rest[end:], `\"`) {
+				break // an escaped quote closes the path; it is not a separator
+			}
+			if jsonEscaped && strings.HasPrefix(rest[end:], `\\`) {
+				path.WriteByte('/')
+				end += 2
+				continue
+			}
+			if c == '\'' && opener == 'e' {
+				path.WriteByte(c)
+				end++
+				continue
+			}
+			if c == '\'' && opener == '\'' {
+				if token := apostropheEscape(rest[end:], jsonEscaped); token != "" {
+					path.WriteString(token)
+					end += len(token)
+					continue
+				}
+			}
+			if isBoundary(c) {
+				break
+			}
+			if c == '\\' {
+				c = '/'
+			}
+			path.WriteByte(c)
 			end++
 		}
-		path := rest[:end]
-		forwardSlash = forwardSlash || strings.Contains(path, "/")
-		if jsonEscaped {
-			path = strings.ReplaceAll(path, `\\`, "/")
-		}
-		b.WriteString(strings.ReplaceAll(path, `\`, "/"))
+		forwardSlash = forwardSlash || strings.Contains(rest[:end], "/")
+		b.WriteString(path.String())
 		out = rest[end:]
 	}
 	return b.String(), forwardSlash
+}
+
+// apostropheEscape is the text at the start of s when it is the shell's
+// single-quote escape inside a single-quoted word, '"'" (JSON-escaped:
+// '\"'\"'), and "" otherwise.
+func apostropheEscape(s string, jsonEscaped bool) string {
+	for _, token := range []string{`'"'"'`, `'\"'\"'`} {
+		if (jsonEscaped || token == `'"'"'`) && strings.HasPrefix(s, token) {
+			return token
+		}
+	}
+	return ""
 }
 
 func baseRoot(root, base string) string {

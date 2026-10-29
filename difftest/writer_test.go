@@ -948,9 +948,14 @@ func relocationCarrying(t *testing.T, r writerRoots, records []string, base *git
 			found = append(found, hex)
 		}
 	}
+	// The case root as output can carry it: raw, long form, and as JSON
+	// escapes it (a Windows "\" doubles in a recording's text).
+	rootForms := maskedForms(r.root, true)
 	tainted := func(text string) bool {
-		if strings.Contains(text, r.root) {
-			return true
+		for _, root := range rootForms {
+			if strings.Contains(text, root) {
+				return true
+			}
 		}
 		for d := range rel.names {
 			if strings.Contains(text, d) {
@@ -1014,7 +1019,7 @@ func relocationCarrying(t *testing.T, r writerRoots, records []string, base *git
 	// appears in no file: name those digests after the masked path.
 	// The ids of the Git objects the case created are seeds too
 	// (gen-writers.ts relocation).
-	seeds := []string{r.root}
+	seeds := slices.Clone(rootForms)
 	for _, path := range loggedCasePaths(records, r) {
 		digest := canonical.SHA256Hex(path)
 		add(digest, "path:"+normalizeWriter(path, r))

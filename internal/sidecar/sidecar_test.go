@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -595,11 +596,18 @@ func TestResultFromReceiptShapes(t *testing.T) {
 // (codex-sidecar.ts:529), the name the live test's plant-stage creates.
 func TestReceiptStageKey(t *testing.T) {
 	path := "/repo/.git/faultline/recordings/codex-stop-" + strings.Repeat("a", 64) + ".json"
-	want := "/repo/.git/faultline/recordings/." + canonical.SHA256Hex(path)[:24] + "." + strconv.Itoa(os.Getpid()) + ".tmp"
+	// The key hashes the path as given; path.join/dirname use the platform's
+	// separator (win32 on Windows, as Node does), so the stage keeps the
+	// separator style of the platform, not the POSIX literal.
+	dir := "/repo/.git/faultline/recordings/"
+	if runtime.GOOS == "windows" {
+		dir = `\repo\.git\faultline\recordings\`
+	}
+	want := dir + "." + canonical.SHA256Hex(path)[:24] + "." + strconv.Itoa(os.Getpid()) + ".tmp"
 	if got := receiptStagePath(path); got != want {
 		t.Fatalf("%s != %s", got, want)
 	}
-	if !regexp.MustCompile(`/\.[a-f0-9]{24}\.\d+\.tmp$`).MatchString(receiptStagePath(path)) {
+	if !regexp.MustCompile(`[\\/]\.[a-f0-9]{24}\.\d+\.tmp$`).MatchString(receiptStagePath(path)) {
 		t.Fatal(receiptStagePath(path))
 	}
 }
@@ -669,7 +677,10 @@ func TestStorageErrors(t *testing.T) {
 	}
 	for _, p := range []string{"faultline", "faultline/recordings"} {
 		info, err := os.Stat(filepath.Join(dir, ".git", p))
-		if err != nil || info.Mode().Perm() != 0o700 {
+		// Windows has no POSIX permission bits: it reports directories as
+		// 0777 whatever the requested mode, so only there the 0700 mode
+		// assertion is not made; existence and type are still asserted.
+		if err != nil || !info.IsDir() || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
 			t.Fatalf("%s %v %v", p, info, err)
 		}
 	}
