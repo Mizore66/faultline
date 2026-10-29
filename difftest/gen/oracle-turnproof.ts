@@ -66,7 +66,7 @@ function bindFn() {
   bindCache = new Function(
     "z", "digestJson", "canonicalJson", "CodexLifecycleLedgerSchema", "verifyCodexLifecycleLedger", "turnStatesFromLedger",
     `${sha[0]}\n${digest[0]}\n${bound[0]}\n${same[0]}\n${take(src, "bindTurnLifecycle")}\nreturn bindTurnLifecycle;`
-  )(z, digestJson, canonicalJson, CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger, turnStatesFromLedger);
+  )(z, digestJson, canonicalJson, CodexLifecycleLedgerSchema, verifyCodexLifecycleLedger, turnStatesFromLedger) as NonNullable<typeof bindCache>;
   return bindCache;
 }
 const states = (trees: string[]) => trees.map((treeDigest) => ({ treeDigest }));
