@@ -303,8 +303,10 @@ var unreachableLiterals = map[string]string{
 	"Attestation receipt path escaped its managed store.": "ReceiptIdSchema refuses every id that is a path first",
 	"Attestation staging file is not a regular file.":     "race only: the staged file was just created with open 'wx' and written by the same call",
 	// Slice 4c, internal/provenance (task-14-report concerns).
+	"Provenance root must be a real directory:":                 "the filesystem root is always a real directory (safedir.EnsureRealDirectoryTree throws rootMessage only for the root itself; every other component gets the traverse message)",
 	"receipt event is not permitted by the trust configuration": "both sides are z.literal(\"push\"), so the schemas refuse any other event before the comparison",
 	// Slice 4c, internal/repair store.go (task-9-report deviation 2).
+	"Repair brief root is not a real directory:":                             "the filesystem root is always a real directory (safedir.EnsureRealDirectoryTree throws rootMessage only for the root itself; every other component gets the traverse message)",
 	"Refusing to publish an invalid repair brief package:":                   "a stage just written verifies unless the filesystem fails between the writes and the verify; an unreadable stage under umask 0477 also fails its removal, and that error is thrown instead (as for the prevention writer)",
 	"Repair brief output appeared during assembly and will not be replaced:": "race only: the output was refused when it existed before staging",
 	// Slice 4c, internal/repair live.go. These are the causes undici gives
