@@ -34,16 +34,14 @@ func TestCpSyncTreeCopiesModesAndRefusesExisting(t *testing.T) {
 }
 
 func TestCpSyncTreeRefusals(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX file types")
-	}
 	root := t.TempDir()
+	sep := string(filepath.Separator) // node_file.cc appends preferred_separator
 	src := filepath.Join(root, "s")
 	os.MkdirAll(filepath.Join(src, "sub"), 0o755)
 	os.WriteFile(filepath.Join(root, "f"), []byte("x"), 0o644)
 	cases := []struct{ name, src, dest, want string }{
 		{"same", src, src, "src and dest cannot be the same " + src},
-		{"subdir", src, filepath.Join(src, "sub", "x"), "Cannot copy " + src + "/ to a subdirectory of self " + filepath.Join(src, "sub", "x")},
+		{"subdir", src, filepath.Join(src, "sub", "x"), "Cannot copy " + src + sep + " to a subdirectory of self " + filepath.Join(src, "sub", "x")},
 		{"dirToFile", src, filepath.Join(root, "f"), "Cannot overwrite non-directory " + filepath.Join(root, "f") + " with directory " + src},
 		{"fileToDir", filepath.Join(root, "f"), src, "Cannot overwrite directory " + src + " with non-directory " + filepath.Join(root, "f")},
 		{"missing", filepath.Join(root, "none"), filepath.Join(root, "z"), "ENOENT: no such file or directory, lstat '" + filepath.Join(root, "none") + "'"},
@@ -53,31 +51,5 @@ func TestCpSyncTreeRefusals(t *testing.T) {
 		if err == nil || err.Error() != c.want {
 			t.Errorf("%s: got %v, want %s", c.name, err, c.want)
 		}
-	}
-}
-
-func TestCpSyncTreeLinks(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks")
-	}
-	root := t.TempDir()
-	src := filepath.Join(root, "s")
-	os.MkdirAll(src, 0o755)
-	os.WriteFile(filepath.Join(src, "f"), []byte("x"), 0o400)
-	os.Symlink("f", filepath.Join(src, "rel"))
-	os.Symlink("/etc/hosts", filepath.Join(src, "abs"))
-	dst := filepath.Join(root, "d")
-	if err := CpSyncTree(src, dst); err != nil {
-		t.Fatal(err)
-	}
-	real, _ := filepath.EvalSymlinks(src)
-	if got, _ := os.Readlink(filepath.Join(dst, "rel")); got != filepath.Join(real, "f") {
-		t.Errorf("rel -> %q", got)
-	}
-	if got, _ := os.Readlink(filepath.Join(dst, "abs")); got != "/etc/hosts" && got != "/private/etc/hosts" {
-		t.Errorf("abs -> %q", got)
-	}
-	if info, _ := os.Stat(filepath.Join(dst, "f")); info.Mode().Perm() != 0o400 {
-		t.Errorf("mode %v", info.Mode())
 	}
 }

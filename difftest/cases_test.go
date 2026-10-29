@@ -487,9 +487,6 @@ func TestExpandRepeats(t *testing.T) {
 // add-symlink replaces a file or a dangling link and makes a missing path;
 // set-mtime sets a symbolic link's own times, not its target's.
 func TestSymlinkAndMtimeMutations(t *testing.T) {
-	if windows {
-		t.Skip("symbolic links")
-	}
 	root := t.TempDir()
 	os.WriteFile(filepath.Join(root, "target.txt"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(root, "file.txt"), []byte("y"), 0o644)
