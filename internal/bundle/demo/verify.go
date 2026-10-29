@@ -346,7 +346,16 @@ func invalidDeclaredPath(file string) bool {
 }
 
 // Verify ports verifyProofBundle (src/proof-bundle.ts:439).
-func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Result) {
+func Verify(directory, expectedRoot string, rootProvided bool) bundle.Result {
+	result, _ := VerifyWithManifest(directory, expectedRoot, rootProvided)
+	return result
+}
+
+// VerifyWithManifest is Verify plus the result's `manifest` member
+// (src/proof-bundle.ts:45): the schema-parsed manifest, or an Undefined value
+// when it did not parse. The caught-exception path keeps a manifest parsed
+// before the throw.
+func VerifyWithManifest(directory, expectedRoot string, rootProvided bool) (result bundle.Result, parsedManifest jsjson.Value) {
 	defer jsjson.UseCallSite(jsjson.SiteDemo)()
 	output := nodefs.Resolve(directory)
 	var errs []string
@@ -370,7 +379,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	})
 
 	if !nodefs.Exists(output) {
-		return bundle.Result{Errors: []string{"bundle directory does not exist"}, ExternalRootStatus: status}
+		return bundle.Result{Errors: []string{"bundle directory does not exist"}, ExternalRootStatus: status}, parsedManifest
 	}
 	assertNoLinksOrSpecialFiles(output)
 	hashesPath := nodefs.Join(output, "hashes.txt")
@@ -378,7 +387,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	manifestPath := nodefs.Join(output, "manifest.json")
 	analysisPath := nodefs.Join(output, "analysis.json")
 	if !nodefs.Exists(hashesPath) || !nodefs.Exists(rootPath) || !nodefs.Exists(manifestPath) || !nodefs.Exists(analysisPath) {
-		return bundle.Result{Errors: []string{"bundle is missing hashes.txt, ROOT.sha256, manifest.json, or analysis.json"}, ExternalRootStatus: status}
+		return bundle.Result{Errors: []string{"bundle is missing hashes.txt, ROOT.sha256, manifest.json, or analysis.json"}, ExternalRootStatus: status}, parsedManifest
 	}
 	hashes := bundle.Must(nodefs.ReadText(hashesPath))
 	calculated := "sha256:" + canonical.SHA256Hex(hashes)
@@ -397,6 +406,9 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 		push("externally supplied bundle root does not match")
 	}
 	manifest, manifestErr := bundle.ParseFile(manifestPath, manifestSchema)
+	if manifestErr == nil {
+		parsedManifest = manifest
+	}
 	if manifestErr != nil {
 		push(jsexc.Concat("manifest validation failed: ", jsexc.Message(manifestErr)))
 	}
@@ -489,5 +501,5 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	if analysisErr == nil {
 		validateSemanticEvidence(analysis, output, &errs)
 	}
-	return bundle.Result{Valid: len(errs) == 0, CheckedFiles: len(declaredOrder), Errors: errs, RootDigest: rootDigest, ExternalRootStatus: status}
+	return bundle.Result{Valid: len(errs) == 0, CheckedFiles: len(declaredOrder), Errors: errs, RootDigest: rootDigest, ExternalRootStatus: status}, parsedManifest
 }

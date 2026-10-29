@@ -2,7 +2,6 @@ package gitproof
 
 import (
 	"errors"
-	"strings"
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/jsexc"
@@ -11,15 +10,14 @@ import (
 	s "github.com/Mizore66/faultline/internal/schema"
 )
 
-// errorSummary ports src/ledger.ts:328.
+// errorSummary ports src/ledger.ts:328: `errors[0] ?? "invalid ledger"`
+// applies only to a one-element list (whose element is never undefined), so
+// an empty list joins to "".
 func errorSummary(errs []string) string {
 	if len(errs) == 1 {
 		return errs[0]
 	}
-	if len(errs) == 0 {
-		return "invalid ledger"
-	}
-	return strings.Join(errs, "; ")
+	return jsexc.Join(errs, "; ")
 }
 
 // ReadCodexLifecycleLedger ports readCodexLifecycleLedger (src/ledger.ts:637).

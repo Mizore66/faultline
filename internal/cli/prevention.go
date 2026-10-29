@@ -146,7 +146,9 @@ func (e *env) preventionWriteFromBundle(args []string, fromBundle, output string
 	if runs.Kind() != jsjson.Array {
 		return fail("--repaired-runs must be a JSON object with a runs array of three repaired NATIVE_DOCKER bindings.")
 	}
-	// The options literal, in its evaluation order.
+	// The options literal, in its evaluation order. TS passes no
+	// repairBaseTree and no hardGuardArtifactDigests (cli-app.ts:2603), so
+	// HasRepairBaseTree and HasHardGuardArtifactDigests stay false.
 	o := prevention.ArtifactOptions{Bundle: nodefs.Resolve(fromBundle), RepairedRuns: runs}
 	if o.ExpectedRoot, err = requiredOption(args, "--expect-root"); err != nil {
 		return err

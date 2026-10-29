@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "faultline.runtime-mapping.v1",
+  "mapping": {
+    "sha256:ef6706c9ae0120623cbd538d583eb963c043189a8993075e9599ac3bf3575b71": "registry.example/faultline-node@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sha256:1949853ad34bbfe91cee8e61c260de4debe088a10cc8d30784bfb918ddb3ab0c": "registry.example/faultline-node@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}

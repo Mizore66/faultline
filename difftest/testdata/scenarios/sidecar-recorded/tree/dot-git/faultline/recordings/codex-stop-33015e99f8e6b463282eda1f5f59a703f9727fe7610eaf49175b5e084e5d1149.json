@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "faultline.codex-sidecar-stop-receipt.v1",
+  "sessionId": "s-1",
+  "turnId": "t-1",
+  "status": "CHECKPOINT_RECORDED",
+  "checkpointDigest": "sha256:209f2dd45906bd72bc668ed3ed316630eeb8f5d6364d92ca3b4b9654edfc5565",
+  "turnSnapshotDigest": "sha256:b3a96beb50fe9484bbd8f79951859b595b751e17cefd9a2afb9b4175f7aaef8a"
+}

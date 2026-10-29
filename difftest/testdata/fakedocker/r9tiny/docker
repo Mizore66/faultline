@@ -1,9 +1,40 @@
 #!/bin/sh
+# r9tiny: stderr-only "abcdefgh" against a cap of 5, then this same shell
+# blocks forever in the read builtin on an unlinked FIFO that it holds open
+# read-write (so its own write end keeps the read from ever seeing EOF). The
+# only way out is the runner's SIGKILL on output overflow. No sleep, timer or
+# helper process. The FIFO and its directory live under a fresh mktemp
+# directory inside the parent of $FAULTLINE_ARGV_LOG (the test's own TempDir)
+# and are removed before anything is printed, so the kill cannot leak them.
 case "$1" in
 rm) exit 0 ;;
 run)
-  printf 'ab' >&2; printf 'cd'; printf 'ef' >&2; printf 'gh'
-  printf '\nFAULTLINE_WITNESS_RESULT={"protocol":"faultline.witness-result.v1","outcome":"PREDICATE_PASS"}\n'
+  log_dir=$(dirname -- "${FAULTLINE_ARGV_LOG:-}") || exit 70
+  [ -n "${FAULTLINE_ARGV_LOG:-}" ] && [ -d "$log_dir" ] || {
+    echo "r9tiny: FAULTLINE_ARGV_LOG directory missing" >&2
+    exit 70
+  }
+  owned=$(mktemp -d "$log_dir/r9tiny.XXXXXX") || {
+    echo "r9tiny: mktemp failed" >&2
+    exit 70
+  }
+  mkfifo "$owned/fifo" || {
+    echo "r9tiny: mkfifo failed" >&2
+    rm -rf -- "$owned"
+    exit 70
+  }
+  exec 3<>"$owned/fifo" || {
+    echo "r9tiny: open fifo failed" >&2
+    rm -rf -- "$owned"
+    exit 70
+  }
+  rm -- "$owned/fifo" && rmdir -- "$owned" || {
+    echo "r9tiny: unlink/rmdir failed" >&2
+    rm -rf -- "$owned"
+    exit 70
+  }
+  printf 'abcdefgh' >&2
+  read -r _ <&3
   exit 0 ;;
 esac
 exit 125

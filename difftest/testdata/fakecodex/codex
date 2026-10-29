@@ -1,0 +1,135 @@
+#!/bin/sh
+# Fake codex (README.md): one script for every variant. installFakeCodex
+# (difftest/writer_test.go) and writerEnv (difftest/gen/scenarios.ts) copy it
+# to <HOME>/fakecodex/codex with the case's argv.log written into the `log=`
+# line and the variant name into the `variant=` line: fl runs codex with
+# PATH as its only environment variable. Every call appends one record:
+# "codex " + the arguments joined by \037, then STDIN=<stdin bytes>,
+# PATH=<$PATH> and ENV=<the other variables' names, sorted, joined by ",">
+# (without PWD, OLDPWD, SHLVL and _, which sh sets on its own, and without
+# AWKPATH or AWKLIBPATH when only awk added them), terminated by \036.
+# Variants: edits noop probe-fail probe-empty probe-crlf exit-nonzero killed
+# flood outside-edits symlink-edit.
+variant=@VARIANT@
+self=$(cd "${0%/*}" && pwd -P)
+log=$FAULTLINE_ARGV_LOG
+# tool finds a helper on PATH, else in /usr/bin or /bin: a case may run with
+# a PATH that holds none (pathTools, the end to end without Node).
+tool() {
+  command -v "$1" 2>/dev/null && return
+  for dir in /usr/bin /bin; do
+    if [ -x "$dir/$1" ]; then echo "$dir/$1"; return; fi
+  done
+  echo "$1"
+}
+us=$(printf '\037')
+stdin=$("$(tool cat)"; printf x)
+stdin=${stdin%x}
+# Some awks (gawk) add AWKPATH and AWKLIBPATH to their own ENVIRON. Presence is
+# snapshotted from this shell before awk runs: a name is skipped only when this
+# shell did not have it, so one fl really passed (even empty) is still recorded.
+names=$("$(tool awk)" -v "awkpath_set=${AWKPATH+x}" -v "awklibpath_set=${AWKLIBPATH+x}" 'BEGIN {
+  n = 0
+  for (k in ENVIRON) {
+    if (k == "PATH" || k == "PWD" || k == "OLDPWD" || k == "SHLVL" || k == "_") continue
+    if ((k == "AWKPATH" && awkpath_set == "") || (k == "AWKLIBPATH" && awklibpath_set == "")) continue
+    i = n++
+    while (i > 0 && names[i - 1] > k) { names[i] = names[i - 1]; i-- }
+    names[i] = k
+  }
+  s = ""
+  for (i = 0; i < n; i++) s = s (i ? "," : "") names[i]
+  printf "%s", s
+}')
+if [ -n "$log" ]; then
+  # One write per record.
+  record="codex "
+  sep=
+  for arg in "$@"; do record="$record$sep$arg"; sep=$us; done
+  printf '%s\036' "$record${us}STDIN=$stdin${us}PATH=$PATH${us}ENV=$names" >> "$log"
+fi
+# rep prints $1 repeated $2 times.
+rep() {
+  s=$1 n=$2 r=
+  while [ "$n" -gt 0 ]; do
+    if [ $((n % 2)) = 1 ]; then r=$r$s; fi
+    s=$s$s n=$((n / 2))
+  done
+  printf '%s' "$r"
+}
+if [ "$1" = --version ] && [ $# = 1 ]; then
+  case "$variant" in
+  probe-fail)
+    printf 'codex: unsupported\n' >&2
+    exit 2
+    ;;
+  probe-empty)
+    printf '\n'
+    exit 0
+    ;;
+  probe-crlf)
+    printf '  codex-cli 1.2.3\r\nbuild fake\r\n'
+    exit 0
+    ;;
+  esac
+  printf 'codex-cli 0.0.0-fake\n'
+  exit 0
+fi
+# edit is the `edits` exec body: a fixed passing witness in a witness
+# implement overlay directory (README.faultline.txt in the cwd), else
+# state.txt = good.
+edit() {
+  if [ -f README.faultline.txt ]; then
+    # The witness implement overlay directory: a fixed passing witness.
+    printf '%s\n' '#!/usr/bin/env node' \
+      '// Drafted by the fake codex (difftest/testdata/fakecodex/README.md).' \
+      'console.log(JSON.stringify({ protocol: "faultline.witness-result.v1", outcome: "PREDICATE_PASS" }));' \
+      'process.exit(0);' > witness.mjs
+  else
+    printf 'good\n' > state.txt
+  fi
+}
+case "$1 $2 $#" in
+"exec --full-auto 3")
+  case "$variant" in
+  edits)
+    edit
+    printf 'fake codex: edited\n'
+    exit 0
+    ;;
+  outside-edits)
+    edit
+    printf 'outside\n' > ../outside.txt
+    printf 'fake codex: edited\n'
+    exit 0
+    ;;
+  noop | probe-fail | probe-empty | probe-crlf)
+    printf 'fake codex: nothing to do\n'
+    exit 0
+    ;;
+  exit-nonzero)
+    printf 'bad\n' > state.txt
+    printf 'codex failed\n' >&2
+    exit 3
+    ;;
+  killed)
+    kill -TERM $$
+    exit 4
+    ;;
+  flood)
+    rep 'é' 6000
+    rep x 5000 >&2
+    exit 0
+    ;;
+  symlink-edit)
+    printf 'good\n' > good.txt
+    "$(tool rm)" -f state.txt
+    "$(tool ln)" -s good.txt state.txt
+    printf 'fake codex: edited\n'
+    exit 0
+    ;;
+  esac
+  ;;
+esac
+printf 'fake codex (%s): unsupported command: %s\n' "$variant" "$*" >&2
+exit 125

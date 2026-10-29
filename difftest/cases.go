@@ -11,8 +11,10 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/canonical"
@@ -241,7 +243,8 @@ func fixturesDir() string {
 }
 
 // pathOps target a path in the bundle (or the bundle itself), not an existing file.
-var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "remove-root": true, "fifo": true, "sparse-file": true, "many-files": true, "fake-git": true, "pad-total": true}
+var pathOps = map[string]bool{"add-file": true, "root-symlink": true, "remove-root": true, "fifo": true, "sparse-file": true, "many-files": true, "fake-git": true, "pad-total": true,
+	"add-symlink": true, "set-mtime": true}
 
 // latin1 is Buffer.from(s, "latin1") for the ASCII find/replace strings.
 func latin1(s string) []byte {
@@ -442,6 +445,116 @@ func writeJSON(path string, v jsjson.Value) {
 	os.WriteFile(path, []byte(jsstr.ToUTF8(jsjson.StringifyIndent(v, "  ")+"\n")), 0o644)
 }
 
+// writeCanonical writes canonicalJson(v) + "\n", a turn bundle artifact's
+// bytes (cases.ts writeCanonical).
+func writeCanonical(path string, v jsjson.Value) {
+	text, err := canonical.CanonicalJSON(v)
+	if err != nil {
+		panic(err)
+	}
+	os.WriteFile(path, []byte(jsstr.ToUTF8(text+"\n")), 0o644)
+}
+
+// withoutKey is a copy of o without key (`const { key: _, ...rest } = o`).
+func withoutKey(o *jsjson.Obj, key string) jsjson.Value {
+	c := jsjson.NewObj()
+	for _, k := range o.Keys() {
+		if k != key {
+			c.Set(k, o.Field(k))
+		}
+	}
+	return jsjson.MakeObject(c)
+}
+
+// resignTurnBundle is the TS engine's resignTurnBundle: the editor who
+// rewrites a turn bundle consistently after an edit of investigation.json.
+// Each runId is re-derived from its run (executionId is left alone) and
+// renamed wherever stable states and transitions name it, then the run and
+// transition artifacts and the manifest's artifact index and investigation
+// digest are rewritten; the template's rehash then rewrites hashes.txt and
+// ROOT.sha256. Like TS, which throws, it panics (failing the test) when
+// investigation.json or manifest.json does not parse as an object.
+func resignTurnBundle(root string) {
+	investigationPath := filepath.Join(root, "investigation.json")
+	o, ok := parseObjectFile(investigationPath)
+	if !ok {
+		panic("resignTurn: investigation.json is not a JSON object")
+	}
+	investigation := jsjson.MakeObject(o)
+	renamed := map[string]string{}
+	runs := investigation.Get("runs").Items()
+	for _, run := range runs {
+		old := run.Get("runId").Str()
+		id := bundleMustString(canonical.DigestJSON(withoutKey(run.Obj(), "runId")))
+		run.Obj().Set("runId", jsjson.MakeString(id))
+		renamed[old] = id
+	}
+	rename := func(s jsjson.Value) {
+		if s.Kind() != jsjson.Object {
+			return
+		}
+		ids := s.Get("runIds")
+		if ids.Kind() != jsjson.Array {
+			return
+		}
+		out := make([]jsjson.Value, len(ids.Items()))
+		for i, id := range ids.Items() {
+			out[i] = id
+			if n, ok := renamed[id.Str()]; ok && id.Kind() == jsjson.String {
+				out[i] = jsjson.MakeString(n)
+			}
+		}
+		s.Obj().Set("runIds", jsjson.MakeArray(out))
+	}
+	for _, st := range investigation.Get("stableStates").Items() {
+		rename(st)
+	}
+	transitions := investigation.Get("transitions").Items()
+	for _, tr := range transitions {
+		rename(tr.Get("before"))
+		rename(tr.Get("after"))
+	}
+	writeCanonical(investigationPath, investigation)
+	runPath := func(run jsjson.Value) string {
+		return "runs/" + strings.TrimPrefix(run.Get("runId").Str(), "sha256:") + ".json"
+	}
+	transitionPath := func(i int) string { return fmt.Sprintf("transitions/%04d.json", i) }
+	for _, dir := range []string{"runs", "transitions"} {
+		os.MkdirAll(filepath.Join(root, dir), 0o755)
+		names, _ := nodefs.ReadDirNames(filepath.Join(root, dir))
+		for _, name := range names {
+			if strings.HasSuffix(name, ".json") {
+				os.Remove(filepath.Join(root, dir, name))
+			}
+		}
+	}
+	var runIndex, transitionIndex []jsjson.Value
+	for _, run := range runs {
+		writeCanonical(filepath.Join(root, filepath.FromSlash(runPath(run))), run)
+		d := jsjson.NewObj()
+		d.Set("runId", run.Get("runId"))
+		d.Set("path", jsjson.MakeString(runPath(run)))
+		runIndex = append(runIndex, jsjson.MakeObject(d))
+	}
+	for i, tr := range transitions {
+		writeCanonical(filepath.Join(root, filepath.FromSlash(transitionPath(i))), tr)
+		d := jsjson.NewObj()
+		d.Set("index", jsjson.MakeNumber(float64(i)))
+		d.Set("path", jsjson.MakeString(transitionPath(i)))
+		transitionIndex = append(transitionIndex, jsjson.MakeObject(d))
+	}
+	manifestPath := filepath.Join(root, "manifest.json")
+	manifest, ok := parseObjectFile(manifestPath)
+	if !ok || manifest.Field("artifacts").Kind() != jsjson.Object {
+		panic("resignTurn: manifest.json is not a JSON object with artifacts")
+	}
+	artifacts := manifest.Field("artifacts").Obj()
+	artifacts.Set("runs", jsjson.MakeArray(append([]jsjson.Value{}, runIndex...)))
+	artifacts.Set("transitions", jsjson.MakeArray(append([]jsjson.Value{}, transitionIndex...)))
+	manifest.Set("investigationDigest", jsjson.MakeString(bundleMustString(canonical.DigestJSON(investigation))))
+	writeCanonical(manifestPath, jsjson.MakeObject(manifest))
+}
+
 func rehash(root, base string) {
 	if strings.HasPrefix(base, "prevention-") {
 		manifest, ok := parseObjectFile(filepath.Join(root, "manifest.json"))
@@ -571,6 +684,30 @@ func applyMutation(root string, c testCase) bool {
 	case "copy-file":
 		b, _ := os.ReadFile(filepath.Join(fixturesDir(), filepath.FromSlash(t.str("from"))))
 		os.WriteFile(path, b, 0o644)
+	case "pad-file":
+		// Spaces until the file is exactly total bytes.
+		b, err := os.ReadFile(path)
+		total := int(t.fields.Field("total").Num())
+		if err != nil || len(b) > total {
+			return false
+		}
+		os.WriteFile(path, append(b, bytes.Repeat([]byte{0x20}, total-len(b))...), 0o644)
+	case "replace-pack":
+		// A new trees.pack, with the source metadata's pack digest and size
+		// following it.
+		b, err := os.ReadFile(filepath.Join(fixturesDir(), filepath.FromSlash(t.str("from"))))
+		if err != nil {
+			return false
+		}
+		os.WriteFile(path, b, 0o644)
+		metadataPath := filepath.Join(root, "source", "trees.metadata.json")
+		metadata, ok := parseObjectFile(metadataPath)
+		if !ok || metadata.Field("pack").Kind() != jsjson.Object {
+			return false
+		}
+		metadata.Field("pack").Obj().Set("digest", jsjson.MakeString("sha256:"+canonical.SHA256HexBytes(b)))
+		metadata.Field("pack").Obj().Set("bytes", jsjson.MakeNumber(float64(len(b))))
+		writeCanonical(metadataPath, jsjson.MakeObject(metadata))
 	case "sparse-file":
 		// count > 1 makes path-00000, path-00001, ...
 		os.MkdirAll(filepath.Dir(path), 0o755)
@@ -612,7 +749,30 @@ func applyMutation(root string, c testCase) bool {
 		}
 	case "add-file":
 		os.MkdirAll(filepath.Dir(path), 0o755)
-		os.WriteFile(path, []byte(t.str("content")), 0o644)
+		content, ok := expandRepeats(t.str("content"))
+		if !ok {
+			return false
+		}
+		os.WriteFile(path, []byte(jsstr.ToUTF8(content)), 0o644)
+	case "add-symlink":
+		// path becomes a symbolic link to target whether or not it exists;
+		// an existing file or link is replaced, a directory refused
+		// (cases.ts applyMutation).
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		if info, err := os.Lstat(path); err == nil {
+			if info.IsDir() || os.Remove(path) != nil {
+				return false
+			}
+		}
+		if err := os.Symlink(t.str("target"), path); err != nil {
+			return false
+		}
+	case "set-mtime":
+		// atime and mtime, without following a symbolic link (lutimesSync).
+		at, err := time.Parse("2006-01-02T15:04:05.000Z", t.str("iso"))
+		if err != nil || lutimes(path, at) != nil {
+			return false
+		}
 	case "chmod":
 		// A writer case applies chmod after resetModes (prepareWriterCase),
 		// which would otherwise undo it.
@@ -646,10 +806,36 @@ func applyMutation(root string, c testCase) bool {
 		}
 		writeJSON(path, jsjson.MakeObject(o))
 	}
+	if t.fields.Field("resignTurn").Bool() {
+		resignTurnBundle(root)
+	}
 	if t.fields.Field("rehash").Bool() {
 		rehash(root, c.base)
 	}
 	return true
+}
+
+// repeatMarker is <REPEAT:c:n> in a writer input or add-file content: the
+// single character c repeated n times, n at most maxRepeat (cases.ts
+// expandRepeats).
+var repeatMarker = regexp.MustCompile(`(?s)<REPEAT:(.):([0-9]+)>`)
+
+const maxRepeat = 8_388_608
+
+// expandRepeats expands every <REPEAT:c:n>; ok is false when an n is over
+// maxRepeat (TS throws).
+func expandRepeats(s string) (string, bool) {
+	ok := true
+	out := repeatMarker.ReplaceAllStringFunc(s, func(m string) string {
+		sub := repeatMarker.FindStringSubmatch(m)
+		n, err := strconv.Atoi(sub[2])
+		if err != nil || n > maxRepeat {
+			ok = false
+			return m
+		}
+		return strings.Repeat(sub[1], n)
+	})
+	return out, ok
 }
 
 // caseEnv adds a fake-git case's PATH to the base environment.
@@ -685,7 +871,15 @@ func treeDigest(root string) string {
 // fileDigest (the writer replay's relocated digest; cases.ts treeDigest's
 // second argument).
 func treeDigestWith(root string, fileDigest func(rel string, b []byte) string) string {
-	var lines []string
+	return treeDigestAliased(root, fileDigest, func(rel string) (string, bool) { return rel, true })
+}
+
+// treeDigestAliased is treeDigestWith with each path named by alias (false
+// leaves the entry out). A renamed line goes last, sorted, since its order
+// would follow the object ids; an unchanged path keeps its place
+// (cases.ts treeDigest).
+func treeDigestAliased(root string, fileDigest func(rel string, b []byte) string, alias func(rel string) (string, bool)) string {
+	var lines, moved []string
 	var walk func(rel string)
 	walk = func(rel string) {
 		names, _ := nodefs.ReadDirNames(filepath.Join(root, filepath.FromSlash(rel)))
@@ -696,25 +890,36 @@ func treeDigestWith(root string, fileDigest func(rel string, b []byte) string) s
 			}
 			path := filepath.Join(root, filepath.FromSlash(r))
 			info, _ := os.Lstat(path)
+			shown, keep := alias(r)
+			add := func(kind, rest string) {
+				switch {
+				case !keep:
+				case shown == r:
+					lines = append(lines, kind+" "+shown+rest)
+				default:
+					moved = append(moved, kind+" "+shown+rest)
+				}
+			}
 			switch {
 			case info.Mode()&os.ModeSymlink != 0:
 				// Windows reports the link target with backslashes; the tree
 				// digest records the logical target as TS wrote it.
 				target, _ := os.Readlink(path)
-				lines = append(lines, "L "+r+" "+filepath.ToSlash(target))
+				add("L", " "+filepath.ToSlash(target))
 			case info.IsDir():
-				lines = append(lines, "D "+r)
+				add("D", "")
 				walk(r)
 			case !info.Mode().IsRegular(): // a FIFO: reading it would block
-				lines = append(lines, "S "+r)
+				add("S", "")
 			default:
 				b, _ := os.ReadFile(path)
-				lines = append(lines, "F "+r+" "+fileDigest(r, b))
+				add("F", " "+fileDigest(r, b))
 			}
 		}
 	}
 	walk("")
-	return canonical.SHA256Hex(strings.Join(lines, "\n"))
+	sort.Strings(moved)
+	return canonical.SHA256Hex(strings.Join(append(lines, moved...), "\n"))
 }
 
 var gitLabels = []string{
@@ -722,6 +927,21 @@ var gitLabels = []string{
 	"Git bundle extraction", "Git commit resolution", "Git tree resolution", "Git bundle range enumeration",
 	"Git binary range patch creation", "Git bundle object-format resolution",
 }
+
+// turnGitLabels precede git's stderr in the turn verifier's and writer's
+// messages (turn-proof-bundle.ts:417, 428, 457, 475), in the ": " form;
+// turnEnumerateLabel is the one that names a tree.
+var (
+	turnGitLabels = []string{
+		"Turn tree pack is not a valid Git pack: ",
+		"Could not create temporary bare repository for pack verification: ",
+		"Could not pack turn trees: ",
+	}
+	turnEnumerateLabel = regexp.MustCompile(`Could not enumerate objects for turn tree [0-9a-f]{40,64}: `)
+)
+
+// gitTmpMarkers name the git verifiers' temporary directories.
+var gitTmpMarkers = []string{"faultline-git-proof-verify-", "faultline-turn-proof-pack-"}
 
 func isBoundary(c byte) bool {
 	return c == '\'' || c == '"' || c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'
@@ -842,6 +1062,8 @@ func normalizeWriter(text string, roots writerRoots) string {
 		return "127.0.0.1:<PORT>"
 	})
 	out = stagedPID.ReplaceAllString(out, ".<pid>.$1.tmp")
+	out = stageKey.ReplaceAllString(out, ".<STAGEKEY>.<pid>.tmp")
+	out = lockAge.ReplaceAllString(out, `${1}"<LOCKAGE>"`)
 	out = maskGitOutput(out, true)
 	if runtime.GOOS == "windows" {
 		for _, m := range masks {
@@ -857,35 +1079,65 @@ var loopbackPort = regexp.MustCompile(`127\.0\.0\.1:[0-9]+`)
 // (.<name>.<pid>.<uuid>.tmp), which a failed rename prints.
 var stagedPID = regexp.MustCompile(`\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp`)
 
+// stageKey masks a sidecar receipt stage (.<sha256(receipt path)[0:24]>.<pid>.tmp,
+// codex-sidecar.ts writeJsonAtomic): its key hashes the absolute receipt
+// path, its pid is the process's.
+var stageKey = regexp.MustCompile(`\.([0-9a-f]{24})\.([0-9]+)\.tmp`)
+
+// lockAge masks sidecar status's ACTIVE lock.ageMilliseconds
+// (codex-sidecar.ts sidecarLockHealth), which a seed cannot fix. A STALE age
+// is seeded by set-mtime and stays compared.
+var lockAge = regexp.MustCompile(`("state": "ACTIVE",\s*"ageMilliseconds": )[0-9]+`)
+
 // maskGitOutput replaces git's temporary verifier directories with <GITTMP>
 // and, with maskGit, git's own diagnostics after each gitLabels failure.
 func maskGitOutput(text string, maskGit bool) string {
 	out := text
-	const marker = "faultline-git-proof-verify-"
-	for i := strings.Index(out, marker); i >= 0; {
-		start := i
-		for start > 0 && !isBoundary(out[start-1]) {
-			start--
+	for _, marker := range gitTmpMarkers {
+		for i := strings.Index(out, marker); i >= 0; {
+			start := i
+			for start > 0 && !isBoundary(out[start-1]) {
+				start--
+			}
+			end := i + len(marker)
+			for end < len(out) && isAlnum(out[end]) {
+				end++
+			}
+			out = out[:start] + "<GITTMP>" + out[end:]
+			next := strings.Index(out[start+len("<GITTMP>"):], marker)
+			if next < 0 {
+				break
+			}
+			i = start + len("<GITTMP>") + next
 		}
-		end := i + len(marker)
-		for end < len(out) && isAlnum(out[end]) {
-			end++
-		}
-		out = out[:start] + "<GITTMP>" + out[end:]
-		next := strings.Index(out[start+len("<GITTMP>"):], marker)
-		if next < 0 {
-			break
-		}
-		i = start + len("<GITTMP>") + next
 	}
-	labels := gitLabels
 	if !maskGit {
-		labels = nil
+		return out
 	}
-	for _, label := range labels {
-		needle := label + " failed: "
-		for i := strings.Index(out, needle); i >= 0; {
-			from := i + len(needle)
+	// Each needle finds the start of the next detail at or after from (-1 if none).
+	var needles []func(from int) int
+	literal := func(needle string) func(int) int {
+		return func(from int) int {
+			if i := strings.Index(out[from:], needle); i >= 0 {
+				return from + i + len(needle)
+			}
+			return -1
+		}
+	}
+	for _, label := range gitLabels {
+		needles = append(needles, literal(label+" failed: "))
+	}
+	for _, label := range turnGitLabels {
+		needles = append(needles, literal(label))
+	}
+	needles = append(needles, func(from int) int {
+		if m := turnEnumerateLabel.FindStringIndex(out[from:]); m != nil {
+			return from + m[1]
+		}
+		return -1
+	})
+	for _, after := range needles {
+		for from := after(0); from >= 0; from = after(from) {
 			to := strings.Index(out[from:], "\n- ")
 			if to >= 0 {
 				to += from
@@ -896,11 +1148,7 @@ func maskGitOutput(text string, maskGit bool) string {
 			}
 			detail := maskGitDetail(out[from:to])
 			out = out[:from] + detail + out[to:]
-			next := strings.Index(out[from+len(detail):], needle)
-			if next < 0 {
-				break
-			}
-			i = from + len(detail) + next
+			from += len(detail)
 		}
 	}
 	return out
@@ -909,6 +1157,13 @@ func maskGitOutput(text string, maskGit bool) string {
 // slashesAfter rewrites the Windows separators in the path that follows each
 // mask, up to a boundary, to "/"; with jsonEscaped, a "\\" (an escaped
 // separator) counts as one. It reports whether a "/" was already there.
+//
+// What ends the path depends on how the mask is quoted, since a Windows path
+// may hold an apostrophe: after a JSON-escaped double quote (\") the path
+// runs to the escaped closing quote, whose backslash is not a separator, and
+// an apostrophe is part of it; after a single quote it runs to the closing
+// one, and the shell's '"'" escape (JSON-escaped: '\"'\"') is part of the
+// path. Anywhere else the first quote or space ends it.
 func slashesAfter(text, mask string, jsonEscaped bool) (string, bool) {
 	var b strings.Builder
 	forwardSlash := false
@@ -920,20 +1175,64 @@ func slashesAfter(text, mask string, jsonEscaped bool) (string, bool) {
 			break
 		}
 		b.WriteString(out[:i+len(mask)])
+		opener := byte(0)
+		switch before := out[:i]; {
+		case jsonEscaped && strings.HasSuffix(before, `\"`):
+			opener = 'e'
+		case strings.HasSuffix(before, "'"):
+			opener = '\''
+		}
 		rest := out[i+len(mask):]
+		var path strings.Builder
 		end := 0
-		for end < len(rest) && !isBoundary(rest[end]) {
+		for end < len(rest) {
+			c := rest[end]
+			if jsonEscaped && strings.HasPrefix(rest[end:], `\"`) {
+				break // an escaped quote closes the path; it is not a separator
+			}
+			if jsonEscaped && strings.HasPrefix(rest[end:], `\\`) {
+				path.WriteByte('/')
+				end += 2
+				continue
+			}
+			if c == '\'' && opener == 'e' {
+				path.WriteByte(c)
+				end++
+				continue
+			}
+			if c == '\'' && opener == '\'' {
+				if token := apostropheEscape(rest[end:], jsonEscaped); token != "" {
+					path.WriteString(token)
+					end += len(token)
+					continue
+				}
+			}
+			if isBoundary(c) {
+				break
+			}
+			if c == '\\' {
+				c = '/'
+			}
+			path.WriteByte(c)
 			end++
 		}
-		path := rest[:end]
-		forwardSlash = forwardSlash || strings.Contains(path, "/")
-		if jsonEscaped {
-			path = strings.ReplaceAll(path, `\\`, "/")
-		}
-		b.WriteString(strings.ReplaceAll(path, `\`, "/"))
+		forwardSlash = forwardSlash || strings.Contains(rest[:end], "/")
+		b.WriteString(path.String())
 		out = rest[end:]
 	}
 	return b.String(), forwardSlash
+}
+
+// apostropheEscape is the text at the start of s when it is the shell's
+// single-quote escape inside a single-quoted word, '"'" (JSON-escaped:
+// '\"'\"'), and "" otherwise.
+func apostropheEscape(s string, jsonEscaped bool) string {
+	for _, token := range []string{`'"'"'`, `'\"'\"'`} {
+		if (jsonEscaped || token == `'"'"'`) && strings.HasPrefix(s, token) {
+			return token
+		}
+	}
+	return ""
 }
 
 func baseRoot(root, base string) string {

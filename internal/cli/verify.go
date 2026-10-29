@@ -7,6 +7,7 @@ import (
 	"github.com/Mizore66/faultline/internal/bundle/demo"
 	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/bundle/prevention"
+	"github.com/Mizore66/faultline/internal/bundle/turnproof"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
@@ -33,8 +34,17 @@ func verifyCommand(e *env, args []string) error {
 	case "faultline.prevention-proof.v1":
 		e.printPrevention(prevention.Verify(root, expectedRoot, rootProvided))
 		return nil
-	case "faultline.turn-proof-bundle.v1":
-		return fail("not yet ported: turn proof bundle verification")
+	case turnproof.BundleSchemaVersion:
+		// cli-app.ts:2927-2939; --expect-root "" is provided (correction 2).
+		r := turnproof.Verify(root, expectedRoot, rootProvided)
+		first := "Integrity"
+		if r.ExternalRootStatus == "NOT_PROVIDED" {
+			first = "Turn proof self-consistency"
+		}
+		e.out(first + ": " + verdictWord(r.Valid) + "\n")
+		e.out(fmt.Sprintf("Evidence grade: EXPERIMENTAL_TURN\nDeclared files checked: %d\nBundle root: %s\nExternal root: %s\n", r.CheckedFiles, orUnavailable(r.RootDigest), r.ExternalRootStatus))
+		e.printErrorsAndExit(r.Result)
+		return nil
 	case "faultline.git-proof-bundle.v1":
 		e.printBundle("Git proof", gitproof.Verify(root, expectedRoot, rootProvided))
 		return nil

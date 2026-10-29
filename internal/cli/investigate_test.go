@@ -32,7 +32,6 @@ func TestInvestigateUsageAndGuards(t *testing.T) {
 		{[]string{"investigate", "git", "--ci-log", "x.log"}, guard},
 		{[]string{"investigate", "turns", "--resume", "id"}, guard},
 		{[]string{"investigate", "--ci-log", "x.log"}, "FaultLine error: not yet ported: investigate --ci-log/--resume\nNext: pnpm fl help\n"},
-		{[]string{"investigate", "turns"}, "FaultLine error: not yet ported: investigate turns\nNext: pnpm fl help\n"},
 		{[]string{"investigate", "git"}, "FaultLine error: Missing required option: --proposal\nNext: pnpm fl help\n"},
 		{[]string{"investigate", "git", "--proposal", "p", "--repair-thread-id", "-bad"},
 			"FaultLine error: --repair-thread-id must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).\nNext: pnpm fl help\n"},

@@ -4,7 +4,9 @@ package clock
 
 import (
 	"crypto/sha256"
+	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -18,23 +20,56 @@ var state struct {
 	seed            string
 	tick, uuid, tmp uint64
 	rand            uint64
+	// offset is FAULTLINE_TEST_CLOCK_OFFSET_MS, added to the epoch: a
+	// writer case's later invocations run an hour apart each
+	// (difftest/gen/seed.mjs).
+	offset int64
 }
 
 func load() {
 	if !state.init {
 		state.seed = os.Getenv("FAULTLINE_TEST_SEED")
+		state.offset = 0
+		if state.seed != "" {
+			state.offset = clockOffset(os.Getenv("FAULTLINE_TEST_CLOCK_OFFSET_MS"))
+		}
 		state.init = true
 	}
+}
+
+// init checks FAULTLINE_TEST_CLOCK_OFFSET_MS when the process starts under
+// a seed, so a bad value fails every command, also one that never reads
+// the clock (seed.mjs checks it when the preload loads).
+func init() {
+	if os.Getenv("FAULTLINE_TEST_SEED") != "" {
+		clockOffset(os.Getenv("FAULTLINE_TEST_CLOCK_OFFSET_MS"))
+	}
+}
+
+// clockOffset parses FAULTLINE_TEST_CLOCK_OFFSET_MS: unset or empty is 0,
+// an integer (-?[0-9]+) is that many milliseconds, and anything else stops
+// the process, as seed.mjs does at load.
+func clockOffset(raw string) int64 {
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || raw[0] == '+' {
+		fmt.Fprintln(os.Stderr, "bad FAULTLINE_TEST_CLOCK_OFFSET_MS")
+		os.Exit(1)
+	}
+	return n
 }
 
 func reset(seed string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.seed, state.init = seed, true
+	state.seed, state.init, state.offset = seed, true, 0
 	state.tick, state.uuid, state.tmp, state.rand = 0, 0, 0, 0
 }
 
-// ResetForTest reseeds the sequence and zeroes every counter.
+// ResetForTest reseeds the sequence, zeroes every counter and the clock
+// offset.
 func ResetForTest(seed string) { reset(seed) }
 
 func digest(kind string, n uint64) [32]byte {
@@ -62,7 +97,7 @@ func NowMillis() int64 {
 	if state.seed == "" {
 		return wallNowMillis()
 	}
-	ms := int64(epochMillis + state.tick)
+	ms := epochMillis + state.offset + int64(state.tick)
 	state.tick++
 	return ms
 }
@@ -125,4 +160,13 @@ func RandRead(b []byte) {
 		state.rand++
 		copy(b[i:], h[:])
 	}
+}
+
+// ConsumedForTest reports how many time reads (Now and NowMillis share one
+// counter) and UUIDs the seeded sequence has handed out; seed.mjs exposes the
+// same two counters as globalThis.__faultlineSeedCounters.
+func ConsumedForTest() (ticks, uuids int) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return int(state.tick), int(state.uuid)
 }

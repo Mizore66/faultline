@@ -18,9 +18,14 @@ type RangeError struct{ Code, Message string }
 
 func (e *RangeError) Error() string { return e.Message }
 
-// DraftInput is createIncidentDraft's input (src/incident.ts:88). An
-// Undefined jsjson.Value (the zero value, "nil") is an absent member; any
-// other value, null included, is validated as TS validates it.
+// DraftInput is createIncidentDraft's input (src/incident.ts:88,
+// IncidentDraftInputSchema): the members createIncidentDraft reads are
+// draftId (ID), createdAt, repository, command, range, localHead, runtime
+// and proposal. An Undefined jsjson.Value (the zero value, "nil") is an
+// absent member; any other value, null included, is validated as TS
+// validates it. The symptom, language, behavior and timeout of `incident
+// start` are not draft members: the command passes them to the witness
+// proposal directly (cli-app.ts:630-646).
 type DraftInput struct {
 	ID, Repository, Command string
 	// CreatedAt is the draft's createdAt. "" reads clock.Now() once, inside
@@ -29,11 +34,9 @@ type DraftInput struct {
 	// one draftInput (cli-app.ts:629 and 647), so its second CreateDraft
 	// must pass the first draft's createdAt.
 	CreatedAt string
-	// Range is the explicit {ancestor, descendant} bracket (--from/--to).
-	// A resolved range (ResolveRange's result, with source) is accepted
-	// too: EXPLICIT is the same bracket, and LOCAL_HEAD_PARENT is the
-	// observed facts {head: descendant, parents: [ancestor]}, which resolve
-	// to the same range.
+	// Range is the explicit {ancestor, descendant} bracket (--from/--to),
+	// passed raw as TS does: a resolved range with a `source` member is
+	// rejected by the strict schema, exactly as in createIncidentDraft.
 	Range jsjson.Value
 	// LocalHead is the observed {head, parents} (LocalHeadFacts), used when
 	// Range is absent. TS passes the raw facts to createIncidentDraft, so
@@ -42,11 +45,6 @@ type DraftInput struct {
 	// Runtime is {requested, image}; Proposal is the proposal binding
 	// {proposalId, proposalDigest, incidentPacketDigest, commandDigest}.
 	Runtime, Proposal jsjson.Value
-	// Symptom, Language, Behavior and TimeoutSeconds are not draft members:
-	// `incident start` sends them to the witness proposal only
-	// (cli-app.ts:630-646). CreateDraft ignores them.
-	Symptom, Language, Behavior string
-	TimeoutSeconds              float64
 }
 
 func throw(message string) { jsexc.Throw(errors.New(message)) }
@@ -90,18 +88,24 @@ func assertNonDegenerateRange(rangeValue jsjson.Value) {
 	}
 }
 
+// ExplicitRange is the --from/--to bracket; both members are present or the
+// range is absent (src/cli-app.ts:619-621 builds `range` only when neither
+// is undefined), so an empty string is a value, never an absence sentinel.
+type ExplicitRange struct{ Ancestor, Descendant string }
+
 // ResolveRange ports resolveIncidentRange (src/incident.ts:185) on the
 // facts `incident start` passes (src/cli-app.ts:619-621): the explicit
-// --from/--to bracket when either is non-empty, otherwise the locally
-// observed HEAD and its parents.
-func ResolveRange(head string, parents []string, from, to string) (jsjson.Value, error) {
-	return tryValue(func() jsjson.Value { return resolveIncidentRange(rangeFacts(head, parents, from, to)) })
+// bracket when one is present, otherwise the locally observed HEAD and its
+// parents. The CLI reaches resolveIncidentRange only through CreateDraft;
+// this entry point exists for the live comparison against the TS oracle.
+func ResolveRange(head string, parents []string, explicit *ExplicitRange) (jsjson.Value, error) {
+	return tryValue(func() jsjson.Value { return resolveIncidentRange(rangeFacts(head, parents, explicit)) })
 }
 
-func rangeFacts(head string, parents []string, from, to string) jsjson.Value {
+func rangeFacts(head string, parents []string, explicit *ExplicitRange) jsjson.Value {
 	facts := jsjson.NewObj()
-	if from != "" || to != "" {
-		facts.Set("range", jsjson.MustObject("ancestor", str(from), "descendant", str(to)))
+	if explicit != nil {
+		facts.Set("range", jsjson.MustObject("ancestor", str(explicit.Ancestor), "descendant", str(explicit.Descendant)))
 	} else {
 		facts.Set("localHead", LocalHeadFacts(head, parents))
 	}
@@ -189,18 +193,8 @@ func CreateDraft(in DraftInput) (jsjson.Value, error) {
 		raw.Set("createdAt", str(createdAt))
 		raw.Set("repository", str(in.Repository))
 		raw.Set("command", str(in.Command))
-		rangeValue, localHead := in.Range, in.LocalHead
-		if rangeValue.Kind() == jsjson.Object {
-			switch source := rangeValue.Get("source"); {
-			case source.Kind() == jsjson.String && source.Str() == "LOCAL_HEAD_PARENT":
-				rangeValue = jsjson.Value{}
-				localHead = jsjson.MustObject("head", in.Range.Get("descendant"), "parents", jsjson.MakeArray([]jsjson.Value{in.Range.Get("ancestor")}))
-			case source.Kind() == jsjson.String && source.Str() == "EXPLICIT":
-				rangeValue = jsjson.MustObject("ancestor", in.Range.Get("ancestor"), "descendant", in.Range.Get("descendant"))
-			}
-		}
-		setDefined(raw, "range", rangeValue)
-		setDefined(raw, "localHead", localHead)
+		setDefined(raw, "range", in.Range)
+		setDefined(raw, "localHead", in.LocalHead)
 		setDefined(raw, "runtime", in.Runtime)
 		setDefined(raw, "proposal", in.Proposal)
 		return createIncidentDraft(jsjson.MakeObject(raw))

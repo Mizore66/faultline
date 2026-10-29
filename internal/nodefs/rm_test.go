@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Expectations were captured from Node 22's rmSync(dir, { recursive: true,
@@ -128,5 +129,70 @@ func TestRemoveAllAsyncMatchesNodePromisesRm(t *testing.T) {
 	}
 	if _, err := os.Lstat(q); !os.IsNotExist(err) {
 		t.Fatalf("tree left behind: %v", err)
+	}
+}
+
+func TestRemoveAllRetry(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	setup := func() (dir, locked string) {
+		dir = t.TempDir()
+		locked = filepath.Join(dir, "d")
+		if err := os.MkdirAll(locked, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(locked, "f"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(locked, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(locked, 0o700) })
+		return dir, locked
+	}
+	// No retry: the first error is returned.
+	_, locked := setup()
+	if err := RemoveAllRetry(locked, 0, 0); err == nil || !strings.Contains(err.Error(), "EACCES") {
+		t.Fatalf("got %v", err)
+	}
+	// Node's loop also retries a non-retry code at once until the last
+	// try, so a directory that is read-only for a short window is removed.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		os.Chmod(locked, 0o700)
+	}()
+	if err := RemoveAllRetry(locked, 100_000_000, 0); err != nil {
+		t.Fatalf("retry after the window: %v", err)
+	}
+	if _, err := os.Stat(locked); !os.IsNotExist(err) {
+		t.Fatalf("directory remains: %v", err)
+	}
+	// The sleep branch: a retry code (EBUSY) twice, then success, sleeps
+	// 1*delay and 2*delay; the last try's error is returned as is; ENOENT
+	// ends the loop quietly.
+	r := remover{maxRetries: 2, retryDelay: 40 * time.Millisecond}
+	calls := 0
+	start := time.Now()
+	err := r.retryLoop(func() error {
+		calls++
+		if calls < 3 {
+			return &Error{Code: "EBUSY"}
+		}
+		return nil
+	})
+	if err != nil || calls != 3 || time.Since(start) < 120*time.Millisecond {
+		t.Fatalf("err %v calls %d after %v", err, calls, time.Since(start))
+	}
+	calls = 0
+	if err := r.retryLoop(func() error { calls++; return &Error{Code: "EPERM"} }); err == nil || calls != 3 {
+		t.Fatalf("err %v calls %d", err, calls)
+	}
+	if err := r.retryLoop(func() error { return &Error{Code: "ENOENT"} }); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := RemoveAllRetry(filepath.Join(dir, "missing"), 3, time.Millisecond); err != nil {
+		t.Fatal(err)
 	}
 }

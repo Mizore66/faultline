@@ -1,0 +1,12 @@
+#!/bin/sh
+# Fake git for difftest: `git unpack-objects` and `git index-pack` both fail;
+# the turn verifier reports index-pack's stderr (turn-proof-bundle.ts:475-481).
+# Everything else runs the real git (PATH without this directory).
+here=$(cd "$(dirname "$0")" && pwd)
+PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vxF "$here" | paste -sd: -)
+export PATH
+# The subcommand comes after the hardened runner's global options.
+. "$here/../lib/subcommand.sh"
+if [ "$sub" = unpack-objects ]; then { echo "fatal: planted unpack failure" >&2; exit 128; }; fi
+if [ "$sub" = index-pack ]; then { printf 'error: planted index-pack detail\nfatal: planted index-pack failure\n' >&2; exit 128; }; fi
+exec git "$@"

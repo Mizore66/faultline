@@ -204,6 +204,35 @@ func NativeRunner() Runner {
 	}
 }
 
+// outputBudget is runNative's capture rule (src/sandbox.ts:870), extracted
+// unchanged. Every byte counts as observed; up to max bytes of the two streams
+// combined are kept (a prefix of each chunk); the first time observed exceeds
+// max, after capturing that chunk, add reports true so the caller kills the
+// child exactly once. The caller serializes access.
+type outputBudget struct {
+	max            int
+	stdout, stderr []byte
+	observed       int
+	overflow       bool
+}
+
+func (b *outputBudget) add(chunk []byte, toStdout bool) (kill bool) {
+	b.observed += len(chunk)
+	if remaining := max(0, b.max-(len(b.stdout)+len(b.stderr))); remaining > 0 {
+		captured := chunk[:min(len(chunk), remaining)]
+		if toStdout {
+			b.stdout = append(b.stdout, captured...)
+		} else {
+			b.stderr = append(b.stderr, captured...)
+		}
+	}
+	if b.observed > b.max && !b.overflow {
+		b.overflow = true
+		return true
+	}
+	return false
+}
+
 // Port of the run method of src/sandbox.ts:870 createNodeSandboxRunner.
 func runNative(argv jsjson.Value, cwd string, timeoutMs, maxOutputBytes int, containerName string) RunResult {
 	args := make([]string, 0, len(argv.Items()))
@@ -211,28 +240,17 @@ func runNative(argv jsjson.Value, cwd string, timeoutMs, maxOutputBytes int, con
 		args = append(args, a.Str())
 	}
 	var (
-		mu                 sync.Mutex
-		stdout, stderr     []byte
-		observed           int
-		timedOut, overflow bool
-		settled            bool
-		child              *nodeproc.Child
-		timer              *time.Timer
+		mu       sync.Mutex
+		budget   = outputBudget{max: maxOutputBytes}
+		timedOut bool
+		settled  bool
+		child    *nodeproc.Child
+		timer    *time.Timer
 	)
 	collect := func(chunk []byte, toStdout bool) {
 		mu.Lock()
 		defer mu.Unlock()
-		observed += len(chunk)
-		if remaining := max(0, maxOutputBytes-(len(stdout)+len(stderr))); remaining > 0 {
-			captured := chunk[:min(len(chunk), remaining)]
-			if toStdout {
-				stdout = append(stdout, captured...)
-			} else {
-				stderr = append(stderr, captured...)
-			}
-		}
-		if observed > maxOutputBytes && !overflow {
-			overflow = true
+		if budget.add(chunk, toStdout) {
 			child.Kill("SIGKILL")
 		}
 	}
@@ -243,13 +261,13 @@ func runNative(argv jsjson.Value, cwd string, timeoutMs, maxOutputBytes int, con
 			timer.Stop()
 		}
 		if extraStderr != "" {
-			stderr = append(stderr, jsstr.ToUTF8(extraStderr)...)
+			budget.stderr = append(budget.stderr, jsstr.ToUTF8(extraStderr)...)
 		}
-		forceRemove := timedOut || overflow || exitCode == nil
+		forceRemove := timedOut || budget.overflow || exitCode == nil
 		mu.Unlock()
 		if forceRemove {
 			if detail, ok := forceRemoveContainer(containerName); ok {
-				stderr = append(stderr, jsstr.ToUTF8("\n"+detail)...)
+				budget.stderr = append(budget.stderr, jsstr.ToUTF8("\n"+detail)...)
 			}
 		}
 		mu.Lock()
@@ -257,10 +275,10 @@ func runNative(argv jsjson.Value, cwd string, timeoutMs, maxOutputBytes int, con
 		return RunResult{
 			ExitCode:            exitCode,
 			Signal:              signal,
-			Stdout:              jsstr.DecodeUTF8(stdout),
-			Stderr:              jsstr.DecodeUTF8(stderr),
+			Stdout:              jsstr.DecodeUTF8(budget.stdout),
+			Stderr:              jsstr.DecodeUTF8(budget.stderr),
 			TimedOut:            timedOut,
-			OutputLimitExceeded: overflow,
+			OutputLimitExceeded: budget.overflow,
 		}
 	}
 

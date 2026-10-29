@@ -103,6 +103,12 @@ func Spawn(file string, args []string, o SpawnOptions) *Child {
 		close(c.done)
 		return c
 	}
+	if refusesBatchFile(jsstr.ToUTF8(file)) {
+		// ProcessWrap::Spawn returns UV_EINVAL without uv_spawn, and
+		// ChildProcess.prototype.spawn throws it ("spawn EINVAL") after
+		// closing the stdio pipes it had opened.
+		return fail("EINVAL")
+	}
 	io, err := newAsyncStdio(o)
 	if err != nil {
 		return fail(nodefs.SystemErrorName(err))

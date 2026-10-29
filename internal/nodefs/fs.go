@@ -434,16 +434,48 @@ func Exists(path string) bool {
 	return exists(sysPath(path))
 }
 
+// The Linux d_type values scandir reports on every platform.
+const (
+	dtFIFO = 1
+	dtCHR  = 2
+	dtDIR  = 4
+	dtBLK  = 6
+	dtREG  = 8
+	dtLNK  = 10
+	dtSOCK = 12
+)
+
 // direntTypeKnown is whether libuv's uv__fs_get_dirent_type names d_type:
 // FIFO, CHR, DIR, BLK, REG, LNK and SOCK. Every other value, DT_UNKNOWN (0)
 // included, is UV_DIRENT_UNKNOWN, and Node lstats the entry
 // (lib/internal/fs/utils.js getDirents).
 func direntTypeKnown(t uint8) bool {
 	switch t {
-	case 1, 2, 4, 6, 8, 10, 12:
+	case dtFIFO, dtCHR, dtDIR, dtBLK, dtREG, dtLNK, dtSOCK:
 		return true
 	}
 	return false
+}
+
+// scandirSorted is readdirSync's libuv scandir of path: the entries in
+// byte order of their raw names, each name decoded as UTF-8 with
+// replacement, with its d_type (the record's type on every platform).
+func scandirSorted(path string) (decoded []string, types []uint8, err error) {
+	names, rawTypes, err := scandir(sysPath(path))
+	if err != nil {
+		return nil, nil, wrap(err, "scandir", path)
+	}
+	order := make([]int, len(names))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool { return names[order[i]] < names[order[j]] })
+	decoded = make([]string, len(names))
+	types = make([]uint8, len(names))
+	for i, k := range order {
+		decoded[i], types[i] = DecodeUTF8([]byte(names[k])), rawTypes[k]
+	}
+	return decoded, types, nil
 }
 
 // ReadDirNames is readdirSync(path, { withFileTypes: true }) as the bundle
@@ -454,29 +486,44 @@ func direntTypeKnown(t uint8) bool {
 // lstat'ed by Node inside readdirSync, in order, and the first failure is
 // thrown from there.
 func ReadDirNames(path string) ([]string, error) {
-	names, types, err := scandir(sysPath(path))
+	entries, err := ReadDirTypes(path)
 	if err != nil {
-		return nil, wrap(err, "scandir", path)
+		return nil, err
 	}
-	order := make([]int, len(names))
-	for i := range order {
-		order[i] = i
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
 	}
-	sort.Slice(order, func(i, j int) bool { return names[order[i]] < names[order[j]] })
-	sorted := make([]string, len(names))
-	for i, k := range order {
-		sorted[i] = DecodeUTF8([]byte(names[k]))
+	return names, nil
+}
+
+// ReadDirTypes is readdirSync(path, { withFileTypes: true }): the entries
+// in byte order with the type libuv read from the directory record
+// (d_type, or the Windows attributes), so a readable directory without
+// search permission keeps them. An entry whose type libuv cannot name is
+// lstat'ed by Node by its decoded name, the first failure thrown. A
+// symlink is neither a directory nor a file. The error is Node's scandir
+// text.
+func ReadDirTypes(path string) ([]Dirent, error) {
+	names, types, err := scandirSorted(path)
+	if err != nil {
+		return nil, err
 	}
-	if types != nil {
-		for i, k := range order {
-			if !direntTypeKnown(types[k]) {
-				if _, err := Lstat(Join(path, sorted[i])); err != nil {
-					return nil, err
-				}
+	out := make([]Dirent, len(names))
+	for i, name := range names {
+		out[i].Name = name
+		typ := types[i]
+		if !direntTypeKnown(typ) {
+			info, err := Lstat(Join(path, name))
+			if err != nil {
+				return nil, err
 			}
+			out[i].IsDir, out[i].IsFile = info.Mode().IsDir(), info.Mode().IsRegular()
+			continue
 		}
+		out[i].IsDir, out[i].IsFile = typ == dtDIR, typ == dtREG
 	}
-	return sorted, nil
+	return out, nil
 }
 
 // Tmpdir is os.tmpdir().

@@ -8,7 +8,6 @@ import (
 	"maps"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -63,7 +62,7 @@ func TestWriterSameDirectory(t *testing.T) {
 				}
 				prepareWriterCase(t, repo, tpl, r)
 				var out []outcome
-				for _, argv := range tpl.Argv {
+				for inv, argv := range tpl.Argv {
 					os.Remove(r.argvLog)
 					args := slices.Clone(command)
 					for _, a := range argv {
@@ -71,7 +70,8 @@ func TestWriterSameDirectory(t *testing.T) {
 					}
 					cmd := exec.Command(args[0], args[1:]...)
 					cmd.Dir = r.ws
-					cmd.Env = writerEnv(repo, r, tpl.ID, tpl)
+					cmd.Env = invocationEnv(repo, r, tpl, inv)
+					cmd.Stdin = bytes.NewReader(invocationInput(t, tpl, inv, r))
 					var stdout, stderr bytes.Buffer
 					cmd.Stdout, cmd.Stderr = &stdout, &stderr
 					var exitErr *exec.ExitError
@@ -82,8 +82,7 @@ func TestWriterSameDirectory(t *testing.T) {
 				}
 				return out
 			}
-			seed := "file://" + filepath.Join(repo, "difftest", "gen", "seed.mjs")
-			ts := run([]string{"node", "--import", seed, filepath.Join(repo, "dist", "cli.js")})
+			ts := run(tsCommand(repo))
 			goOut := run([]string{flBinary})
 			for i := range ts {
 				want, got := ts[i], goOut[i]

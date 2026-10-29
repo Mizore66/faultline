@@ -381,8 +381,12 @@ func TestLiveNativeRunner(t *testing.T) {
 		// Round 9 (r9-2): 70 KB blocks alternating between stderr and
 		// stdout, cut mid-chunk by the cap on either stream; a grandchild
 		// still writing after docker exits; 3 MB of stderr against a 1 MiB
-		// cap; a 2-byte interleave against a cap of 5. Each twice, as the
-		// split depends on how the reads interleave.
+		// cap; stderr-only "abcdefgh" against a cap of 5, after which the
+		// fake docker blocks until killed (a one-stream prefix cannot depend
+		// on read order). Each twice, as the split depends on how the reads
+		// interleave. Cross-stream alternation, coalescing and the cap
+		// falling between streams at tiny sizes are not live-tested: the
+		// deterministic outputBudget tests in internal/sandbox cover them.
 		{"r9mix-a", "r9mix", "", 60_000, 150_000, "OUTPUT_LIMIT_EXCEEDED"},
 		{"r9mix-b", "r9mix", "", 60_000, 150_000, "OUTPUT_LIMIT_EXCEEDED"},
 		{"r9mix-c", "r9mix", "", 60_000, 300_001, "OUTPUT_LIMIT_EXCEEDED"},
@@ -467,6 +471,16 @@ func TestLiveNativeRunner(t *testing.T) {
 			}
 			if stdout := o.Field("result").Get("stdout").Str(); tc.name == "flood" && !strings.HasSuffix(stdout, "flood \ufffd") {
 				t.Fatalf("flood stdout should end in a cut é: %q", stdout[max(0, len(stdout)-20):])
+			}
+			// The tiny fixture's own result, asserted on the result fields
+			// (kind, exitCode, signal, stdout, stderr, outputTruncated,
+			// reason), so a fixture that failed early with more than 5
+			// stderr bytes cannot pass on matching TS/Go OUTPUT_LIMIT
+			// results alone.
+			if res := o.Field("result"); tc.fake == "r9tiny" && (res.Get("stdout").Str() != "" || res.Get("stderr").Str() != "abcde" ||
+				res.Get("exitCode").Kind() != jsjson.Null || res.Get("signal").Str() != "SIGKILL" ||
+				!res.Get("outputTruncated").Bool() || res.Get("reason").Str() != "OUTPUT_LIMIT_EXCEEDED") {
+				t.Fatalf("r9tiny result is not the blocked-until-killed fixture's: %s", got)
 			}
 		})
 	}

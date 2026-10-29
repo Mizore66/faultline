@@ -9,6 +9,7 @@
 // not create a decisive state" at that base, after rewriting the git bases
 // before it and none of the ones after, leaving the tree half regenerated;
 // there, pass the ids of the bases to rewrite, leaving out git-cjk-overlays.
+import { execFileSync } from "node:child_process";
 import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -18,9 +19,13 @@ import { investigateGitRange } from "../../src/git-investigation.js";
 import { writeGitInvestigationProofBundle } from "../../src/git-proof-bundle.js";
 import { defaultPreventionProofRoot, writePreventionProof } from "../../src/prevention-proof.js";
 import { writeProofBundle } from "../../src/proof-bundle.js";
+import { writeCodexLifecycleLedgerAtomic } from "../../src/ledger.js";
+import { investigateTurnTrees } from "../../src/turn-investigation.js";
+import { writeTurnInvestigationProofBundle } from "../../src/turn-proof-bundle.js";
 import {
-  createFrozenWitness, createRepository, type ExtraOverlay, deterministicDockerRunner, groundedPreventionInput,
-  lifecycleBoundToDescendant, lifecycleBoundToEveryInvestigatedState, nativeDockerFixture, pinnedImage, sampleInput
+  createFrozenWitness, createRepository, createTurnFrozenWitness, createTurnRepository, type ExtraOverlay,
+  deterministicDockerRunner, groundedPreventionInput, lifecycleBoundToDescendant, lifecycleBoundToEveryInvestigatedState,
+  git, nativeDockerFixture, nativeTurnFixture, pinnedImage, sampleInput, turnLedger
 } from "./fixtures.js";
 
 const basesDir = resolve("difftest/testdata/bases");
@@ -69,6 +74,53 @@ async function gitBase(
     generatedAt: "2026-07-16T11:03:00.000Z",
     ...(lifecycleLedger === undefined ? {} : { lifecycleLedger })
   });
+  place(id, written.directory);
+}
+
+// A turn proof base: one commit per state, a closed session whose baseline
+// is the first state, and the investigation promoted to native Docker with
+// every clock read fixed (nativeTurnFixture), so a rerun writes the same
+// bytes; only source/trees.pack follows git and zlib (plan correction 8).
+// ancestorOnly, when set, also writes a pack of only the first state's tree
+// objects to difftest/testdata/fixtures (the turn-pack-wrong-trees case),
+// built the way packTurnTrees builds the bundle's pack.
+async function turnBase(id: string, states: readonly string[], ancestorOnly?: string): Promise<void> {
+  if (!wanted(id)) return;
+  const root = mkdtempSync(join(work, `${id}-`));
+  const repository = createTurnRepository(states);
+  const ledger = turnLedger({
+    states: repository.trees.map((tree, index) => ({ ordinal: index, tree, dirty: false, commit: repository.commits[index] })),
+    baseline: true
+  });
+  const ledgerPath = join(root, "ledger.json");
+  writeCodexLifecycleLedgerAtomic(ledgerPath, ledger);
+  const frozen = createTurnFrozenWitness(join(root, "witness-lock"));
+  const observed = await investigateTurnTrees({
+    repository: repository.root,
+    ledgerPath,
+    frozenWitness: frozen,
+    expectedFrozenDigest: frozen.frozenDigest,
+    image: pinnedImage,
+    runner: deterministicDockerRunner()
+  });
+  if (observed.status !== "COMPLETED" || observed.proof.isProof) {
+    throw new Error(`${id}: the injected-runner investigation must complete without proof (${observed.status})`);
+  }
+  const result = nativeTurnFixture(observed);
+  const written = await writeTurnInvestigationProofBundle(join(root, "proofs", id), result, frozen, {
+    proofRoot: join(root, "proofs"),
+    generatedAt: "2026-07-16T11:04:00.000Z",
+    lifecycleLedger: ledger,
+    repository: repository.root
+  });
+  if (ancestorOnly !== undefined) {
+    const objects = git(repository.root, ["rev-list", "--objects", repository.trees[0]!]).split("\n")
+      .map((line) => line.trim().split(/\s+/)[0]).filter(Boolean).sort((l, r) => l!.localeCompare(r!));
+    const pack = execFileSync("git", ["-C", repository.root, "pack-objects", "--stdout", "--compression=9"], { input: `${objects.join("\n")}\n` });
+    writeFileSync(resolve("difftest/testdata/fixtures", ancestorOnly), pack);
+    console.log(`wrote fixtures/${ancestorOnly}`);
+  }
+  rmSync(repository.root, { recursive: true, force: true });
   place(id, written.directory);
 }
 
@@ -141,4 +193,6 @@ demoBase("demo-rerun-lone-surrogate-stdout", "RERUN", (analysis) => {
 });
 preventionBase("prevention-summary", sampleInput());
 preventionBase("prevention-verified", groundedPreventionInput());
+await turnBase("turn-two-states", ["good", "bad"], "turn-ancestor-only.pack");
+await turnBase("turn-non-monotonic", ["good", "bad", "good"]);
 rmSync(work, { recursive: true, force: true });

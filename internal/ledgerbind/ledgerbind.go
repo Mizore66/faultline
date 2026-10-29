@@ -5,14 +5,12 @@
 package ledgerbind
 
 import (
-	"os"
 	"runtime"
 	"strconv"
 
 	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/bundle/gitproof"
 	"github.com/Mizore66/faultline/internal/canonical"
-	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jscase"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
@@ -528,34 +526,6 @@ func Verify(value jsjson.Value, expected string, provided bool) jsjson.Value {
 	)
 }
 
-// atomicWrite ports src/ledger-binding.ts:536: a staged `.<name>.<pid>.<uuid>.tmp`
-// (0600, fsynced) renamed over the destination, removed again if it survives.
-func atomicWrite(filePath, body string) (string, error) {
-	destination := nodefs.Resolve(filePath)
-	directory := nodefs.Dirname(destination)
-	if err := nodefs.MkdirAll(directory, 0o777); err != nil {
-		return "", err
-	}
-	staged := nodefs.Resolve(directory, jsexc.Concat(".", nodefs.Basename(destination), ".", strconv.Itoa(os.Getpid()), ".", clock.NewUUID(), ".tmp"))
-	err := nodefs.WriteFileSyncUTF8(staged, body, 0o600)
-	if err == nil {
-		err = nodefs.Rename(staged, destination)
-	}
-	if err == nil {
-		nodefs.SyncDir(directory)
-	}
-	// `finally`: a throw from rmSync replaces the result.
-	if nodefs.Exists(staged) {
-		if rmErr := nodefs.RemoveAll(staged); rmErr != nil {
-			err = rmErr
-		}
-	}
-	if err != nil {
-		return "", err
-	}
-	return destination, nil
-}
-
 // WriteAtomic ports writeLedgerBoundInvestigationAtomic (src/ledger-binding.ts:567):
 // only a fully valid record is written, as canonical JSON and a newline.
 func WriteAtomic(path string, v jsjson.Value) (string, error) {
@@ -564,7 +534,8 @@ func WriteAtomic(path string, v jsjson.Value) (string, error) {
 		return "", &BindingError{jsexc.Concat("Refusing to write an invalid ledger-bound investigation: ", jsexc.Join(reportErrors(verification), "; "))}
 	}
 	parsed := parse(boundSchema, v)
-	return atomicWrite(path, jsexc.Concat(bundle.Must(canonical.CanonicalJSON(parsed)), "\n"))
+	// atomicWrite (src/ledger-binding.ts:536) is src/ledger.ts:599's code.
+	return nodefs.AtomicWriteFile(path, jsexc.Concat(bundle.Must(canonical.CanonicalJSON(parsed)), "\n"))
 }
 
 // VerifyFile ports verifyLedgerBoundInvestigationFile (src/ledger-binding.ts:578):

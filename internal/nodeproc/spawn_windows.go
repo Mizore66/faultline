@@ -14,14 +14,25 @@ import (
 // buffers libuv gives its pipes. libuv's shutdown of the stdin pipe does not
 // close it, so the parent keeps its end open until the child is done (a
 // child reading stdin waits, as under Node). With input, endInput closes
-// it once the input is written.
-func newStdio(bool) (*stdio, error) {
+// it once the input is written. With ignoreStdin, stdin is "ignore": the
+// child gets the NUL device, opened readable, and there is no parent end.
+func newStdio(_, ignoreStdin bool) (*stdio, error) {
 	var parent, child [3]*os.File
 	for i := range parent {
+		if i == 0 && ignoreStdin {
+			c, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
+			if err != nil {
+				return nil, err
+			}
+			child[0] = c
+			continue
+		}
 		r, w, err := pipe64k()
 		if err != nil {
 			for j := 0; j < i; j++ {
-				parent[j].Close()
+				if parent[j] != nil {
+					parent[j].Close()
+				}
 				child[j].Close()
 			}
 			return nil, err
@@ -221,3 +232,7 @@ func getenvUTF16(name string) ([]uint16, bool) {
 		buf = make([]uint16, n)
 	}
 }
+
+// waitSignalName is unused on Windows: a WaitStatus never reports a signal,
+// and the signal a kill sent is reported by SpawnSyncWith itself.
+func waitSignalName(syscall.WaitStatus) string { return "" }

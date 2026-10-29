@@ -3,13 +3,19 @@
 package difftest
 
 import (
+	"bytes"
+	"encoding/base64"
+	"errors"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/repair"
 )
 
 // TestEndToEndWithoutNode is done criterion 3 of the slice 2 spec (4.2): the
@@ -321,4 +327,348 @@ func nodelessPath(t *testing.T, fakeDocker string, tools ...string) string {
 		t.Fatal("git is not on PATH")
 	}
 	return path
+}
+
+// TestEndToEndSlice4bWithoutNode is done criterion 3 of the slice 4 spec
+// (4.2, PR 4b; spec 2.6): the turn commands chain end to end on the Go binary
+// with no `node` on PATH (git's own directory and the pass-fail fake Docker).
+// A frozen witness, a recorded Codex session (SessionStart, a prompt, an edit
+// of state.txt to bad that is committed, Stop) whose hook events go in on
+// stdin, `investigate turns --latest` (EXPERIMENTAL_TURN), `fl verify` with the
+// external root, and `prove transition`, whose minimization bridge commit has
+// the baseline tree and verifies under `minimize verify`. POSIX only.
+func TestEndToEndSlice4bWithoutNode(t *testing.T) {
+	ws := scenarioWorkspace(t, "sidecar-repo")
+	r := rootsOf(ws)
+	env := map[string]string{"PATH": nodelessPath(t, "pass-fail", "cat")}
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := osexec.Command("git", append([]string{"-c", "user.name=E2E", "-c", "user.email=e2e@example.test"}, args...)...)
+		cmd.Dir = ws
+		cmd.Env = append(os.Environ(), "PATH="+env["PATH"], "HOME="+r.home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+filepath.Join(r.home, "empty.gitconfig"))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	step := func(want int, args ...string) string {
+		t.Helper()
+		stdout, stderr, code := runFlIn(t, ws, env, args...)
+		if code != want {
+			t.Fatalf("fl %s: exit %d, want %d\n%s%s", strings.Join(args, " "), code, want, stdout, stderr)
+		}
+		return stdout
+	}
+	status := func(want, stdout string, args ...string) {
+		t.Helper()
+		if got := jsonField(stdout, "status"); got != want {
+			t.Fatalf("fl %s: status %q, want %s\n%s", strings.Join(args, " "), got, want, stdout)
+		}
+	}
+
+	// scenarios.ts PROPOSAL_INPUT, written as proposal.json.
+	overlay := base64.StdEncoding.EncodeToString([]byte("export const faultLineWitness = 'approved-exact-bytes';\n"))
+	proposal := `{
+  "proposalId": "demo-1",
+  "incidentPacket": {
+    "symptom": "The repository state must not be bad.",
+    "ciLog": "state.txt became bad",
+    "repositoryLanguage": "Text",
+    "repositorySummary": "Temporary repository for the writer replay."
+  },
+  "witness": {
+    "behavior": "state.txt must not be bad",
+    "command": "node witness.mjs",
+    "overlays": [
+      {
+        "path": "witness.mjs",
+        "bytesBase64": "` + overlay + `"
+      }
+    ],
+    "policy": {
+      "network": "disabled",
+      "credentials": "redacted",
+      "timeoutSeconds": 30
+    }
+  }
+}
+`
+	// Outside the repository: the turn-tree snapshot refuses the proposal's base64 overlay as a high-entropy token.
+	proposalFile := filepath.Join(r.root, "proposal.json")
+	if err := os.WriteFile(proposalFile, []byte(proposal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"witness", "propose", "--input", proposalFile}
+	status("PROPOSED", step(0, args...), args...)
+	args = []string{"witness", "approve", "demo-1", "--approved-by", "r@example.test"}
+	status("APPROVED", step(0, args...), args...)
+	args = []string{"witness", "freeze", "demo-1", "--repo", "."}
+	status("FROZEN", step(0, args...), args...)
+
+	args = []string{"record", "init", "--session", "e2e", "--repo", "."}
+	status("RECORDING_STARTED", step(0, args...), args...)
+
+	// Each hook is its own process on the seeded clock: invocation n runs
+	// n hours on (as a writer case with advanceClock), so the ledger's
+	// timestamps never go backwards between events.
+	invocation := 0
+	hook := func(event string, fields string) {
+		t.Helper()
+		invocation++
+		body := `{"session_id":"s-1","cwd":` + strconv.Quote(ws) + `,"model":"gpt-5.6","hook_event_name":"` + event + `"` + fields + "}\n"
+		cmd := osexec.Command(flBinary, "codex", "sidecar", "hook", "--quiet")
+		cmd.Dir = ws
+		cmd.Env = writerEnv(repoRoot(t), r, t.Name()+"/"+strconv.Itoa(invocation), writerTemplate{ID: t.Name(), FakeDocker: "pass-fail",
+			Env: [][2]string{{"PATH", env["PATH"]}, {"FAULTLINE_TEST_CLOCK_OFFSET_MS", strconv.Itoa(invocation * 3_600_000)}}})
+		cmd.Stdin = strings.NewReader(body)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("hook %s: %v\n%s%s", event, err, stdout.String(), stderr.String())
+		}
+		if strings.TrimSpace(stdout.String()) != `{"continue":true}` || strings.Contains(stdout.String()+stderr.String(), "did not record") {
+			t.Fatalf("hook %s: stdout %q stderr %q", event, stdout.String(), stderr.String())
+		}
+	}
+	hook("SessionStart", "")
+	hook("UserPromptSubmit", `,"turn_id":"t-1","prompt":"Make state.txt bad.","transcript_path":"/work/transcript.jsonl"`)
+	if err := os.WriteFile(filepath.Join(ws, "state.txt"), []byte("bad\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "state.txt")
+	git("commit", "-q", "-m", "bad")
+	hook("Stop", `,"turn_id":"t-1"`)
+
+	args = []string{"codex", "sidecar", "status", "--repo", "."}
+	out := step(0, args...)
+	status("SIDECAR_RECORDINGS_READY", out, args...)
+	v, err := jsjson.Parse(out)
+	if err != nil || len(v.Get("recordings").Items()) != 1 {
+		t.Fatalf("sidecar status recordings:\n%s", out)
+	}
+	ledger := v.Get("recordings").Items()[0].Get("ledgerPath").Str()
+	if ledger == "" {
+		t.Fatalf("no ledgerPath:\n%s", out)
+	}
+	if got := step(0, "record", "verify", "--ledger", ledger); !strings.Contains(got, `"valid": true`) {
+		t.Fatalf("record verify:\n%s", got)
+	}
+
+	const bundleDir = ".faultline/turn-proof-bundles/e2e"
+	out = step(0, "investigate", "turns", "--repo", ".", "--latest", "--proposal", "demo-1", "--image", pinnedImage, "--output", bundleDir)
+	if jsonField(out, "ledger", "ledgerPath") != ledger || jsonField(out, "proofBundle", "evidenceGrade") != "EXPERIMENTAL_TURN" {
+		t.Fatalf("investigate turns:\n%s", out)
+	}
+	root := jsonField(out, "proofBundle", "rootDigest")
+	if root == "" {
+		t.Fatalf("no rootDigest:\n%s", out)
+	}
+	got := step(0, "verify", bundleDir, "--expect-root", root)
+	for _, want := range []string{"Integrity: VALID", "Evidence grade: EXPERIMENTAL_TURN", "External root: MATCH"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("verify: no %q\n%s", want, got)
+		}
+	}
+
+	out = step(0, "prove", "transition", bundleDir, "--repo", ".", "--proposal", "demo-1", "--image", pinnedImage)
+	before := jsonField(out, "minimization", "bridge", "beforeCommit")
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(before) {
+		t.Fatalf("minimization.bridge.beforeCommit %q:\n%s", before, out)
+	}
+	if tree := git("rev-parse", before+"^{tree}"); tree != git("rev-parse", "HEAD~1^{tree}") {
+		t.Errorf("bridge beforeCommit tree %s is not the baseline tree %s", tree, git("rev-parse", "HEAD~1^{tree}"))
+	}
+	path := jsonField(out, "minimization", "path")
+	if path == "" {
+		t.Fatalf("no minimization.path:\n%s", out)
+	}
+	if got := step(0, "minimize", "verify", path); !strings.Contains(got, `"valid": true`) {
+		t.Fatalf("minimize verify:\n%s", got)
+	}
+}
+
+// TestEndToEndSlice4aWithoutNode is done criterion 3 of the slice 4 spec
+// (4.2, PR 4a; spec 2.6): the recording commands chain end to end on the Go
+// binary with PATH holding only the Git directory and no `node`. It
+// installs the sidecar hook, starts a recording, attaches a turn with a
+// checkpoint, feeds the five hook events (--quiet), reads the sidecar
+// status, verifies both ledgers and collects the clean session's snapshots.
+func TestEndToEndSlice4aWithoutNode(t *testing.T) {
+	ws := scenarioWorkspace(t, "sidecar-repo")
+	env := map[string]string{"PATH": nodelessPath(t, "pass-fail")}
+	run := func(stdin string, args ...string) (string, string, int) {
+		t.Helper()
+		// The real clock (writerEnv's seeded one would repeat its ticks in
+		// every invocation) and TestMain's isolated HOME and Git settings.
+		cmd := osexec.Command(flBinary, args...)
+		cmd.Dir = ws
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "PATH=") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
+		cmd.Env = append(cmd.Env, "PATH="+env["PATH"])
+		cmd.Stdin = strings.NewReader(stdin)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		var exitErr *osexec.ExitError
+		if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
+			t.Fatalf("running fl: %v", err)
+		}
+		return stdout.String(), stderr.String(), cmd.ProcessState.ExitCode()
+	}
+	must := func(stdin string, args ...string) string {
+		t.Helper()
+		stdout, stderr, code := run(stdin, args...)
+		if code != 0 {
+			t.Fatalf("fl %s: exit %d\n%s%s", strings.Join(args, " "), code, stdout, stderr)
+		}
+		return stdout
+	}
+	// The hook document install writes is untracked, and a checkpoint needs a
+	// clean worktree: keep it out of Git's status, as a user's own ignore would.
+	if err := os.MkdirAll(filepath.Join(ws, ".git", "info"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".git", "info", "exclude"), []byte(".codex/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := jsonField(must("", "codex", "sidecar", "install", "--repo", ".", "--command", "fl codex sidecar hook --quiet", "--yes"), "status"); got != "PROJECT_HOOKS_INSTALLED" {
+		t.Errorf("sidecar install: status %q, want PROJECT_HOOKS_INSTALLED", got)
+	}
+	if got := jsonField(must("", "record", "init", "--session", "e2e", "--repo", "."), "status"); got != "RECORDING_STARTED" {
+		t.Errorf("record init: status %q, want RECORDING_STARTED", got)
+	}
+	// attach has no --session: without --ledger it names recordings/session.json
+	// (src/cli-app.ts:256), not the ledger record init made.
+	attach := must("", "record", "attach", "--ledger", ".faultline/recordings/e2e.json", "--turn", "t-1", "--ordinal", "1", "--prompt-digest", "sha256:"+strings.Repeat("a", 64), "--repo", ".", "--checkpoint")
+	if got := jsonField(attach, "status"); got != "ATTACHED" {
+		t.Errorf("record attach: status %q, want ATTACHED\n%s", got, attach)
+	}
+	if got := jsonField(attach, "checkpoint"); got != "RECORDED" {
+		t.Errorf("record attach: checkpoint %q, want RECORDED\n%s", got, attach)
+	}
+	// The five hook events, one invocation each (--quiet).
+	base := `{"session_id":"s-1","cwd":` + strconv.Quote(ws) + `,"model":"gpt-5.6",`
+	for _, event := range []string{
+		`"hook_event_name":"SessionStart"}`,
+		`"hook_event_name":"UserPromptSubmit","turn_id":"t-1","prompt":"Keep state.txt good.","transcript_path":"/work/transcript.jsonl"}`,
+		`"hook_event_name":"PreToolUse","turn_id":"t-1","tool_name":"shell","tool_call_id":"c-1","tool_input":{"cmd":"ls"}}`,
+		`"hook_event_name":"PostToolUse","turn_id":"t-1","tool_name":"shell","tool_call_id":"c-1"}`,
+		`"hook_event_name":"Stop","turn_id":"t-1"}`,
+	} {
+		stdout, stderr, code := run(base+event+"\n", "codex", "sidecar", "hook", "--quiet")
+		if code != 0 || strings.TrimSpace(stdout) != `{"continue":true}` || strings.Contains(stdout+stderr, "did not record") {
+			t.Errorf("hook %.60s: exit %d\n%s%s", event, code, stdout, stderr)
+		}
+	}
+	status := must("", "codex", "sidecar", "status", "--repo", ".")
+	if got := jsonField(status, "status"); got != "SIDECAR_RECORDINGS_READY" {
+		t.Errorf("sidecar status: %q, want SIDECAR_RECORDINGS_READY\n%s", got, status)
+	}
+	if got := firstRecording(status, "latestStop", "status"); got != "CHECKPOINT_RECORDED" {
+		t.Errorf("sidecar status: latestStop.status %q, want CHECKPOINT_RECORDED\n%s", got, status)
+	}
+	if got := firstRecording(status, "latestStop", "receipt"); got != "DURABLE" {
+		t.Errorf("sidecar status: latestStop.receipt %q, want DURABLE\n%s", got, status)
+	}
+	for _, ledger := range []string{firstRecording(status, "ledgerPath"), ".faultline/recordings/e2e.json"} {
+		if ledger == "" {
+			t.Errorf("no ledger to verify\n%s", status)
+			continue
+		}
+		out := must("", "record", "verify", "--ledger", ledger)
+		if v, err := jsjson.Parse(out); err != nil || v.Get("valid").Kind() != jsjson.Bool || !v.Get("valid").Bool() {
+			t.Errorf("record verify %s: not valid: true\n%s", ledger, out)
+		}
+	}
+	if got := jsonField(must("", "codex", "snapshot", "gc", "--repo", "."), "status"); got != "ALREADY_EMPTY" {
+		t.Errorf("snapshot gc: status %q, want ALREADY_EMPTY", got)
+	}
+}
+
+// firstRecording is the string at path in the first entry of status's
+// recordings array.
+func firstRecording(status string, path ...string) string {
+	v, err := jsjson.Parse(status)
+	if err != nil || len(v.Get("recordings").Items()) == 0 {
+		return ""
+	}
+	if f := v.Get("recordings").Items()[0].Get(path...); f.Kind() == jsjson.String {
+		return f.Str()
+	}
+	return ""
+}
+
+// TestEndToEndSlice4cWithoutNode is done criterion 3 of the slice 4c spec
+// (4.2): investigate git, repair --with-codex (the edits fake codex through
+// FAULTLINE_CODEX_BIN), verify of its prevention package, repair brief and
+// repair verify, prevention write --from-bundle on the repair's own runs,
+// and attest create and verify, all with no `node` on PATH. POSIX only: the
+// fake Docker and fake codex are sh scripts.
+func TestEndToEndSlice4cWithoutNode(t *testing.T) {
+	ws := scenarioWorkspace(t, "repair-repo")
+	codex := installFakeCodex(t, repoRoot(t), rootsOf(ws), "edits")
+	env := map[string]string{"PATH": nodelessPath(t, "pass-fail", "cat", "sh"), "FAULTLINE_CODEX_BIN": codex}
+	step := func(want int, args ...string) string {
+		t.Helper()
+		stdout, stderr, code := runFlIn(t, ws, env, args...)
+		if code != want {
+			t.Fatalf("fl %s: exit %d, want %d\n%s%s", strings.Join(args, " "), code, want, stdout, stderr)
+		}
+		return stdout
+	}
+	out := step(0, "investigate", "git", "--repo", "repo", "--from", "HEAD~2", "--to", "HEAD", "--proposal", "demo-1", "--image", pinnedImage)
+	bundle, root := jsonField(out, "proofBundle", "directory"), jsonField(out, "proofBundle", "rootDigest")
+
+	out = step(0, "repair", "--bundle", bundle, "--expect-root", root, "--repo", "repo", "--with-codex", "--allow-codex-full-auto")
+	if jsonField(out, "status") != "REPAIR_CANDIDATE_VERIFIED" || jsonField(out, "preventionExport", "classification") != "PREVENTION_VERIFIED" {
+		t.Fatalf("repair:\n%s", out)
+	}
+	pkg, pkgRoot, managed := jsonField(out, "preventionExport", "directory"), jsonField(out, "preventionExport", "rootDigest"), jsonField(out, "managedRoot")
+	if v := step(0, "verify", pkg, "--expect-root", pkgRoot); !strings.Contains(v, "\nPrevention verified\n") {
+		t.Fatalf("verify package:\n%s", v)
+	}
+
+	// The brief must cite this bundle's packet: the investigation digest
+	// covers the repository path, so a committed brief would not match.
+	invText, err := os.ReadFile(filepath.Join(bundle, "investigation.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := jsjson.Parse(string(invText))
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet, err := repair.CreateEvidencePacket(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brief := `{"schemaVersion":"faultline.repair-brief.v1","evidencePacketDigest":"` + packet.Get("packetDigest").Str() + `",` +
+		`"proposedInvariant":{"statement":"state.txt stays good","evidenceIds":["E1"]},"repairDirections":[{"statement":"restore good","evidenceIds":["E2"]}],` +
+		`"prevention":{"hardEnforcement":[{"statement":"add a CI check","evidenceIds":["E3"]}],"softGuidance":[]},"uncertainties":["inferred"]}`
+	if err := os.WriteFile(filepath.Join(ws, "brief.json"), []byte(brief), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out = step(0, "repair", "brief", "--bundle", bundle, "--expect-root", root, "--input", "brief.json")
+	if v := step(0, "repair", "verify", jsonField(out, "directory"), "--expect-digest", jsonField(out, "artifactDigest")); !strings.Contains(v, "\"valid\": true") {
+		t.Fatalf("repair verify:\n%s", v)
+	}
+
+	body, err := os.ReadFile(filepath.Join(pkg, "prevention.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, tree := jsonField(string(body), "repaired", "commit"), jsonField(string(body), "repaired", "tree")
+	out = step(0, "prevention", "write", "--from-bundle", bundle, "--expect-root", root, "--repaired-runs", filepath.Join(pkg, "repaired-runs.json"),
+		"--repaired-commit", commit, "--repaired-tree", tree, "--patch", filepath.Join(managed, "artifacts", "repair.patch"), "--repo", "repo")
+	if !strings.HasSuffix(out, "\nPrevention verified\n") {
+		t.Fatalf("prevention write:\n%s", out)
+	}
+
+	out = step(0, "attest", "create", "--bundle", bundle, "--receipt", "e2e-1", "--subject", "repo", "--issuer", "ci")
+	if v := step(0, "attest", "verify", "e2e-1", "--expect-digest", jsonField(out, "receiptDigest")); jsonField(v, "externalDigestStatus") != "MATCH" {
+		t.Fatalf("attest verify:\n%s", v)
+	}
 }

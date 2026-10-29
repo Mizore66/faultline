@@ -3,10 +3,12 @@
 package safedir
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
@@ -92,4 +94,51 @@ func RelativeTrustedSystemPath(from, to string) (string, error) {
 		return "", err
 	}
 	return nodefs.Relative(f, t), nil
+}
+
+// EnsureRealDirectoryTree is the shared body of the TS ensureRealDirectoryTree
+// copies (src/git-proof-bundle.ts:257, src/proof-bundle.ts:73,
+// src/prevention-proof.ts:158, src/repair-brief-store.ts:108,
+// src/authenticated-witness-approval.ts:146, src/github-provenance.ts:266):
+// each existing component is checked with lstat, never followed; a missing one
+// is created with mode 0700 after its parent was checked. rootMessage and
+// traverseMessage are the callers' exception message prefixes (including the
+// trailing ": "); every thrown value is an error and panics through jsexc.
+func EnsureRealDirectoryTree(directory, rootMessage, traverseMessage string) {
+	absolute := nodefs.Resolve(directory)
+	root := nodefs.ParseRoot(absolute)
+	var parts []string
+	if suffix := nodefs.Relative(root, absolute); suffix != "" {
+		parts = strings.FieldsFunc(suffix, func(r rune) bool { return r == '/' || r == '\\' })
+	}
+	current := root
+	if nodefs.Exists(current) {
+		safe, ok := safeSegmentThrow(current)
+		if !ok {
+			jsexc.Throw(errors.New(jsexc.Concat(rootMessage, current)))
+		}
+		current = safe
+	}
+	for _, part := range parts {
+		current = nodefs.Join(current, part)
+		if !nodefs.Exists(current) {
+			if err := nodefs.Mkdir(current, 0o700); err != nil {
+				jsexc.Throw(err)
+			}
+		}
+		safe, ok := safeSegmentThrow(current)
+		if !ok {
+			jsexc.Throw(errors.New(jsexc.Concat(traverseMessage, current)))
+		}
+		current = safe
+	}
+}
+
+// safeSegmentThrow is ResolveSafeDirectorySegment with its lstat error thrown.
+func safeSegmentThrow(path string) (string, bool) {
+	resolved, ok, err := ResolveSafeDirectorySegment(path)
+	if err != nil {
+		jsexc.Throw(err)
+	}
+	return resolved, ok
 }

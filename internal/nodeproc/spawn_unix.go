@@ -25,22 +25,32 @@ const nameMax = 255
 // newStdio is libuv's uv__process_init_stdio for three UV_CREATE_PIPE
 // slots: each is a socketpair. Without input Node shuts down its end of
 // stdin at once, so the child reads EOF; with input, endInput does so once
-// the input is written.
-func newStdio(input bool) (*stdio, error) {
+// the input is written. With ignoreStdin, stdin is UV_IGNORE instead: the
+// child opens /dev/null read-only (uv__process_child_init), and there is no
+// parent end.
+func newStdio(input, ignoreStdin bool) (*stdio, error) {
 	parent := make([]*os.File, 3)
 	child := make([]*os.File, 3)
 	for i := range parent {
-		p, c, err := socketPair()
+		var p, c *os.File
+		var err error
+		if i == 0 && ignoreStdin {
+			c, err = os.OpenFile(os.DevNull, os.O_RDONLY, 0)
+		} else {
+			p, c, err = socketPair()
+		}
 		if err != nil {
 			for j := 0; j < i; j++ {
-				parent[j].Close()
+				if parent[j] != nil {
+					parent[j].Close()
+				}
 				child[j].Close()
 			}
 			return nil, err
 		}
 		parent[i], child[i] = p, c
 	}
-	if !input {
+	if !input && parent[0] != nil {
 		shutdownWrite(parent[0])
 	}
 	return &stdio{stdin: parent[0], stdout: parent[1], stderr: parent[2], child: child}, nil
@@ -231,3 +241,7 @@ func execvpDarwin(file string, argv []string, path string, exec execFunc) (*os.P
 
 // getenvUTF16 is only used on Windows.
 func getenvUTF16(string) ([]uint16, bool) { return nil, false }
+
+// waitSignalName is spawnSync's signal for a child killed by a signal:
+// signo_string(term_signal), "" for a number it has no name for.
+func waitSignalName(ws syscall.WaitStatus) string { return signalName(int(ws.Signal())) }

@@ -4,6 +4,8 @@ package difftest
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -106,6 +108,9 @@ func requireReached(t *testing.T, file, outputs string) {
 		if _, ok := unreachableLiterals[lit]; ok {
 			continue
 		}
+		if _, ok := liveOnlyUnreachable[lit]; ok {
+			continue
+		}
 		reached := true
 		for _, frag := range messageFragments(lit) {
 			reached = reached && strings.Contains(outputs, jsjson.Quote(frag)[1:len(jsjson.Quote(frag))-1])
@@ -114,6 +119,116 @@ func requireReached(t *testing.T, file, outputs string) {
 			t.Errorf("%s: no generated input reached %q", pos, lit)
 		}
 	}
+}
+
+// liveGroupState accumulates, per file, the outputs of the live tests that
+// together gate it (liveGatedFiles names them "TestA+TestB").
+var liveGroupState = struct {
+	sync.Mutex
+	outputs map[string]string
+	done    map[string]map[string]bool
+	// checked are the files whose reach check ran (complete and unnarrowed).
+	checked map[string]bool
+}{outputs: map[string]string{}, done: map[string]map[string]bool{}, checked: map[string]bool{}}
+
+// noteGroup records that test top finished with out for file, whose group has
+// n tests, and says whether the group is now complete (and its outputs). A
+// complete, unnarrowed group is marked checked: the caller runs the reach
+// check at once.
+func noteGroup(file, top string, narrowed bool, out string, n int) (bool, string) {
+	liveGroupState.Lock()
+	defer liveGroupState.Unlock()
+	liveGroupState.outputs[file] += out + "\n"
+	if liveGroupState.done[file] == nil {
+		liveGroupState.done[file] = map[string]bool{}
+	}
+	liveGroupState.done[file][top] = true
+	complete := len(liveGroupState.done[file]) == n
+	if complete && !narrowed {
+		liveGroupState.checked[file] = true
+	}
+	return complete, liveGroupState.outputs[file]
+}
+
+// reportUnverifiedGroups prints the terminal LIVE-GROUP-UNVERIFIED lines the
+// CI log gate fails on, for the files a test called requireReachedGroup for
+// whose reach check never ran (a test of the group did not run, or a knob
+// narrowed it). TestMain calls it after m.Run, so a group that completed
+// later in the same process leaves none.
+func reportUnverifiedGroups(w io.Writer) {
+	liveGroupState.Lock()
+	var files []string
+	for file := range liveGroupState.done {
+		if !liveGroupState.checked[file] {
+			files = append(files, file)
+		}
+	}
+	liveGroupState.Unlock()
+	slices.Sort(files)
+	for _, file := range files {
+		fmt.Fprintf(w, "LIVE-GROUP-UNVERIFIED %s: needs %s in one unnarrowed run\n", file, liveGatedFiles[file])
+	}
+}
+
+// requireReachedGroup is requireReached for a file several live tests reach
+// together (liveGatedFiles names them "TestA+TestB"): each calls it at its
+// end, and the check runs once every named test has. A run that selects only
+// some of them cannot judge the file: it logs LIVE-GROUP-PENDING, the process-end audit (reportUnverifiedGroups) prints the terminal LIVE-GROUP-UNVERIFIED, and CI
+// (which runs them all in one process) enforces the check. With
+// FAULTLINE_DUMP_LIVE_OUTPUTS=<dir> a narrowed run appends what it compared
+// to the file's dump and logs the literals still unreached by the union so
+// far, so bounded local windows can be audited without a monolithic run.
+func requireReachedGroup(t *testing.T, file string) {
+	t.Helper()
+	tests := strings.Split(liveGatedFiles[file], "+")
+	top, _, _ := strings.Cut(t.Name(), "/")
+	if !slices.Contains(tests, top) {
+		t.Errorf("%s names %q, not %s", file, liveGatedFiles[file], top)
+		return
+	}
+	narrowed := os.Getenv("FAULTLINE_REPAIR_ONLY") != "" || os.Getenv("FAULTLINE_REPAIR_SKIP") != "" || os.Getenv("FAULTLINE_REPAIR_WT_CASES") != ""
+	complete, outputs := noteGroup(file, top, narrowed, recordedOutputs(t), len(tests))
+	if dir := os.Getenv("FAULTLINE_DUMP_LIVE_OUTPUTS"); dir != "" && narrowed {
+		name := filepath.Join(dir, strings.ReplaceAll(file, "/", "_")+".txt")
+		f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		f.WriteString(recordedOutputs(t) + "\n")
+		f.Close()
+		union, _ := os.ReadFile(name)
+		t.Logf("LIVE-GROUP-AUDIT %s: unreached by the dumped union so far: %q", file, unreachedLiterals(t, file, string(union)))
+		return
+	}
+	if !complete || narrowed {
+		t.Logf("LIVE-GROUP-PENDING %s: waits for %s in one unnarrowed run (the process-end audit reports it if none completes it)", file, liveGatedFiles[file])
+		return
+	}
+	requireReached(t, file, outputs)
+}
+
+// unreachedLiterals are file's error literals that neither outputs nor a
+// golden produced and unreachableLiterals does not waive.
+func unreachedLiterals(t *testing.T, file, outputs string) []string {
+	t.Helper()
+	repo := oracle.RepoRoot(t)
+	outputs += goldenText(t, repo)
+	var out []string
+	for lit := range errorLiterals(t, filepath.Join(repo, filepath.FromSlash(file))) {
+		if _, ok := unreachableLiterals[lit]; ok {
+			continue
+		}
+		reached := true
+		for _, frag := range messageFragments(lit) {
+			reached = reached && strings.Contains(outputs, jsjson.Quote(frag)[1:len(jsjson.Quote(frag))-1])
+		}
+		if !reached {
+			out = append(out, lit)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // liveSummary logs how much a long live test compared, marked so that CI

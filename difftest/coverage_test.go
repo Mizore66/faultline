@@ -36,7 +36,6 @@ var unreachableLiterals = map[string]string{
 	"three-state prevention requires PASS → FAIL → PASS":                      "each state's verdict is a zod literal (PASS, FAIL, PASS); the schema rejects other orders first",
 	"prevention requires at least three distinct executions per state":        "distinctExecutionCount has a zod minimum of 3",
 	"source metadata artifact paths do not match the manifest":                "both paths are zod literals, so they always agree after the schemas pass",
-	"Cannot bind an invalid Codex lifecycle ledger:":                          "binding runs only after the ledger verified",
 	"Cannot bind a lifecycle ledger that has no SESSION_STARTED observation.": "a verified ledger always starts with SESSION_STARTED",
 
 	// gitproof/write.go (TestLiveProofWriter's requireReached):
@@ -114,6 +113,7 @@ var unreachableLiterals = map[string]string{
 	"Git minimization result already exists and will not be replaced:":                     "race only: the CLI's safeManagedFileOutput refused an existing output just before",
 	"minimization result changed beyond FaultLine's verification read limit while reading": "race only: lstat just reported a size within the limit",
 	"Generated Git proof bundle failed verification:":                                      "race only: the bundle fl just wrote verifies unless it changes underneath",
+	"Generated turn proof bundle failed verification:":                                     "unreachable: turnproof.Write already verifies the staged bundle against its own root before publishing, so the Verify that follows cannot fail unless the bundle changes underneath (the Git bundle text above is the same check)",
 	"Generated incident proof bundle failed verification:":                                 "race only: the bundle incident continue just wrote verifies unless it changes underneath (the Git bundle text above is the same check)",
 	"Refusing to render a Git proof bundle that changed during verification:":              "race only: the bundle is verified twice in a row",
 	"Unable to read verified":                                                              "race only: the file was just verified, so it exists and parses",
@@ -122,13 +122,11 @@ var unreachableLiterals = map[string]string{
 	// error struct literals, which errorSites did not collect before.
 	// CLI paths frozen TS runs for real (Go throws `not yet ported`): no
 	// golden can compare them; internal/cli's unit tests pin the texts.
-	"not yet ported: help":                           "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
-	"not yet ported: %s":                             "every unported top-level command (codex, record, prove, attest, provenance and repair in slice 4; serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
-	"not yet ported: investigate --ci-log/--resume":  "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
-	"not yet ported: investigate turns":              "investigate turns runs in TS; TestInvestigateUsageAndGuards pins the text",
-	"not yet ported: turn proof bundle verification": "a turn proof bundle verifies in TS; slice 2 does not port the turn verifier",
-	"not yet ported: witness propose --live":         "witness propose --live calls OpenAI in TS (slice 5); TestWitnessProposeSampleAndUnported pins the text",
-	"not yet ported: witness %s":                     "witness implement/review call a model in TS; TestWitnessProposeSampleAndUnported pins the text",
+	"not yet ported: help":                          "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
+	"not yet ported: %s":                            "every unported top-level command (serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
+	"not yet ported: investigate --ci-log/--resume": "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
+	"not yet ported: witness propose --live":        "witness propose --live calls OpenAI in TS (slice 5); TestWitnessProposeSampleAndUnported pins the text",
+	"not yet ported: witness %s":                    "witness implement/review call a model in TS; TestWitnessProposeSampleAndUnported pins the text",
 	"%s must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).": "Go-only flags (KNOWN_DIFFERENCES: Codex thread IDs): TS ignores them, so no golden can hold the refusal; TestInvestigateUsageAndGuards pins it",
 	// Witness store invariants and earlier refusals.
 	"Reviewer public key could not be exported as SPKI DER.":               "x509.MarshalPKIXPublicKey of an Ed25519 key never fails; Node's export of a parsed Ed25519 key neither",
@@ -151,34 +149,33 @@ var unreachableLiterals = map[string]string{
 	// Round 8 review: messages that flow through return values, []string
 	// helpers, cross-package helpers and message variables.
 	// Defaults overwritten before use or reached only through an earlier refusal:
-	"invalid ledger":                                               "errorSummary of an empty list: a failed schema parse has at least one issue and a failed verification at least one error",
-	"Investigation did not produce proof.":                         "baseResult's default reason; every caller passes at least one error",
-	"Frozen witness did not match the externally supplied digest.": "VerifyFrozenWitnessRecord reports an error whenever it is not a MATCH with an expected digest supplied, so the fallback list is never used",
-	"A separately supplied frozen witness digest did not match.":   "VerifyFrozenWitnessRecord reports an error whenever it is not a MATCH with an expected digest supplied, so the fallback list is never used",
-	"Git range resolved to no states.":                             "resolveCommitRange always returns the ancestor at least",
-	"Sandbox configuration failed.":                                "a configuration error is always recorded in errs first, whose first entry becomes the reason",
-	"An injected runner produced these observations; FaultLine refuses to certify it as native Docker proof.":                                                                                   "the CLI always runs the native Docker runner; only an injected runner (library callers) gets here",
-	"Unsafe local execution is explicitly inapplicable and cannot be proof.":                                                                                                                    "the sandbox schemas accept only DOCKER_ISOLATED for new runs, so no CLI run is UNSAFE_LOCAL",
-	"Unsafe local execution is explicitly inapplicable and cannot support proof.":                                                                                                               "the sandbox schemas accept only DOCKER_ISOLATED for new runs, so no CLI run is UNSAFE_LOCAL",
+	"Investigation did not produce proof.":                                                                    "baseResult's default reason; every caller passes at least one error",
+	"Frozen witness did not match the externally supplied digest.":                                            "VerifyFrozenWitnessRecord reports an error whenever it is not a MATCH with an expected digest supplied, so the fallback list is never used",
+	"A separately supplied frozen witness digest did not match.":                                              "VerifyFrozenWitnessRecord reports an error whenever it is not a MATCH with an expected digest supplied, so the fallback list is never used",
+	"Git range resolved to no states.":                                                                        "resolveCommitRange always returns the ancestor at least",
+	"Sandbox configuration failed.":                                                                           "a configuration error is always recorded in errs first, whose first entry becomes the reason",
+	"An injected runner produced these observations; FaultLine refuses to certify it as native Docker proof.": "the CLI always runs the native Docker runner; only an injected runner (library callers) gets here",
+	"Unsafe local execution is explicitly inapplicable and cannot be proof.":                                  "the sandbox schemas accept only DOCKER_ISOLATED for new runs, so no CLI run is UNSAFE_LOCAL",
+	"Unsafe local execution is explicitly inapplicable and cannot support proof.":                             "the sandbox schemas accept only DOCKER_ISOLATED for new runs, so no CLI run is UNSAFE_LOCAL",
 	"Environment descriptors (lockfiles/toolchains) changed across the investigated range; FaultLine refuses a single-image proof grade. Provide per-fingerprint runtimes or narrow the range.": "the preflight refuses a heterogeneous range without a complete mapping (CONFIGURATION_ERROR) before any run, and a mapped range is complete",
-	"the bundle changed while its artifacts were being read":                                                                                                                                    "race only: a failed re-verification always reports its errors, which replace this default",
-	"the bundle presentation artifacts changed during verification":                                                                                                                             "race only: the bundle is verified three times in a row",
-	"no valid root digest was produced":                                                                                                                                                         "a failed verification always reports at least one error, which replaces this default",
-	"FaultLine refuses to name a first bad state without a stable bracket.":                                                                                                                     "page text: commit-proof-preview-no-regression writes it into the preview HTML, which the writer golden compares by digest (goldens hold file digests, not contents)",
-	"human owned the question after execution; digests identical":                                                                                                                               "the default ratification note is written into the ratification record, which the CLI does not print and the writer goldens hash (the file digest covers it)",
-	"--require-signature needs a reviewer keyring":                                                                                                                                              "the CLI refuses --require-signature without --keyring itself (\"--require-signature needs --keyring …\") before verification runs",
-	"authenticated reviewer signature cannot be trusted without a reviewer keyring":                                                                                                             "the CLI refuses --require-signature without --keyring itself before verification runs",
-	"frozen witness changed during authenticated approval verification":                                                                                                                         "race only: the frozen record verified an instant before is read again",
-	"policy network must be disabled":                                                                                                                                                           "the policy schema requires network \"disabled\" (a zod literal), parsed before matching",
-	"proposal network is not disabled":                                                                                                                                                          "the proposal schema requires network \"disabled\" (a zod literal)",
-	"proposal credentials are not redacted":                                                                                                                                                     "the proposal schema requires credentials \"redacted\" (a zod literal)",
-	"Invalid lifecycle ledger at":                                                                                                                                                               "both callers bind a ledger that readVerifiedCodexLifecycleLedger, or the bound-record schema, already parsed with the same schema",
-	"Invalid Git investigation at":                                                                                                                                                              "both callers bind an investigation already parsed with the same schema (the CLI, the investigation result, the bound-record schema)",
-	"Invalid Git checkpoint at":                                                                                                                                                                 "the ledger schema parses every WORKTREE_CHECKPOINT payload's checkpoint with the same schema first",
-	"Invalid turn tree snapshot at":                                                                                                                                                             "the ledger schema parses every snapshot payload with the same schema first",
-	"content mismatch":                                                                                                                                                                          "git diff-files --quiet reports a difference by exit 1 with no stderr only when the worktree changes under the fresh checkout (race only); the bounded-run reasons are checked by TestLiveHardenedGit",
-	"Git command exceeded bounded execution time":                                                                                                                                               "materialization runs a real git over a fresh checkout; TestLiveHardenedGit compares this reason with a slow fake git",
-	"Git command exceeded bounded output limit":                                                                                                                                                 "materialization runs a real git over a fresh checkout; TestLiveHardenedGit compares this reason with a flooding fake git",
+	"the bundle changed while its artifacts were being read":                        "race only: a failed re-verification always reports its errors, which replace this default",
+	"the bundle presentation artifacts changed during verification":                 "race only: the bundle is verified three times in a row",
+	"no valid root digest was produced":                                             "a failed verification always reports at least one error, which replaces this default",
+	"FaultLine refuses to name a first bad state without a stable bracket.":         "page text: commit-proof-preview-no-regression writes it into the preview HTML, which the writer golden compares by digest (goldens hold file digests, not contents)",
+	"human owned the question after execution; digests identical":                   "the default ratification note is written into the ratification record, which the CLI does not print and the writer goldens hash (the file digest covers it)",
+	"--require-signature needs a reviewer keyring":                                  "the CLI refuses --require-signature without --keyring itself (\"--require-signature needs --keyring …\") before verification runs",
+	"authenticated reviewer signature cannot be trusted without a reviewer keyring": "the CLI refuses --require-signature without --keyring itself before verification runs",
+	"frozen witness changed during authenticated approval verification":             "race only: the frozen record verified an instant before is read again",
+	"policy network must be disabled":                                               "the policy schema requires network \"disabled\" (a zod literal), parsed before matching",
+	"proposal network is not disabled":                                              "the proposal schema requires network \"disabled\" (a zod literal)",
+	"proposal credentials are not redacted":                                         "the proposal schema requires credentials \"redacted\" (a zod literal)",
+	"Invalid lifecycle ledger at":                                                   "both callers bind a ledger that readVerifiedCodexLifecycleLedger, or the bound-record schema, already parsed with the same schema",
+	"Invalid Git investigation at":                                                  "both callers bind an investigation already parsed with the same schema (the CLI, the investigation result, the bound-record schema)",
+	"Invalid Git checkpoint at":                                                     "the ledger schema parses every WORKTREE_CHECKPOINT payload's checkpoint with the same schema first",
+	"Invalid turn tree snapshot at":                                                 "the ledger schema parses every snapshot payload with the same schema first",
+	"content mismatch":                                                              "git diff-files --quiet reports a difference by exit 1 with no stderr only when the worktree changes under the fresh checkout (race only); the bounded-run reasons are checked by TestLiveHardenedGit",
+	"Git command exceeded bounded execution time":                                   "materialization runs a real git over a fresh checkout; TestLiveHardenedGit compares this reason with a slow fake git",
+	"Git command exceeded bounded output limit":                                     "materialization runs a real git over a fresh checkout; TestLiveHardenedGit compares this reason with a flooding fake git",
 	// minimize.go (live-gated by TestLiveMinimize): branches its generated
 	// repositories cannot take.
 	"Minimization did not produce proof.":                                 "baseResult's default reason; every caller passes at least one error",
@@ -227,21 +224,20 @@ var unreachableLiterals = map[string]string{
 	"jsre: /%s/%s: unsupported flag %q":                                 "jsre refuses a flag the port does not implement; every pattern fl compiles is a constant with g or i",
 	"jsre: /%s/: match boundary inside a code point":                    "an internal invariant: RE2 over UTF-8 never ends a match inside a code point",
 
+	// Slice 4a: error literals of the sidecar files that no input reaches.
+	"A recorded checkpoint result requires a checkpoint digest.":           "checkpointResult is only called with a checkpoint for CHECKPOINT_RECORDED",
+	"The sidecar stop receipt omitted its checkpoint digest.":              "assertReceiptMatchesLedger compares the digest with the ledger's first and refuses a receipt without one",
+	"A checkpoint receipt requires a checkpoint digest.":                   "writeReceipt only gets a RECORDED result that carries its digest",
+	"A turn snapshot receipt requires a turn tree snapshot digest.":        "a TURN_SNAPSHOT_RECORDED result always carries its snapshot",
+	"Only Stop checkpoint outcomes can be persisted as a sidecar receipt.": "writeReceipt is only called with the four Stop statuses",
+	"session-start":    "event id phase strings reach a message only through appendIfAbsent, which SessionStart does not use",
+	"session-baseline": "event id phase strings reach a message only through appendIfAbsent, which SessionStart does not use",
+
 	// internal/projinit (slice 3a Task 10): SidecarCliCommand and
 	// CodexSidecarLedgerPath are shared with `fl codex sidecar`, not ported
 	// yet; `fl init` passes only `--cli <resolved path>` and the fixed
 	// session id.
-	"must not be empty.": "assertSidecarCommandText runs on --command/--command-windows only, which `fl init` never passes (fl codex sidecar config/install)",
-	"Provide exactly one of --cli <built-cli.js> or --command <stable-hook-command>.": "fl init calls sidecarCliCommand with exactly [--cli, path] (fl codex sidecar config/install)",
-	"--command-windows": "the --command-windows label of assertSidecarCommandText, reached only through fl codex sidecar config/install",
-	"--command-windows is only valid with an explicit --command; --cli generates both platform commands safely.": "fl init never passes --command-windows to sidecarCliCommand (fl codex sidecar config/install)",
-	"Identifier contains unsupported characters":                                                                 "fl init's only session id is the constant faultline-install-check (fl codex sidecar hook takes others)",
-	"faultline-install-check":                                       "the fixed session id HookTarget passes to codexSidecarLedgerPath: an argument, not output",
-	"FaultLine observes this Codex session":                         "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
-	"FaultLine records an observed Codex turn":                      "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
-	"FaultLine records tool-use attribution (digests only)":         "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
-	"FaultLine records tool-use completion (digests only)":          "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
-	"FaultLine captures a clean observed checkpoint when available": "a statusMessage written into .codex/hooks.json, compared by the file digest, not printed",
+	"faultline-install-check":          "the fixed session id HookTarget passes to codexSidecarLedgerPath: an argument, not output",
 	"is unavailable:":                  "race only: assertSafeDirectory lstats a directory realpathSync or safeDirectoryExists has just accepted",
 	"FaultLine Git metadata directory": "race only: the label of assertSafeDirectory on the realpath of git's common directory, which exists when git reports it",
 	"Git did not report a common metadata directory for this worktree.": "git rev-parse --git-common-dir prints a path or fails",
@@ -267,6 +263,76 @@ var unreachableLiterals = map[string]string{
 	"git hash-object --stdin did not return a blob id for":                             "git hash-object -w --stdin prints a full object id or fails",
 	"Git did not return a valid tree object id for this turn tree snapshot.":           "git write-tree prints a full object id or fails",
 	"Git did not return a resolvable HEAD commit for this turn tree snapshot.":         "git rev-parse HEAD prints a full object id or fails (an unborn HEAD fails)",
+
+	// turnproof/files.go: reached by Task 7/8 goldens; remove each row when
+	// they land (the gate then reports the row as stale).
+	"Turn proof bundle artifact exceeds FaultLine's read limit:": "reached by Task 7/8 goldens; remove when they land",
+
+	// turnproof/verify.go and semantics.go (Task 7).
+	// proveTransitionCommand's `|| "unknown error"` (cli-app.ts:2310): every invalid Verification carries an error (a missing directory, a failed
+	// check or the catch-all "verification failed safely" all push one), so the empty join is a defensive fallback.
+	"unknown error": "verifyTurnInvestigationProofBundle returns valid:false only with at least one pushed error (turn-proof-bundle.ts:823,964-970); prove's empty-join fallback is unreachable",
+
+	// turnproof/pack.go (TestLiveTurnTreesPack's requireReached):
+	"Turn tree pack enumeration produced no Git objects.":         "rev-list --objects <tree> always lists the tree itself",
+	"Turn tree pack exceeds FaultLine's portable artifact limit.": "pack-objects output past the 64 MiB runHardenedGit cap fails first, below the 128 MiB limit",
+
+	// Slice 4b Task 4: the turn-minimization bridge (live-gated by
+	// TestLiveTurnBridge) and minimizeFromTurnInvestigation.
+	"Transition index must be a non-negative integer (got": "minimizeFromTurnInvestigation refuses a non-integer or negative --transition first (`--transition must be a non-negative integer.`), so fl never passes one to selectTurnTransition; TestLiveTurnBridge compares it on direct calls",
+
+	// turnproof/write.go (TestLiveTurnProofWriter's requireReached):
+	"Turn proof root is not a real directory:":                                    "the filesystem root is always a real directory",
+	"Turn proof bundle generated duplicate artifact:":                             "semantic validation refuses duplicate run ids first",
+	"Turn proof writer did not produce the complete expected artifact set.":       "the writer puts exactly requiredArtifactPaths",
+	"Turn proof bundle output appeared during assembly and will not be replaced:": "race only: the output was refused when it existed before staging",
+
+	// turninv/investigate.go (TestLiveInvestigateTurns's requireReached):
+	"Missing prepared state or fingerprint at index":    "phase 2 runs only after the fingerprint count check, so every state has a fingerprint",
+	"No resolved runtime image for fingerprint":         "buildEffectiveRuntimeMapping resolves an image for every distinct fingerprint digest or throws first",
+	"Could not fingerprint every turn state.":           "every state without a fingerprint pushed its materialization error, so the error list is never empty there",
+	"Turn investigation did not localize a transition.": "baseResult's default reason; every caller passes a proofReason",
+	"Turn investigation did not produce proof.":         "baseResult's default reason; every caller passes a proofReason",
+	// internal/bundle/prevention/repaired.go and repaired_runs.go (Task 13).
+	"Repaired worktree path is not a regular file:":     "race only: the walk keeps only entries readdirSync calls files, lstat'ed just after",
+	"Collected repaired run digests were not distinct.": "each run id digests its attempt number, so the three always differ (src/prevention-from-artifacts.ts:535)",
+	// Slice 4c Task 18 (internal/cli/repair.go).
+	"Repair evidence packet changed during redaction and cannot be safely correlated to the verified investigation.": "src/cli-app.ts:2770: the packet holds only digests, fixed statements and counts, which redactValue never rewrites (a changed digest needs a secret-shaped packet field)",
+	// Slice 4c, internal/attest (task-7-report concern 1).
+	"Attestation path root must be a real directory:":     "the filesystem root is always a real directory",
+	"Attestation receipt path escaped its managed store.": "ReceiptIdSchema refuses every id that is a path first",
+	"Attestation staging file is not a regular file.":     "race only: the staged file was just created with open 'wx' and written by the same call",
+	// Slice 4c, internal/provenance (task-14-report concerns).
+	"Provenance root must be a real directory:":                 "the filesystem root is always a real directory (safedir.EnsureRealDirectoryTree throws rootMessage only for the root itself; every other component gets the traverse message)",
+	"receipt event is not permitted by the trust configuration": "both sides are z.literal(\"push\"), so the schemas refuse any other event before the comparison",
+	// Slice 4c, internal/repair store.go (task-9-report deviation 2).
+	"Repair brief root is not a real directory:":                             "the filesystem root is always a real directory (safedir.EnsureRealDirectoryTree throws rootMessage only for the root itself; every other component gets the traverse message)",
+	"Refusing to publish an invalid repair brief package:":                   "a stage just written verifies unless the filesystem fails between the writes and the verify; an unreadable stage under umask 0477 also fails its removal, and that error is thrown instead (as for the prevention writer)",
+	"Repair brief output appeared during assembly and will not be replaced:": "race only: the output was refused when it existed before staging",
+	// Slice 4c, internal/repair live.go. These are the causes undici gives
+	// "fetch failed"; postJSON replaces them with errFetchFailed (live.go),
+	// so no output ever holds them. TestLiveProposeRepairBrief compares the
+	// outcome (fetch failed) against Node on a non-HTTP scheme, a redirect
+	// loop and credentials in Location.
+	"URL scheme must be a HTTP(S) scheme":                "the cause of fetch failed, replaced by errFetchFailed: never in the output",
+	"redirect count exceeded":                            "the cause of fetch failed, replaced by errFetchFailed: never in the output",
+	"cross origin not allowed for request mode \"cors\"": "the cause of fetch failed, replaced by errFetchFailed: never in the output",
+	"invalid deflate data":                               "inflate's error only makes readResponse report terminated (live.go), so the text is never printed; TestLiveResponseDecoders compares whether Node's zlib errors on each stream",
+	// Node 22 decodes a br response; Go does not and reports terminated
+	// (difftest/KNOWN_DIFFERENCES.md), so no case compares a br body.
+	"brotli is not supported": "a documented known difference: Node decodes br, and the Go text is never printed (the body read fails as terminated)",
+	// Slice 4c, internal/repair worktree.go (TestLiveRepairWorktree).
+	"must be a child of the managed repair root.":  "the four paths are fixed names joined to the managed root, so they are always its children",
+	"Repair managed root is not a real directory:": "race only: the managed root was created by mkdir just before",
+	"must not be a symbolic link:":                 "race only: git worktree add just created the worktree directory",
+	// Slice 4c, internal/codexloop/repair.go (TestSelectRepairBaseCommit and
+	// TestRepairBundleInvalid pin both texts).
+	"Proof bundle verification failed.":                              "Valid is len(errors)==0, so an invalid bundle always carries at least one error and the join is never empty",
+	"Verified investigation does not identify a repair base commit.": "a bundle the verifier accepted holds a resolved range whose descendant has a commit (semantic validation refuses a null range first)",
+	// Slice 4c Task 10: not an error text. repair.ProposeBrief parses
+	// redactValue's result with bundle.ParseValue, whose input the flow
+	// analysis counts as a message, so redactValue's returns become sites.
+	"<FAULTLINE_UNSUPPORTED_VALUE:undefined>": "redactValue's placeholder for an undefined value, not an error; the only CLI path that redacts an undefined value is fl witness propose --input without incidentPacket (cli-app.ts:1377-1385, witness.go:258-279), which exercises it (golden propose-input-no-packet: Expected object, received string) but fails in zod before the placeholder text can print, so no golden can contain the literal",
 }
 
 // errorLiterals collects the error-message literals of path (errorSites),
@@ -1059,7 +1125,11 @@ var gatedDirs = []string{
 	"internal/witnessresult", "internal/redaction", "internal/witness", "internal/ledgerbind",
 	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
 	"internal/safegit", "internal/hostcmd", "internal/runtimeimage", "internal/doctor", "internal/allowlist", "internal/turnsnap",
-	"internal/incident",
+	"internal/incident", "internal/ledger", "internal/sidecar", "internal/snapgc",
+	// Slice 4b: every file is live-gated (TestLiveTurnStates, TestLiveInvestigateTurns).
+	"internal/turninv",
+	// Slice 4c.
+	"internal/codexloop", "internal/repair", "internal/attest", "internal/provenance", "internal/jsdate",
 }
 
 // gatedLiterals is errorLiterals over every gatedDirs package.
@@ -1128,7 +1198,66 @@ var liveGatedFiles = map[string]string{
 	"internal/bundle/prevention/write.go":     "TestLivePreventionWrite",
 	"internal/bundle/prevention/agentsmd.go":  "TestLiveAgentsMd",
 	"internal/bundle/prevention/artifacts.go": "TestLivePreventionFromArtifacts",
+	// Slice 4b Task 5: the turn hash catalog and the portable tree pack.
+	"internal/bundle/turnproof/catalog.go": "TestLiveTurnHashCatalog",
+	"internal/bundle/turnproof/pack.go":    "TestLiveTurnTreesPack",
+	// Slice 4b Task 7: the turn proof semantics and lifecycle binding, on
+	// 3,000 mutations of the two turn bases.
+	"internal/bundle/turnproof/semantics.go": "TestLiveTurnSemantics",
+	// Slice 4b Task 8: the write-once turn proof bundle writer, on 80
+	// generated investigations and the refusal variants.
+	"internal/bundle/turnproof/write.go": "TestLiveTurnProofWriter",
+	// Slice 4b Task 3: turn states, reconstruction, transitions and attribution.
+	"internal/turninv/states.go": "TestLiveTurnStates",
+	// Slice 4b Task 4: the turn-minimization bridge, on generated
+	// transitions, repositories and environments. Its runGit rethrows
+	// spawnSync's own error: ENOENT is compared there, ENOBUFS needs more
+	// than 16 MiB from rev-parse or commit-tree, which print one object id.
+	"internal/minimize/bridge.go": "TestLiveTurnBridge",
+	// Slice 4b Task 6: investigateTurnTrees on generated sessions.
+	"internal/turninv/investigate.go": "TestLiveInvestigateTurns",
+	"internal/turninv/schemas.go":     "TestLiveInvestigateTurns",
+	// Slice 4a: the recording ledger writers, the snapshot collector and the
+	// sidecar hook state machine, on generated inputs and stores.
+	"internal/ledger/ledger.go":     "TestLiveLedgerWriters",
+	"internal/ledger/checkpoint.go": "TestLiveLedgerWriters",
+	"internal/snapgc/gc.go":         "TestLiveSnapshotGC",
+	"internal/sidecar/hook.go":      "TestLiveSidecarHooks",
+	"internal/sidecar/receipt.go":   "TestLiveSidecarHooks",
+	"internal/sidecar/lock.go":      "TestLiveSidecarHooks",
+	"internal/sidecar/inspect.go":   "TestLiveSidecarHooks",
+	// Slice 4c: the hard-guard helpers have no src/ caller.
+	"internal/bundle/prevention/hardguard.go": "TestLiveHardGuardDigests",
+	// Slice 4c Task 13: the repaired-state commit and run collection, on
+	// generated worktrees and scripted verifiers.
+	"internal/bundle/prevention/repaired.go":      "TestLiveCommitRepairedWorktreeState",
+	"internal/bundle/prevention/repaired_runs.go": "TestLiveCollectRepairedRuns",
+	// Slice 4c: the library packages the tasks left to live tests. The
+	// "+"-joined names are the tests that together reach a file
+	// (requireReachedGroup); a narrowed or partial run cannot judge it.
+	"internal/attest/attest.go":         "TestLiveAttestationCreate+TestLiveAttestationStore",
+	"internal/provenance/provenance.go": "TestLiveProvenanceReceipt+TestLiveProvenanceBinding+TestLiveGhAttestation+TestLiveProvenanceWrite",
+	"internal/repair/store.go":          "TestLiveRepairBriefStore",
+	"internal/repair/live.go":           "TestLiveProposeRepairBrief",
+	"internal/repair/response.go":       "TestLiveExtractOpenAiResponseText",
+	"internal/repair/worktree.go":       "TestLiveRepairWorktree",
+	"internal/codexloop/repair.go":      "TestLiveRepairWithCodex",
+	"internal/codexloop/verifier.go":    "TestLiveRepairWithCodex",
+	"internal/codexloop/runner.go":      "TestLiveImplementCodexRunner",
+	// cpSync is Linux-only (libstdc++), so TestLiveCpSyncTree gates it only
+	// on a Linux run; nodefs is not a gatedDirs package.
+	"internal/nodefs/cp.go": "TestLiveCpSyncTree",
+	// Slice 4c Task 18: every Git bundle the verifier accepts is a completed,
+	// Docker-isolated proof with a transition and a witness digest, so the
+	// packet refusal is not reachable through the CLI.
+	"internal/repair/brief.go": "TestLiveRepairEvidencePacket",
 }
+
+// liveOnlyUnreachable are error texts in live-gated files outside gatedDirs
+// (so TestGoldensReachEveryErrorLiteral never sees them) that their live test
+// cannot reach, each with the reason; requireReached skips them.
+var liveOnlyUnreachable = map[string]string{
+	"Cannot copy an unknown file type:": "on Linux Go's os.Stat maps every S_IFMT type it can see (regular, directory, symlink, FIFO, socket, block and character device) to a mode bit and never sets fs.ModeIrregular (os/stat_linux.go, Go 1.27.3), and cp.go:251 throws only on ModeIrregular, so no Linux fixture reaches it (block and character devices copy, as cp.go:318 does). Whether frozen Node 22.22.2 ever reports this text for a type Go maps was NOT inspected: this is a statement about the Go port, not about Node."}
 
 // liveGated reports whether the file at pos (an absolute path, optionally
 // followed by :line) is live-gated.
@@ -1149,6 +1278,12 @@ func goldenText(t *testing.T, repo string) string {
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no goldens: %v", err)
 	}
+	// The writer replay's per-task goldens (writer_test.go writerGoldenDir).
+	perTask, err := filepath.Glob(filepath.Join(repo, "difftest", "testdata", "golden", writerGoldenDir, "*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = append(files, perTask...)
 	var goldens strings.Builder
 	for _, f := range files {
 		b, err := os.ReadFile(f)

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const fakeGit = `#!/bin/sh
@@ -124,5 +125,68 @@ func TestSpawnSyncWithEnvAndInput(t *testing.T) {
 	})
 	if r.Err != nil || r.Status == nil || *r.Status != 0 || string(r.Stdout) != "barin" {
 		t.Fatalf("status=%v err=%v stdout=%q stderr=%q", r.Status, r.Err, r.Stdout, r.Stderr)
+	}
+}
+
+// TestSpawnSyncTimeout pins spawnSync's timeout: OnKillTimerTimeout sets
+// ETIMEDOUT and kills the child with SIGTERM, so status is null, and the
+// output read before the kill is kept.
+func TestSpawnSyncTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX sh")
+	}
+	start := time.Now()
+	r := SpawnSyncWith("sh", []string{"-c", "printf partial; sleep 5"}, SpawnSyncOptions{Timeout: 200 * time.Millisecond})
+	if r.Err == nil || r.Err.Error() != "spawnSync sh ETIMEDOUT" || r.Status != nil || string(r.Stdout) != "partial" {
+		t.Fatalf("%+v %v", r, r.Err)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatal("the child was not killed")
+	}
+}
+
+// TestSpawnSyncTimeoutAfterOverflow pins GetError's order: ENOBUFS, set
+// first, stays the error when the timer would have fired later, and a
+// timeout that never fires changes nothing.
+func TestSpawnSyncTimeoutAfterOverflow(t *testing.T) {
+	r := SpawnSyncWith("sh", []string{"-c", "head -c 2000 /dev/zero; sleep 5"}, SpawnSyncOptions{MaxBuffer: 1000, Timeout: 2 * time.Second})
+	if r.Err == nil || r.Err.Error() != "spawnSync sh ENOBUFS" || r.Status != nil {
+		t.Fatalf("%+v %v", r, r.Err)
+	}
+	r = SpawnSyncWith("sh", []string{"-c", "printf ok; exit 3"}, SpawnSyncOptions{Timeout: 10 * time.Second})
+	if r.Err != nil || r.Status == nil || *r.Status != 3 || string(r.Stdout) != "ok" {
+		t.Fatalf("%+v %v", r, r.Err)
+	}
+}
+
+func TestSpawnSyncTimeoutSendsSIGTERM(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX sh")
+	}
+	start := time.Now()
+	r := SpawnSyncWith("/bin/sh", []string{"-c", "sleep 5"}, SpawnSyncOptions{Timeout: 200 * time.Millisecond})
+	if r.Status != nil || r.Signal != "SIGTERM" || r.Err == nil || r.Err.Error() != "spawnSync /bin/sh ETIMEDOUT" {
+		t.Fatalf("%+v", r)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatal("the timeout did not stop the child")
+	}
+}
+
+func TestExecFileSyncMessages(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX sh")
+	}
+	_, err := ExecFileSync("/bin/sh", []string{"-c", "echo out; echo err >&2; exit 3"}, SpawnSyncOptions{})
+	if err == nil || err.Error() != "Command failed: /bin/sh -c echo out; echo err >&2; exit 3\nerr\n" {
+		t.Fatalf("%v", err)
+	}
+	_, err = ExecFileSync("/nonexistent-gitx", []string{"a"}, SpawnSyncOptions{})
+	if err == nil || err.Error() != "spawnSync /nonexistent-gitx ENOENT" {
+		t.Fatalf("%v", err)
+	}
+	out, err := ExecFileSync("/bin/sh", []string{"-c", "printf ok"}, SpawnSyncOptions{})
+	if err != nil || string(out) != "ok" {
+		t.Fatalf("%q %v", out, err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"sort"
+	"time"
 )
 
 // RemoveAll is rmSync(path, { recursive: true, force: true }): Node 22's
@@ -24,7 +25,56 @@ func RemoveAllDepth(path string, maxDepth int) error {
 	return r.rimraf(sysPath(path), path, 0)
 }
 
-type remover struct{ maxDepth int }
+// RemoveAllRetry is rmSync(path, {recursive: true, force: true,
+// maxRetries, retryDelay}): RemoveAll, where every unlink and the final
+// rmdir of each directory are retried up to maxRetries times on EBUSY,
+// EMFILE, ENFILE, ENOTEMPTY and EPERM, sleeping i*retryDelay before
+// retry i (internal/fs/rimraf.js _unlinkSync, _rmdirSync).
+func RemoveAllRetry(path string, maxRetries int, retryDelay time.Duration) error {
+	r := remover{maxDepth: -1, maxRetries: maxRetries, retryDelay: retryDelay}
+	return r.rimraf(sysPath(path), path, 0)
+}
+
+type remover struct {
+	maxDepth   int
+	maxRetries int
+	retryDelay time.Duration
+}
+
+// retryErrorCodes is rimraf.js retryErrorCodes.
+func retryable(code string) bool {
+	switch code {
+	case "EBUSY", "EMFILE", "ENFILE", "ENOTEMPTY", "EPERM":
+		return true
+	}
+	return false
+}
+
+// retryLoop is the try loop of rimraf.js _unlinkSync and of _rmdirSync's
+// final rmdir: ENOENT ends it quietly, a retryable code sleeps i*retryDelay
+// before the next try, and the last try throws.
+func (r remover) retryLoop(op func() error) error {
+	tries := r.maxRetries + 1
+	for i := 1; i <= tries; i++ {
+		err := op()
+		if err == nil {
+			return nil
+		}
+		e, _ := err.(*Error)
+		code := ""
+		if e != nil {
+			code = e.Code
+		}
+		if retryable(code) && i < tries && r.retryDelay > 0 {
+			time.Sleep(time.Duration(i) * r.retryDelay)
+		} else if code == "ENOENT" {
+			return nil
+		} else if i == tries {
+			return err
+		}
+	}
+	return nil
+}
 
 func (r remover) rimraf(raw, display string, depth int) error {
 	if r.maxDepth >= 0 && depth > r.maxDepth {
@@ -47,7 +97,7 @@ func (r remover) rimraf(raw, display string, depth int) error {
 	if info != nil && info.IsDir() {
 		err = r.rmdirTree(raw, display, nil, depth)
 	} else {
-		err = unlinkFile(raw, display)
+		err = r.unlinkFile(raw, display)
 	}
 	if err == nil {
 		return nil
@@ -70,14 +120,14 @@ func (r remover) rimraf(raw, display string, depth int) error {
 	return err
 }
 
-// unlinkFile is rimraf's _unlinkSync with one try.
-func unlinkFile(raw, display string) error {
-	if err := unlinkRaw(raw); err != nil {
-		if e := wrap(err, "unlink", display); e.(*Error).Code != "ENOENT" {
-			return e
+// unlinkFile is rimraf's _unlinkSync.
+func (r remover) unlinkFile(raw, display string) error {
+	return r.retryLoop(func() error {
+		if err := unlinkRaw(raw); err != nil {
+			return wrap(err, "unlink", display)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // rmdirTree is rimraf's _rmdirSync.
@@ -107,12 +157,12 @@ func (r remover) rmdirTree(raw, display string, original error, depth int) error
 				return err
 			}
 		}
-		if err := rmdirRaw(raw); err != nil {
-			if e := wrap(err, "rmdir", display); e.(*Error).Code != "ENOENT" {
-				return e
+		return r.retryLoop(func() error {
+			if err := rmdirRaw(raw); err != nil {
+				return wrap(err, "rmdir", display)
 			}
-		}
-		return nil
+			return nil
+		})
 	}
 	if original != nil {
 		return original
@@ -138,7 +188,7 @@ func (r remover) fixWinEPERM(raw, display string, original error, depth int) err
 	if info.IsDir() {
 		return r.rmdirTree(raw, display, original, depth)
 	}
-	return unlinkFile(raw, display)
+	return r.unlinkFile(raw, display)
 }
 
 // RemoveAllAsync is fs/promises.rm(path, { recursive: true, force: true })
@@ -273,7 +323,7 @@ func fixWinEPERMAsync(raw, display string, original error) error {
 // readRawNames is readdirSync(path, "buffer"): libuv sorts names on Unix and
 // returns directory order on Windows.
 func readRawNames(raw string) ([]string, error) {
-	names, _, err := scandir(raw)
+	names, err := scandirNames(raw)
 	if err != nil {
 		return nil, err
 	}

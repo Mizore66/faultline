@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, lutimesSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,16 @@ export type Template = {
   fakeGitPathOnly?: boolean;
   // mode: a chmod template's permission bits, in octal ("555").
   mode?: string;
+  // iso: a set-mtime template's time (atime and mtime, lutimes semantics).
+  iso?: string;
+  // inv: a writer mutation applied just before invocation inv instead of
+  // at case setup (gen-writers.ts runCase).
+  inv?: number;
+  // resignTurn: after the edit, re-sign a turn bundle the way its writer
+  // would (resignTurnBundle), so only the semantic checks see the edit.
+  resignTurn?: boolean;
+  // posixOnly: the Go replay skips the case on Windows; TS generates it.
+  posixOnly?: boolean;
 };
 // JsonEdit is one json-edit step; a json-edit template is one step itself or
 // lists several in `edits`, applied in order.
@@ -134,7 +144,7 @@ function matches(pattern: string, file: string): boolean {
 }
 
 // Ops whose target is a path in the bundle (or the bundle itself), not an existing file.
-export const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "fifo", "sparse-file", "many-files", "fake-git", "pad-total"]);
+export const PATH_OPS = new Set(["add-file", "root-symlink", "remove-root", "fifo", "sparse-file", "many-files", "fake-git", "pad-total", "add-symlink", "set-mtime"]);
 
 export function expandCases(base: string, root: string, templates: Template[]): Case[] {
   const files = listFiles(root);
@@ -167,6 +177,12 @@ function defineOwn(o: Record<string, unknown>, key: string, value: unknown): voi
 // assigning it sets the prototype instead of a property. Go's
 // canonical.DigestJSON is iterative too.
 export function canonicalDigest(root: unknown): string {
+  return `sha256:${sha256(canonicalText(root))}`;
+}
+
+// canonicalText is canonicalJson's text, built the way canonicalDigest
+// describes; turn bundle artifacts are canonicalText(value) + "\n".
+export function canonicalText(root: unknown): string {
   const out: string[] = [];
   type Frame = { items: unknown[]; i: number } | { entries: Array<[string, unknown]>; i: number };
   const stack: Frame[] = [];
@@ -212,7 +228,7 @@ export function canonicalDigest(root: unknown): string {
       emit(v);
     }
   }
-  return `sha256:${sha256(out.join(""))}`;
+  return out.join("");
 }
 
 function rehash(root: string, base: string): void {
@@ -266,6 +282,57 @@ function resignLedgerJson(ledger: LedgerJson): void {
     event.hash = digestJson(unsigned);
     previous = event.hash;
   }
+}
+
+type TurnRun = { runId?: string } & Record<string, unknown>;
+type TurnStable = { runIds?: unknown[] };
+type TurnInvestigationJson = {
+  runs: TurnRun[]; stableStates: TurnStable[]; transitions: Array<{ before: TurnStable; after: TurnStable }>;
+};
+
+const writeCanonical = (path: string, value: unknown) => writeFileSync(path, `${canonicalText(value)}\n`);
+
+// resignTurnBundle is the editor who rewrites a turn bundle consistently
+// after an edit of investigation.json: each runId is re-derived from its run
+// (executionId is left alone) and renamed wherever stable states and
+// transitions name it, then the run and transition artifacts and the
+// manifest's artifact index and investigation digest are rewritten. The
+// template's rehash then rewrites hashes.txt and ROOT.sha256.
+function resignTurnBundle(root: string): void {
+  const investigationPath = join(root, "investigation.json");
+  const investigation = JSON.parse(readFileSync(investigationPath, "utf8")) as TurnInvestigationJson;
+  const renamed = new Map<unknown, string>();
+  for (const run of investigation.runs) {
+    const { runId: old, ...unsigned } = run;
+    run.runId = canonicalDigest(unsigned);
+    renamed.set(old, run.runId);
+  }
+  const rename = (s: TurnStable) => {
+    if (Array.isArray(s.runIds)) s.runIds = s.runIds.map((id) => (typeof id === "string" ? renamed.get(id) ?? id : id));
+  };
+  for (const s of investigation.stableStates) rename(s);
+  for (const t of investigation.transitions) {
+    rename(t.before);
+    rename(t.after);
+  }
+  writeCanonical(investigationPath, investigation);
+  const runPath = (run: TurnRun) => `runs/${run.runId!.slice("sha256:".length)}.json`;
+  const transitionPath = (index: number) => `transitions/${String(index).padStart(4, "0")}.json`;
+  for (const [dir, items] of [["runs", investigation.runs], ["transitions", investigation.transitions]] as const) {
+    mkdirSync(join(root, dir), { recursive: true });
+    for (const name of readdirSync(join(root, dir))) if (name.endsWith(".json")) rmSync(join(root, dir, name));
+    items.forEach((item: unknown, index: number) => {
+      writeCanonical(join(root, dir === "runs" ? runPath(item as TurnRun) : transitionPath(index)), item);
+    });
+  }
+  const manifestPath = join(root, "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+    artifacts: Record<string, unknown>; investigationDigest: string;
+  };
+  manifest.artifacts.runs = investigation.runs.map((run) => ({ runId: run.runId, path: runPath(run) }));
+  manifest.artifacts.transitions = investigation.transitions.map((_, index) => ({ index, path: transitionPath(index) }));
+  manifest.investigationDigest = canonicalDigest(investigation);
+  writeCanonical(manifestPath, manifest);
 }
 
 // padTotal adds sparse files path-00000, ... of at most 120 MiB (under the
@@ -384,6 +451,25 @@ export function applyMutation(root: string, c: Case): void {
     }
     case "fake-git": break; // the tree is unchanged; caseEnv puts the fake git on PATH
     case "copy-file": copyFileSync(join(FIXTURES, t.from!), path); break;
+    case "pad-file": {
+      // Spaces until the file is exactly total bytes.
+      const b = readFileSync(path);
+      if (b.length > t.total!) throw new Error(`pad-file: ${c.file} is already ${b.length} bytes`);
+      writeFileSync(path, Buffer.concat([b, Buffer.alloc(t.total! - b.length, 0x20)]));
+      break;
+    }
+    case "replace-pack": {
+      // A new trees.pack, with the source metadata's pack digest and size
+      // following it.
+      const bytes = readFileSync(join(FIXTURES, t.from!));
+      writeFileSync(path, bytes);
+      const metadataPath = join(root, "source", "trees.metadata.json");
+      const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as { pack: { digest: string; bytes: number } };
+      metadata.pack.digest = `sha256:${sha256(bytes)}`;
+      metadata.pack.bytes = bytes.length;
+      writeCanonical(metadataPath, metadata);
+      break;
+    }
     case "sparse-file": {
       // count > 1 makes path-00000, path-00001, ...
       mkdirSync(dirname(path), { recursive: true });
@@ -409,7 +495,20 @@ export function applyMutation(root: string, c: Case): void {
     case "delete-file": rmSync(path); break;
     case "make-dir": rmSync(path); mkdirSync(path); break;
     case "symlink": rmSync(path); symlinkSync(t.target!, path); break;
-    case "add-file": mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, t.content!); break;
+    case "add-file": mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, expandRepeats(t.content!)); break;
+    // add-symlink makes path a symbolic link to target whether or not path
+    // exists; an existing file or link is replaced, a directory refused.
+    case "add-symlink": {
+      mkdirSync(dirname(path), { recursive: true });
+      if (existsSync(path) || lstatExists(path)) {
+        if (lstatSync(path).isDirectory()) throw new Error(`add-symlink: ${c.file} is a directory`);
+        rmSync(path);
+      }
+      symlinkSync(t.target!, path);
+      break;
+    }
+    // set-mtime sets atime and mtime without following a symbolic link.
+    case "set-mtime": { const at = new Date(t.iso!); lutimesSync(path, at, at); break; }
     // A writer case applies chmod after resetModes (gen-writers.ts runCase),
     // which would otherwise undo it.
     case "chmod": chmodSync(path, parseInt(t.mode!, 8)); break;
@@ -431,7 +530,24 @@ export function applyMutation(root: string, c: Case): void {
     }
     default: throw new Error(`unknown op ${t.op}`);
   }
+  if (t.resignTurn) resignTurnBundle(root);
   if (t.rehash) rehash(root, c.base);
+}
+
+function lstatExists(path: string): boolean {
+  try { lstatSync(path); return true; } catch { return false; }
+}
+
+// REPEAT is <REPEAT:c:n> in a writer input or add-file content: the single
+// character c repeated n times (an oversized hook prompt). The Go twin is
+// expandRepeats in difftest/cases.go.
+const REPEAT = /<REPEAT:(.):([0-9]+)>/gsu;
+export const MAX_REPEAT = 8_388_608;
+export function expandRepeats(text: string): string {
+  return text.replace(REPEAT, (_whole, c: string, n: string) => {
+    if (Number(n) > MAX_REPEAT) throw new Error(`<REPEAT:${c}:${n}> is over ${MAX_REPEAT}`);
+    return c.repeat(Number(n));
+  });
 }
 
 // caseEnv is the environment a case runs fl with: a fake-git case puts
@@ -443,22 +559,33 @@ export function caseEnv(c: Case, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...env, PATH: `${dir}:${env.PATH ?? ""}` };
 }
 
-export function treeDigest(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes)): string {
+// treeDigest hashes the tree under root. alias (the writer replay's
+// relocation.alias) renames a path whose name holds a case-dependent Git
+// object id, or returns null to leave the entry out. A renamed line goes
+// last, sorted, since its order would follow the ids; an unchanged path
+// keeps its place, so a tree without such paths hashes as before.
+export function treeDigest(root: string, fileDigest: (rel: string, bytes: Buffer) => string = (_rel, bytes) => sha256(bytes),
+  alias: (rel: string) => string | null = (rel) => rel): string {
   const lines: string[] = [];
+  const moved: string[] = [];
   if (!existsSync(root)) return sha256(""); // remove-root; Go lists nothing either
   const walk = (rel: string) => {
     for (const name of readdirSync(join(root, rel)).sort(byCodeUnit)) {
       const r = rel ? `${rel}/${name}` : name;
       const path = join(root, r);
       const stat = lstatSync(path);
-      if (stat.isSymbolicLink()) lines.push(`L ${r} ${readlinkSync(path)}`);
-      else if (stat.isDirectory()) { lines.push(`D ${r}`); walk(r); }
-      else if (!stat.isFile()) lines.push(`S ${r}`); // a FIFO: reading it would block
-      else lines.push(`F ${r} ${fileDigest(r, readFileSync(path))}`);
+      const shown = alias(r);
+      const add = (kind: string, rest: string) => {
+        if (shown !== null) (shown === r ? lines : moved).push(`${kind} ${shown}${rest}`);
+      };
+      if (stat.isSymbolicLink()) add("L", ` ${readlinkSync(path)}`);
+      else if (stat.isDirectory()) { add("D", ""); walk(r); }
+      else if (!stat.isFile()) add("S", ""); // a FIFO: reading it would block
+      else add("F", ` ${fileDigest(r, readFileSync(path))}`);
     }
   };
   walk("");
-  return sha256(lines.join("\n"));
+  return sha256([...lines, ...moved.sort(byCodeUnit)].join("\n"));
 }
 
 export const GIT_LABELS = [
@@ -466,6 +593,18 @@ export const GIT_LABELS = [
   "Git bundle extraction", "Git commit resolution", "Git tree resolution", "Git bundle range enumeration",
   "Git binary range patch creation", "Git bundle object-format resolution"
 ];
+
+// TURN_GIT_LABELS precede git's stderr in the turn verifier's and writer's
+// messages (turn-proof-bundle.ts:417, 428, 457, 475), in the ": " form.
+export const TURN_GIT_LABELS: Array<string | RegExp> = [
+  "Turn tree pack is not a valid Git pack: ",
+  "Could not create temporary bare repository for pack verification: ",
+  "Could not pack turn trees: ",
+  /Could not enumerate objects for turn tree [0-9a-f]{40,64}: /g
+];
+
+// GITTMP_MARKERS name the git verifiers' temporary directories.
+const GITTMP_MARKERS = ["faultline-git-proof-verify-", "faultline-turn-proof-pack-"];
 
 function isBoundary(c: string | undefined): boolean {
   return c === undefined || c === "'" || c === "\"" || /\s/.test(c);
@@ -513,6 +652,12 @@ export function normalizeWriter(text: string, roots: { ws: string; tmp: string; 
   out = out.replace(/127\.0\.0\.1:([0-9]+)/g, (whole, port: string) => (port === "4174" ? whole : "127.0.0.1:<PORT>"));
   // The process id in an atomic write's staged name (.<name>.<pid>.<uuid>.tmp).
   out = out.replace(/\.[0-9]+\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp/g, ".<pid>.$1.tmp");
+  // A sidecar receipt stage (.<sha256(receipt path)[0:24]>.<pid>.tmp): its
+  // key hashes the absolute receipt path (codex-sidecar.ts writeJsonAtomic).
+  out = out.replace(/\.([0-9a-f]{24})\.([0-9]+)\.tmp/g, ".<STAGEKEY>.<pid>.tmp");
+  // sidecar status's ACTIVE lock age (codex-sidecar.ts sidecarLockHealth). A
+  // STALE age is seeded by set-mtime and stays compared.
+  out = out.replace(/("state": "ACTIVE",\s*"ageMilliseconds": )[0-9]+/g, '$1"<LOCKAGE>"');
   return maskGitOutput(out, true);
 }
 
@@ -520,24 +665,35 @@ export function normalizeWriter(text: string, roots: { ws: string; tmp: string; 
 // and, with maskGit, git's own diagnostics after each GIT_LABELS failure.
 export function maskGitOutput(text: string, maskGit: boolean): string {
   let out = text;
-  const marker = "faultline-git-proof-verify-";
-  for (let i = out.indexOf(marker); i >= 0; i = out.indexOf(marker, i)) {
-    let start = i;
-    while (start > 0 && !isBoundary(out[start - 1])) start--;
-    let end = i + marker.length;
-    while (end < out.length && /[A-Za-z0-9]/.test(out[end]!)) end++;
-    out = `${out.slice(0, start)}<GITTMP>${out.slice(end)}`;
-    i = start + "<GITTMP>".length;
+  for (const marker of GITTMP_MARKERS) {
+    for (let i = out.indexOf(marker); i >= 0; i = out.indexOf(marker, i)) {
+      let start = i;
+      while (start > 0 && !isBoundary(out[start - 1])) start--;
+      let end = i + marker.length;
+      while (end < out.length && /[A-Za-z0-9]/.test(out[end]!)) end++;
+      out = `${out.slice(0, start)}<GITTMP>${out.slice(end)}`;
+      i = start + "<GITTMP>".length;
+    }
   }
-  for (const label of maskGit ? GIT_LABELS : []) {
-    const needle = `${label} failed: `;
-    for (let i = out.indexOf(needle); i >= 0; i = out.indexOf(needle, i + needle.length)) {
-      const from = i + needle.length;
+  if (!maskGit) return out;
+  const needles: Array<string | RegExp> = [...GIT_LABELS.map((label) => `${label} failed: `), ...TURN_GIT_LABELS];
+  for (const needle of needles) {
+    // after is where the detail following the next needle at or after from starts, or -1.
+    const after = (from: number): number => {
+      if (typeof needle === "string") {
+        const i = out.indexOf(needle, from);
+        return i < 0 ? -1 : i + needle.length;
+      }
+      needle.lastIndex = from;
+      const m = needle.exec(out);
+      return m ? m.index + m[0].length : -1;
+    };
+    for (let from = after(0); from >= 0; from = after(from)) {
       let to = out.indexOf("\n- ", from);
       if (to < 0) to = out.endsWith("\n") ? out.length - 1 : out.length;
       const detail = maskGitDetail(out.slice(from, to));
       out = `${out.slice(0, from)}${detail}${out.slice(to)}`;
-      i = from + detail.length - needle.length;
+      from += detail.length;
     }
   }
   return out;

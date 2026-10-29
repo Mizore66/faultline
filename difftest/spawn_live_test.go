@@ -18,6 +18,7 @@ import (
 
 	"github.com/Mizore66/faultline/difftest/oracle"
 	"github.com/Mizore66/faultline/internal/hostcmd"
+	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodeproc"
 )
 
@@ -405,4 +406,217 @@ func TestLiveHostCmd(t *testing.T) {
 		}
 	}
 	t.Logf("%d cases: %d over the cap, %d timed out, %d with a null exit code otherwise", len(cases), limited, timedOut, signalled)
+}
+
+// spawnSyncOutcome is the oracle's spawnSyncTimeout record.
+type spawnSyncOutcome struct {
+	Status       *int    `json:"status"`
+	Signal       *string `json:"signal"`
+	Error        *string `json:"error"`
+	StdoutLength *int    `json:"stdoutLength"`
+	StderrLength *int    `json:"stderrLength"`
+}
+
+// TestLiveSpawnSyncTimeout runs the same children through Node's spawnSync
+// with a timeout and nodeproc.SpawnSyncWith with Timeout, and compares the
+// status, signal, error and output lengths: children that sleep, spin,
+// ignore SIGTERM and exit later (the pipes are closed at the timeout, the
+// status is the late exit code), overrun maxBuffer before the timer (ENOBUFS
+// is kept), never read their input, or finish in time. The timeouts are
+// 100 to 400 ms, each case well clear of the timer either way.
+func TestLiveSpawnSyncTimeout(t *testing.T) {
+	o := oracle.Start(t)
+	defer o.Close()
+	type timeoutCase struct {
+		script    string
+		timeout   int
+		maxBuffer int
+		input     *string
+		overflow  bool // the output length past maxBuffer depends on read sizes
+	}
+	r := rand.New(rand.NewPCG(73, 3))
+	bigInput := strings.Repeat("i", 3<<20)
+	smallInput := "in\x00\xff"
+	var cases []timeoutCase
+	for i := range 40 {
+		tc := timeoutCase{timeout: 100 + r.IntN(301)}
+		pre := strings.Repeat("o", r.IntN(3000))
+		printPre := fmt.Sprintf("printf '%s'; printf e >&2; ", pre)
+		switch i % 8 {
+		case 0:
+			tc.script = printPre + "sleep 5"
+		case 1:
+			tc.script = printPre + "exec sleep 5"
+		case 2:
+			tc.script = printPre + "while :; do :; done"
+		case 3:
+			tc.script = printPre + fmt.Sprintf("trap '' TERM; sleep 0.5; exit %d", r.IntN(4))
+		case 4:
+			// The output passes maxBuffer well before the timer: ENOBUFS
+			// is recorded first and kept.
+			tc.timeout = 300 + r.IntN(101)
+			tc.maxBuffer = 1 + r.IntN(200000)
+			tc.script = fmt.Sprintf("head -c %d /dev/zero; sleep 5", tc.maxBuffer+1+r.IntN(300000))
+			tc.overflow = true
+		case 5:
+			tc.input = &bigInput
+			tc.script = printPre + "sleep 5"
+		case 6:
+			tc.input = &smallInput
+			tc.script = printPre + fmt.Sprintf("cat; exit %d", r.IntN(4))
+		case 7:
+			tc.script = printPre + fmt.Sprintf("exit %d", r.IntN(4))
+		}
+		cases = append(cases, tc)
+	}
+	signalled, timedOut := 0, 0
+	for i, tc := range cases {
+		args := map[string]any{"file": "/bin/sh", "args": []string{"-c", tc.script}, "timeout": tc.timeout}
+		if tc.maxBuffer != 0 {
+			args["maxBuffer"] = tc.maxBuffer
+		}
+		if tc.input != nil {
+			args["input"] = toLatin1(*tc.input)
+		}
+		req, _ := json.Marshal(args)
+		raw := oracleCall(t, o, "spawnSyncTimeout", string(req))
+		var want spawnSyncOutcome
+		if err := json.Unmarshal([]byte(raw), &want); err != nil {
+			t.Fatal(err)
+		}
+		opts := nodeproc.SpawnSyncOptions{Timeout: time.Duration(tc.timeout) * time.Millisecond, MaxBuffer: tc.maxBuffer}
+		if tc.input != nil {
+			opts.Input, opts.HasInput = []byte(*tc.input), true
+		}
+		got := nodeproc.SpawnSyncWith("/bin/sh", []string{"-c", tc.script}, opts)
+		goErr := ""
+		if got.Err != nil {
+			goErr = got.Err.Error()
+		}
+		name := fmt.Sprintf("case %d (%.80q, timeout %d, maxBuffer %d)", i, tc.script, tc.timeout, tc.maxBuffer)
+		if !equalPtr(want.Status, got.Status) || deref(want.Signal) != got.Signal || deref(want.Error) != goErr {
+			t.Errorf("%s:\nnode %v %q %q\ngo   %v %q %q", name, fmtPtr(want.Status), deref(want.Signal), deref(want.Error), fmtPtr(got.Status), got.Signal, goErr)
+		}
+		if want.StdoutLength == nil || want.StderrLength == nil {
+			t.Errorf("%s: node output %v/%v", name, fmtPtr(want.StdoutLength), fmtPtr(want.StderrLength))
+			continue
+		}
+		if tc.overflow && deref(want.Error) != "spawnSync /bin/sh ENOBUFS" {
+			t.Errorf("%s: node did not overrun maxBuffer before the timer: %q", name, deref(want.Error))
+		}
+		if tc.overflow {
+			// Both keep the chunk that crossed the limit, whose size
+			// depends on how much the socket held at that read.
+			for side, n := range map[string]int{"node": *want.StdoutLength, "go": len(got.Stdout)} {
+				if n <= tc.maxBuffer || n > tc.maxBuffer+64*1024 {
+					t.Errorf("%s: %s kept %d bytes", name, side, n)
+				}
+			}
+		} else if *want.StdoutLength != len(got.Stdout) || *want.StderrLength != len(got.Stderr) {
+			t.Errorf("%s: output node %d/%d, go %d/%d", name, *want.StdoutLength, *want.StderrLength, len(got.Stdout), len(got.Stderr))
+		}
+		if want.Signal != nil {
+			signalled++
+		}
+		if deref(want.Error) == "spawnSync /bin/sh ETIMEDOUT" {
+			timedOut++
+		}
+	}
+	t.Logf("%d cases: %d timed out, %d ended by a signal", len(cases), timedOut, signalled)
+	if timedOut < 20 || signalled < 20 {
+		t.Errorf("too few timeouts (%d) or signals (%d) for the cases to mean anything", timedOut, signalled)
+	}
+}
+
+// execFileSyncOutcome is the oracle's execFileSyncError record.
+type execFileSyncOutcome struct {
+	Stdout *string `json:"stdout"`
+	Error  *string `json:"error"`
+}
+
+// TestLiveExecFileSync runs the same commands through Node's execFileSync
+// (stdio ["ignore", "pipe", "pipe"], encoding "utf8") and
+// nodeproc.ExecFileSync and compares the stdout or the error message:
+// checkExecSyncError's "Command failed: <file> <args>" with and without
+// stderr (including invalid UTF-8), signals, and the bare spawnSync errors
+// (ENOENT, EACCES, ENOBUFS, ETIMEDOUT).
+func TestLiveExecFileSync(t *testing.T) {
+	o := oracle.Start(t)
+	defer o.Close()
+	dir := t.TempDir()
+	noexec := filepath.Join(dir, "noexec")
+	if err := os.WriteFile(noexec, []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	type execCase struct {
+		file      string
+		args      []string
+		timeout   int
+		maxBuffer int
+	}
+	r := rand.New(rand.NewPCG(73, 4))
+	stderrs := []string{"", "err\n", "e\xffr\x80", "multi\nline\n", "\U0001F600 \xe2\x82"}
+	stdouts := []string{"", "out\n", "o\xfe\n", "\U0001F600"}
+	octal := func(s string) string {
+		var b strings.Builder
+		for i := 0; i < len(s); i++ {
+			fmt.Fprintf(&b, `\%03o`, s[i])
+		}
+		return b.String()
+	}
+	var cases []execCase
+	for range 48 {
+		script := fmt.Sprintf("printf '%s'; printf '%s' >&2; exit %d",
+			octal(stdouts[r.IntN(len(stdouts))]), octal(stderrs[r.IntN(len(stderrs))]), r.IntN(4))
+		args := []string{"-c", script}
+		if r.IntN(4) == 0 {
+			args = append(args, "arg\nwith newline", "")
+		}
+		cases = append(cases, execCase{file: "/bin/sh", args: args})
+	}
+	cases = append(cases,
+		execCase{file: "/bin/sh", args: []string{"-c", "printf x; kill -TERM $$"}},
+		execCase{file: "/bin/sh", args: []string{"-c", "printf err >&2; kill -KILL $$"}},
+		execCase{file: "/bin/sh", args: []string{"-c", "cat; printf done"}}, // stdin is /dev/null
+		execCase{file: "/nonexistent-gitx", args: []string{"a"}},
+		execCase{file: "faultline-no-such-binary", args: []string{"a\nb"}},
+		execCase{file: noexec, args: []string{}},
+		execCase{file: "/bin/sh", args: []string{"-c", "head -c 2000000 /dev/zero; sleep 5"}},
+		execCase{file: "/bin/sh", args: []string{"-c", "head -c 300 /dev/zero >&2; sleep 5"}, maxBuffer: 100},
+		execCase{file: "/bin/sh", args: []string{"-c", "printf x; printf y >&2; sleep 5"}, timeout: 200},
+		execCase{file: "/bin/sh", args: []string{"-c", "printf x; printf y >&2; trap '' TERM; sleep 0.5; exit 0"}, timeout: 200},
+		execCase{file: "/bin/sh", args: []string{"-c", `printf "%s|" "$@"`, "sh", "a b", "c\nd", "é\U0001F600"}},
+		execCase{file: "sh", args: []string{"-c", "printf path"}},
+	)
+	failed := 0
+	for i, tc := range cases {
+		args := map[string]any{"file": tc.file, "args": tc.args}
+		if tc.timeout != 0 {
+			args["timeout"] = tc.timeout
+		}
+		if tc.maxBuffer != 0 {
+			args["maxBuffer"] = tc.maxBuffer
+		}
+		req, _ := json.Marshal(args)
+		raw := oracleCall(t, o, "execFileSyncError", string(req))
+		var want execFileSyncOutcome
+		if err := json.Unmarshal([]byte(raw), &want); err != nil {
+			t.Fatal(err)
+		}
+		stdout, err := nodeproc.ExecFileSync(tc.file, tc.args, nodeproc.SpawnSyncOptions{
+			Timeout: time.Duration(tc.timeout) * time.Millisecond, MaxBuffer: tc.maxBuffer})
+		name := fmt.Sprintf("case %d (%s %.120q)", i, tc.file, tc.args)
+		switch {
+		case want.Error != nil:
+			failed++
+			if err == nil || err.Error() != *want.Error {
+				t.Errorf("%s:\nnode %q\ngo   %v", name, *want.Error, err)
+			}
+		case err != nil:
+			t.Errorf("%s: node returned %q, go failed: %q", name, deref(want.Stdout), err.Error())
+		case want.Stdout == nil || *want.Stdout != jsstr.DecodeUTF8(stdout):
+			t.Errorf("%s: stdout node %q, go %q", name, deref(want.Stdout), jsstr.DecodeUTF8(stdout))
+		}
+	}
+	t.Logf("%d cases: %d failed, %d returned stdout", len(cases), failed, len(cases)-failed)
 }
