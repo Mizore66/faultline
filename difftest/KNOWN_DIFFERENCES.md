@@ -2,7 +2,7 @@
 
 Every intentional divergence is listed here. Anything not listed is a bug.
 
-The oracle is frozen TS at `ce99a79` (`v0.1.10-buildweek`), the `src/` CI has built since slice 1. Slices 1 and 2 named `faa98c0` (`v0.1.9-buildweek`) as the pin, but `14ad89d` and `ce99a79` changed `src/` after it (slice 3 spec, section 3.1); every entry below was measured against the `ce99a79` build.
+The oracle source identity is frozen TS at immutable `ce99a79`, the `src/` CI has built since slice 1. The locally cached `v0.1.10-buildweek` tag names that pin; the live remote tag observed 2026-10-30 peels to `89b8e23` (manifest `0.1.4`, identical `src/`). Corpus provenance uses explicit source/manifest commits, not the tag name. Slices 1 and 2 named `faa98c0` (`v0.1.9-buildweek`) as the pin, but `14ad89d` and `ce99a79` changed `src/` after it (slice 3 spec, section 3.1); every entry below was measured against the `ce99a79` build.
 
 ## Locale-dependent key order (TS bug, not reproduced)
 

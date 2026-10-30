@@ -16,7 +16,7 @@
 
 - Go 1.27; standard library only. Keep Git CLI behavior, canonical JSON and digest paths unchanged.
 - `src/`, `package.json` and `pnpm-lock.yaml` are never modified under this authorization. The final retirement goal does not lift that freeze.
-- Node 22.22.2; source pin `ce99a793af0b020bf1b9cf21114f8d7897b37207`; current-tree manifest baseline `6f2450549acb002f04a73dd3c1e3091299d7d59f`, version `0.1.4`. The pristine source pin/tag has manifest `0.1.3`, not `0.1.4`.
+- Node 22.22.2; source pin `ce99a793af0b020bf1b9cf21114f8d7897b37207`; current-tree manifest baseline `6f2450549acb002f04a73dd3c1e3091299d7d59f`, version `0.1.4`. The source pin has manifest `0.1.3`, not `0.1.4`. The locally cached `v0.1.10-buildweek` tag names that pin, but the live remote tag observed 2026-10-30 peels to `89b8e2348037ece69faf47b6e230a78c3bab6f44` (manifest `0.1.4`, identical `src/`). Use the explicit source/manifest SHAs, not the tag name, as the corpus baseline.
 - Preserve punctuation, Unicode, spaces, line breaks and final newlines. Compare complete stdout, stderr and exit code; no length-only comparisons, masks, several accepted outputs, version normalization or skip-allowlist expansion.
 - `internal/buildinfo.Version` defaults to `0.1.4`. The exact linker target is `github.com/Mizore66/faultline/internal/buildinfo.Version`. No runtime package-manifest or environment override.
 - Permanent default replay uses an unstamped binary and historical TS-captured output. Release stamping must not rewrite that default or its goldens.
