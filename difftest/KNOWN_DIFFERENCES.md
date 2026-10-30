@@ -2,7 +2,7 @@
 
 Every intentional divergence is listed here. Anything not listed is a bug.
 
-The oracle is frozen TS at `ce99a79` (`v0.1.10-buildweek`), the `src/` CI has built since slice 1. Slices 1 and 2 named `faa98c0` (`v0.1.9-buildweek`) as the pin, but `14ad89d` and `ce99a79` changed `src/` after it (slice 3 spec, section 3.1); every entry below was measured against the `ce99a79` build.
+The oracle source identity is frozen TS at immutable `ce99a79`, the `src/` CI has built since slice 1. The locally cached `v0.1.10-buildweek` tag names that pin; the live remote tag observed 2026-10-30 peels to `89b8e23` (manifest `0.1.4`, identical `src/`). Corpus provenance uses explicit source/manifest commits, not the tag name. Slices 1 and 2 named `faa98c0` (`v0.1.9-buildweek`) as the pin, but `14ad89d` and `ce99a79` changed `src/` after it (slice 3 spec, section 3.1); every entry below was measured against the `ce99a79` build.
 
 ## Locale-dependent key order (TS bug, not reproduced)
 
@@ -231,3 +231,7 @@ The turn verifier reads its zod messages at a call site of its own (`SiteTurnPro
 ## A failed `close` of a read aborts both Node and Go; only the stacks differ (slice 4b)
 
 `investigate turns` reads the session binding twice before rewriting it. Failing the `close` of one of those READS (`strace -e inject=close`) makes Node 22.22.2 abort in `node::fs::ReadFileUtf8` (`Assertion failed: (0) == (uv_fs_close(nullptr, &req, file, nullptr))`, then SIGABRT, with Node's native and JavaScript stack traces). Go aborts the same way: `nodefs.ReadText` (`internal/nodefs/fs.go`) calls `jsexc.FatalCheck` on a failed close, and `jsexc.FatalCheck` (`internal/jsexc/fatal.go`) prints the same assertion header and raises SIGABRT. Both sides therefore exit by the signal with the same header; what Go does not reproduce is Node's native and JavaScript stack traces, which name Node-internal frames and the TS `dist/` paths. This is a Node CHECK, not a FaultLine behaviour. The `turn-binding` close row of `TestLiveWriterFaults` faults the binding's WRITE `close` (the third close of the file on each side, with a per-side check that the injected call is that close and that nothing aborted), not the read close; a pass of that row is not a claim about read-close parity.
+
+## Standalone CLI version metadata (slice 5a)
+
+The normal unstamped Go binary prints `FaultLine 0.1.4\n`, matching the declared current-tree TypeScript oracle manifest. The source/submission pin `ce99a79` has manifest `0.1.3`; those versions are not normalized into equality. TypeScript reads its own package manifest at runtime and returns `unknown` when that file is absent, malformed or has a non-string version. Go retains its embedded `internal/buildinfo.Version` in those deployment circumstances and does not read a runtime manifest or environment override. A separately linker-stamped candidate reports its exact stamp. Permanent default replay compares an unstamped binary with the original TS-captured version bytes; stamping or TS retirement does not replace that baseline.

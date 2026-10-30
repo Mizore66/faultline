@@ -114,13 +114,16 @@ jobs:
         # regenerates the two turn bases first (gen-bases.ts rewrites their
         # trees and packs, deterministic by construction), so a drift in the
         # turn bases fails this job too (spec 4.1); the Git bases stay
-        # committed snapshots.
+        # committed snapshots. The CLI-help metadata is validated and its
+        # output regenerated from the built current-tree CLI (Slice 5a).
         run: |
           pnpm exec tsx difftest/gen/gen-bases.ts turn-two-states turn-non-monotonic
           pnpm exec tsx difftest/gen/gen-goldens.ts
           pnpm exec tsx difftest/gen/scenarios.ts
           pnpm exec tsx difftest/gen/gen-writers.ts
           pnpm exec tsx difftest/gen/gen-corpus.ts
+          pnpm exec tsx --test difftest/gen/cli-help-cases.test.ts
+          pnpm exec tsx difftest/gen/gen-cli-help.ts
           git status --porcelain difftest/testdata
           git diff --stat difftest/testdata
           test -z "$(git status --porcelain difftest/testdata)"

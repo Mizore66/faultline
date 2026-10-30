@@ -122,7 +122,6 @@ var unreachableLiterals = map[string]string{
 	// error struct literals, which errorSites did not collect before.
 	// CLI paths frozen TS runs for real (Go throws `not yet ported`): no
 	// golden can compare them; internal/cli's unit tests pin the texts.
-	"not yet ported: help":                          "fl with no command prints TS's help, which slice 2 does not port; internal/cli TestFailures pins the text",
 	"not yet ported: %s":                            "every unported top-level command (serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
 	"not yet ported: investigate --ci-log/--resume": "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: witness propose --live":        "witness propose --live calls OpenAI in TS (slice 5); TestWitnessProposeSampleAndUnported pins the text",
