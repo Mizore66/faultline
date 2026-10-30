@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/Mizore66/faultline/internal/buildinfo"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
@@ -68,10 +69,21 @@ func RunWithStdin(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 
 func dispatch(e *env, args []string) error {
 	if len(args) == 0 {
-		return fail("not yet ported: help")
+		return helpCommand(e, nil)
 	}
 	command, rest := args[0], args[1:]
 	switch {
+	case command == "help" || command == "--help" || command == "-h":
+		return helpCommand(e, rest)
+	case command == "advanced":
+		e.out(advancedUsage + "\n")
+		return nil
+	case command == "quickstart":
+		e.out(quickstart)
+		return nil
+	case command == "--version" || command == "-V":
+		e.out("FaultLine " + buildinfo.Version + "\n")
+		return nil
 	case command == "verify":
 		return verifyCommand(e, rest)
 	case command == "witness":
