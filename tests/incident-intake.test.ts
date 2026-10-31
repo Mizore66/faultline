@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { DOCTOR_SAFE_GIT_CONFIG } from "../src/doctor.js";
 import {
@@ -53,6 +54,73 @@ function fakeRepositoryDirectory(label: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), `faultline-incident-intake-${label}-`)));
 }
 
+// Failure-only evidence: keep exact IDs as strings as well as Node's Number IDs.
+function emitIntakeIdentityDiagnostics(context: {
+  root: string;
+  reportedRoot: string;
+  calls: readonly Pick<IncidentIntakeGitCommand, "arguments" | "timeoutMs" | "maxOutputBytes">[];
+  error: unknown;
+}, write: (line: string) => void = (line) => { process.stderr.write(line); }): void {
+  try {
+    const paths = new Set([context.reportedRoot]);
+    let current = context.root;
+    for (let depth = 0; depth < 256; depth += 1) {
+      paths.add(current);
+      const next = dirname(current);
+      if (next === current) break;
+      current = next;
+    }
+    const identities = [...paths].map((path) => {
+      try {
+        const number = statSync(path);
+        const bigint = statSync(path, { bigint: true });
+        return {
+          path,
+          realpath: realpathSync(path),
+          number: { dev: number.dev, ino: number.ino },
+          bigint: { dev: bigint.dev.toString(), ino: bigint.ino.toString() },
+          devSafeInteger: Number.isSafeInteger(number.dev),
+          inoSafeInteger: Number.isSafeInteger(number.ino),
+          inoZero: number.ino === 0,
+          devConversionLossless: BigInt(number.dev) === bigint.dev,
+          inoConversionLossless: BigInt(number.ino) === bigint.ino
+        };
+      } catch (error) {
+        return { path, error: inspect(error, { depth: 4, maxStringLength: null }) };
+      }
+    });
+    const reported = identities.find((identity) => identity.path === context.reportedRoot);
+    for (const identity of identities) {
+      if (identity.number && identity.bigint && reported?.number && reported.bigint) {
+        Object.assign(identity, {
+          numberMatchesReported: identity.number.dev === reported.number.dev && identity.number.ino === reported.number.ino,
+          bigintMatchesReported: identity.bigint.dev === reported.bigint.dev && identity.bigint.ino === reported.bigint.ino
+        });
+      }
+    }
+    // Diagnostic replay of isInsideDirectory's string branch, not its decision.
+    const comparable = (path: string): string => process.platform === "win32"
+      ? path.replace(/^\\\\\?\\UNC\\/i, "\\\\").replace(/^\\\\\?\\/i, "").replaceAll("/", "\\").toLocaleLowerCase("en-US")
+      : path;
+    write(`FL-DIAG-INCIDENT-208 ${JSON.stringify({
+      platform: process.platform,
+      arch: process.arch,
+      node: process.version,
+      root: context.root,
+      reportedRoot: context.reportedRoot,
+      comparableRoot: comparable(context.root),
+      comparableReportedRoot: comparable(context.reportedRoot),
+      pathFromParent: relative(comparable(context.reportedRoot), comparable(context.root)),
+      callCount: context.calls.length,
+      calls: context.calls,
+      error: inspect(context.error, { depth: 6, maxStringLength: null }),
+      identities
+    })}\n`);
+  } catch {
+    // Diagnostics must never replace the assertion failure or prevent cleanup.
+  }
+}
+
 function fullCandidateResponse(repository: string, overrides: {
   upstream?: "missing" | "head" | "invalid";
   parent?: "missing" | "invalid";
@@ -90,6 +158,63 @@ function commit(repository: string, content: string, message: string): string {
   git(repository, ["commit", "-m", message]);
   return git(repository, ["rev-parse", "HEAD"]);
 }
+
+describe("incident intake failure diagnostics", () => {
+  it("retains exact filesystem IDs, full argv and the original rejection", () => {
+    const root = fakeRepositoryDirectory("diagnostic-root");
+    const reportedRoot = fakeRepositoryDirectory("diagnostic-reported-root");
+    const lines: string[] = [];
+    const error = new IncidentIntakeError("GIT_UNAVAILABLE", "diagnostic original rejection");
+    try {
+      emitIntakeIdentityDiagnostics({
+        root,
+        reportedRoot,
+        calls: [{
+          arguments: ["-C", root, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+          timeoutMs: 1234,
+          maxOutputBytes: 5678
+        }],
+        error
+      }, (line) => { lines.push(line); });
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/^FL-DIAG-INCIDENT-208 /);
+      const record = JSON.parse(lines[0]!.slice("FL-DIAG-INCIDENT-208 ".length));
+      expect(record.calls).toEqual([{
+        arguments: ["-C", root, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+        timeoutMs: 1234,
+        maxOutputBytes: 5678
+      }]);
+      expect(record.error).toContain("diagnostic original rejection");
+      expect(record.error).toContain("GIT_UNAVAILABLE");
+      expect(record.identities).toContainEqual(expect.objectContaining({
+        path: root,
+        number: { dev: statSync(root).dev, ino: statSync(root).ino },
+        bigint: { dev: statSync(root, { bigint: true }).dev.toString(), ino: statSync(root, { bigint: true }).ino.toString() }
+      }));
+      expect(record.identities).toContainEqual(expect.objectContaining({ path: reportedRoot }));
+      expect(record.identities).toContainEqual(expect.objectContaining({ path: dirname(root) }));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(reportedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let a missing path or failed diagnostic write replace the failure", () => {
+    const root = fakeRepositoryDirectory("diagnostic-missing");
+    const missing = join(root, "missing");
+    const context = { root: missing, reportedRoot: missing, calls: [], error: new Error("original failure") };
+    const lines: string[] = [];
+    try {
+      expect(() => emitIntakeIdentityDiagnostics(context, (line) => { lines.push(line); })).not.toThrow();
+      expect(lines).toHaveLength(1);
+      const record = JSON.parse(lines[0]!.slice("FL-DIAG-INCIDENT-208 ".length));
+      expect(record.identities).toContainEqual(expect.objectContaining({ path: missing, error: expect.stringContaining("ENOENT") }));
+      expect(() => emitIntakeIdentityDiagnostics(context, () => { throw new Error("diagnostic write failed"); })).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("local incident range suggestions", () => {
   it("returns transparent local-upstream and parent candidates without selecting either", async () => {
@@ -182,6 +307,8 @@ describe("local incident range suggestions", () => {
     const neverCalled = fakeRunner(() => {
       throw new Error("runner should not be called");
     });
+    let escapedRootCalls: readonly IncidentIntakeGitCommand[] | undefined;
+    let escapedRootError: unknown;
     try {
       await expect(suggestIncidentRanges({ repository: file, runner: neverCalled.runner })).rejects.toMatchObject({
         name: "IncidentIntakeError",
@@ -205,10 +332,19 @@ describe("local incident range suggestions", () => {
         if (tail.join(" ") === "rev-parse --show-toplevel") return response({ stdout: `${unrelatedRoot}\n` });
         throw new Error(`Unexpected Git command: ${tail.join(" ")}`);
       });
-      await expect(suggestIncidentRanges({ repository: root, runner: escapedRoot.runner })).rejects.toMatchObject({
+      escapedRootCalls = escapedRoot.calls;
+      await expect(suggestIncidentRanges({ repository: root, runner: escapedRoot.runner }).catch((error: unknown) => {
+        escapedRootError = error;
+        throw error;
+      })).rejects.toMatchObject({
         name: "IncidentIntakeError",
         code: "UNSAFE_REPOSITORY_PATH"
       } satisfies Partial<IncidentIntakeError>);
+    } catch (error) {
+      if (escapedRootCalls !== undefined) {
+        emitIntakeIdentityDiagnostics({ root, reportedRoot: unrelatedRoot, calls: escapedRootCalls, error: { assertion: error, rejection: escapedRootError } });
+      }
+      throw error;
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(unrelatedRoot, { recursive: true, force: true });
