@@ -46,6 +46,18 @@ jobs:
       # on Linux (the runners' passwordless sudo) and must not skip.
       # TestChmodMutationAfterResetModes checks POSIX permission bits, which
       # Windows does not have.
+      # Slice 5b.1 (cached demo artifacts and judge-preview) adds only the
+      # symlink-eligibility names below, for the same runners that may not
+      # create links (check-skips.sh matches the reported subtest name, so the
+      # first two also allow exactly their named link subtests):
+      # TestDemoWriterSymlinks, TestJudgePreviewSymlinks,
+      # TestJudgePreviewCLISymlinks/(cli-linked-parent|cli-linked-output|
+      # cli-dangling-output) and TestDemoArtifactsReplay/(writer-linked-root|
+      # writer-linked-output|writer-linked-bundle-file|cli-linked-parent|
+      # cli-linked-output|cli-dangling-output). A parent TestJudgePreviewCLI
+      # skip is not allowed and no ordinary case may skip after a link failure.
+      # Its Unix-only FIFO and mode tests are compiled only where supported
+      # (they are not executed on Windows).
       # TestErrorPathReplacesLoneSurrogate pins the Unix error text (the JS
       # path string through UTF-8, as given); on Windows Node prints the
       # resolved path with backslashes (errorPath's Windows branch), which its
@@ -57,12 +69,19 @@ jobs:
           status=0
           go test -count=1 -timeout 30m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
           go test -tags faultline_test -count=1 -timeout 120m -v ./... | tee -a "$RUNNER_TEMP/go.log" || status=$?
+          # ./... skips testdata, so the default-built globalopen helper package
+          # (including its native ARM64 suppression regression) is run by path,
+          # on Linux only, with its own timeout. Same log, status preserved, and
+          # the final check-skips guard below still covers it.
+          if [ "$RUNNER_OS" = Linux ]; then
+            go test -count=1 -timeout 15m -v ./difftest/testdata/globalopen/ | tee -a "$RUNNER_TEMP/go.log" || status=$?
+          fi
           allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestWriterSameDirectory|TestSidecarReachedFromDump|TestCoverageWindows'
           case "$RUNNER_OS" in
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
             Windows)
               posix=$(tr -d '\r' < .github/scripts/windows-writer-skips.txt | grep -v '^#' | paste -sd '|' -)
-              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestLoadRejectsSymlinkDirectoryAndOversize|TestCaptureRefusesSymlink|TestEnsureRealDirectoryTree|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|$posix" ;;
+              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestLoadRejectsSymlinkDirectoryAndOversize|TestCaptureRefusesSymlink|TestEnsureRealDirectoryTree|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|TestDemoWriterSymlinks(/writer-linked-(root|output|bundle-file))?|TestJudgePreviewSymlinks(/(linked-parent|linked-output|dangling-output))?|TestJudgePreviewCLISymlinks/(cli-linked-parent|cli-linked-output|cli-dangling-output)|TestDemoArtifactsReplay/(writer-linked-root|writer-linked-output|writer-linked-bundle-file|cli-linked-parent|cli-linked-output|cli-dangling-output)|$posix" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
           exit $status
@@ -116,6 +135,14 @@ jobs:
         # turn bases fails this job too (spec 4.1); the Git bases stay
         # committed snapshots. The CLI-help metadata is validated and its
         # output regenerated from the built current-tree CLI (Slice 5a).
+        # Slice 5b.1: the demo-artifacts evidence is captured once and then
+        # committed, and the generator's first-capture mode deliberately
+        # refuses to overwrite it, so a bare run cannot succeed in a checkout.
+        # --recapture performs a complete fresh pinned-TS capture in new roots
+        # and compares it byte for byte with the committed baseline, preview
+        # HTML and golden.jsonl (it writes nothing); --check then validates the
+        # committed evidence's structure. Neither is a skip or an accepted
+        # alternative output.
         run: |
           pnpm exec tsx difftest/gen/gen-bases.ts turn-two-states turn-non-monotonic
           pnpm exec tsx difftest/gen/gen-goldens.ts
@@ -124,6 +151,8 @@ jobs:
           pnpm exec tsx difftest/gen/gen-corpus.ts
           pnpm exec tsx --test difftest/gen/cli-help-cases.test.ts
           pnpm exec tsx difftest/gen/gen-cli-help.ts
+          pnpm exec tsx difftest/gen/gen-demo-artifacts.ts --recapture
+          pnpm exec tsx difftest/gen/gen-demo-artifacts.ts --check
           git status --porcelain difftest/testdata
           git diff --stat difftest/testdata
           test -z "$(git status --porcelain difftest/testdata)"
@@ -205,11 +234,19 @@ jobs:
         # requireReachedGroup judges the attest, provenance and repair files
         # only when all their tests ran in one process, which is this step;
         # the check below fails the step when one reports LIVE-GROUP-UNVERIFIED.
+        # Slice 5b.1 adds TestLiveDemoArtifacts (the 26 analysis, render and
+        # preview-CLI requests) and TestLiveDemoWriter (the 19 demo-v2 writer
+        # requests plus the supplemental supplied-value table, with every
+        # Go-written bundle verified by Go and by frozen TS) through the same
+        # derivation. Their CI durations are not measured; locally in the pinned
+        # Node 22.22.2 linux/arm64 image each took about 3 seconds of test time.
+        # TestLiveDemoArtifactFaults (Linux and strace) is listed in elsewhere
+        # and runs in difftest-live-faults, where strace is installed.
         run: |
           unset FAULTLINE_TURNSNAP_CASES
           set -o pipefail
           status=0
-          elsewhere='TestLiveInvestigate TestLiveMinimize TestLiveMinimizationVerify TestLiveProofWriter TestLiveWriterFaults TestLiveRealDocker TestLiveRealDockerProjectBuild'
+          elsewhere='TestLiveInvestigate TestLiveMinimize TestLiveMinimizationVerify TestLiveProofWriter TestLiveWriterFaults TestLiveRealDocker TestLiveRealDockerProjectBuild TestLiveDemoArtifactFaults'
           go test -tags faultline_test -list 'TestLive' ./difftest/ | grep -E '^Test' | grep -vxF -f <(printf '%s\n' $elsewhere) > "$RUNNER_TEMP/live.list"
           tests=$(paste -sd '|' "$RUNNER_TEMP/live.list")
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($tests)\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
@@ -384,6 +421,12 @@ jobs:
   # writerFaultPaths, 102 in writerFaultPaths4a and the 3 doctor every-call
   # rows), counted from the table rows; no CI or local duration of the union
   # is measured, so the 60 minute go test timeout stays the number to check.
+  # That 654 is the unchanged TestLiveWriterFaults matrix. Slice 5b.1 adds a
+  # separate TestLiveDemoArtifactFaults suite (the demo-v2 writer's stage,
+  # replacement and rollback rows, plus the preview-write and preview-overwrite
+  # rows of the real judge-preview CLI, and the canonical-shim contract it runs
+  # first) with its own count and duration; no combined count or duration is
+  # claimed, and neither has been measured on CI.
   difftest-live-faults:
     name: difftest live writer faults and real Docker (frozen TS oracle)
     runs-on: ubuntu-24.04
@@ -427,6 +470,39 @@ jobs:
         # TestLiveRealDocker runs investigate against the real daemon with
         # --pull never; TestLiveRealDockerProjectBuild builds FROM it.
         run: docker pull node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+      - name: GLOBALOPEN helper native controls (native, before the writer matrix)
+        # The ordinary first-open fault rows of TestLiveWriterFaults run under
+        # the test-only ptrace helper difftest/testdata/globalopen (stock strace
+        # counts the first call per tracee and cannot express one tree-wide
+        # first open). This step proves the helper natively on this runner
+        # BEFORE the 654-case matrix: first the default-built helper against its
+        # adversarial fixture and the real verifier (30 scenarios, the /dev/full
+        # control and the nine verifier corruptions), then the hook-tagged
+        # lifecycle controls (regression, residual, non-leader exec, log
+        # controls, ledger). No hooks exist in the default helper. Raw stdout
+        # and stderr are kept for the artifact step below; the exit status of
+        # every go test is preserved and an unexpected skip fails the step.
+        run: |
+          set -o pipefail
+          status=0
+          mkdir -p "$RUNNER_TEMP/globalopen-proof"
+          p="$RUNNER_TEMP/globalopen-proof"
+          { echo "uname: $(uname -srm)"; echo "go: $(go version)"; echo "strace: $(strace --version 2>&1 | head -1)"; } | tee "$p/identity.txt"
+          default_tests='TestGlobalOpenDefaultHelperScenarios TestGlobalOpenHeaderMarkerScenario TestGlobalOpenFixtureEvidenceRetention TestGlobalOpenDevFullIsToolFailure TestGlobalOpenVerifierRejectsCorruptions TestGlobalOpenOverrideValidation TestValidateGlobalOpenTrace TestValidateGlobalOpenTraceAcceptsReconciledNonPendingLoss TestGlobalOpenCommand TestGlobalOpenRowClassification'
+          printf '%s\n' $default_tests > "$p/default.list"
+          # Fixture scenarios keep their raw trace.log/child.out (success and
+          # failure) under the same evidence directory the writer step uses, so
+          # the existing always-upload step collects them.
+          mkdir -p "$RUNNER_TEMP/globalopen-evidence"
+          FAULTLINE_GLOBALOPEN_EVIDENCE_DIR="$RUNNER_TEMP/globalopen-evidence" go test -tags faultline_test -count=1 -timeout 15m -v -run "^($(echo $default_tests | tr ' ' '|'))\$" ./difftest/ > "$p/default.stdout" 2> "$p/default.stderr" || status=$?
+          cat "$p/default.stdout"; cat "$p/default.stderr" >&2
+          .github/scripts/check-skips.sh "$p/default.stdout" '^$' "$p/default.list" || status=1
+          tags='globalopen_hooks,globalopen_residual,nonleader_exec_staged,log_controls,ledger_staged'
+          go test -tags "$tags" -list '.*' ./difftest/testdata/globalopen/ | grep -E '^Test' > "$p/hooks.list" || status=1
+          go test -tags "$tags" -count=1 -timeout 15m -v ./difftest/testdata/globalopen/ > "$p/hooks.stdout" 2> "$p/hooks.stderr" || status=$?
+          cat "$p/hooks.stdout"; cat "$p/hooks.stderr" >&2
+          .github/scripts/check-skips.sh "$p/hooks.stdout" '^$' "$p/hooks.list" || status=1
+          exit $status
       - name: Writer faults, real Docker
         # FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 makes
         # TestLiveRealDockerProjectBuild fail unless the daemon recorded no
@@ -438,11 +514,34 @@ jobs:
           # comment): slice 4a's 102 (record- 39, codex- 24, sidecar- 39) took
           # 26 s, 11 s and 96 s in podman as uid 1000 when run alone. Every
           # group of the spec 2.6 table fired, so none was dropped.
-          tests='TestLiveWriterFaults TestLiveRealDocker TestLiveRealDockerProjectBuild'
+          # TestLiveDemoArtifactFaults is named here and in difftest-live's
+          # elsewhere list, so it runs once, where strace is installed, and
+          # check-skips.sh '^$' fails if it (or its canonical-shim subtest)
+          # is skipped.
+          tests='TestLiveWriterFaults TestLiveRealDocker TestLiveRealDockerProjectBuild TestLiveDemoArtifactFaults'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
-          FAULTLINE_REAL_DOCKER=1 FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
+          # The ordinary first-open rows retain every raw GLOBALOPEN trace (passed
+          # or failed) and its metadata here for the artifact step below.
+          mkdir -p "$RUNNER_TEMP/globalopen-evidence"
+          FAULTLINE_GLOBALOPEN_EVIDENCE_DIR="$RUNNER_TEMP/globalopen-evidence" FAULTLINE_REAL_DOCKER=1 FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
           exit $status
+      - name: Retain GLOBALOPEN proof artifacts
+        # Raw stdout, stderr and traces are kept whether the steps above passed
+        # or failed. An upload problem is reported but must not hide a test
+        # failure (continue-on-error), and a missing path warns instead of
+        # failing a run that has nothing to keep.
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: globalopen-proof
+          path: |
+            ${{ runner.temp }}/globalopen-proof
+            ${{ runner.temp }}/globalopen-evidence
+            ${{ runner.temp }}/live.log
+          if-no-files-found: warn
+          retention-days: 14
 
   stack-live:
     # The V8 stack, spread and rimraf limits are fitted per platform

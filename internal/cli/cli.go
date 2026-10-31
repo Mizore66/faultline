@@ -98,6 +98,8 @@ func dispatch(e *env, args []string) error {
 		return judgeProofCommand(e, rest)
 	case command == "commit-proof-preview":
 		return commitProofPreviewCommand(e, rest)
+	case command == "judge-preview":
+		return judgePreviewCommand(e, rest)
 	case command == "doctor":
 		return doctorCommand(e, rest)
 	case command == "runtime":
