@@ -545,7 +545,8 @@ type pemMismatch struct {
 // When every Node run gave one outcome, Go must give only that outcome:
 // a Go run with another one fails unless Node, re-run pemUnanimousRepeat
 // times, also gives another one (the case is then random, and the shares
-// over all runs are compared).
+// over all runs are compared). The one analytically justified random-key
+// contract instead checks both full-outcome samples against its exact model.
 func pemCompareRepeated(t *testing.T, cases []pemCase, idx []int, runs int) []pemMismatch {
 	t.Helper()
 	if len(idx) == 0 {
@@ -563,7 +564,7 @@ func pemCompareRepeated(t *testing.T, cases []pemCase, idx []int, runs int) []pe
 		for range runs {
 			goCounts[k][pemOutcome(witness.ParseKeyForTest(cases[i].Text, cases[i].Pub))]++
 		}
-		if len(counts[k]) == 1 && len(goCounts[k]) > 1 {
+		if !pemHasRandomContract(cases[i]) && len(counts[k]) == 1 && len(goCounts[k]) > 1 {
 			unanimous = append(unanimous, k)
 		}
 	}
@@ -581,22 +582,33 @@ func pemCompareRepeated(t *testing.T, cases []pemCase, idx []int, runs int) []pe
 	}
 	var out []pemMismatch
 	for k, i := range idx {
-		why := ""
-		if len(counts[k]) == 1 {
-			for o := range counts[k] {
-				if len(goCounts[k]) != 1 || goCounts[k][o] == 0 {
-					why = "Node gave one outcome in every run, Go did not"
-				}
-			}
-		}
-		if why == "" {
-			why = pemSharesDiffer(counts[k], goCounts[k])
-		}
+		why := pemRepeatedDifference(cases[i], counts[k], goCounts[k])
 		if why != "" {
 			out = append(out, pemMismatch{i, fmt.Sprintf("%s: %q\n  go:   %v\n  node: %v", why, cases[i].Text, goCounts[k], counts[k])})
 		}
 	}
 	return out
+}
+
+// pemRepeatedDifference compares already collected, full-outcome counts.
+func pemRepeatedDifference(c pemCase, node, goSide map[string]int) string {
+	if pemHasRandomContract(c) {
+		if why := pemRandomCountsDiffer(node); why != "" {
+			return "node: " + why
+		}
+		if why := pemRandomCountsDiffer(goSide); why != "" {
+			return "go: " + why
+		}
+		return ""
+	}
+	if len(node) == 1 {
+		for o := range node {
+			if len(goSide) != 1 || goSide[o] == 0 {
+				return "Node gave one outcome in every run, Go did not"
+			}
+		}
+	}
+	return pemSharesDiffer(node, goSide)
 }
 
 // pemOutcome is one Go parse as the oracle prints it (the JSON of a
