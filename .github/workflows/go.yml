@@ -69,6 +69,13 @@ jobs:
           status=0
           go test -count=1 -timeout 30m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
           go test -tags faultline_test -count=1 -timeout 120m -v ./... | tee -a "$RUNNER_TEMP/go.log" || status=$?
+          # ./... skips testdata, so the default-built globalopen helper package
+          # (including its native ARM64 suppression regression) is run by path,
+          # on Linux only, with its own timeout. Same log, status preserved, and
+          # the final check-skips guard below still covers it.
+          if [ "$RUNNER_OS" = Linux ]; then
+            go test -count=1 -timeout 15m -v ./difftest/testdata/globalopen/ | tee -a "$RUNNER_TEMP/go.log" || status=$?
+          fi
           allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestWriterSameDirectory|TestSidecarReachedFromDump|TestCoverageWindows'
           case "$RUNNER_OS" in
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;

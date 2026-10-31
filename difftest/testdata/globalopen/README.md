@@ -33,6 +33,24 @@ whatever the writer returned.
 - The tracer locks its goroutine to one OS thread (`init`). That is required
   ptrace ownership, not alignment of any tracee's threads, timing or CPU.
 
+## How a call is suppressed (and proven)
+
+At the matching syscall ENTRY the helper replaces the syscall number so the
+kernel does not run the open; at the paired EXIT it requires the kernel's own
+raw `-ENOSYS` before rewriting the return to the configured errno, and fails
+loudly otherwise. On amd64 the number is set to `-1` through `orig_rax`. On
+arm64 the number is written through the `NT_ARM_SYSTEM_CALL` regset and must be
+an out-of-range number that is NOT `-1`: on affected kernels (the upstream
+v6.11 reference) exactly `NO_SYSCALL` (-1) can make the kernel skip the call and
+leave `x0` untouched, so the paired exit can show the input register (for
+`openat`, the dirfd such as `-100` or `4`) instead of an errno. This is kernel
+dependent: a local Linux 7.2.7 run with `-1` still produced `ENOSYS`, which is
+why the regression test reads the syscall-number register back instead of
+relying on the observed return. An out-of-range number other than `-1` (the
+helper uses `-2`, i.e. `0xFFFFFFFE` unsigned) takes the normal dispatch path,
+which returns `-ENOSYS` without depending on that shortcut. `x0` is never
+seeded. `suppress_linux_arm64_test.go` checks this against a real tracee.
+
 ## Unsupported or disclosed
 
 - A non-leader thread's `execve` is reconciled without a phantom (from the
