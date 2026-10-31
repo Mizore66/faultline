@@ -161,8 +161,28 @@ var demoSides = []demoSide{
 		return []string{"node", "--import", "file://" + filepath.Join(gen, "seed.mjs"), e.script, reqFile, e.repo}
 	}, nil},
 	{"Go", func(e demoEnv, root, reqFile string) []string {
-		return []string{e.driver, "--root", root, "--repo", e.repo, "--request", reqFile, "--cli", e.cli}
+		args := []string{e.driver, "--root", root, "--repo", e.repo, "--request", reqFile, "--cli", e.cli}
+		// A CLI request is faulted on a file the driver's own tree inventory
+		// would also read inside the traced process (foreign open and close
+		// records of the same path). The tree is inventoried outside strace.
+		if cliRequest(reqFile) {
+			args = append(args, "--no-inventory")
+		}
+		return args
 	}, []string{"GOMAXPROCS=1"}},
+}
+
+// cliRequest reports whether the request file holds a CLI request.
+func cliRequest(reqFile string) bool {
+	b, err := os.ReadFile(reqFile)
+	if err != nil {
+		panic(err)
+	}
+	var r demoartifactstest.Request
+	if err := json.Unmarshal(b, &r); err != nil {
+		panic(err)
+	}
+	return r.Kind == "cli"
 }
 
 func demoDecode(e *demoartifactstest.Entry) string {
@@ -437,7 +457,7 @@ type demoPlan struct {
 	injections []demoInjection
 	want       []wantFault
 	renames    []string // nil = not a rename row
-	errText    string   // "" = not asserted textually (mkdir uses errPrefix)
+	errText    string   // "" = not asserted textually
 	errPrefix  string
 	filter     []string
 	groups     []string
@@ -532,7 +552,9 @@ func fileFault(file func(p demoPaths) string) func(d demoDiscover, group, errno 
 			groups:     []string{group}, filter: []string{path},
 		}
 		if group == "mkdir" {
-			pl.errText, pl.errPrefix = "", d.errTextFor("mkdir", name, errno, path, "")
+			// The stage is made by a recursive mkdir that stays absent after the
+			// injected failure: the complete message is exact (no prefix).
+			pl.errText = demoMask(demoRoot(d.base), absentStageMkdirText(errno, path))
 		}
 		return pl
 	}
@@ -667,7 +689,7 @@ var demoRows = []demoRow{
 			return demoPlan{
 				injections: []demoInjection{{"unlink", errno, []string{first.Path}, strconv.Itoa(n)}},
 				want:       []wantFault{{Group: "unlink", Errno: errno, Path: first.Path}},
-				errText:    d.errTextFor("unlink", first.Name, errno, first.Path, ""),
+				errText:    d.errTextFor("unlink", removalName(first), errno, first.Path, ""),
 				groups:     []string{"unlink"}, filter: []string{first.Path},
 			}
 		},
@@ -703,7 +725,7 @@ var demoRows = []demoRow{
 					{Group: "unlink", Errno: errno, Path: first.Path},
 				},
 				// The removal error supersedes the write error.
-				errText: d.errTextFor("unlink", first.Name, errno, first.Path, ""),
+				errText: d.errTextFor("unlink", removalName(first), errno, first.Path, ""),
 				groups:  []string{"write", "unlink"}, filter: []string{manifest, first.Path},
 			}
 		},

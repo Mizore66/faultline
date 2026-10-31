@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -278,7 +279,7 @@ func inventory(t *testing.T, root string) []goldenEntry {
 				if err != nil {
 					t.Fatal(err)
 				}
-				out = append(out, goldenEntry{Path: rel, Kind: "symlink", Target: target})
+				out = append(out, goldenEntry{Path: rel, Kind: "symlink", Target: portableTarget(target, runtime.GOOS == "windows")})
 			case info.IsDir():
 				out = append(out, goldenEntry{Path: rel, Kind: "directory"})
 				walk(p, rel)
@@ -300,14 +301,8 @@ func inventory(t *testing.T, root string) []goldenEntry {
 
 func compareInventory(t *testing.T, label string, got, want []goldenEntry) {
 	t.Helper()
-	if len(got) != len(want) {
-		t.Errorf("%s: %d entries, want %d", label, len(got), len(want))
-	}
-	for i := 0; i < len(got) && i < len(want); i++ {
-		if got[i] != want[i] {
-			t.Errorf("%s: entry %d path %q kind %q differs from %q kind %q", label, i, got[i].Path, got[i].Kind, want[i].Path, want[i].Kind)
-			return
-		}
+	if d := inventoryDiff(got, want); d != "" {
+		t.Errorf("%s: %s", label, d)
 	}
 }
 
@@ -450,28 +445,244 @@ func runGoldenWriter(t *testing.T, id string) {
 	}
 	analysis = mutateAnalysis(t, analysis, row.Request.Mutation)
 	written, err := Write(out, analysis, WriteOptions{ProofRoot: row.Request.ProofRoot})
-	mask := func(s string) string { return strings.ReplaceAll(s, root, "<TMP>") }
+	// The expectation, not the actual result, is adapted to the native root and
+	// separator; the actual error and value are compared unmasked.
 	switch {
 	case row.Call.Error != nil:
 		if err == nil {
 			t.Fatalf("%s: wrote %+v, want error %q", id, written, *row.Call.Error)
 		}
-		if got := mask(err.Error()); got != *row.Call.Error {
-			t.Errorf("%s: error\n got %q\nwant %q", id, got, *row.Call.Error)
+		want, merr := materializeTmp(*row.Call.Error, root, filepath.Separator)
+		if merr != nil {
+			t.Fatalf("%s: %v", id, merr)
+		}
+		if got := err.Error(); got != want {
+			t.Errorf("%s: error\n got %q\nwant %q", id, got, want)
 		}
 	default:
 		if err != nil {
 			t.Fatalf("%s: %v", id, err)
 		}
+		want, merr := expectedValue(*row.Call.ValueJSON, root, filepath.Separator)
+		if merr != nil {
+			t.Fatalf("%s: %v", id, merr)
+		}
 		got := jsjson.Stringify(jsjson.MustObject(
-			"directory", jsjson.MakeString(mask(written.Directory)),
+			"directory", jsjson.MakeString(written.Directory),
 			"manifestDigest", jsjson.MakeString(written.ManifestDigest),
 			"rootDigest", jsjson.MakeString(written.RootDigest)))
-		if got != *row.Call.ValueJSON {
-			t.Errorf("%s: value\n got %s\nwant %s", id, got, *row.Call.ValueJSON)
+		if got != want {
+			t.Errorf("%s: value\n got %s\nwant %s", id, got, want)
 		}
 	}
 	compareInventory(t, id+" after", inventory(t, root), row.After)
+}
+
+// materializeTmp turns a golden's single declared <TMP> path slot into the
+// actual case root plus the slash-delimited tail converted to sep. Goldens
+// were captured on POSIX with only the root prefix replaced by <TMP>, so the
+// tail after it is always '/'-delimited. Exactly one token is accepted (none
+// leaves the golden literal) and its tail must run to the end of the string
+// and use only ASCII path characters: quotes, whitespace, backslashes or a
+// second token are rejected rather than rewritten.
+func materializeTmp(golden, root string, sep byte) (string, error) {
+	n := strings.Count(golden, "<TMP>")
+	if n == 0 {
+		return golden, nil
+	}
+	if n > 1 {
+		return "", fmt.Errorf("golden has %d <TMP> tokens: %q", n, golden)
+	}
+	i := strings.Index(golden, "<TMP>")
+	tail := golden[i+len("<TMP>"):]
+	for j := 0; j < len(tail); j++ {
+		c := tail[j]
+		ok := c == '/' || c == '.' || c == '-' || c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		if !ok {
+			return "", fmt.Errorf("golden <TMP> tail %q has unexpected byte %q", tail, c)
+		}
+	}
+	if tail != "" && tail[0] != '/' {
+		return "", fmt.Errorf("golden <TMP> tail %q does not start a path", tail)
+	}
+	return golden[:i] + root + strings.ReplaceAll(tail, "/", string(sep)), nil
+}
+
+// expectedValue materializes a writer-result golden: it must be exactly the
+// ordered object {directory, manifestDigest, rootDigest} of strings; only
+// directory changes (its <TMP> slot), and the result is re-serialized.
+func expectedValue(golden, root string, sep byte) (string, error) {
+	v, err := jsjson.Parse(golden)
+	if err != nil {
+		return "", err
+	}
+	if v.Kind() != jsjson.Object || strings.Join(v.Obj().Keys(), ",") != "directory,manifestDigest,rootDigest" {
+		return "", fmt.Errorf("golden value is not exactly {directory,manifestDigest,rootDigest}: %s", golden)
+	}
+	for _, k := range v.Obj().Keys() {
+		if v.Get(k).Kind() != jsjson.String {
+			return "", fmt.Errorf("golden value member %s is not a string: %s", k, golden)
+		}
+	}
+	dir, err := materializeTmp(v.Get("directory").Str(), root, sep)
+	if err != nil {
+		return "", err
+	}
+	return jsjson.Stringify(jsjson.MustObject(
+		"directory", jsjson.MakeString(dir),
+		"manifestDigest", v.Get("manifestDigest"),
+		"rootDigest", v.Get("rootDigest"))), nil
+}
+
+// portableTarget converts a Windows-native relative symlink target to the
+// slash form the POSIX goldens use. On other platforms a backslash is a
+// literal name character and is preserved.
+func portableTarget(target string, windows bool) string {
+	if windows {
+		return strings.ReplaceAll(target, `\`, "/")
+	}
+	return target
+}
+
+func describeEntry(e goldenEntry) string {
+	body := 0
+	if e.Base64 != "" {
+		body = len(e.Base64)
+	}
+	return fmt.Sprintf("path %q kind %q target %q body %d base64 chars", e.Path, e.Kind, e.Target, body)
+}
+
+// inventoryDiff is the first difference between two inventories ("" if none),
+// naming path, kind, link target and body size of both entries.
+func inventoryDiff(got, want []goldenEntry) string {
+	for i := 0; i < len(got) && i < len(want); i++ {
+		if got[i] != want[i] {
+			return fmt.Sprintf("entry %d: got %s; want %s", i, describeEntry(got[i]), describeEntry(want[i]))
+		}
+	}
+	if len(got) != len(want) {
+		return fmt.Sprintf("%d entries, want %d", len(got), len(want))
+	}
+	return ""
+}
+
+// The helpers below are the ones runGoldenWriter and inventory use; the tests
+// call them with an explicit separator/platform so Windows behavior is checked
+// on every OS. Only the declared <TMP> path slot of a golden is materialized;
+// actual errors, JSON and artifact bodies are never rewritten.
+func TestMaterializeTmpSlot(t *testing.T) {
+	win := `C:\Users\r\t\001`
+	rows := []struct {
+		name, golden, root string
+		sep                byte
+		want               string
+		bad                bool
+	}{
+		{"windows error", "Proof bundle output must be a directory: <TMP>/.faultline/bundles/demo", win, '\\',
+			`Proof bundle output must be a directory: ` + win + `\.faultline\bundles\demo`, false},
+		{"windows nested", "Proof bundle root cannot traverse a symbolic link or non-directory: <TMP>/.faultline/bundles/blocked", win, '\\',
+			`Proof bundle root cannot traverse a symbolic link or non-directory: ` + win + `\.faultline\bundles\blocked`, false},
+		{"windows exact root", "child of <TMP>", win, '\\', "child of " + win, false},
+		{"posix unchanged", "x: <TMP>/.faultline/bundles/demo", "/tmp/r", '/', "x: /tmp/r/.faultline/bundles/demo", false},
+		{"no token stays literal", "Cannot write incomplete proof bundle: duplicate run id in catalog: 5", win, '\\',
+			"Cannot write incomplete proof bundle: duplicate run id in catalog: 5", false},
+		{"two tokens", "a <TMP>/x b <TMP>/y", win, '\\', "", true},
+		{"quote in tail", `a <TMP>/x"y`, win, '\\', "", true},
+		{"whitespace tail", "a <TMP>/x y", win, '\\', "", true},
+		{"backslash in golden tail", `a <TMP>\x`, win, '\\', "", true},
+		{"token mid-sentence", "a <TMP>/x then more", win, '\\', "", true},
+	}
+	for _, row := range rows {
+		got, err := materializeTmp(row.golden, row.root, row.sep)
+		if row.bad {
+			if err == nil {
+				t.Errorf("%s: accepted, got %q", row.name, got)
+			}
+			continue
+		}
+		if err != nil || got != row.want {
+			t.Errorf("%s: got %q (%v), want %q", row.name, got, err, row.want)
+		}
+	}
+	// The old prefix-only mask accepted a wrong root; the materialized
+	// expectation must differ from an actual path under another root.
+	other, _ := materializeTmp("x <TMP>/a", `D:\other`, '\\')
+	right, _ := materializeTmp("x <TMP>/a", win, '\\')
+	if other == right {
+		t.Error("distinct roots materialize equal")
+	}
+}
+
+func TestPortableTarget(t *testing.T) {
+	rows := []struct {
+		name, target string
+		windows      bool
+		want         string
+	}{
+		{"windows backslashes", `..\..\..\original-witness.json`, true, "../../../original-witness.json"},
+		{"windows forward kept", "../actual-managed", true, "../actual-managed"},
+		{"posix literal backslash preserved", `..\odd`, false, `..\odd`},
+		{"posix plain", "../target-bundle", false, "../target-bundle"},
+	}
+	for _, row := range rows {
+		if got := portableTarget(row.target, row.windows); got != row.want {
+			t.Errorf("%s: %q, want %q", row.name, got, row.want)
+		}
+	}
+	// A different target must stay different after conversion.
+	if portableTarget(`..\a`, true) == portableTarget(`..\b`, true) {
+		t.Error("distinct targets converted equal")
+	}
+}
+
+func TestValueExpectationKeepsOrderedFields(t *testing.T) {
+	golden := `{"directory":"<TMP>/.faultline/bundles/demo","manifestDigest":"sha256:aa","rootDigest":"sha256:bb"}`
+	root := `C:\r`
+	got, err := expectedValue(golden, root, '\\')
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"directory":"C:\\r\\.faultline\\bundles\\demo","manifestDigest":"sha256:aa","rootDigest":"sha256:bb"}`
+	if got != want {
+		t.Errorf("got %s want %s", got, want)
+	}
+	for name, bad := range map[string]string{
+		"extra field":   `{"directory":"<TMP>/d","manifestDigest":"a","rootDigest":"b","extra":1}`,
+		"missing field": `{"directory":"<TMP>/d","manifestDigest":"a"}`,
+		"order":         `{"manifestDigest":"a","directory":"<TMP>/d","rootDigest":"b"}`,
+		"non-string":    `{"directory":5,"manifestDigest":"a","rootDigest":"b"}`,
+		"not json":      `{`,
+	} {
+		if _, err := expectedValue(bad, root, '\\'); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
+func TestCompareInventoryReportsTargetAndBodyDifferences(t *testing.T) {
+	a := []goldenEntry{{Path: "l", Kind: "symlink", Target: "../x"}, {Path: "f", Kind: "file", Base64: "QQ=="}}
+	if d := inventoryDiff(a, append([]goldenEntry(nil), a...)); d != "" {
+		t.Fatalf("equal inventories differ: %s", d)
+	}
+	b := append([]goldenEntry(nil), a...)
+	b[0].Target = "../y"
+	if d := inventoryDiff(a, b); !strings.Contains(d, `"../x"`) || !strings.Contains(d, `"../y"`) {
+		t.Errorf("target difference not shown: %q", d)
+	}
+	// Same-length body change: detected (non-empty diff).
+	c := append([]goldenEntry(nil), a...)
+	c[1].Base64 = "QUI="
+	if d := inventoryDiff(a, c); d == "" {
+		t.Error("same-length body change not detected")
+	}
+	// Different-length body: the message states both body sizes (base64
+	// characters), got first and want second, in describeEntry's format.
+	e := append([]goldenEntry(nil), a...)
+	e[1].Base64 = "QUJDRA=="
+	wantDiff := `entry 1: got path "f" kind "file" target "" body 4 base64 chars; want path "f" kind "file" target "" body 8 base64 chars`
+	if d := inventoryDiff(a, e); d != wantDiff {
+		t.Errorf("body-size diagnostic\n got %q\nwant %q", d, wantDiff)
+	}
 }
 
 func TestWriteOutputSafety(t *testing.T) {

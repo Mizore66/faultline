@@ -28,6 +28,7 @@ func run() (err error) {
 	repo := flag.String("repo", "", "absolute checkout")
 	request := flag.String("request", "", "request JSON file")
 	cli := flag.String("cli", "", "actual tagged fl binary (CLI requests only)")
+	noInventory := flag.Bool("no-inventory", false, "do not inventory the case root before and after the call (traced fault rows)")
 	flag.Parse()
 	if *root == "" || *repo == "" || *request == "" || flag.NArg() != 0 {
 		return fmt.Errorf("usage: --root <dir> --repo <dir> --request <file> [--cli <fl>]")
@@ -57,7 +58,11 @@ func run() (err error) {
 	// call being compared is made synchronously by this goroutine, so pin it
 	// for the whole invocation. Production code never pins threads.
 	runtime.LockOSThread()
-	capture := demoartifactstest.Invoke(*root, *repo, *cli, req)
+	invoke := demoartifactstest.Invoke
+	if *noInventory {
+		invoke = demoartifactstest.InvokeBare
+	}
+	capture := invoke(*root, *repo, *cli, req)
 	runtime.UnlockOSThread()
 	out, err := json.Marshal(capture)
 	if err != nil {

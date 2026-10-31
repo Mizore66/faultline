@@ -85,6 +85,133 @@ func TestParseStracePaddedPidFdResolution(t *testing.T) {
 	}
 }
 
+// Ruling A. A recursive mkdir of an absent stage that fails with EIO is reported
+// by Node (and the Go port) as the ENOENT of the follow-up stat; only EACCES,
+// ENOSPC, ENOTDIR and EPERM are returned directly. The expectations below are
+// hand-written literals, not a call into nodefs. The mapping is scoped to the
+// precondition that the stage stayed absent; a one-time injection that a retry
+// or a later ENOENT recovery could mask is not modeled.
+func TestAbsentStageRecursiveMkdirText(t *testing.T) {
+	for _, row := range []struct{ errno, want string }{
+		{"EIO", "ENOENT: no such file or directory, mkdir '" + trStage + "'"},
+		{"EACCES", "EACCES: permission denied, mkdir '" + trStage + "'"},
+		{"ENOSPC", "ENOSPC: no space left on device, mkdir '" + trStage + "'"},
+		{"ENOTDIR", "ENOTDIR: not a directory, mkdir '" + trStage + "'"},
+		{"EPERM", "EPERM: operation not permitted, mkdir '" + trStage + "'"},
+	} {
+		if got := absentStageMkdirText(row.errno, trStage); got != row.want {
+			t.Errorf("%s: %q, want %q", row.errno, got, row.want)
+		}
+	}
+	// The former expectation (the injected code echoed back) is wrong for EIO.
+	if got := absentStageMkdirText("EIO", trStage); got == "EIO: i/o error, mkdir '"+trStage+"'" {
+		t.Errorf("the injected EIO was echoed back: %q", got)
+	}
+}
+
+// Ruling B. The removal an error names is the operation actually traced:
+// rmdir for rmdir(2) and for unlinkat with the AT_REMOVEDIR flag, unlink for a
+// file removal, including a file whose quoted path contains "AT_REMOVEDIR".
+func TestRemovalNameFollowsTheTracedOperation(t *testing.T) {
+	parse := func(line string) straceCall {
+		calls, err := parseStrace(line)
+		if err != nil || len(calls) != 1 {
+			t.Fatalf("%q: %v %d", line, err, len(calls))
+		}
+		return calls[0]
+	}
+	for _, row := range []struct{ line, want string }{
+		{`5 rmdir("` + trBackup + `") = 0`, "rmdir"},
+		{`5 unlinkat(AT_FDCWD, "` + trBackup + `", AT_REMOVEDIR) = 0`, "rmdir"},
+		{`5 unlinkat(AT_FDCWD, "` + trBackup + `", AT_REMOVEDIR) = -1 EIO (Input/output error) (INJECTED)`, "rmdir"},
+		{`5 unlinkat(AT_FDCWD, "` + trBackup + `/ROOT.sha256", 0) = 0`, "unlink"},
+		{`5 unlink("` + trBackup + `/ROOT.sha256") = 0`, "unlink"},
+		// A file whose name contains the flag text is still a file removal.
+		{`5 unlinkat(AT_FDCWD, "` + trBackup + `/x-AT_REMOVEDIR-y", 0) = 0`, "unlink"},
+		{`5 unlinkat(AT_FDCWD, "` + trBackup + `/AT_REMOVEDIR", 0) = 0`, "unlink"},
+	} {
+		if got := removalName(parse(row.line)); got != row.want {
+			t.Errorf("%s: %q, want %q", row.line, got, row.want)
+		}
+	}
+	// The failing call keeps its group and path for the injection proof.
+	c := parse(`5 unlinkat(AT_FDCWD, "` + trBackup + `", AT_REMOVEDIR) = -1 EIO (Input/output error) (INJECTED)`)
+	if err := validateInjections([]straceCall{c}, []wantFault{{Group: "unlink", Errno: "EIO", Path: trBackup}}); err != nil {
+		t.Errorf("an AT_REMOVEDIR unlinkat is still the unlink group: %v", err)
+	}
+	if got := expectedErrorText("unlink", removalName(c), "EIO", trBackup, ""); got != "EIO: i/o error, rmdir '"+trBackup+"'" {
+		t.Errorf("expected text for the failed directory removal: %q", got)
+	}
+}
+
+// Two tracees (the driver and its CLI child, as in the hosted preview rows) hold
+// the same descriptor number for different files. A descriptor belongs to the
+// process that opened it: each call resolves to its own pid's path and one
+// pid's close does not forget the other's descriptor.
+func TestParseStraceFdTableIsPerPid(t *testing.T) {
+	const a, b = "/r/a.html", "/r/b.html"
+	calls, err := parseStrace(strings.Join([]string{
+		`10 openat(AT_FDCWD, "` + a + `", O_RDONLY|O_CLOEXEC) = 4`,
+		`20 openat(AT_FDCWD, "` + b + `", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 4`,
+		`10 close(4) = 0`,
+		`20 write(4, "x", 1) = 1`,
+		`20 close(4) = -1 EIO (Input/output error) (INJECTED)`,
+		`10 close(4) = 0`,
+	}, "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ pid, name, path string }{
+		{"10", "openat", a}, {"20", "openat", b}, {"10", "close", a},
+		{"20", "write", b}, {"20", "close", b}, {"10", "close", ""},
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("%d calls, want %d", len(calls), len(want))
+	}
+	for i, w := range want {
+		if calls[i].PID != w.pid || calls[i].Name != w.name || calls[i].Path != w.path {
+			t.Errorf("call %d: pid %s %s path %q, want pid %s %s path %q", i, calls[i].PID, calls[i].Name, calls[i].Path, w.pid, w.name, w.path)
+		}
+	}
+	// The injected close is attributed to the file its own pid opened.
+	if err := validateInjections(calls, []wantFault{{Group: "close", Errno: "EIO", Path: b}}); err != nil {
+		t.Errorf("injected close of pid 20: %v", err)
+	}
+}
+
+// The hosted Go preview rows: the driver (pid 7042) read the preview file
+// before and after the CLI child (pid 7052) opened and closed it for writing.
+// A family spread over two tracees must still be refused, never reused.
+func TestOrdinalRefusesDriverAndChildSharingAFamily(t *testing.T) {
+	const html = "/r/out.html"
+	calls, err := parseStrace(strings.Join([]string{
+		`7042 openat(AT_FDCWD, "` + html + `", O_RDONLY|O_CLOEXEC) = 4`,
+		`7042 close(4) = 0`,
+		`7052 openat(AT_FDCWD, "` + html + `", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 4`,
+		`7052 close(4) = 0`,
+		`7042 openat(AT_FDCWD, "` + html + `", O_RDONLY|O_CLOEXEC) = 4`,
+		`7042 close(4) = 0`,
+	}, "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx, err := findCall(calls, "open", html, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ordinalOf(calls, "open", idx); err == nil || !strings.Contains(err.Error(), "span threads") {
+		t.Errorf("a two-tracee open family was accepted: %v", err)
+	}
+	// With only the child traced (no driver inventory) the position is its own.
+	only := []straceCall{calls[2], calls[3]}
+	if n, err := ordinalOf(only, "open", 0); err != nil || n != 1 {
+		t.Errorf("child-only ordinal = %d (%v), want 1", n, err)
+	}
+	if n, err := ordinalOf(only, "close", 1); err != nil || n != 1 {
+		t.Errorf("child-only close ordinal = %d (%v), want 1", n, err)
+	}
+}
+
 func TestParseStraceMergesUnfinishedAndRejectsMalformed(t *testing.T) {
 	merged := strings.Join([]string{
 		`200 openat(AT_FDCWD, "/x", O_RDONLY) = 4`,
@@ -283,6 +410,7 @@ var fdCalls = map[string]bool{"write": true, "writev": true, "pwrite64": true, "
 func parseStrace(trace string) ([]straceCall, error) {
 	var out []straceCall
 	pending := map[string]string{} // pid+name -> text before <unfinished ...>
+	// A descriptor belongs to the tracee (pid) that opened it.
 	fds := map[string]string{}
 	for n, line := range strings.Split(trace, "\n") {
 		if line == "" || strings.Contains(line, " --- ") || strings.Contains(line, " +++ ") {
@@ -320,9 +448,10 @@ func parseStrace(trace string) ([]straceCall, error) {
 		args := strings.TrimLeft(m[3][:res[0]-(len(line)-len(m[3]))], " ")
 		if fdCalls[call.Name] {
 			if f := straceFirstInt.FindStringSubmatch(args); f != nil {
-				call.Path = fds[f[1]]
+				key := m[1] + " " + f[1]
+				call.Path = fds[key]
 				if call.Name == "close" {
-					delete(fds, f[1])
+					delete(fds, key)
 				}
 			}
 		} else if q := straceQuoted.FindAllStringSubmatch(args, 2); len(q) > 0 {
@@ -331,7 +460,7 @@ func parseStrace(trace string) ([]straceCall, error) {
 				call.Dest = q[1][1]
 			}
 			if inGroup("open", call.Name) && call.Errno == "" && call.Ret != "?" && !strings.HasPrefix(call.Ret, "-") {
-				fds[call.Ret] = call.Path
+				fds[m[1]+" "+call.Ret] = call.Path
 			}
 		}
 		out = append(out, call)
@@ -458,6 +587,44 @@ func ordinalOf(calls []straceCall, group string, idx int) (int, error) {
 		}
 	}
 	return pos, nil
+}
+
+// absentStageMkdirText is the message of a recursive mkdir whose target stage
+// stayed absent after the injected failure errno. Node's MKDirpSync (and the Go
+// port) return EACCES, ENOSPC, ENOTDIR and EPERM directly; any other code,
+// EIO included, makes it stat the still-absent path and report that stat's
+// ENOENT. The table is hand-written from that observed behavior and applies
+// only under the absent-stage precondition; it is not a general model.
+func absentStageMkdirText(errno, path string) string {
+	reported := "ENOENT"
+	switch errno {
+	case "EACCES", "ENOSPC", "ENOTDIR", "EPERM":
+		reported = errno
+	}
+	return expectedErrorText("mkdir", "mkdir", reported, path, "")
+}
+
+// removalName is the operation a removal error names, read from the traced
+// call: rmdir(2), or unlinkat whose flags argument (the last argument, after
+// the quoted path) carries AT_REMOVEDIR. A path that merely contains the text
+// AT_REMOVEDIR is a file removal.
+func removalName(c straceCall) string {
+	if c.Name == "rmdir" {
+		return "rmdir"
+	}
+	if c.Name == "unlinkat" {
+		open := strings.Index(c.Line, "(")
+		res := straceResult.FindStringIndex(c.Line)
+		if open >= 0 && res != nil && open < res[0] {
+			args := c.Line[open+1 : res[0]]
+			// Drop every quoted string (the path), then look at what is left.
+			unquoted := straceQuoted.ReplaceAllString(args, `""`)
+			if strings.Contains(unquoted, "AT_REMOVEDIR") {
+				return "rmdir"
+			}
+		}
+	}
+	return "unlink"
 }
 
 // expectedErrorText is Node's message for a failed call, as the writer's

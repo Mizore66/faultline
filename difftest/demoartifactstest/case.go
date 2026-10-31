@@ -351,21 +351,38 @@ func cliProcess(root, cliBinary string, req Request) *Process {
 // the call. A library request returns Call (null Process); a CLI request runs
 // the actual cliBinary and returns Process (null Call).
 func Invoke(root, repo, cliBinary string, req Request) Capture {
+	return invoke(root, repo, cliBinary, req, true)
+}
+
+// InvokeBare is Invoke without the before and after tree inventories: it never
+// walks or reads the case root, and the returned Before and After are nil. A
+// tracing caller (the Linux fault rows) uses it so that the traced process makes
+// only the call under test; the tree is then inventoried outside the trace.
+func InvokeBare(root, repo, cliBinary string, req Request) Capture {
+	return invoke(root, repo, cliBinary, req, false)
+}
+
+func invoke(root, repo, cliBinary string, req Request, inventory bool) Capture {
 	switch req.Kind {
 	case "writer", "analysis", "render", "cli":
 	default:
 		fail("request kind %q is not supported", req.Kind)
 	}
-	before, err := Inventory(root)
-	must(err)
-	capture := Capture{Schema: CaptureSchema, Request: req, Before: before}
+	capture := Capture{Schema: CaptureSchema, Request: req}
+	if inventory {
+		before, err := Inventory(root)
+		must(err)
+		capture.Before = before
+	}
 	if req.Kind == "cli" {
 		capture.Process = cliProcess(root, cliBinary, req)
 	} else {
 		capture.Call = libraryCall(repo, req)
 	}
-	after, err := Inventory(root)
-	must(err)
-	capture.After = after
+	if inventory {
+		after, err := Inventory(root)
+		must(err)
+		capture.After = after
+	}
 	return capture
 }
