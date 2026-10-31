@@ -357,6 +357,7 @@ func TestCaptureSleepsOnceWithTheDelay(t *testing.T) { // :271
 
 func TestCaptureAllowlistedSecret(t *testing.T) { // :335
 	t.Parallel()
+	recordTurnsnapStall(t)
 	dir := repositoryFixture(t)
 	token := fixtureSecret()
 	write(t, dir, "fixture-key.txt", "token = "+token+"\n")
