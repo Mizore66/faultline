@@ -4,6 +4,7 @@ package difftest
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"os/exec"
 	"path"
@@ -356,13 +357,21 @@ func TestLiveWriterFaults(t *testing.T) {
 					t.Errorf("every %s failed: %d in TS, %d in Go (want 2 and 1, the first on %s)\n--- TS\n%s--- Go\n%s", f.call, ts.injected, goRes.injected, rel, ts.trace, goRes.trace)
 				}
 			case goRes.injected != ts.injected:
-				t.Errorf("%s on %s injected %d times in TS, %d in Go", f.call, rel, ts.injected, goRes.injected)
+				t.Errorf("%s", faultCountMismatchMessage(f.call, rel, ts, goRes))
 			}
 			compareWriter(t, f.name(), goRes.writerResult, asGolden(ts.writerResult))
 			first, _, _ := strings.Cut(strings.TrimSpace(ts.Stderr+ts.Stdout), "\n")
 			t.Logf("both exit %d, %d file(s) changed: %.160s", ts.Exit, len(ts.Files), first)
 		})
 	}
+}
+
+// faultCountMismatchMessage is the failure text of the ordinary injected-count
+// comparison: the count sentence followed by both raw, root-masked strace logs
+// (TS first), unmodified, so a failing run keeps the tid and syscall of every
+// injected record. It is diagnostic evidence only; the comparison is unchanged.
+func faultCountMismatchMessage(call, rel string, ts, goRes faultResult) string {
+	return fmt.Sprintf("%s on %s injected %d times in TS, %d in Go\n--- TS\n%s--- Go\n%s", call, rel, ts.injected, goRes.injected, ts.trace, goRes.trace)
 }
 
 // faultResult is an invocation run under strace and the number of calls
