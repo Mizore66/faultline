@@ -5,6 +5,7 @@ package difftest
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -212,6 +213,179 @@ func TestOrdinalRefusesDriverAndChildSharingAFamily(t *testing.T) {
 	}
 }
 
+// ---- positively terminated unavailable syscall entry (detach-lifecycle repair) ----
+//
+// With `strace -f -q`, a tracee whose syscall-entry registers cannot be read is
+// printed as `PID  ???( <unfinished ...>` (the next record from any tid closes
+// the open line) and, when that tid ends normally, `PID +++ exited with N +++`.
+// The unavailable entry is a non-call: it never took the path filter or an
+// injection. It is supported only with that positive normal exit; everything
+// else stays an error. These tests pin the contract through parseStrace and the
+// unchanged validators; they define no new helper.
+
+const lcHTML = "/r/out.html"
+
+func lcTrace(lines ...string) string { return strings.Join(lines, "\n") + "\n" }
+
+const (
+	lcOpen  = `8408  openat(AT_FDCWD, "` + lcHTML + `", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 4`
+	lcClose = `8408  close(4)                          = -1 EIO (Input/output error) (INJECTED)`
+	lcUnk   = `8411  ???( <unfinished ...>`
+	lcChld  = `8409  --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=8408, si_uid=1001, si_status=1, si_utime=1, si_stime=1} ---`
+)
+
+func TestParseStraceAcceptsUnavailableEntryWithPositiveNormalExit(t *testing.T) {
+	trace := lcTrace(
+		lcOpen,
+		lcUnk,
+		lcClose,
+		lcChld,
+		`8408 +++ exited with 1 +++`,
+		`8411 +++ exited with 1 +++`,
+		`8409 +++ exited with 0 +++`,
+	)
+	calls, err := parseStrace(trace)
+	if err != nil {
+		t.Fatalf("a positively terminated unavailable entry was rejected: %v", err)
+	}
+	// Only the two actual calls are visible to every helper.
+	if len(calls) != 2 || calls[0].Name != "openat" || calls[1].Name != "close" {
+		t.Fatalf("calls = %+v, want exactly openat then close", calls)
+	}
+	for _, c := range calls {
+		if c.PID != "8408" || c.Path != lcHTML {
+			t.Errorf("call %s: pid %q path %q, want the 8408 target", c.Name, c.PID, c.Path)
+		}
+	}
+	want := []wantFault{{Group: "close", Errno: "EIO", Path: lcHTML}}
+	if err := validateInjections(calls, want); err != nil {
+		t.Errorf("the exact injection no longer validates: %v", err)
+	}
+	if idx, err := findCall(calls, "open", lcHTML, ""); err != nil || idx != 0 {
+		t.Errorf("open located at %d (%v), want 0", idx, err)
+	} else if n, err := ordinalOf(calls, "open", idx); err != nil || n != 1 {
+		t.Errorf("open ordinal %d (%v), want 1", n, err)
+	}
+	if n, err := ordinalOf(calls, "close", 1); err != nil || n != 1 {
+		t.Errorf("close ordinal %d (%v), want 1", n, err)
+	}
+}
+
+// Normal exit notices alone (what -q adds for every tid) are lifecycle records,
+// not syscalls, and a trace may consist of calls plus exits with no unknown.
+func TestParseStraceNormalExitNoticesAreNotCalls(t *testing.T) {
+	calls, err := parseStrace(lcTrace(lcOpen, lcClose, `8408 +++ exited with 1 +++`, `8409 +++ exited with 0 +++`))
+	if err != nil {
+		t.Fatalf("normal exit notices rejected: %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("%d calls, want 2", len(calls))
+	}
+	for _, code := range []string{"0", "1", "127", "255"} {
+		if _, err := parseStrace(lcTrace(lcOpen, `8408 +++ exited with `+code+` +++`)); err != nil {
+			t.Errorf("exit code %s rejected: %v", code, err)
+		}
+	}
+}
+
+// Accepting the lifecycle never relaxes the injection proof.
+func TestUnavailableEntryDoesNotMaskMissingOrExtraInjections(t *testing.T) {
+	terminated := func(extra ...string) string {
+		lines := append([]string{lcOpen, lcUnk}, extra...)
+		return lcTrace(append(lines, `8408 +++ exited with 1 +++`, `8411 +++ exited with 1 +++`)...)
+	}
+	parse := func(trace string) []straceCall {
+		t.Helper()
+		calls, err := parseStrace(trace)
+		if err != nil {
+			t.Fatalf("a positively terminated unavailable entry was rejected: %v", err)
+		}
+		return calls
+	}
+	want := []wantFault{{Group: "close", Errno: "EIO", Path: lcHTML}}
+	// Missing: the target close was never injected.
+	if err := validateInjections(parse(terminated(`8408  close(4) = 0`)), want); err == nil {
+		t.Error("a missing injection was accepted next to an unavailable entry")
+	}
+	// Extra: a second injected record is not hidden by the lifecycle record.
+	extra := parse(terminated(lcClose, `8408  close(4) = -1 EIO (Input/output error) (INJECTED)`))
+	if err := validateInjections(extra, want); err == nil {
+		t.Error("an extra injection was accepted next to an unavailable entry")
+	}
+	// The unavailable entry itself is never an injection.
+	if err := validateInjections(parse(terminated()), want); err == nil {
+		t.Error("an unavailable entry satisfied a wanted injection")
+	}
+	if err := validateInjections(parse(terminated(lcClose)), nil); err == nil {
+		t.Error("an unexpected injection was accepted")
+	}
+}
+
+// Lifecycle records are anchored whole-line records. A syscall whose quoted
+// path merely contains the text of one stays a syscall (the old substring skip
+// dropped such lines silently).
+func TestParseStraceQuotedLifecycleTextInPathStaysASyscall(t *testing.T) {
+	calls, err := parseStrace(lcTrace(
+		`5  openat(AT_FDCWD, "/r/odd +++ name", O_RDONLY|O_CLOEXEC) = 4`,
+		`5  openat(AT_FDCWD, "/r/odd --- name", O_RDONLY|O_CLOEXEC) = 5`,
+		`5  openat(AT_FDCWD, "/r/ +++ exited with 0 +++", O_RDONLY|O_CLOEXEC) = 6`,
+		`5  close(5)                          = 0`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := []string{"/r/odd +++ name", "/r/odd --- name", "/r/ +++ exited with 0 +++", "/r/odd --- name"}
+	if len(calls) != 4 {
+		t.Fatalf("%d calls, want 4: %+v", len(calls), calls)
+	}
+	for i, p := range wantPath {
+		if calls[i].Path != p {
+			t.Errorf("call %d path %q, want %q", i, calls[i].Path, p)
+		}
+	}
+}
+
+// Everything outside the one supported shape fails closed. The first row is the
+// exact trace the hosted job produced; it must stay rejected.
+func TestParseStraceRejectsUnsupportedLifecycleRecords(t *testing.T) {
+	exit1 := `8411 +++ exited with 1 +++`
+	for name, trace := range map[string]string{
+		"original hosted detached record":            lcTrace(lcOpen, lcClose, `8411  ???( <detached ...>`, lcChld),
+		"detached record with a synthetic exit":      lcTrace(lcOpen, `8411  ???( <detached ...>`, lcClose, exit1),
+		"unavailable entry without any terminal":     lcTrace(lcOpen, lcUnk, lcClose, lcChld),
+		"terminal only for another tid":              lcTrace(lcOpen, lcUnk, lcClose, `8408 +++ exited with 1 +++`),
+		"terminal before the unknown entry":          lcTrace(lcOpen, exit1, lcUnk, lcClose),
+		"duplicate terminal":                         lcTrace(lcOpen, lcUnk, lcClose, exit1, exit1),
+		"two unknown entries for one tid":            lcTrace(lcOpen, lcUnk, lcUnk, lcClose, exit1),
+		"call by the same tid after the unknown":     lcTrace(lcOpen, lcUnk, `8411  close(4) = 0`, exit1),
+		"signal by the same tid after the unknown":   lcTrace(lcOpen, lcUnk, `8411  --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=8408, si_uid=1001, si_status=1} ---`, exit1),
+		"resume by the same tid after the unknown":   lcTrace(lcOpen, lcUnk, `8411  <... close resumed>) = 0`, exit1),
+		"record after the terminal":                  lcTrace(lcOpen, lcUnk, exit1, `8411  close(4) = 0`),
+		"killed placeholder instead of exit":         lcTrace(lcOpen, lcUnk, lcClose, `8411 +++ killed by SIGKILL +++`),
+		"killed notice without any unknown":          lcTrace(lcOpen, lcClose, `8408 +++ killed by SIGKILL +++`),
+		"killed with core dump":                      lcTrace(lcOpen, `8408 +++ killed by SIGSEGV (core dumped) +++`),
+		"named unfinished call even when terminated": lcTrace(lcOpen, `8411  write(4, "x", 1 <unfinished ...>`, lcClose, exit1),
+		"named detached call even when terminated":   lcTrace(lcOpen, `8411  write(4, "x", 1 <detached ...>`, lcClose, exit1),
+		"unknown after a pending named call":         lcTrace(lcOpen, `8411  write(4, "x", 1 <unfinished ...>`, lcUnk, lcClose, exit1),
+		"unavailable entry with extra text":          lcTrace(lcOpen, `8411  ???( <unfinished ...> junk`, lcClose, exit1),
+		"unavailable entry with arguments":           lcTrace(lcOpen, `8411  ???(4, 5 <unfinished ...>`, lcClose, exit1),
+		"unavailable entry with a result":            lcTrace(lcOpen, `8411  ???() = -1 ENOSYS (Function not implemented)`, lcClose, exit1),
+		"unavailable entry without a tid":            lcTrace(lcOpen, `  ???( <unfinished ...>`, lcClose),
+		"exit code out of range":                     lcTrace(lcOpen, lcUnk, lcClose, `8411 +++ exited with 256 +++`),
+		"negative exit code":                         lcTrace(lcOpen, lcUnk, lcClose, `8411 +++ exited with -1 +++`),
+		"non-decimal exit code":                      lcTrace(lcOpen, lcUnk, lcClose, `8411 +++ exited with 0x1 +++`),
+		"exit notice with trailing text":             lcTrace(lcOpen, lcUnk, lcClose, `8411 +++ exited with 1 +++ extra`),
+		"exit notice without a tid":                  lcTrace(lcOpen, lcClose, `+++ exited with 1 +++`),
+		"standalone malformed exit notice":           lcTrace(lcOpen, lcClose, `8408 +++ exited with +++`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if calls, err := parseStrace(trace); err == nil {
+				t.Fatalf("accepted unsupported lifecycle trace (%d calls):\n%s", len(calls), trace)
+			}
+		})
+	}
+}
+
 func TestParseStraceMergesUnfinishedAndRejectsMalformed(t *testing.T) {
 	merged := strings.Join([]string{
 		`200 openat(AT_FDCWD, "/x", O_RDONLY) = 4`,
@@ -404,40 +578,123 @@ var (
 
 var fdCalls = map[string]bool{"write": true, "writev": true, "pwrite64": true, "pwritev": true, "pwritev2": true, "close": true, "fsync": true, "fdatasync": true}
 
-// parseStrace parses `strace -f -qq` output. Signal and exit records are
-// skipped; a line that is none of a complete call, an unfinished call or its
-// resumption is an error, as is an unfinished call that never resumes.
+// Lifecycle records of `strace -f -q`, each an anchored whole-line record (a
+// syscall whose quoted path merely contains such text is still a syscall).
+var (
+	straceSignal  = regexp.MustCompile(`^\s*(\d+)\s+--- SIG[A-Z0-9+-]+( \{.*\})? ---\s*$`)
+	straceExit    = regexp.MustCompile(`^\s*(\d+)\s+\+\+\+ exited with (\d{1,3}) \+\+\+\s*$`)
+	straceKilled  = regexp.MustCompile(`^\s*(\d+)\s+\+\+\+ killed by `)
+	straceUnavail = regexp.MustCompile(`^\s*(\d+)\s+\?\?\?\( <unfinished \.\.\.>\s*$`)
+)
+
+// parseStrace parses `strace -f -q` output into the actual syscalls. See
+// parseStraceLifecycle for the accepted lifecycle records.
 func parseStrace(trace string) ([]straceCall, error) {
+	calls, _, err := parseStraceLifecycle(trace)
+	return calls, err
+}
+
+// parseStraceLifecycle returns the calls and one note per accepted unavailable
+// syscall entry. Signal records (SIG... {...}) and normal exit notices
+// (`PID +++ exited with N +++`, N 0..255) are lifecycle records, not calls. A
+// tracee whose syscall-entry registers strace could not read is printed
+// `PID ???( <unfinished ...>`: that stop never reached the path filter or the
+// injection, so it is a non-call. It is accepted only for a tid that has no
+// pending named call, appears once, makes no other record, and later has
+// exactly one normal exit notice; otherwise the trace is an error. Killed
+// notices, detached records, named detached or never-resumed calls, and every
+// other line are errors.
+func parseStraceLifecycle(trace string) ([]straceCall, []string, error) {
 	var out []straceCall
+	var notes []string
 	pending := map[string]string{} // pid+name -> text before <unfinished ...>
+	unavailable := map[string]bool{}
+	terminated := map[string]bool{}
+	pendingFor := func(pid string) bool {
+		for k := range pending {
+			if strings.HasPrefix(k, pid+" ") {
+				return true
+			}
+		}
+		return false
+	}
+	// A tid that is unavailable or already terminated makes no further record.
+	quiet := func(n int, pid, line string) error {
+		if unavailable[pid] || terminated[pid] {
+			return fmt.Errorf("trace line %d: record by tid %s after its unavailable entry or termination: %q", n+1, pid, line)
+		}
+		return nil
+	}
 	// A descriptor belongs to the tracee (pid) that opened it.
 	fds := map[string]string{}
 	for n, line := range strings.Split(trace, "\n") {
-		if line == "" || strings.Contains(line, " --- ") || strings.Contains(line, " +++ ") {
+		if line == "" {
 			continue
+		}
+		if m := straceSignal.FindStringSubmatch(line); m != nil {
+			if err := quiet(n, m[1], line); err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
+		if m := straceExit.FindStringSubmatch(line); m != nil {
+			code, _ := strconv.Atoi(m[2])
+			if code > 255 {
+				return nil, nil, fmt.Errorf("trace line %d: exit code out of range: %q", n+1, line)
+			}
+			if terminated[m[1]] {
+				return nil, nil, fmt.Errorf("trace line %d: second terminal record for tid %s: %q", n+1, m[1], line)
+			}
+			if pendingFor(m[1]) {
+				return nil, nil, fmt.Errorf("trace line %d: tid %s ended with a named call still unfinished: %q", n+1, m[1], line)
+			}
+			terminated[m[1]] = true
+			if unavailable[m[1]] {
+				notes = append(notes, fmt.Sprintf("tid %s: unavailable syscall entry (???( <unfinished ...>), then normal exit %s", m[1], m[2]))
+			}
+			continue
+		}
+		if straceKilled.MatchString(line) {
+			return nil, nil, fmt.Errorf("trace line %d: killed notices are not supported: %q", n+1, line)
+		}
+		if m := straceUnavail.FindStringSubmatch(line); m != nil {
+			if unavailable[m[1]] || terminated[m[1]] || pendingFor(m[1]) {
+				return nil, nil, fmt.Errorf("trace line %d: unavailable entry for tid %s after a prior unavailable entry, termination or pending named call: %q", n+1, m[1], line)
+			}
+			unavailable[m[1]] = true
+			continue
+		}
+		if m := straceResumed.FindStringSubmatch(line); m != nil {
+			if err := quiet(n, m[1], line); err != nil {
+				return nil, nil, err
+			}
+		} else if m := straceHead.FindStringSubmatch(line); m != nil {
+			if err := quiet(n, m[1], line); err != nil {
+				return nil, nil, err
+			}
 		}
 		if m := straceResumed.FindStringSubmatch(line); m != nil {
 			head, ok := pending[m[1]+" "+m[2]]
 			if !ok {
-				return nil, fmt.Errorf("trace line %d: resumed %s with no unfinished call: %q", n+1, m[2], line)
+				return nil, nil, fmt.Errorf("trace line %d: resumed %s with no unfinished call: %q", n+1, m[2], line)
 			}
 			delete(pending, m[1]+" "+m[2])
 			line = head + m[3]
 		} else if i := strings.Index(line, " <unfinished ...>"); i >= 0 {
 			m := straceHead.FindStringSubmatch(line)
 			if m == nil {
-				return nil, fmt.Errorf("trace line %d: unparsable unfinished call: %q", n+1, line)
+				return nil, nil, fmt.Errorf("trace line %d: unparsable unfinished call: %q", n+1, line)
 			}
 			pending[m[1]+" "+m[2]] = line[:i]
 			continue
 		}
 		m := straceHead.FindStringSubmatch(line)
 		if m == nil {
-			return nil, fmt.Errorf("trace line %d: not a syscall record: %q", n+1, line)
+			return nil, nil, fmt.Errorf("trace line %d: not a syscall record: %q", n+1, line)
 		}
 		res := straceResult.FindStringSubmatchIndex(line)
 		if res == nil {
-			return nil, fmt.Errorf("trace line %d: no result: %q", n+1, line)
+			return nil, nil, fmt.Errorf("trace line %d: no result: %q", n+1, line)
 		}
 		call := straceCall{PID: m[1], Name: m[2], Line: line, Ret: line[res[2]:res[3]], Injected: strings.HasSuffix(strings.TrimSpace(line), "(INJECTED)")}
 		if res[4] >= 0 {
@@ -466,9 +723,14 @@ func parseStrace(trace string) ([]straceCall, error) {
 		out = append(out, call)
 	}
 	if len(pending) != 0 {
-		return nil, fmt.Errorf("trace ends with %d unfinished call(s)", len(pending))
+		return nil, nil, fmt.Errorf("trace ends with %d unfinished call(s)", len(pending))
 	}
-	return out, nil
+	for pid := range unavailable {
+		if !terminated[pid] {
+			return nil, nil, fmt.Errorf("tid %s has an unavailable syscall entry and no normal exit record", pid)
+		}
+	}
+	return out, notes, nil
 }
 
 // classifyRenames names, in trace order, the renames of the replacement

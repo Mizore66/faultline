@@ -226,6 +226,37 @@ func demoSiblings(tree []demoartifactstest.Entry, prefix string) []string {
 	return out
 }
 
+// demoStraceProbe logs the installed strace version (the command must succeed;
+// the version is not pinned here) and runs a real strace with the same
+// -D -f -q options the rows use on /bin/true, requiring the printed trace to end
+// with that tid's positive normal exit notice. It shows the option and exit
+// grammar the parser relies on; it does not reproduce an unavailable entry.
+func demoStraceProbe(t *testing.T) {
+	t.Helper()
+	version, err := exec.Command("strace", "--version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("strace --version failed: %v\n%s", err, version)
+	}
+	t.Logf("strace --version:\n%s", version)
+	trace := filepath.Join(t.TempDir(), "probe-trace")
+	if out, err := exec.Command("strace", "-D", "-f", "-q", "-e", "trace=execve", "-o", trace, "--", "/bin/true").CombinedOutput(); err != nil {
+		t.Fatalf("strace probe of /bin/true failed: %v\n%s", err, out)
+	}
+	body, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("strace -D -f -q probe of /bin/true:\n%s", body)
+	lines := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	last := lines[len(lines)-1]
+	if !straceExit.MatchString(last) || !strings.HasSuffix(strings.TrimSpace(last), "+++ exited with 0 +++") {
+		t.Fatalf("the probe trace does not end with a normal exit notice: %q", last)
+	}
+	if _, err := parseStrace(string(body)); err != nil {
+		t.Fatalf("the probe trace is not accepted by the row parser: %v", err)
+	}
+}
+
 func demoPreflight(t *testing.T, repo string) {
 	t.Helper()
 	out, err := exec.Command("node", "--version").Output()
@@ -344,7 +375,9 @@ func runDemo(t *testing.T, e demoEnv, side demoSide, req demoartifactstest.Reque
 			add("open")
 		}
 	}
-	args := []string{"-D", "-f", "-qq", "-s", "4096", "-o", trace}
+	// -q (not -qq) keeps the per-tid normal exit notices the parser uses as
+	// positive terminal evidence.
+	args := []string{"-D", "-f", "-q", "-s", "4096", "-o", trace}
 	pset := map[string]bool{}
 	addP := func(p string) {
 		if !pset[p] {
@@ -397,9 +430,13 @@ func runDemo(t *testing.T, e demoEnv, side demoSide, req demoartifactstest.Reque
 	if err != nil {
 		t.Fatalf("%s: strace log unreadable: %v", side.name, err)
 	}
-	parsed, err := parseStrace(strings.ReplaceAll(string(tb), "\r", ""))
+	parsed, lifecycle, err := parseStraceLifecycle(strings.ReplaceAll(string(tb), "\r", ""))
 	if err != nil {
 		t.Fatalf("%s: strace log unparsable: %v\n%s", side.name, err, tb)
+	}
+	// An accepted unavailable syscall entry is not a call; make it visible.
+	for _, note := range lifecycle {
+		t.Logf("%s: accepted lifecycle record: %s\n%s", side.name, note, tb)
 	}
 	tree, err := demoartifactstest.Inventory(root)
 	if err != nil {
@@ -837,6 +874,7 @@ func TestLiveDemoArtifactFaults(t *testing.T) {
 	// names this test installs it (CI fails rather than skips without it).
 	t.Run("canonical-shim-contract", func(t *testing.T) { demoShimContract(t, env) })
 	requireStrace(t)
+	demoStraceProbe(t)
 
 	executions, preview := 0, 0
 	for _, row := range demoRows {
