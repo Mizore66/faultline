@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
+	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
 // unreachableLiterals are error texts in the gated packages (gatedDirs)
@@ -39,12 +40,17 @@ var unreachableLiterals = map[string]string{
 	"Cannot bind a lifecycle ledger that has no SESSION_STARTED observation.": "a verified ledger always starts with SESSION_STARTED",
 
 	// gitproof/write.go (TestLiveProofWriter's requireReached):
-	"Git proof root is not a real directory:":                                         "the filesystem root is always a real directory",
-	"Proof bundle root cannot traverse a symbolic link or non-directory:":             "race only: the Git proof walk over the same segments refused it first",
-	"Proof bundle output must be a child directory of":                                "prepareFreshOutput refuses the same relation first",
-	"Proof bundle root cannot be a symbolic link:":                                    "race only: the Git proof walk resolved the root just before",
-	"Proof bundle output cannot traverse a symbolic link:":                            "race only: the Git proof walk resolved every parent just before, and the output does not exist",
-	"Proof bundle output must be a directory:":                                        "race only: prepareFreshOutput refused an existing output just before",
+	"Git proof root is not a real directory:": "the filesystem root is always a real directory",
+	// The individual entries "Proof bundle root cannot traverse a symbolic link
+	// or non-directory:", "Proof bundle output must be a child directory of",
+	// "Proof bundle output cannot traverse a symbolic link:" and "Proof bundle
+	// output must be a directory:" were removed (Slice 5b.1): the committed
+	// demo-artifacts captures (writer-linked-root, writer-parent-file,
+	// writer-root, writer-outside, writer-linked-output, writer-output-file)
+	// produce each text for real, and TestLiveProofWriter's requireReached now
+	// also sees that corpus. The post-walk symlink message below stays race
+	// only for both writers: the same path was validated just before.
+	"Proof bundle root cannot be a symbolic link:":                                    "race only: the Git proof walk (and the demo writer's proofRootTree) resolved the root just before",
 	"Only a completed Git investigation with a resolved source range can be bundled.": "semantic validation refuses a null repository or range first",
 	"Unsupported Git object format:":                                                  "Git reports only sha1 or sha256",
 	"Git bundle did not expose exactly the expected descendant reference.":            "git bundle create was given exactly that one ref",
@@ -55,6 +61,29 @@ var unreachableLiterals = map[string]string{
 	"Git proof writer did not produce the complete expected artifact set.":            "the writer puts exactly requiredArtifactPaths",
 	"Git proof source artifact changed before package assembly:":                      "race only: the bundle git just wrote is read back unchanged",
 	"Git proof bundle output appeared during assembly and will not be replaced:":      "race only: the output was refused when it existed before staging",
+
+	// Slice 5b.1. Each is a source proof, individually checked against the final
+	// sources; none is a blanket exemption for a package or file.
+	// demofixture/replay.go uniqueRunCatalog: the fixed builder constructs 20
+	// distinct cached records (identical duplicates collapse), so a conflicting
+	// record cannot arrive from its public input; TestUniqueRunCatalog-style
+	// native tests in internal/demofixture still run the private algorithm.
+	"Run id collision with conflicting evidence:": "the fixed REPLAY builder's records have distinct IDs or are identical, so no conflict reaches uniqueRunCatalog from CreateReplayAnalysis; the private conflict algorithm has a native unit test",
+	// bundle/demo/write.go: requiredDeclaredFiles lists the seven fixed paths
+	// plus the same catalog's three run paths each; by this point every one of
+	// those was inserted into the artifact map and an already-present path was
+	// rejected with the write-twice error, so the two path sets are equal.
+	"Proof bundle writer did not produce the complete expected file set": "after the seven fixed paths and the catalog's three paths per record were all inserted and a duplicate path was rejected, the written set equals the declared set by construction",
+	// proofview/judge_preview_output.go: EnsureRealDirectoryTree's first message
+	// is for the filesystem root itself; it exists and is a real directory on
+	// every supported host.
+	"Judge preview output must use a real directory:": "the filesystem root is always a real directory on a normal supported host",
+	// proofview/judge.go:412 is the Git proof incident page's footer prose, not an
+	// error: the scanner counts it as message text only because the preview
+	// writer passes RenderJudgePreviewPage through jsexc.Must, which makes the
+	// shared page-end helper's footer argument a message. Its bytes are compared
+	// by TestLiveJudgeServer (GET /) and the commit-proof-preview writer replay.
+	"FaultLine reports verified predicate-specific evidence, states when minimization or repair artifacts are absent, and does not claim private model reasoning, a unique semantic cause, or native Codex interception.": "page footer prose of RenderGitProofIncidentPage, not an error; compared byte for byte by TestLiveJudgeServer and the commit-proof-preview writer replay",
 
 	// prevention/write.go (TestLivePreventionWrite's requireReached):
 	"Prevention proof root is not a real directory:":                             "the filesystem root is always a real directory",
@@ -1125,6 +1154,9 @@ var gatedDirs = []string{
 	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
 	"internal/safegit", "internal/hostcmd", "internal/runtimeimage", "internal/doctor", "internal/allowlist", "internal/turnsnap",
 	"internal/incident", "internal/ledger", "internal/sidecar", "internal/snapgc",
+	// Slice 5b.1: the cached fixture (position-gated through the permanent
+	// demo-artifacts replay and the writer/renderer goldens).
+	"internal/demofixture",
 	// Slice 4b: every file is live-gated (TestLiveTurnStates, TestLiveInvestigateTurns).
 	"internal/turninv",
 	// Slice 4c.
@@ -1250,6 +1282,18 @@ var liveGatedFiles = map[string]string{
 	// Docker-isolated proof with a transition and a witness digest, so the
 	// packet refusal is not reachable through the CLI.
 	"internal/repair/brief.go": "TestLiveRepairEvidencePacket",
+	// Slice 5b.1: the demo-v2 bundle writer, on the 19 captured writer requests
+	// plus the supplemental supplied-value table, against the frozen
+	// writeProofBundle. write_report.go has supplied-value TypeErrors the fixed
+	// captures cannot reach, so it is owned by the same test and judged by that
+	// test's own pinned-oracle refusals.
+	"internal/bundle/demo/write.go":        "TestLiveDemoWriter",
+	"internal/bundle/demo/write_output.go": "TestLiveDemoWriter",
+	"internal/bundle/demo/write_report.go": "TestLiveDemoWriter",
+	// The preview renderer's non-REPLAY guard has no CLI input; the live
+	// library renderer requests reach it. judge_preview_output.go and the CLI
+	// handler stay position-gated through the actual tagged flBinary replay.
+	"internal/proofview/judge_preview.go": "TestLiveDemoArtifacts",
 }
 
 // liveOnlyUnreachable are error texts in live-gated files outside gatedDirs
@@ -1283,6 +1327,9 @@ func goldenText(t *testing.T, repo string) string {
 		t.Fatal(err)
 	}
 	files = append(files, perTask...)
+	// Slice 5b.1: the additive demo-artifacts corpus. Existing corpus text is
+	// not rewritten; this file only joins the discovery.
+	files = append(files, filepath.Join(repo, "difftest", "testdata", "demo-artifacts", "golden.jsonl"))
 	var goldens strings.Builder
 	for _, f := range files {
 		b, err := os.ReadFile(f)
@@ -1291,7 +1338,44 @@ func goldenText(t *testing.T, repo string) string {
 		}
 		goldens.Write(b)
 	}
+	// The same file, once decoded: its library values are JSON texts inside a
+	// JSON string, so a rendered page's quotes and newlines are escaped twice
+	// there and a plain containment check cannot find them.
+	goldens.WriteString(demoArtifactsDecodedText(t, filepath.Join(repo, "difftest", "testdata", "demo-artifacts", "golden.jsonl")))
 	return goldens.String()
+}
+
+// demoArtifactsDecodedText is the committed demo-artifacts corpus with each
+// library call's valueJSON decoded once more, so that a page the renderer
+// returned (a JSON string inside the record's JSON string) is searchable as
+// the text it is. It only reads the evidence; it never rewrites or filters it.
+func demoArtifactsDecodedText(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		record, err := jsjson.Parse(line)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		value := record.Get("call", "valueJSON")
+		if value.Kind() != jsjson.String {
+			continue
+		}
+		inner, err := jsjson.Parse(value.Str())
+		if err != nil {
+			t.Fatalf("%s: call.valueJSON: %v", path, err)
+		}
+		if inner.Kind() == jsjson.String {
+			// One JSON level, like every other golden line.
+			out.WriteString(jsjson.Quote(inner.Str()))
+			out.WriteByte('\n')
+		}
+	}
+	return out.String()
 }
 
 func TestGoldensReachEveryErrorLiteral(t *testing.T) {

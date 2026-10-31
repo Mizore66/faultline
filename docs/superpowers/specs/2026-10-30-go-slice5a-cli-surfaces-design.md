@@ -1,14 +1,14 @@
 # Go migration slice 5a — help, quickstart and version
 
 - **Date:** 2026-10-30
-- **Status:** Written spec and [implementation plan](../plans/2026-10-30-go-slice5a-cli-surfaces.md) approved by the user on 2026-10-30; parallel Sonnet implementation authorized. The Go surface and additive 67-case corpus are implemented. Bounded local checks, standalone/stamped binaries and pinned Node 22.22.2 Podman live comparison pass; independent whole-branch review approved with no Critical or Important findings. Exact-head hosted acceptance remains pending. The user separately authorized commit, push, draft PR and CI on 2026-10-30 under Mizore66; merge, ready transition and release publication are not authorized.
+- **Status:** Complete and merged as [PR #215](https://github.com/Mizore66/faultline/pull/215), merge `647440884a6668042f7726f2cbade38886d00a41`, on 2026-10-30 under verified Mizore66 after separate ready/merge authorization. The approved implementation and additive 67-case corpus passed local checks and independent review. All four hosted workflows at reviewed head `707a28a8691d5dd8a13f3b94faa6f819ac34a406` succeeded on attempt 1: 52 successful jobs and two expected main-push-only provenance skips; all successful logs were audited. This is reviewed-head acceptance, not fresh merge-commit CI or signed-attestation evidence. Release publication remains unauthorized; new subprojects require their own approvals.
 - **Parent:** [Go migration overview](2026-09-25-go-migration-overview.md), especially the compatibility contract and Slice 5 decisions.
 - **Baseline:** Slice 4 merged through [PR #214](https://github.com/Mizore66/faultline/pull/214) at `6f2450549acb002f04a73dd3c1e3091299d7d59f`.
 - **Oracle:** Node 22.22.2, source unchanged from `ce99a793af0b020bf1b9cf21114f8d7897b37207`; current-tree manifest version `0.1.4`. The source pin's own manifest is `0.1.3`; see Section 3.
 
 ## 1. Scope and boundaries
 
-5a ports the existing fast CLI surface, without adding commands or changing proof semantics. The current Go dispatcher recognizes these names but still returns `not yet ported`; the no-argument case also needs replacing. This slice makes those paths usable in the standalone Go binary while the TypeScript oracle is still available.
+5a ports the existing fast CLI surface, without adding commands or changing proof semantics. At its Slice 4 baseline the Go dispatcher recognized these names but returned `not yet ported`; the no-argument case also needed replacing. The completed slice makes those paths usable in the standalone Go binary while the TypeScript oracle is still available.
 
 | Surface | Frozen TS behavior | Go requirement |
 | --- | --- | --- |
@@ -94,7 +94,7 @@ A separately built test binary stamped with a clearly test-only version must pri
 
 ## 4. Evidence and acceptance criteria
 
-All items below are requirements for the future implementation, not claims that tests have run.
+The items below define the implementation acceptance contract. The status above records completed reviewed-head acceptance; this documentation update does not claim fresh test execution.
 
 ### 4.1 Direct CLI tests
 
@@ -138,8 +138,9 @@ This is ownership and ordering for later specs, not implementation approval for 
 
 | Subproject | Owned scope | Dependency / gate |
 | --- | --- | --- |
-| 5a | Help, aliases, advanced, quickstart, version | This spec; exact baseline parity |
-| 5b | Demo analysis/fixture, demo-v2 writer, judge-demo, judge-preview, plain serve | Artifact and HTTP/lifecycle oracle evidence |
+| 5a | Help, aliases, advanced, quickstart, version | Complete; reviewed-head acceptance and merged PR #215 |
+| 5b.1 | Cached REPLAY fixture/analysis, demo-v2 writer, complete judge-preview | [Focused design](2026-10-30-go-slice5b1-cached-artifacts-preview-design.md) approved; [implementation plan](../plans/2026-10-30-go-slice5b1-cached-artifacts-preview.md) local implementation, independent review/final fix and bounded post-fix integration complete; full acceptance pending, including hosted six-native/Linux/positional/canonical-generation gates and long/full-tagged gaps (uncommitted; see the plan's status paragraph) |
+| 5b follow-up | Genuine RERUN execution, interactive renderer, full judge-demo and plain serve | Own spec/approval; execution provenance, mutation security and HTTP/lifecycle evidence; judge-demo including export-only remains unported until then |
 | 5c | `serve --bundle`, minimization/repair/prevention attachments and panels | Existing verifiers; hostile attachment and HTTP tests |
 | 5d | UI hub, artifact discovery and turn view | Verified rendering/attachments from 5c |
 | 5e | Witness review JSON, server, TTY and non-TTY | Witness/draft APIs; terminal and HTTP lifecycle tests |
@@ -163,4 +164,4 @@ Before 5l, inventory TS tests, oracle adapters, mixed-language generator files, 
 
 The user separately approved the design/documentation direction, this written spec, and then the detailed implementation plan on 2026-10-30. Their execution choice, “1 and parallelize the executions”, authorizes parallel Sonnet implementation within 5a. Disjoint file ownership and dependency barriers preserve the contract; runtime verification remains serialized under explicit HOST ownership.
 
-No commit or push is implied by spec approval. Protected-source changes, unfreeze/retirement, ready/merge transitions, publication and external publisher setup retain their separate authorization requirements. Preserve personal Mizore66 identity, the normal TruffleHog hook and the required attribution for any subsequently authorized commit/PR. No real Codex/OpenAI operation is part of this work.
+No commit or push is implied by spec approval. The later explicit 5a publication and PR #215 ready/merge authorizations were exercised for that PR only; they do not cover 5b.1 or another future PR. Protected-source changes, unfreeze/retirement, new ready/merge transitions, publication and external publisher setup retain their separate authorization requirements. Preserve personal Mizore66 identity, the normal TruffleHog hook and the required attribution for any subsequently authorized commit/PR. No real Codex/OpenAI operation is part of this work.
