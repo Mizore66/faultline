@@ -463,6 +463,39 @@ jobs:
         # TestLiveRealDocker runs investigate against the real daemon with
         # --pull never; TestLiveRealDockerProjectBuild builds FROM it.
         run: docker pull node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+      - name: GLOBALOPEN helper native controls (native, before the writer matrix)
+        # The ordinary first-open fault rows of TestLiveWriterFaults run under
+        # the test-only ptrace helper difftest/testdata/globalopen (stock strace
+        # counts the first call per tracee and cannot express one tree-wide
+        # first open). This step proves the helper natively on this runner
+        # BEFORE the 654-case matrix: first the default-built helper against its
+        # adversarial fixture and the real verifier (30 scenarios, the /dev/full
+        # control and the nine verifier corruptions), then the hook-tagged
+        # lifecycle controls (regression, residual, non-leader exec, log
+        # controls, ledger). No hooks exist in the default helper. Raw stdout
+        # and stderr are kept for the artifact step below; the exit status of
+        # every go test is preserved and an unexpected skip fails the step.
+        run: |
+          set -o pipefail
+          status=0
+          mkdir -p "$RUNNER_TEMP/globalopen-proof"
+          p="$RUNNER_TEMP/globalopen-proof"
+          { echo "uname: $(uname -srm)"; echo "go: $(go version)"; echo "strace: $(strace --version 2>&1 | head -1)"; } | tee "$p/identity.txt"
+          default_tests='TestGlobalOpenDefaultHelperScenarios TestGlobalOpenHeaderMarkerScenario TestGlobalOpenFixtureEvidenceRetention TestGlobalOpenDevFullIsToolFailure TestGlobalOpenVerifierRejectsCorruptions TestGlobalOpenOverrideValidation TestValidateGlobalOpenTrace TestValidateGlobalOpenTraceAcceptsReconciledNonPendingLoss TestGlobalOpenCommand TestGlobalOpenRowClassification'
+          printf '%s\n' $default_tests > "$p/default.list"
+          # Fixture scenarios keep their raw trace.log/child.out (success and
+          # failure) under the same evidence directory the writer step uses, so
+          # the existing always-upload step collects them.
+          mkdir -p "$RUNNER_TEMP/globalopen-evidence"
+          FAULTLINE_GLOBALOPEN_EVIDENCE_DIR="$RUNNER_TEMP/globalopen-evidence" go test -tags faultline_test -count=1 -timeout 15m -v -run "^($(echo $default_tests | tr ' ' '|'))\$" ./difftest/ > "$p/default.stdout" 2> "$p/default.stderr" || status=$?
+          cat "$p/default.stdout"; cat "$p/default.stderr" >&2
+          .github/scripts/check-skips.sh "$p/default.stdout" '^$' "$p/default.list" || status=1
+          tags='globalopen_hooks,globalopen_residual,nonleader_exec_staged,log_controls,ledger_staged'
+          go test -tags "$tags" -list '.*' ./difftest/testdata/globalopen/ | grep -E '^Test' > "$p/hooks.list" || status=1
+          go test -tags "$tags" -count=1 -timeout 15m -v ./difftest/testdata/globalopen/ > "$p/hooks.stdout" 2> "$p/hooks.stderr" || status=$?
+          cat "$p/hooks.stdout"; cat "$p/hooks.stderr" >&2
+          .github/scripts/check-skips.sh "$p/hooks.stdout" '^$' "$p/hooks.list" || status=1
+          exit $status
       - name: Writer faults, real Docker
         # FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 makes
         # TestLiveRealDockerProjectBuild fail unless the daemon recorded no
@@ -480,9 +513,28 @@ jobs:
           # is skipped.
           tests='TestLiveWriterFaults TestLiveRealDocker TestLiveRealDockerProjectBuild TestLiveDemoArtifactFaults'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
-          FAULTLINE_REAL_DOCKER=1 FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
+          # The ordinary first-open rows retain every raw GLOBALOPEN trace (passed
+          # or failed) and its metadata here for the artifact step below.
+          mkdir -p "$RUNNER_TEMP/globalopen-evidence"
+          FAULTLINE_GLOBALOPEN_EVIDENCE_DIR="$RUNNER_TEMP/globalopen-evidence" FAULTLINE_REAL_DOCKER=1 FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
           .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
           exit $status
+      - name: Retain GLOBALOPEN proof artifacts
+        # Raw stdout, stderr and traces are kept whether the steps above passed
+        # or failed. An upload problem is reported but must not hide a test
+        # failure (continue-on-error), and a missing path warns instead of
+        # failing a run that has nothing to keep.
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: globalopen-proof
+          path: |
+            ${{ runner.temp }}/globalopen-proof
+            ${{ runner.temp }}/globalopen-evidence
+            ${{ runner.temp }}/live.log
+          if-no-files-found: warn
+          retention-days: 14
 
   stack-live:
     # The V8 stack, spread and rimraf limits are fitted per platform

@@ -398,10 +398,25 @@ func runGoWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault
 // perSide, when set, rebuilds rel for the case root (a receipt stage's key
 // differs between the sides). With faultLastInvocation only the last
 // invocation runs under strace; its result is returned.
+//
+// An ordinary first-call open-group row (f.call == "open", !f.everyCall) runs
+// under the test-only GLOBALOPEN helper (difftest/testdata/globalopen) on both
+// sides instead: stock strace counts "the first call" per tracee, so it cannot
+// express one process-tree-wide first matching open. Every other family, the
+// every-call rows, the ordinals and discovery stay stock strace.
 func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, rel string, command []string, ordinal int, tsSide bool, perSide func(root string) string) faultResult {
 	t.Helper()
 	if ordinal == 0 {
 		ordinal = 1
+	}
+	useHelper := f.call == "open" && !f.everyCall
+	var helper string
+	if useHelper {
+		o := faultOrdinals[f.caseID+"/"+f.label+"/"+f.call]
+		if ordinal != 1 || o.from || o.onlyCalls {
+			t.Fatalf("the globalopen helper supports only the default first-call open row; %s has ordinal %d, from=%t, onlyCalls=%t", f.name(), ordinal, o.from, o.onlyCalls)
+		}
+		helper = globalOpenBinary(t, repo)
 	}
 	trace := filepath.Join(t.TempDir(), "trace")
 	calls := faultCalls[f.call]
@@ -424,6 +439,9 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 			if perSide != nil {
 				rel = perSide(r.root)
 			}
+			if useHelper {
+				return withFakeGit(repo, f.fakeGit, globalOpenCommand(helper, f.errno, filepath.Join(r.root, filepath.FromSlash(rel)), trace, append(slices.Clone(command), args...)))
+			}
 			quote := func(p string) string {
 				return "'" + strings.ReplaceAll(p, "<PID>", `'"$$"'`) + "'"
 			}
@@ -445,7 +463,10 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 		},
 	}
 	res := faultResultOf(tpl, runWriterCaseWith(t, repo, tpl, run))
-	b, _ := os.ReadFile(trace)
+	b, rerr := os.ReadFile(trace)
+	if useHelper {
+		checkGlobalOpenEvidence(t, f, tsSide, root, b, rerr)
+	}
 	return faultResult{res, strings.Count(string(b), "(INJECTED)"), strings.ReplaceAll(string(b), root+"/", "<R>/")}
 }
 

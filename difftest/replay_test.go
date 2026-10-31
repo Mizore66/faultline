@@ -112,6 +112,9 @@ func TestMain(m *testing.M) {
 		}
 		os.RemoveAll(coverDir)
 	}
+	// The globalopen helper/fixture builds the resolver owned for this process
+	// (never an explicit prebuilt override); see globalopen_resolver_test.go.
+	globalOpenCleanup()
 	os.RemoveAll(home)
 	os.Exit(code)
 }
