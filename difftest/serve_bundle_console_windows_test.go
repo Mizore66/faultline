@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -25,24 +26,43 @@ const consoleProbeWait = 5 * time.Second
 
 // TestServeFixtureWindowsConsoleInterrupt is an OBSERVATIONAL diagnostic for the
 // hosted Windows failure where the real console helper returns success yet
-// every Go serve process stays alive. It runs two independent variants of the
+// every Go serve process stays alive. It runs three sequential variants of the
 // same tiny target (difftest/servefixture/console-target) through the same
 // launch path (servefixture.Start in its own new console, the existing console
 // helper, Wait, Dispose):
 //
-//   - baseline: ordinary signal.Notify(os.Interrupt);
+//   - baseline: ordinary signal.Notify(os.Interrupt), launched before anything
+//     in this test touches the test process's console state;
 //   - clear-ignore: the identical target with ONLY SetConsoleCtrlHandler(NULL,
-//     FALSE) added before the subscription.
+//     FALSE) added by the target itself before the subscription;
+//   - clear-in-launcher (LAST): the baseline target again, with NO target
+//     argument, launched after the TEST PROCESS itself called
+//     SetConsoleCtrlHandler(NULL, FALSE). Per the documented semantics the call
+//     restores normal Ctrl+C processing for the caller, the attribute is
+//     inherited by processes created afterwards and existing processes are not
+//     affected.
+//
+// clear-in-launcher MUTATES THE TEST PROCESS and is process-wide and test-only:
+// it must stay last, nothing here is parallel, and no attempt is made to restore
+// the prior state (there is no documented getter). The baseline therefore always
+// runs before the mutation and its failure is neither masked nor suppressed.
+// Tests that run later in the same test binary observe the cleared state, so
+// after a failing baseline they cannot independently qualify readiness.
+// This is instrumentation to locate where the ignore attribute comes from, not
+// the proposed launcher fix and not an acceptance of anything.
 //
 // Reading the native results (hypotheses, not conclusions): a baseline failure
 // with a clear-ignore pass is consistent with an inherited "ignore Ctrl+C"
-// attribute but does not by itself prove where it was inherited from; both
-// failing means that hypothesis is insufficient; both passing points at
-// something specific to fl. Each variant must start, deliver the existing
+// attribute but does not by itself prove where it was inherited from. If
+// clear-in-launcher then passes, the attribute was held by the test process at
+// the time its children were created (it does not say which ancestor set it);
+// if it still fails, the attribute is not simply inherited from the test
+// process's own state. If baseline and clear-ignore both pass, the symptom did
+// not reproduce; fl behavior remains unproven. Each variant must start, deliver the existing
 // emitter successfully, exit within the bound with exactly the two startup
 // lines, empty stderr, raw exit 0 and no signal. Nothing here skips, accepts
-// either outcome, clears a flag of the test process or the helper, or sends
-// anything but the real CTRL_C_EVENT.
+// either outcome, touches the helper, or sends anything but the real
+// CTRL_C_EVENT.
 func TestServeFixtureWindowsConsoleInterrupt(t *testing.T) {
 	helper := serveBundleConsoleHelper(t)
 	target := buildConsoleTarget(t)
@@ -63,6 +83,15 @@ func TestServeFixtureWindowsConsoleInterrupt(t *testing.T) {
 		// Independent subtests: a failure of the first does not stop the second.
 		t.Run(variant.name, func(t *testing.T) { runConsoleProbe(t, variant.name, target, helper, variant.args) })
 	}
+	// LAST and sequential: it mutates the test process (see the comment above).
+	t.Run("clear-in-launcher", func(t *testing.T) {
+		setHandler := syscall.NewLazyDLL("kernel32.dll").NewProc("SetConsoleCtrlHandler")
+		if ok, _, err := setHandler.Call(0, 0); ok == 0 {
+			t.Fatalf("clear-in-launcher: SetConsoleCtrlHandler(NULL, FALSE) failed in the test process: %v", err)
+		}
+		t.Logf("clear-in-launcher: the TEST PROCESS cleared its own Ctrl+C-ignore attribute (SetConsoleCtrlHandler(NULL, FALSE)) before launching the ordinary baseline target; no --clear-ignore argument")
+		runConsoleProbe(t, "clear-in-launcher", target, helper, nil)
+	})
 }
 
 func consoleProbeSHA256Hex(data []byte) string {

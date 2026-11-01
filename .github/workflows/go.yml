@@ -774,3 +774,67 @@ jobs:
             ${{ runner.temp }}/standalone.log
           if-no-files-found: error
           retention-days: 14
+
+  # Slice 5c diagnostic: a small, fast, independent native Windows job that runs
+  # ONLY the console Ctrl+C origin experiment (baseline, target-side
+  # clear-ignore, and the last parent-clear variant), so its raw log is
+  # inspectable long before the full native suites finish. It is a normal
+  # strict job: any failing variant fails it, there is no continue-on-error and
+  # no alternate accepted outcome. A failing baseline is the expected, already
+  # retained symptom and remains a real failure. It proves nothing about overall
+  # readiness and does not replace or weaken any other job.
+  windows-console-diagnostic:
+    name: windows console Ctrl+C diagnostic (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - name: Console Ctrl+C origin experiment
+        shell: bash
+        run: |
+          set -o pipefail
+          status=0
+          {
+            echo "runner: os=$RUNNER_OS arch=$RUNNER_ARCH image=${{ matrix.os }}"
+            go version
+            echo "event=${{ github.event_name }} sha=$(git rev-parse HEAD)"
+          } 2>&1 | tee "$RUNNER_TEMP/console-diagnostic.log"
+          go test -tags faultline_test -count=1 -v -timeout 3m -run '^TestServeFixtureWindowsConsoleInterrupt$' ./difftest/ 2>&1 | tee -a "$RUNNER_TEMP/console-diagnostic.log" || status=$?
+          # Guards (go test exiting 0 is not trusted alone). check-skips.sh fails on
+          # an unexpected skip, "no tests to run" and a named top-level test that
+          # reported no result, so a renamed or unmatched test cannot pass. It only
+          # annotates a failed test and does not itself return nonzero for a FAIL;
+          # the original go test status, preserved above, is what keeps a failing
+          # variant failing. Its output goes to a SEPARATE file that is appended to
+          # the retained log afterwards, never read and written through one pipeline.
+          printf '%s\n' TestServeFixtureWindowsConsoleInterrupt > "$RUNNER_TEMP/console-diagnostic.list"
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/console-diagnostic.log" '^$' "$RUNNER_TEMP/console-diagnostic.list" > "$RUNNER_TEMP/console-guard.out" 2>&1 || status=1
+          # Each variant must have an actual terminal result (PASS or FAIL,
+          # indentation allowed) under its exact full subtest name; a missing one
+          # fails the job.
+          for variant in baseline clear-ignore clear-in-launcher; do
+            name="TestServeFixtureWindowsConsoleInterrupt/$variant"
+            if ! grep -Eq "^[[:space:]]*--- (PASS|FAIL): $name \(" "$RUNNER_TEMP/console-diagnostic.log"; then
+              echo "::error title=console diagnostic::no PASS or FAIL terminal for $name" >> "$RUNNER_TEMP/console-guard.out"
+              status=1
+            fi
+          done
+          cat "$RUNNER_TEMP/console-guard.out"
+          cat "$RUNNER_TEMP/console-guard.out" >> "$RUNNER_TEMP/console-diagnostic.log"
+          exit $status
+      - name: Retain the console diagnostic log
+        # Retained even on failure; a missing file fails this step.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-console-diagnostic-${{ github.event_name }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/console-diagnostic.log
+          if-no-files-found: error
+          retention-days: 14
