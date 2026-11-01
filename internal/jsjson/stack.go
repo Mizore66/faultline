@@ -76,7 +76,36 @@ type stackModel struct {
 
 var v8Stack = stackModelFor(runtime.GOOS, runtime.GOARCH)
 
+// stackModelFor is the platform's model with its serve --bundle attachment
+// sites (see the Serve sites below) filled in.
 func stackModelFor(goos, goarch string) stackModel {
+	m := stackModelBase(goos, goarch)
+	// Unmeasured platforms keep exactly the behavior the attachment verifiers
+	// had before these sites existed: minimization ran at the ambient offset
+	// 0, repair at SiteGitProof and prevention at SitePrevention. Only
+	// linux/arm64 has actual same-command `serve --bundle` four-shape
+	// measurements (FitSiteOffsetForTest feasible intervals -46300..-41900 for
+	// minimization and -15200..-11900 for the other five; midpoints used).
+	// darwin/arm64, linux/amd64 and Windows are pending hosted measurement.
+	// The repaired-runs row (review I2) was measured separately through the
+	// actual command on linux/arm64: TS arr/obj/idx/alt 1826/3651/1956/2434,
+	// feasible interval -15200..-11900, midpoint -13550.
+	min, repair, prevention := 0, m.sites[SiteGitProof], m.sites[SitePrevention]
+	repairedRuns := prevention
+	if goos == "linux" && goarch == "arm64" {
+		min, repair, prevention, repairedRuns = -44_100, -13_550, -13_550, -13_550
+	}
+	m.sites[SiteServePreventionRepairedRuns] = repairedRuns
+	m.sites[SiteServeMinimization] = min
+	m.sites[SiteServeRepairManifest] = repair
+	m.sites[SiteServeRepairPacket] = repair
+	m.sites[SiteServeRepairBrief] = repair
+	m.sites[SiteServePreventionManifest] = prevention
+	m.sites[SiteServePreventionBody] = prevention
+	return m
+}
+
+func stackModelBase(goos, goarch string) stackModel {
 	switch {
 	case goos == "darwin" && goarch == "arm64":
 		return stackModel{budget: 60_894_500 + 23_333 + 10_000, array: 23_333, object: 10_000, slowObject: 24_444,
@@ -111,6 +140,21 @@ const (
 	// an async function, so the stack under its zod messages is its own
 	// (plan correction 14).
 	SiteTurnProof
+
+	// Serve sites: the schema-literal messages read while `serve --bundle`
+	// verifies its attachments (internal/proofview), one per schema, measured
+	// separately through the actual command. The ordinary verifier entry
+	// points keep their own sites; only the fixed attachment entry points use
+	// these.
+	SiteServeMinimization
+	SiteServeRepairManifest
+	SiteServeRepairPacket
+	SiteServeRepairBrief
+	SiteServePreventionManifest
+	SiteServePreventionBody
+	// SiteServePreventionRepairedRuns is the repaired-runs.json schema message of
+	// a verified prevention package (review I2).
+	SiteServePreventionRepairedRuns
 	siteCount
 )
 

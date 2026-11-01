@@ -265,10 +265,16 @@ func proofGradeEvidence(result jsjson.Value, attemptsByRunID map[string]jsjson.V
 // offline, self-consistency verification of one stored record. provided is
 // whether an external digest was supplied.
 func Verify(value jsjson.Value, expected string, provided bool) Verification {
+	return verifyAt(value, expected, provided, nil)
+}
+
+// verifyAt is Verify with an optional fixed call site for the schema message
+// (nil: the ambient site, as for ordinary verification).
+func verifyAt(value jsjson.Value, expected string, provided bool, site *jsjson.Site) Verification {
 	errs := []string{}
 	var resultDigest *string
 	var out *Verification
-	thrown := jsexc.Try(func() { out = verify(value, expected, provided, &errs, &resultDigest) })
+	thrown := jsexc.Try(func() { out = verify(value, expected, provided, &errs, &resultDigest, site) })
 	if thrown != nil {
 		errs = append(errs, "minimization result verification failed safely: "+jsexc.Message(thrown))
 		status := externalDigestStatus(expected, provided, resultDigest, &errs)
@@ -277,10 +283,14 @@ func Verify(value jsjson.Value, expected string, provided bool) Verification {
 	return *out
 }
 
-func verify(value jsjson.Value, expected string, provided bool, errs *[]string, resultDigest **string) *Verification {
+func verify(value jsjson.Value, expected string, provided bool, errs *[]string, resultDigest **string, site *jsjson.Site) *Verification {
 	parsed, issues, ok := schema.Parse(ResultSchema, value)
 	if !ok {
-		*errs = append(*errs, "minimization result schema validation failed: "+schema.ErrorMessage(issues))
+		message := func() string { return schema.ErrorMessage(issues) }
+		if site != nil {
+			message = func() string { return jsjson.AtCallSite(*site, func() string { return schema.ErrorMessage(issues) }) }
+		}
+		*errs = append(*errs, "minimization result schema validation failed: "+message())
 		status := externalDigestStatus(expected, provided, *resultDigest, errs)
 		return &Verification{Errors: *errs, ResultDigest: *resultDigest, ExternalDigestStatus: status}
 	}
@@ -643,6 +653,17 @@ func verify(value jsjson.Value, expected string, provided bool, errs *[]string, 
 // VerifyFile ports verifyGitMinimizationResultFile (src/git-minimization.ts:1930):
 // it reads and verifies a standalone result without running its repository code.
 func VerifyFile(filePath, expected string, provided bool) Verification {
+	return verifyFile(filePath, expected, provided, nil)
+}
+
+// VerifyFileForAttachment is VerifyFile for a `serve --bundle` attachment: the
+// same body with the schema message read at the fixed attachment site.
+func VerifyFileForAttachment(filePath, expected string, provided bool) Verification {
+	site := jsjson.SiteServeMinimization
+	return verifyFile(filePath, expected, provided, &site)
+}
+
+func verifyFile(filePath, expected string, provided bool, site *jsjson.Site) Verification {
 	errs := []string{}
 	var out *Verification
 	if thrown := jsexc.Try(func() {
@@ -664,7 +685,7 @@ func VerifyFile(filePath, expected string, provided bool) Verification {
 				errs = append(errs, "minimization result contains invalid JSON: "+jsexc.Message(err))
 			}
 			if len(errs) == 0 {
-				verification := Verify(value, expected, provided)
+				verification := verifyAt(value, expected, provided, site)
 				out = &verification
 			}
 		}

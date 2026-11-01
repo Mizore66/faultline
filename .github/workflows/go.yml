@@ -81,9 +81,14 @@ jobs:
             macOS) allowed="$allowed|TestReadDirNamesDecodesLikeNode" ;;
             Windows)
               posix=$(tr -d '\r' < .github/scripts/windows-writer-skips.txt | grep -v '^#' | paste -sd '|' -)
-              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestLoadRejectsSymlinkDirectoryAndOversize|TestCaptureRefusesSymlink|TestEnsureRealDirectoryTree|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|TestDemoWriterSymlinks(/writer-linked-(root|output|bundle-file))?|TestJudgePreviewSymlinks(/(linked-parent|linked-output|dangling-output))?|TestJudgePreviewCLISymlinks/(cli-linked-parent|cli-linked-output|cli-dangling-output)|TestDemoArtifactsReplay/(writer-linked-root|writer-linked-output|writer-linked-bundle-file|cli-linked-parent|cli-linked-output|cli-dangling-output)|$posix" ;;
+              allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestLoadRejectsSymlinkDirectoryAndOversize|TestCaptureRefusesSymlink|TestEnsureRealDirectoryTree|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|TestDemoWriterSymlinks(/writer-linked-(root|output|bundle-file))?|TestJudgePreviewSymlinks(/(linked-parent|linked-output|dangling-output))?|TestJudgePreviewCLISymlinks/(cli-linked-parent|cli-linked-output|cli-dangling-output)|TestDemoArtifactsReplay/(writer-linked-root|writer-linked-output|writer-linked-bundle-file|cli-linked-parent|cli-linked-output|cli-dangling-output)|TestInventoryRejectsLinksInRetainedTree|TestPermissionBitsAreNotInventoried|TestAttachmentHostileRootSymlink/(minimization|repair|prevention)|TestAttachmentHostileChildSymlink/(repair|prevention)|TestServeBundleBindingLoaderRejectsLinks/(minimization/foreign-frozen\.json|cases\.jsonl|golden\.jsonl|inventory\.json|baseline\.json|\.gitattributes)|$posix" ;;
           esac
           .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
+          # Slice 5c: the serve-bundle Windows skips above are accepted by name
+          # only here; this separate audit also requires each one's exact reason
+          # (and fails any such skip on a non-Windows runner or any other skip of
+          # those test families), without widening check-skips.sh.
+          .github/scripts/check-serve-bundle-skip-reasons.sh "$RUNNER_TEMP/go.log" "$RUNNER_OS" || status=1
           exit $status
         env:
           FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-24.04' && '1' || '' }}
@@ -153,6 +158,16 @@ jobs:
           pnpm exec tsx difftest/gen/gen-cli-help.ts
           pnpm exec tsx difftest/gen/gen-demo-artifacts.ts --recapture
           pnpm exec tsx difftest/gen/gen-demo-artifacts.ts --check
+          # Slice 5c: the five serve-bundle support suites (fixtures, cases,
+          # corpus, harness and binding) run explicitly, without touching the
+          # protected package scripts. Then the original corpus (148 files) and
+          # the supplemental binding corpus (10 data files) are replayed against
+          # their retained inputs only: --recapture/--check build no input and
+          # write nothing, so the final no-drift check below covers both.
+          pnpm exec tsx --test difftest/gen/serve-bundle-fixtures.test.ts difftest/gen/serve-bundle-cases.test.ts difftest/gen/serve-bundle-corpus.test.ts difftest/gen/serve-bundle-harness.test.ts difftest/gen/serve-bundle-binding.test.ts
+          pnpm exec tsx difftest/gen/gen-serve-bundle.ts --recapture
+          pnpm exec tsx difftest/gen/gen-serve-bundle.ts --check
+          pnpm exec tsx difftest/gen/gen-serve-bundle-binding.ts --check
           git status --porcelain difftest/testdata
           git diff --stat difftest/testdata
           test -z "$(git status --porcelain difftest/testdata)"
@@ -596,7 +611,7 @@ jobs:
           set -o pipefail
           status=0
           unset FAULTLINE_TURNSNAP_CASES
-          tests='TestLiveInvestigateTurns TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft TestLiveSidecarHooks TestLiveResolveCodexRunner TestLiveCpSyncTree'
+          tests='TestLiveInvestigateTurns TestLiveStackThresholdsMatchNode TestLiveServeBundleStackCallSites TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft TestLiveSidecarHooks TestLiveResolveCodexRunner TestLiveCpSyncTree'
           printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
           FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 70m | tee "$RUNNER_TEMP/live.log" || status=$?
           if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode|TestLiveProjectContext/sparse256MiB|TestLiveCpSyncTree)$'; else allowed='^$'; fi
@@ -624,3 +639,134 @@ jobs:
           echo TestSortMatchesV8 > "$RUNNER_TEMP/v8sort.list"
           .github/scripts/check-skips.sh "$RUNNER_TEMP/v8sort.log" '^$' "$RUNNER_TEMP/v8sort.list" || status=1
           exit $status
+
+  # Slice 5c: `fl serve --bundle` natively on all six targets against the frozen
+  # TypeScript CLI. The ordinary difftest-live job above still discovers every
+  # TestLive* (including these) on ubuntu amd64 and is not narrowed; this job
+  # exists because that job, the stack-live job and the go matrix together do not
+  # run the oracle comparison on Windows, Darwin or Linux arm64. It runs only
+  # supported paths: no test here may skip except the exact Windows symlink and
+  # POSIX-mode identities audited by check-serve-bundle-skip-reasons.sh. The
+  # recorded evidence is the actual TS and Go output of all 73 cases (68
+  # original, 5 supplemental binding), the launched fl binary's own hash and the
+  # native identity; none of it comes from a cross-build, a container emulation
+  # or an earlier head.
+  serve-bundle-native:
+    name: serve --bundle native (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      # Six explicit legs, each with its INTENDED target. The identity test and
+      # the later audit both read that same independent pair (test-only context;
+      # it never overrides GOOS/GOARCH or how anything runs) and fail if the
+      # runner, the Go toolchain or the launched fl is any other target.
+      matrix:
+        include:
+          - { os: ubuntu-24.04, goos: linux, goarch: amd64 }
+          - { os: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
+          - { os: macos-latest, goos: darwin, goarch: arm64 }
+          - { os: macos-15-intel, goos: darwin, goarch: amd64 }
+          - { os: windows-latest, goos: windows, goarch: amd64 }
+          - { os: windows-11-arm, goos: windows, goarch: arm64 }
+    env:
+      LC_ALL: C.UTF-8
+      FAULTLINE_EVIDENCE_EXPECT_GOOS: ${{ matrix.goos }}
+      FAULTLINE_EVIDENCE_EXPECT_GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          # Pinned: the oracle is Node 22.22.2 (the tests pin its actual version).
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Record the checked-out identity
+        # The head of the tree actually checked out (for a pull request this is
+        # the merge ref's commit) and, separately, the event's own head: they
+        # are recorded as two facts and never equated.
+        shell: bash
+        run: |
+          set -eu
+          head=$(git rev-parse HEAD)
+          event_head="${{ github.event.pull_request.head.sha || github.sha }}"
+          {
+            echo "FAULTLINE_EVIDENCE_HEAD=$head"
+            echo "FAULTLINE_EVIDENCE_EVENT=${{ github.event_name }}"
+            echo "FAULTLINE_EVIDENCE_EVENT_HEAD=$event_head"
+            echo "FAULTLINE_EVIDENCE_GITHUB_SHA=${{ github.sha }}"
+            echo "FAULTLINE_SERVE_BUNDLE_EVIDENCE_DIR=$RUNNER_TEMP/serve-bundle-evidence"
+          } >> "$GITHUB_ENV"
+          echo "checked-out head $head, event ${{ github.event_name }}, event head $event_head, github.sha ${{ github.sha }}"
+      - name: Native live comparison, permanent replay and evidence
+        # Every test below is named, and check-skips.sh fails when a named
+        # top-level test reports no result. TestLiveServeBundle must pass all 68
+        # original cases and TestLiveServeBundleBinding the 5 supplemental ones
+        # (check-serve-bundle-counts.sh counts them from the log). The identity
+        # test hashes the real launched flBinary before TestMain removes it.
+        # The Linux inherited-signal test exists only with cgo on Linux and
+        # additionally proves the actual fl build's CGO_ENABLED=1 metadata.
+        # Windows builds and runs the isolated-console helper natively
+        # (serveBundleConsoleHelper) for the signal tests on both architectures.
+        shell: bash
+        run: |
+          set -o pipefail
+          status=0
+          tests='TestLiveServeBundleEvidenceIdentity TestLiveServeBundle TestLiveServeBundleBinding TestLiveServeBundleStackCallSites TestLiveServeBundleSignals TestServeBundleCLIReplay TestServeBundleBindingCLIReplay TestServeBundleHTTP TestServeBundleStartupOrdinaryInterrupt TestServeBundleStartupRepeatedInterrupt'
+          if [ "$RUNNER_OS" = Linux ]; then tests="$tests TestLiveServeBundleInheritedSignals"; fi
+          printf '%s\n' $tests > "$RUNNER_TEMP/serve-live.list"
+          # Never overwrite or delete an earlier capture, even after a failure.
+          mkdir "$FAULTLINE_SERVE_BUNDLE_EVIDENCE_DIR" || exit 1
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 100m | tee "$RUNNER_TEMP/serve-live.log" || status=$?
+          # No test selected here may skip on any target (the Windows symlink and
+          # POSIX-mode identities run in the full go matrix above, not here).
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/serve-live.log" '^$' "$RUNNER_TEMP/serve-live.list" || status=1
+          .github/scripts/check-serve-bundle-counts.sh "$RUNNER_TEMP/serve-live.log" || status=1
+          .github/scripts/check-serve-bundle-skip-reasons.sh "$RUNNER_TEMP/serve-live.log" "$RUNNER_OS" || status=1
+          exit $status
+      - name: Audit the recorded evidence
+        # Validates the whole directory against the strictly loaded corpora: the
+        # exact 68 original and 5 supplemental case ids on both sides with their
+        # raw streams, status and pages, the launched binary's hash, the runner,
+        # go env, Node and head identity. The marker line is printed only by a
+        # complete audit.
+        shell: bash
+        run: |
+          set -o pipefail
+          status=0
+          printf '%s\n' TestServeBundleEvidenceAudit TestServeBundleEvidenceAuditControls > "$RUNNER_TEMP/serve-audit.list"
+          FAULTLINE_SERVE_BUNDLE_EVIDENCE_AUDIT=1 go test -tags faultline_test -count=1 ./difftest/ -run '^(TestServeBundleEvidenceAudit|TestServeBundleEvidenceAuditControls)$' -v | tee "$RUNNER_TEMP/serve-audit.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/serve-audit.log" '^$' "$RUNNER_TEMP/serve-audit.list" || status=1
+          grep -q 'SERVE-BUNDLE-EVIDENCE-AUDIT ok' "$RUNNER_TEMP/serve-audit.log" || { echo "::error title=evidence audit::no complete audit marker"; status=1; }
+          exit $status
+      - name: Standalone release binary without Node (trusted Git present)
+        # The untagged release binary, outside the repository, with a PATH that
+        # holds real Git and no node/npm/pnpm/tsx launcher (TestServeBundleStandalone
+        # verifies every PATH entry), on this native target.
+        shell: bash
+        run: |
+          set -o pipefail
+          status=0
+          echo TestServeBundleStandalone > "$RUNNER_TEMP/standalone.list"
+          go test -count=1 ./difftest/release/ -run '^TestServeBundleStandalone$' -v -timeout 40m | tee "$RUNNER_TEMP/standalone.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/standalone.log" '^$' "$RUNNER_TEMP/standalone.list" || status=1
+          exit $status
+      - name: Retain the serve --bundle native evidence
+        # Required evidence is retained even on failure. An upload failure also
+        # fails this job; it never turns an earlier failure into success.
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: serve-bundle-native-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/serve-bundle-evidence
+            ${{ runner.temp }}/serve-live.log
+            ${{ runner.temp }}/serve-audit.log
+            ${{ runner.temp }}/standalone.log
+          if-no-files-found: error
+          retention-days: 14

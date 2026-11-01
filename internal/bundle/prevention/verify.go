@@ -123,12 +123,52 @@ func validateRepairedRuns(body, artifact jsjson.Value) []string {
 }
 
 // Verify ports verifyPreventionProof (src/prevention-proof.ts:296).
-func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Result) {
+func Verify(directory, expectedRoot string, rootProvided bool) bundle.Result {
+	result, _, _ := verifyWithArtifacts(directory, expectedRoot, rootProvided)
+	return result
+}
+
+// VerifyWithArtifacts is Verify plus the manifest and body parsed by that same
+// single verification pass. A value is Undefined unless it was actually parsed
+// (schema-valid), even when the verdict is invalid or the pass failed safely.
+func VerifyWithArtifacts(directory, expectedRoot string, rootProvided bool) (bundle.Result, jsjson.Value, jsjson.Value) {
+	return verifyWithArtifacts(directory, expectedRoot, rootProvided)
+}
+
+// VerifyWithArtifactsForAttachment is VerifyWithArtifacts for a `serve
+// --bundle` attachment: the same single pass, with the manifest and body
+// schema messages read at their own fixed serve sites.
+func VerifyWithArtifactsForAttachment(directory, expectedRoot string, rootProvided bool) (bundle.Result, jsjson.Value, jsjson.Value) {
+	return verifyWithSites(directory, expectedRoot, rootProvided, &attachmentSites{
+		manifest:     jsjson.SiteServePreventionManifest,
+		body:         jsjson.SiteServePreventionBody,
+		repairedRuns: jsjson.SiteServePreventionRepairedRuns,
+	})
+}
+
+// attachmentSites are the fixed call sites of the manifest, body and
+// repaired-runs schema messages; nil is ordinary verification (SitePrevention).
+type attachmentSites struct{ manifest, body, repairedRuns jsjson.Site }
+
+func schemaMessage(issues []schema.Issue, site *jsjson.Site) string {
+	if site == nil {
+		return schema.ErrorMessage(issues)
+	}
+	return jsjson.AtCallSite(*site, func() string { return schema.ErrorMessage(issues) })
+}
+
+func verifyWithArtifacts(directory, expectedRoot string, rootProvided bool) (bundle.Result, jsjson.Value, jsjson.Value) {
+	return verifyWithSites(directory, expectedRoot, rootProvided, nil)
+}
+
+func verifyWithSites(directory, expectedRoot string, rootProvided bool, sites *attachmentSites) (result bundle.Result, manifest, prevention jsjson.Value) {
 	defer jsjson.UseCallSite(jsjson.SitePrevention)()
+	var manifestSite, bodySite, repairedRunsSite *jsjson.Site
+	if sites != nil {
+		manifestSite, bodySite, repairedRunsSite = &sites.manifest, &sites.body, &sites.repairedRuns
+	}
 	var errs []string
-	var manifest jsjson.Value
 	haveManifest, havePrevention := false, false
-	var prevention jsjson.Value
 	var rootDigest *string
 	status := "NOT_PROVIDED"
 	if rootProvided {
@@ -149,7 +189,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 
 	root := nodefs.Resolve(directory)
 	if !nodefs.Exists(root) {
-		return bundle.Result{Errors: []string{"Prevention proof directory does not exist"}, ExternalRootStatus: status}
+		return bundle.Result{Errors: []string{"Prevention proof directory does not exist"}, ExternalRootStatus: status}, manifest, prevention
 	}
 	assertNoLinksOrSpecialFiles(root)
 	// new Set(readdirSync(...).map(name)): decoded names can collide, and a
@@ -178,7 +218,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	}
 
 	if out, issues, ok := schema.Parse(ManifestSchema, readJSON(nodefs.Join(root, "manifest.json"), "prevention proof manifest", &errs)); !ok {
-		errs = append(errs, jsexc.Concat("Prevention proof manifest schema validation failed: ", schema.ErrorMessage(issues)))
+		errs = append(errs, jsexc.Concat("Prevention proof manifest schema validation failed: ", schemaMessage(issues, manifestSite)))
 	} else {
 		manifest, haveManifest = out, true
 		rd := manifest.Get("rootDigest").Str()
@@ -197,7 +237,7 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 	}
 
 	if out, issues, ok := schema.Parse(BodySchema, readJSON(nodefs.Join(root, "prevention.json"), "prevention body", &errs)); !ok {
-		errs = append(errs, jsexc.Concat("Prevention proof body schema validation failed: ", schema.ErrorMessage(issues)))
+		errs = append(errs, jsexc.Concat("Prevention proof body schema validation failed: ", schemaMessage(issues, bodySite)))
 	} else {
 		prevention, havePrevention = out, true
 		errs = append(errs, validateSemantics(prevention)...)
@@ -219,10 +259,10 @@ func Verify(directory, expectedRoot string, rootProvided bool) (result bundle.Re
 
 	if slices.Contains(physical, "repaired-runs.json") && havePrevention {
 		if out, issues, ok := schema.Parse(RepairedRunsSchema, readJSON(nodefs.Join(root, "repaired-runs.json"), "repaired runs artifact", &errs)); !ok {
-			errs = append(errs, jsexc.Concat("repaired-runs.json schema validation failed: ", schema.ErrorMessage(issues)))
+			errs = append(errs, jsexc.Concat("repaired-runs.json schema validation failed: ", schemaMessage(issues, repairedRunsSite)))
 		} else {
 			errs = append(errs, validateRepairedRuns(prevention, out)...)
 		}
 	}
-	return finish()
+	return finish(), manifest, prevention
 }
