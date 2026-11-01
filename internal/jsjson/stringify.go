@@ -79,7 +79,14 @@ func StringifyIndent(v Value, indent string) string {
 // result exceeds String::kMaxLength. V8 keeps serializing after the string
 // overflows, so a later stack overflow still wins.
 func StringifyIndentChecked(v Value, indent string) (string, error) {
-	w := &writer{indent: indent, budget: v8Stack.budget + siteOffset, maxUnits: jsexc.MaxStringLength}
+	// The budget and the three frame costs are resolved once here (a serve
+	// site's profile, else the model's own) and stay fixed for the whole
+	// recursion, so enter and leave always charge and refund the same values.
+	costs := v8Stack.baseCosts()
+	if siteCosts != nil {
+		costs = *siteCosts
+	}
+	w := &writer{indent: indent, budget: costs.budget + siteOffset, costs: costs, maxUnits: jsexc.MaxStringLength}
 	w.write(v, "")
 	switch {
 	case w.overflow:
@@ -93,7 +100,8 @@ func StringifyIndentChecked(v Value, indent string) (string, error) {
 type writer struct {
 	b        strings.Builder
 	indent   string
-	budget   int // remaining stack; -1 means unlimited
+	budget   int        // remaining stack; -1 means unlimited
+	costs    frameCosts // the frame costs charged by enter and refunded by leave
 	overflow bool
 	units    int // UTF-16 length written so far
 	maxUnits int // -1 means unlimited
@@ -167,10 +175,10 @@ func (w *writer) write(v Value, current string) {
 			w.str("[]")
 			return
 		}
-		if !w.enter(v8Stack.array) {
+		if !w.enter(w.costs.array) {
 			return
 		}
-		defer w.leave(v8Stack.array)
+		defer w.leave(w.costs.array)
 		inner := current + indent
 		w.str("[")
 		for i, item := range v.Items() {
@@ -195,9 +203,9 @@ func (w *writer) write(v Value, current string) {
 			w.str("{}")
 			return
 		}
-		cost := v8Stack.object
+		cost := w.costs.object
 		if v.obj.slowForStringify() {
-			cost = v8Stack.slowObject
+			cost = w.costs.slowObject
 		}
 		if !w.enter(cost) {
 			return

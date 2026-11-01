@@ -72,6 +72,20 @@ import "runtime"
 type stackModel struct {
 	budget, array, object, slowObject int
 	sites                             [siteCount]int
+	// serve, when its entry for a site is non-nil, replaces budget and the three
+	// frame costs while a message is read at that site; nil (the zero value)
+	// means the model's own costs, so every platform without a serve profile and
+	// every ordinary site behaves exactly as before.
+	serve [siteCount]*frameCosts
+}
+
+// frameCosts is the budget and the three frame costs one checked stringification
+// charges against. It is selected once per call and never changes mid-recursion.
+type frameCosts struct{ budget, array, object, slowObject int }
+
+// baseCosts are the model's own budget and frame costs.
+func (m stackModel) baseCosts() frameCosts {
+	return frameCosts{m.budget, m.array, m.object, m.slowObject}
 }
 
 var v8Stack = stackModelFor(runtime.GOOS, runtime.GOARCH)
@@ -82,10 +96,11 @@ func stackModelFor(goos, goarch string) stackModel {
 	m := stackModelBase(goos, goarch)
 	// Unmeasured platforms keep exactly the behavior the attachment verifiers
 	// had before these sites existed: minimization ran at the ambient offset
-	// 0, repair at SiteGitProof and prevention at SitePrevention. Only four
+	// 0, repair at SiteGitProof and prevention at SitePrevention. Only six
 	// targets have actual same-command `serve --bundle` four-shape
-	// measurements (FitSiteOffsetForTest feasible intervals; the midpoint of
-	// each is used):
+	// measurements. Four use site offsets (FitSiteOffsetForTest feasible
+	// intervals; the midpoint of each is used); the two Windows targets use
+	// serve-only cost profiles instead:
 	//   - linux/arm64 (VM, Node 22.22.2): minimization -46300..-41900, the
 	//     repair and prevention sites -15200..-11900 (midpoint -13550; the
 	//     repaired-runs row, review I2, was measured separately: TS
@@ -106,8 +121,12 @@ func stackModelFor(goos, goarch string) stackModel {
 	//     minimization -47000..-42600 (midpoint -44800), the three repair sites
 	//     -20900..-17100 (midpoint -19000), the two prevention sites and
 	//     repaired-runs -17000..-13900 (midpoint -15450).
-	// Windows is pending its own hosted measurement and keeps the fallback;
-	// nothing is extrapolated.
+	//   - windows/amd64 differs in kind (its frame-cost ratios are not the Unix
+	//     ones), so it carries a serve-only cost profile instead of offsets; see
+	//     installWindowsAMD64ServeProfile.
+	//   - windows/arm64 likewise carries its own serve-only cost profile; see
+	//     installWindowsARM64ServeProfile.
+	// Every other target keeps the fallback; nothing is extrapolated.
 	min, repair, prevention := 0, m.sites[SiteGitProof], m.sites[SitePrevention]
 	repairedRuns := prevention
 	switch {
@@ -128,7 +147,76 @@ func stackModelFor(goos, goarch string) stackModel {
 	m.sites[SiteServeRepairBrief] = repair
 	m.sites[SiteServePreventionManifest] = prevention
 	m.sites[SiteServePreventionBody] = prevention
+	if goos == "windows" && goarch == "amd64" {
+		m.installWindowsAMD64ServeProfile()
+	}
+	if goos == "windows" && goarch == "arm64" {
+		m.installWindowsARM64ServeProfile()
+	}
 	return m
+}
+
+// installWindowsARM64ServeProfile gives the seven serve sites of windows/arm64
+// their own frame costs, fitted to the frozen TS command's measured last
+// printing depths on native Windows ARM64 (hosted push run 41321557251, job
+// 124892698490; Node 22.22.2, Go 1.27.3): minimization 1888/2104/1368/1989 and
+// every other serve site 1889/2106/1369/1991 (arr, obj, idx, alt). Their shape
+// ratios differ from the arm64 base, so no offset alone reproduces them. The
+// exact integer feasibility fit allows array 11149..11155, object 10000,
+// slowObject 15373..15387; array 11151 and slowObject 15379 are chosen feasible
+// values within those ranges. Residual budgets (after the two wrapper frames) are
+// 21043590 for minimization (feasible 21041937..21045244) and 21062119 for the
+// other six (feasible 21060000..21064238), also chosen feasible values; their
+// difference is not a single array frame. Each profile budget is the residual plus the
+// wrapper frames (array + object = 21151), the way the base budget field is
+// written, and the site offset is 0 so nothing is added twice.
+//
+// Only the serve sites get a profile; the arm64 base and every ordinary
+// Windows ARM64 site keep their existing values. This is a fitted candidate,
+// not hosted acceptance.
+func (m *stackModel) installWindowsARM64ServeProfile() {
+	const array, object, slowObject = 11_151, 10_000, 15_379
+	const wrapper = array + object
+	minimization := &frameCosts{budget: 21_043_590 + wrapper, array: array, object: object, slowObject: slowObject}
+	other := &frameCosts{budget: 21_062_119 + wrapper, array: array, object: object, slowObject: slowObject}
+	for _, site := range []Site{SiteServeMinimization, SiteServeRepairManifest, SiteServeRepairPacket, SiteServeRepairBrief,
+		SiteServePreventionManifest, SiteServePreventionBody, SiteServePreventionRepairedRuns} {
+		m.sites[site] = 0
+		m.serve[site] = other
+	}
+	m.serve[SiteServeMinimization] = minimization
+}
+
+// installWindowsAMD64ServeProfile gives the seven serve sites of windows/amd64
+// their own frame costs, fitted to the frozen TS command's measured last
+// printing depths on native Windows AMD64 (hosted push run 41321557251, job
+// 124892698398, repeated exactly by the pull-request run 41321562664, job
+// 124892713752; Node 22.22.2, Go 1.27.3): minimization 1450/1731/1198/1578 and
+// every other serve site 1451/1732/1199/1579 (arr, obj, idx, alt). Their shape
+// ratios differ from every Unix row, so no offset alone reproduces them: the
+// exact integer feasibility fit allows array 11943, object 10000, slowObject
+// 14445 (midpoints of the feasible set), with residual budgets (after the two
+// wrapper frames) 17315188 for minimization and 17327131 for the other six,
+// whose difference is exactly one array frame. Each profile budget below is the
+// residual plus those wrapper frames (array + object), the way the base budget
+// field is written, and the site offset is 0 so nothing is added twice.
+//
+// Only the serve sites get a profile; stackModelBase and every ordinary
+// Windows site keep their existing values (the ordinary rows are unmeasured
+// there and nothing is claimed for them). Only windows/arm64 has another profile
+// (installWindowsARM64ServeProfile). These are a fitted candidate, not hosted
+// acceptance.
+func (m *stackModel) installWindowsAMD64ServeProfile() {
+	const array, object, slowObject = 11_943, 10_000, 14_445
+	const wrapper = array + object
+	minimization := &frameCosts{budget: 17_315_188 + wrapper, array: array, object: object, slowObject: slowObject}
+	other := &frameCosts{budget: 17_327_131 + wrapper, array: array, object: object, slowObject: slowObject}
+	for _, site := range []Site{SiteServeMinimization, SiteServeRepairManifest, SiteServeRepairPacket, SiteServeRepairBrief,
+		SiteServePreventionManifest, SiteServePreventionBody, SiteServePreventionRepairedRuns} {
+		m.sites[site] = 0
+		m.serve[site] = other
+	}
+	m.serve[SiteServeMinimization] = minimization
 }
 
 func stackModelBase(goos, goarch string) stackModel {
@@ -184,15 +272,22 @@ const (
 	siteCount
 )
 
-var siteOffset int
+var (
+	siteOffset int
+	// siteCosts are the selected site's serve cost profile, nil for every site
+	// without one. It is always set and restored together with siteOffset.
+	siteCosts *frameCosts
+)
 
 // UseCallSite makes checked stringification use the stack available at a
 // call site until the returned function restores the previous one:
-// `defer jsjson.UseCallSite(jsjson.SiteGitProof)()`.
+// `defer jsjson.UseCallSite(jsjson.SiteGitProof)()`. The offset and the cost
+// profile are one fixed pair: an ordinary site clears any profile, so an
+// ordinary read nested inside a serve read is never charged serve costs.
 func UseCallSite(site Site) func() {
-	prev := siteOffset
-	siteOffset = v8Stack.sites[site]
-	return func() { siteOffset = prev }
+	prevOffset, prevCosts := siteOffset, siteCosts
+	siteOffset, siteCosts = v8Stack.sites[site], v8Stack.serve[site]
+	return func() { siteOffset, siteCosts = prevOffset, prevCosts }
 }
 
 // AtCallSite runs f (which reads a zod message) at site.

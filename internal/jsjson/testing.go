@@ -11,6 +11,23 @@ package jsjson
 func FitSiteOffsetForTest(shapes []func(n int) string, lasts []int) (lo, hi int, ok bool) {
 	prev := siteOffset
 	defer func() { siteOffset = prev }()
+	return fitSiteOffset(shapes, lasts)
+}
+
+// FitSiteOffsetAtSiteForTest is FitSiteOffsetForTest under the cost profile of
+// site (UseCallSite installs the pair and restores both on return), so a site
+// with its own frame costs is fitted with those costs. The scan still varies
+// only the offset, on top of the profile's own budget; a result is a log range
+// to refit from, never applied. The generic function above keeps its behavior
+// for the sites that have no profile.
+func FitSiteOffsetAtSiteForTest(site Site, shapes []func(n int) string, lasts []int) (lo, hi int, ok bool) {
+	defer UseCallSite(site)()
+	prev := siteOffset
+	defer func() { siteOffset = prev }()
+	return fitSiteOffset(shapes, lasts)
+}
+
+func fitSiteOffset(shapes []func(n int) string, lasts []int) (lo, hi int, ok bool) {
 	overflows := func(text string) bool {
 		v, err := Parse(text)
 		if err != nil {

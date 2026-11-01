@@ -141,7 +141,11 @@ func TestLiveServeBundleStackCallSites(t *testing.T) {
 			// when the site differs and all four shapes were measured in this
 			// run; nothing here applies a number to production.
 			if siteDiffers && len(tsLasts) == len(serveStackShapeOrder) {
-				if lo, hi, ok := jsjson.FitSiteOffsetForTest(shapeFns, tsLasts); ok {
+				jsonSite, known := serveStackJSONSite[site.name]
+				if !known {
+					t.Fatalf("site %s has no entry in serveStackJSONSite", site.name)
+				}
+				if lo, hi, ok := jsjson.FitSiteOffsetAtSiteForTest(jsonSite, shapeFns, tsLasts); ok {
 					t.Logf("%s/%s %s refit: site offsets %d to %d reproduce TS", runtime.GOOS, runtime.GOARCH, site.name, lo, hi)
 				} else {
 					t.Logf("%s/%s %s refit: no site offset reproduces TS on all four shapes", runtime.GOOS, runtime.GOARCH, site.name)
@@ -149,6 +153,19 @@ func TestLiveServeBundleStackCallSites(t *testing.T) {
 			}
 		})
 	}
+}
+
+// serveStackJSONSite maps each probed site to the jsjson call site whose cost
+// profile its refit log must use (a site with its own frame costs is fitted with
+// them). It is explicit, one entry per site in serveStackSites.
+var serveStackJSONSite = map[string]jsjson.Site{
+	"minimization":             jsjson.SiteServeMinimization,
+	"repair-manifest":          jsjson.SiteServeRepairManifest,
+	"repair-packet":            jsjson.SiteServeRepairPacket,
+	"repair-brief":             jsjson.SiteServeRepairBrief,
+	"prevention-manifest":      jsjson.SiteServePreventionManifest,
+	"prevention-body":          jsjson.SiteServePreventionBody,
+	"prevention-repaired-runs": jsjson.SiteServePreventionRepairedRuns,
 }
 
 const (
