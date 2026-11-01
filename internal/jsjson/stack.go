@@ -82,7 +82,7 @@ func stackModelFor(goos, goarch string) stackModel {
 	m := stackModelBase(goos, goarch)
 	// Unmeasured platforms keep exactly the behavior the attachment verifiers
 	// had before these sites existed: minimization ran at the ambient offset
-	// 0, repair at SiteGitProof and prevention at SitePrevention. Only three
+	// 0, repair at SiteGitProof and prevention at SitePrevention. Only four
 	// targets have actual same-command `serve --bundle` four-shape
 	// measurements (FitSiteOffsetForTest feasible intervals; the midpoint of
 	// each is used):
@@ -100,8 +100,14 @@ func stackModelFor(goos, goarch string) stackModel {
 	//     minimization -74500..-71800 (midpoint -73150), every other serve site
 	//     (three repair, two prevention, repaired-runs) -24500..-18800
 	//     (midpoint -21650).
-	// darwin/amd64 and Windows are pending their own hosted measurements and
-	// keep the fallback; nothing is extrapolated.
+	//   - darwin/amd64 (hosted native push run 41307904995, job 124852003638,
+	//     macOS X64, Go 1.27.3 cgo 1, Node 22.22.2, artifact 13086535901; its
+	//     own retained measurements, which happen to equal linux/amd64's):
+	//     minimization -47000..-42600 (midpoint -44800), the three repair sites
+	//     -20900..-17100 (midpoint -19000), the two prevention sites and
+	//     repaired-runs -17000..-13900 (midpoint -15450).
+	// Windows is pending its own hosted measurement and keeps the fallback;
+	// nothing is extrapolated.
 	min, repair, prevention := 0, m.sites[SiteGitProof], m.sites[SitePrevention]
 	repairedRuns := prevention
 	switch {
@@ -111,6 +117,9 @@ func stackModelFor(goos, goarch string) stackModel {
 		min, repair, prevention, repairedRuns = -44_800, -19_000, -15_450, -15_450
 	case goos == "darwin" && goarch == "arm64":
 		min, repair, prevention, repairedRuns = -73_150, -21_650, -21_650, -21_650
+	case goos == "darwin" && goarch == "amd64":
+		// Its own native measurements; deliberately not a shared Linux condition.
+		min, repair, prevention, repairedRuns = -44_800, -19_000, -15_450, -15_450
 	}
 	m.sites[SiteServePreventionRepairedRuns] = repairedRuns
 	m.sites[SiteServeMinimization] = min
