@@ -82,18 +82,35 @@ func stackModelFor(goos, goarch string) stackModel {
 	m := stackModelBase(goos, goarch)
 	// Unmeasured platforms keep exactly the behavior the attachment verifiers
 	// had before these sites existed: minimization ran at the ambient offset
-	// 0, repair at SiteGitProof and prevention at SitePrevention. Only
-	// linux/arm64 has actual same-command `serve --bundle` four-shape
-	// measurements (FitSiteOffsetForTest feasible intervals -46300..-41900 for
-	// minimization and -15200..-11900 for the other five; midpoints used).
-	// darwin/arm64, linux/amd64 and Windows are pending hosted measurement.
-	// The repaired-runs row (review I2) was measured separately through the
-	// actual command on linux/arm64: TS arr/obj/idx/alt 1826/3651/1956/2434,
-	// feasible interval -15200..-11900, midpoint -13550.
+	// 0, repair at SiteGitProof and prevention at SitePrevention. Only three
+	// targets have actual same-command `serve --bundle` four-shape
+	// measurements (FitSiteOffsetForTest feasible intervals; the midpoint of
+	// each is used):
+	//   - linux/arm64 (VM, Node 22.22.2): minimization -46300..-41900, the
+	//     repair and prevention sites -15200..-11900 (midpoint -13550; the
+	//     repaired-runs row, review I2, was measured separately: TS
+	//     arr/obj/idx/alt 1826/3651/1956/2434).
+	//   - linux/amd64 (hosted native push run 41307904995, job 124852003885,
+	//     Linux X64, actual cgo launched binary, Node 22.22.2): minimization
+	//     -47000..-42600 (midpoint -44800), the three repair sites
+	//     -20900..-17100 (midpoint -19000), the two prevention sites and
+	//     repaired-runs -17000..-13900 (midpoint -15450).
+	//   - darwin/arm64 (hosted native push run 41307904995, job 124852003946,
+	//     macOS ARM64, Go 1.27.3 cgo 1, Node 22.22.2, artifact 13085102333):
+	//     minimization -74500..-71800 (midpoint -73150), every other serve site
+	//     (three repair, two prevention, repaired-runs) -24500..-18800
+	//     (midpoint -21650).
+	// darwin/amd64 and Windows are pending their own hosted measurements and
+	// keep the fallback; nothing is extrapolated.
 	min, repair, prevention := 0, m.sites[SiteGitProof], m.sites[SitePrevention]
 	repairedRuns := prevention
-	if goos == "linux" && goarch == "arm64" {
+	switch {
+	case goos == "linux" && goarch == "arm64":
 		min, repair, prevention, repairedRuns = -44_100, -13_550, -13_550, -13_550
+	case goos == "linux" && goarch == "amd64":
+		min, repair, prevention, repairedRuns = -44_800, -19_000, -15_450, -15_450
+	case goos == "darwin" && goarch == "arm64":
+		min, repair, prevention, repairedRuns = -73_150, -21_650, -21_650, -21_650
 	}
 	m.sites[SiteServePreventionRepairedRuns] = repairedRuns
 	m.sites[SiteServeMinimization] = min

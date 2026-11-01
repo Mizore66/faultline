@@ -719,6 +719,10 @@ jobs:
           status=0
           tests='TestLiveServeBundleEvidenceIdentity TestLiveServeBundle TestLiveServeBundleBinding TestLiveServeBundleStackCallSites TestLiveServeBundleSignals TestServeBundleCLIReplay TestServeBundleBindingCLIReplay TestServeBundleHTTP TestServeBundleStartupOrdinaryInterrupt TestServeBundleStartupRepeatedInterrupt'
           if [ "$RUNNER_OS" = Linux ]; then tests="$tests TestLiveServeBundleInheritedSignals"; fi
+          # Windows only: the observational console-interrupt diagnostic
+          # (baseline and clear-ignore variants of a tiny target). It runs in this
+          # retained log and its failure fails the job.
+          if [ "$RUNNER_OS" = Windows ]; then tests="$tests TestServeFixtureWindowsConsoleInterrupt"; fi
           printf '%s\n' $tests > "$RUNNER_TEMP/serve-live.list"
           # Never overwrite or delete an earlier capture, even after a failure.
           mkdir "$FAULTLINE_SERVE_BUNDLE_EVIDENCE_DIR" || exit 1

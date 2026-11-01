@@ -113,9 +113,15 @@ func TestServeAttachmentSitesMatchMeasuredTS(t *testing.T) {
 // Catches a serve site that silently changes behavior on a platform whose
 // serve --bundle rows have not been measured: those keep the pre-existing
 // sites (minimization at the ambient 0, repair at the git row, prevention at
-// the prevention row) until hosted measurement.
-func TestServeAttachmentSitesFallBackOffLinuxArm64(t *testing.T) {
-	for _, platform := range [][2]string{{"darwin", "arm64"}, {"linux", "amd64"}, {"windows", "amd64"}, {"windows", "arm64"}} {
+// the prevention row) until their own hosted measurement. linux/arm64,
+// linux/amd64 and darwin/arm64 are measured (see
+// TestServeAttachmentSitesMatchMeasuredTS,
+// TestServeAttachmentNativeSitesMatchMeasuredTS and
+// TestServeAttachmentDarwinARM64SitesMatchMeasuredTS) and are excluded here; a
+// target leaves this list only when an actual four-shape measurement of it is
+// added.
+func TestServeAttachmentSitesFallBackOffMeasuredTargets(t *testing.T) {
+	for _, platform := range [][2]string{{"darwin", "amd64"}, {"windows", "amd64"}, {"windows", "arm64"}} {
 		m := stackModelFor(platform[0], platform[1])
 		want := map[Site]int{
 			SiteServeMinimization:       0,
