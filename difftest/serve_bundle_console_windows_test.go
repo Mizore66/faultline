@@ -24,6 +24,18 @@ import (
 // timeout is a failure and is never counted as delivery or a pass.
 const consoleProbeWait = 5 * time.Second
 
+// STATUS (read first). The retained native RED that motivated this test, on both
+// Windows architectures at the pre-correction head, was: baseline FAILED (the
+// target ignored the genuine CTRL_C_EVENT; unchanged 5 s observation, forced
+// owned cleanup), clear-ignore PASSED, and clear-in-launcher PASSED. The test
+// launcher (servefixture.Start, process_windows.go) now clears the test
+// process's own Ctrl+C-ignore attribute exactly once before it creates its first
+// child. After that preparation, baseline is expected to PASS, and the
+// clear-in-launcher variant is a redundant, explicit idempotence observation: it
+// is no longer independent evidence of the originally inherited state. The
+// observations establish the effect of the creating test process's inherited
+// state, not the ultimate runner ancestor, and not production correctness.
+//
 // TestServeFixtureWindowsConsoleInterrupt is an OBSERVATIONAL diagnostic for the
 // hosted Windows failure where the real console helper returns success yet
 // every Go serve process stays alive. It runs three sequential variants of the
@@ -31,8 +43,10 @@ const consoleProbeWait = 5 * time.Second
 // launch path (servefixture.Start in its own new console, the existing console
 // helper, Wait, Dispose):
 //
-//   - baseline: ordinary signal.Notify(os.Interrupt), launched before anything
-//     in this test touches the test process's console state;
+//   - baseline: ordinary signal.Notify(os.Interrupt), with no target argument.
+//     servefixture.Start now clears the test process's Ctrl+C-ignore attribute
+//     before launching it (see STATUS above); in the pre-correction diagnostic
+//     it ran against the unprepared inherited state;
 //   - clear-ignore: the identical target with ONLY SetConsoleCtrlHandler(NULL,
 //     FALSE) added by the target itself before the subscription;
 //   - clear-in-launcher (LAST): the baseline target again, with NO target
@@ -42,16 +56,21 @@ const consoleProbeWait = 5 * time.Second
 //     inherited by processes created afterwards and existing processes are not
 //     affected.
 //
-// clear-in-launcher MUTATES THE TEST PROCESS and is process-wide and test-only:
-// it must stay last, nothing here is parallel, and no attempt is made to restore
-// the prior state (there is no documented getter). The baseline therefore always
-// runs before the mutation and its failure is neither masked nor suppressed.
-// Tests that run later in the same test binary observe the cleared state, so
-// after a failing baseline they cannot independently qualify readiness.
-// This is instrumentation to locate where the ignore attribute comes from, not
-// the proposed launcher fix and not an acceptance of anything.
+// HISTORICAL (pre-correction) interpretation of the final variant, kept because
+// the retained native logs were produced by it: clear-in-launcher MUTATED THE
+// TEST PROCESS, was process-wide and test-only, had to stay last, nothing here is
+// parallel, and no attempt is made to restore the prior state (there is no
+// documented getter). The baseline then ran before that mutation and its failure
+// was neither masked nor suppressed; tests later in the same binary observed the
+// cleared state and could not independently qualify readiness after a failing
+// baseline. It was instrumentation to locate where the ignore attribute comes
+// from, not the launcher fix. CURRENT: the launcher itself now performs that
+// clear before any child, so the final variant's explicit clear is redundant
+// (idempotent) and the sentences above no longer describe the baseline's state.
+// This remains instrumentation, not an acceptance of anything.
 //
-// Reading the native results (hypotheses, not conclusions): a baseline failure
+// HISTORICAL (pre-correction) reading of the native results, hypotheses and not
+// conclusions, for the retained logs only: a baseline failure
 // with a clear-ignore pass is consistent with an inherited "ignore Ctrl+C"
 // attribute but does not by itself prove where it was inherited from. If
 // clear-in-launcher then passes, the attribute was held by the test process at

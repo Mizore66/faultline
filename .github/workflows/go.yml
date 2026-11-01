@@ -780,9 +780,12 @@ jobs:
   # clear-ignore, and the last parent-clear variant), so its raw log is
   # inspectable long before the full native suites finish. It is a normal
   # strict job: any failing variant fails it, there is no continue-on-error and
-  # no alternate accepted outcome. A failing baseline is the expected, already
-  # retained symptom and remains a real failure. It proves nothing about overall
-  # readiness and does not replace or weaken any other job.
+  # no alternate accepted outcome. Before the test launcher cleared its own
+  # inherited Ctrl+C-ignore attribute, a failing baseline was the expected,
+  # retained symptom (retained native logs on both Windows architectures); after
+  # that correction ALL THREE variants must pass, and a failing variant remains a
+  # real failure. It proves nothing about overall readiness and does not replace
+  # or weaken any other job.
   windows-console-diagnostic:
     name: windows console Ctrl+C diagnostic (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

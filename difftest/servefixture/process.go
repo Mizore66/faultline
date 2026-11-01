@@ -75,7 +75,11 @@ func Start(ctx context.Context, executable string, prefix, argv, env []string, c
 	cmd.Env = env
 	p := &Started{Cmd: cmd, stdout: newCollector(), stderr: newCollector(), done: make(chan struct{})}
 	cmd.Stdout, cmd.Stderr = p.stdout, p.stderr
-	prepare(cmd)
+	// Preparation failure is reported before any child exists, so nothing is
+	// launched and there is nothing to clean up.
+	if err := prepare(cmd); err != nil {
+		return nil, fmt.Errorf("preparing to start %s: %w", executable, err)
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting %s: %w", executable, err)
 	}

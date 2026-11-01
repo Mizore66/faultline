@@ -14,7 +14,10 @@ import (
 // never reach the test runner's group.
 type ownership struct{ pgid int }
 
-func prepare(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
+func prepare(cmd *exec.Cmd) error {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return nil
+}
 
 func takeOwnership(cmd *exec.Cmd) ownership { return ownership{pgid: cmd.Process.Pid} }
 

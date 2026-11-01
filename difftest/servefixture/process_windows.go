@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"syscall"
 )
 
@@ -21,7 +22,35 @@ const createNewConsole = 0x10
 // ownership is the child's process handle (os.Process); there is no group.
 type ownership struct{}
 
-func prepare(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewConsole} }
+// clearConsoleIgnore clears the CALLING TEST PROCESS's own Ctrl+C-ignore
+// attribute, SetConsoleCtrlHandler(NULL, FALSE), exactly once before the first
+// child is created; the outcome (including a failure) is cached. This is
+// process-wide TEST preparation, not production behavior: the attribute is
+// inherited by children created afterwards (existing processes are unaffected).
+// Measured effect on hosted Windows before this preparation: launched children
+// behaved as if the attribute were set and ignored the genuine CTRL_C_EVENT, and
+// clearing it in the creating test process restored delivery; the ultimate
+// ancestor that set it is unknown. The prior state is unknowable (there is no
+// documented getter), so nothing is restored. There is no override or per-target
+// injection.
+var clearConsoleIgnore = sync.OnceValue(func() error {
+	setHandler := syscall.NewLazyDLL("kernel32.dll").NewProc("SetConsoleCtrlHandler")
+	if ok, _, err := setHandler.Call(0, 0); ok == 0 {
+		return fmt.Errorf("clearing the test process's Ctrl+C-ignore attribute, SetConsoleCtrlHandler(NULL, FALSE): %w", err)
+	}
+	return nil
+})
+
+// prepare gives the child its own new console only (no process-group flag, which
+// would disable Ctrl+C for it) after the test process's inherited ignore
+// attribute has been cleared.
+func prepare(cmd *exec.Cmd) error {
+	if err := clearConsoleIgnore(); err != nil {
+		return err
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewConsole}
+	return nil
+}
 
 func takeOwnership(*exec.Cmd) ownership { return ownership{} }
 
