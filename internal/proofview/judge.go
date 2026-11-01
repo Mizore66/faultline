@@ -36,12 +36,40 @@ func commitProofPackageIdentityNotice(rootDigest string) *string {
 	return &notice
 }
 
-// View is VerifiedGitProofView (src/git-proof-view.ts:40) without its
-// attachments member: judge-proof and commit-proof-preview pass no
-// attachment options, and loadVerifiedIncidentAttachments with empty options
-// returns { minimization: null, repair: null, prevention: null } without
-// reading anything, so every attachment is the constant null here and the
-// panels render their null branch only.
+// AttachmentOptions are the optional separately supplied artifacts of
+// loadVerifiedGitProofView. A nil pointer is undefined, not the empty string.
+type AttachmentOptions struct {
+	MinimizationFile, ExpectedMinimizationDigest  *string
+	RepairDirectory, ExpectedRepairDigest         *string
+	PreventionDirectory, ExpectedPreventionDigest *string
+}
+
+type VerifiedMinimizationAttachment struct {
+	Result                             jsjson.Value
+	ResultDigest, ExternalDigestStatus string
+}
+
+type VerifiedRepairAttachment struct {
+	Manifest, Packet, Brief jsjson.Value
+	ExternalDigestStatus    string
+}
+
+type VerifiedPreventionAttachment struct {
+	Manifest, Prevention             jsjson.Value
+	RootDigest, ExternalDigestStatus string
+}
+
+// VerifiedAttachments mirrors the TS attachments member; a nil pointer is the
+// TS null.
+type VerifiedAttachments struct {
+	Minimization *VerifiedMinimizationAttachment
+	Repair       *VerifiedRepairAttachment
+	Prevention   *VerifiedPreventionAttachment
+}
+
+// View is VerifiedGitProofView (src/git-proof-view.ts:40). Attachments is
+// all-nil for the loaders that supply no attachment options (the sample and
+// preview paths), whose panels render their null branch only.
 type View struct {
 	RootDigest         string
 	CheckedFiles       int
@@ -49,6 +77,7 @@ type View struct {
 	Manifest           jsjson.Value
 	Investigation      jsjson.Value
 	FrozenWitness      jsjson.Value
+	Attachments        VerifiedAttachments
 }
 
 // Port of src/git-proof-view.ts:50 readJson.
@@ -78,9 +107,18 @@ func sameProofPresentationArtifacts(left, right presentationArtifacts) bool {
 
 // Port of src/git-proof-view.ts:89 loadVerifiedGitProofView (with no
 // attachment options). A nil expectedRoot is undefined.
-func LoadVerifiedGitProofView(directory string, expectedRoot *string) (view View, err error) {
-	err = jsexc.Try(func() { view = loadVerifiedGitProofView(directory, expectedRoot) })
-	return view, err
+func LoadVerifiedGitProofView(directory string, expectedRoot *string) (View, error) {
+	return LoadVerifiedGitProofViewWithAttachments(directory, expectedRoot, AttachmentOptions{})
+}
+
+// LoadVerifiedGitProofViewWithAttachments is loadVerifiedGitProofView with
+// attachment options. A failure returns the zero View.
+func LoadVerifiedGitProofViewWithAttachments(directory string, expectedRoot *string, options AttachmentOptions) (view View, err error) {
+	err = jsexc.Try(func() { view = loadVerifiedGitProofView(directory, expectedRoot, options) })
+	if err != nil {
+		return View{}, err
+	}
+	return view, nil
 }
 
 func verifyBundle(root string, expectedRoot *string) (bundle.Result, jsjson.Value) {
@@ -90,7 +128,7 @@ func verifyBundle(root string, expectedRoot *string) (bundle.Result, jsjson.Valu
 	return gitproof.VerifyWithManifest(root, *expectedRoot, true)
 }
 
-func loadVerifiedGitProofView(directory string, expectedRoot *string) View {
+func loadVerifiedGitProofView(directory string, expectedRoot *string, options AttachmentOptions) View {
 	root := nodefs.Resolve(directory)
 	verification, manifest := verifyBundle(root, expectedRoot)
 	if !verification.Valid || manifest.Kind() == jsjson.Undefined || verification.RootDigest == nil {
@@ -125,6 +163,9 @@ func loadVerifiedGitProofView(directory string, expectedRoot *string) View {
 		}
 		jsexc.Throw(errors.New(jsexc.Concat("Refusing to render a Git proof bundle that changed during verification: ", detail)))
 	}
+	// Attachments load only after every base condition has passed.
+	attachments := loadAttachments(options, recheckedArtifacts.investigation,
+		recheckedArtifacts.frozenWitness, &rootDigest, realAttachmentDependencies())
 	return View{
 		RootDigest:         rootDigest,
 		CheckedFiles:       finalCheck.CheckedFiles,
@@ -132,6 +173,7 @@ func loadVerifiedGitProofView(directory string, expectedRoot *string) View {
 		Manifest:           finalManifest,
 		Investigation:      recheckedArtifacts.investigation,
 		FrozenWitness:      recheckedArtifacts.frozenWitness,
+		Attachments:        attachments,
 	}
 }
 
@@ -336,25 +378,29 @@ func recoveryPanel(transitions []jsjson.Value) string {
 	return `<article class="card panel"><h3>Recorded recovery</h3><p><strong>Recorded stable recovery</strong><small>Each displayed state has three distinct Docker executions under the same frozen witness. This establishes recovery only, not prevention.</small></p>` + rows.String() + `</article>`
 }
 
-// Port of src/git-proof-view.ts:265 minimizationPanel: its null branch only
-// (no attachment is ever supplied, see View).
-const minimizationPanel = `<article class="card panel"><h3>Counterfactual minimization</h3><p class="empty-state"><strong>Not attached</strong><br>No minimization record was supplied to this read-only view.</p><small>A stable Git boundary does not by itself establish a 1-minimal set, agent intent, or a unique semantic root cause.</small></article>`
+// Port of src/git-proof-view.ts:265 minimizationPanel's absent-attachment branch.
+// Supplied attachments are rendered in attachment_panels.go.
+const absentMinimizationPanel = `<article class="card panel"><h3>Counterfactual minimization</h3><p class="empty-state"><strong>Not attached</strong><br>No minimization record was supplied to this read-only view.</p><small>A stable Git boundary does not by itself establish a 1-minimal set, agent intent, or a unique semantic root cause.</small></article>`
 
 // Port of src/git-proof-view.ts:291 repairPanel: its null branch only.
-const repairPanel = `<article class="card panel"><h3>Evidence-bounded repair packet</h3><p>FaultLine can hand a repair workflow the frozen witness, verified boundary, and evidence digests without choosing a model culprit.</p><p class="empty-state"><strong>Repair not attached</strong><br>No repair artifact was supplied to this view.</p><small>No repair claim is rendered from a boundary-only proof package.</small></article>`
+const absentRepairPanel = `<article class="card panel"><h3>Evidence-bounded repair packet</h3><p>FaultLine can hand a repair workflow the frozen witness, verified boundary, and evidence digests without choosing a model culprit.</p><p class="empty-state"><strong>Repair not attached</strong><br>No repair artifact was supplied to this view.</p><small>No repair claim is rendered from a boundary-only proof package.</small></article>`
 
 // Port of src/git-proof-view.ts:307 preventionGuidancePanel: the branch with
 // neither a prevention package nor a repair attachment.
-const preventionGuidancePanel = `<article class="card panel"><h3>Prevention guidance</h3><p class="empty-state"><strong>Not attached</strong><br>No evidence-cited prevention guidance or prevention-proof package was supplied.</p><small>Recovery evidence and a stable boundary do not establish prevention. Attach a grounded <code>faultline.prevention-proof.v1</code> package via <code>fl prevention write --from-bundle</code>.</small></article>`
+const absentPreventionGuidancePanel = `<article class="card panel"><h3>Prevention guidance</h3><p class="empty-state"><strong>Not attached</strong><br>No evidence-cited prevention guidance or prevention-proof package was supplied.</p><small>Recovery evidence and a stable boundary do not establish prevention. Attach a grounded <code>faultline.prevention-proof.v1</code> package via <code>fl prevention write --from-bundle</code>.</small></article>`
 
 // Port of src/git-proof-view.ts:345 attachmentSummary with both
 // attachments null.
-const attachmentSummary = "It distinguishes an observed boundary from downstream artifacts that were not supplied."
+const absentAttachmentSummary = "It distinguishes an observed boundary from downstream artifacts that were not supplied."
 
 func ptr(s string) *string { return &s }
 
 // Port of src/git-proof-view.ts:337 renderGitProofIncidentPage.
 func RenderGitProofIncidentPage(view View) string {
+	attachmentSummary := absentAttachmentSummary
+	if view.Attachments.Minimization != nil || view.Attachments.Repair != nil {
+		attachmentSummary = "It separately verifies each supplied downstream artifact and its applicable evidence binding before rendering it."
+	}
 	manifest, investigation, frozenWitness := view.Manifest, view.Investigation, view.FrozenWitness
 	transitions := investigation.Get("transitions").Items()
 	var firstRegression *jsjson.Value
@@ -406,9 +452,9 @@ func RenderGitProofIncidentPage(view View) string {
 <section class="hero"><div><div class="eyebrow">FAULTLINE · COMMIT_PROOF</div><h1>Where this frozen<br>predicate <em>first failed.</em></h1><p class="lede">` + EscapeHTML(ideaBoundary) + ` Grade <code>` + EscapeHTML(evidenceGrade) + `</code> (` + EscapeHTML(evidenceLabel) + `). When certified: <code>` + evidence.CommitPathEvidenceGrade + `</code>. Not turn-path (<code>` + evidence.TurnPathEvidenceGradeExperimental + `</code>). ` + EscapeHTML(attachmentSummary) + `</p><span class="readonly-badge">READ-ONLY REVIEW</span></div><aside class="card metric-card" aria-label="Verified proof summary"><div class="metric"><b>` + strconv.Itoa(view.CheckedFiles) + `</b><small>declared files checked</small></div><div class="metric"><b>` + strconv.Itoa(runs) + `</b><small>recorded executions</small></div><div class="metric"><b>` + strconv.Itoa(states) + `</b><small>Git states</small></div><div class="metric"><b>` + strconv.Itoa(len(transitions)) + `</b><small>stable transitions</small></div></aside></section>
 <section class="section" id="break"><div class="section-head"><span class="number">01</span><h2>BREAK → FIND</h2></div><div class="grid"><article class="card panel witness"><h3>Frozen witness</h3><p><strong>Human-reviewed executable predicate</strong></p><span class="pill">human-approved before freeze</span><span class="pill">network disabled</span><span class="pill">read-only review</span><p class="hash">` + EscapeHTML(frozenWitness.Get("witnessDigest").Str()) + `</p><small>Behavior text, command text, overlay bytes, incident-packet contents, and reviewer identity are intentionally omitted from this shareable view.</small></article><article class="card panel"><h3>Package verification</h3><p><strong>` + EscapeHTML(proofStatus) + `</strong></p><div class="proof"><span>Evidence grade</span><code>` + EscapeHTML(evidenceGrade) + `</code></div><div class="proof"><span>Evidence label</span><small>` + EscapeHTML(evidenceLabel) + `</small></div><div class="proof proof-stack"><span>Turn-path contrast</span><small><code>` + evidence.TurnPathEvidenceGradeExperimental + `</code> — ` + EscapeHTML(evidence.TurnPathEvidenceLabelExperimental) + ` (not this page)</small></div><div class="proof"><span>Bundle root</span><code title="` + EscapeHTML(view.RootDigest) + `">` + EscapeHTML(shortDigest(view.RootDigest)) + `</code></div><div class="proof"><span>External root</span><small>` + EscapeHTML(externalRootCopy(view.ExternalRootStatus)) + `</small></div><div class="proof"><span>Human approval</span><small>` + EscapeHTML(approval.Get("approvedAt").Str()) + ` recorded before freeze</small></div></article></div></section>
 <section class="section" id="find"><div class="section-head"><span class="number">02</span><h2>FIND</h2></div><div class="grid"><article class="card panel"><h3>Stable Git states</h3><div class="table-wrap"><table class="data-table"><thead><tr><th>Index</th><th>Commit</th><th>Verdict</th><th>Evidence</th></tr></thead><tbody>` + stableStateRows(view) + `</tbody></table></div><small>` + EscapeHTML(stableStateSummary) + `</small></article><article class="card panel"><h3>Stable transitions</h3><p>Three reruns on either side prevent a single noisy result from becoming attribution.</p><div class="table-wrap"><table class="data-table transitions-table"><thead><tr><th>Transition</th><th>Before</th><th></th><th>After</th><th>Evidence</th></tr></thead><tbody>` + transitionRows(transitions) + `</tbody></table></div><p><strong>` + firstHeading + `</strong></p><small>` + firstDetail + `</small></article></div></section>
-<section class="section" id="prove"><div class="section-head"><span class="number">03</span><h2>PROVE</h2></div><div class="grid"><article class="card panel"><h3>Sandbox evidence</h3><p>Recorded execution trust: <strong>` + EscapeHTML(underscoresToSpaces(investigation.Get("proof", "executionTrust").Str())) + `</strong>.</p><div class="table-wrap"><table class="data-table sandbox-table"><thead><tr><th>Kind</th><th>Executor</th><th>Policy</th><th>Runtime constraints</th><th>Coverage</th></tr></thead><tbody>` + sandboxRows(view) + `</tbody></table></div><small>Policy and command values are represented by digests; raw output and overlay bytes are intentionally omitted.</small></article>` + minimizationPanel + `</div></section>
-<section class="section" id="fix"><div class="section-head"><span class="number">04</span><h2>FIX</h2></div><div class="grid">` + repairPanel + lifecyclePanel(view) + `</div></section>
-<section class="section" id="prevent"><div class="section-head"><span class="number">05</span><h2>PREVENT</h2></div><div class="grid">` + recoveryPanel(transitions) + preventionGuidancePanel + `<article class="card panel"><h3>Portable proof bundle</h3><div class="proof"><span>Integrity scope</span><small>` + EscapeHTML(manifest.Get("integrityScope").Str()) + `</small></div><div class="proof"><span>Bundle root</span><code title="` + EscapeHTML(view.RootDigest) + `">` + EscapeHTML(shortDigest(view.RootDigest)) + `</code></div><div class="proof-command"><span>Verified command</span><pre class="command-snippet"><code>fl verify &lt;bundle&gt; --expect-root ` + EscapeHTML(view.RootDigest) + `</code></pre></div><details><summary>Integrity boundary</summary><pre>Verifies the complete declared file set against an externally retained root. Separately supplied attachments are re-verified and linked before rendering, but are not retroactively included in this Git proof root.</pre></details></article></div></section>
+<section class="section" id="prove"><div class="section-head"><span class="number">03</span><h2>PROVE</h2></div><div class="grid"><article class="card panel"><h3>Sandbox evidence</h3><p>Recorded execution trust: <strong>` + EscapeHTML(underscoresToSpaces(investigation.Get("proof", "executionTrust").Str())) + `</strong>.</p><div class="table-wrap"><table class="data-table sandbox-table"><thead><tr><th>Kind</th><th>Executor</th><th>Policy</th><th>Runtime constraints</th><th>Coverage</th></tr></thead><tbody>` + sandboxRows(view) + `</tbody></table></div><small>Policy and command values are represented by digests; raw output and overlay bytes are intentionally omitted.</small></article>` + minimizationPanel(view) + `</div></section>
+<section class="section" id="fix"><div class="section-head"><span class="number">04</span><h2>FIX</h2></div><div class="grid">` + repairPanel(view) + lifecyclePanel(view) + `</div></section>
+<section class="section" id="prevent"><div class="section-head"><span class="number">05</span><h2>PREVENT</h2></div><div class="grid">` + recoveryPanel(transitions) + preventionGuidancePanel(view) + `<article class="card panel"><h3>Portable proof bundle</h3><div class="proof"><span>Integrity scope</span><small>` + EscapeHTML(manifest.Get("integrityScope").Str()) + `</small></div><div class="proof"><span>Bundle root</span><code title="` + EscapeHTML(view.RootDigest) + `">` + EscapeHTML(shortDigest(view.RootDigest)) + `</code></div><div class="proof-command"><span>Verified command</span><pre class="command-snippet"><code>fl verify &lt;bundle&gt; --expect-root ` + EscapeHTML(view.RootDigest) + `</code></pre></div><details><summary>Integrity boundary</summary><pre>Verifies the complete declared file set against an externally retained root. Separately supplied attachments are re-verified and linked before rendering, but are not retroactively included in this Git proof root.</pre></details></article></div></section>
 ` + renderIncidentPageDocumentEnd("FaultLine reports verified predicate-specific evidence, states when minimization or repair artifacts are absent, and does not claim private model reasoning, a unique semantic cause, or native Codex interception.", nil)
 }
 
@@ -454,7 +500,7 @@ func loadSelfIncidentProofView(directory string, expectedRoot *string) View {
 	if expectedRoot != nil {
 		root = *expectedRoot
 	}
-	return loadVerifiedGitProofView(directory, &root)
+	return loadVerifiedGitProofView(directory, &root, AttachmentOptions{})
 }
 
 // Preview is writeCommitProofPreview's result.

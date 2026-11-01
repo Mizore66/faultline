@@ -271,7 +271,7 @@ func TestStringifyStackOverflow(t *testing.T) {
 // everything: a stack overflow later in the value still wins.
 func TestStringifyStringLength(t *testing.T) {
 	check := func(v Value, max int) (string, bool, bool) {
-		w := &writer{budget: v8Stack.budget, maxUnits: max}
+		w := &writer{budget: v8Stack.budget, costs: v8Stack.baseCosts(), maxUnits: max}
 		w.write(v, "")
 		return w.b.String(), w.tooLong, w.overflow
 	}
