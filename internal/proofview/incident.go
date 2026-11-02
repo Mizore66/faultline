@@ -275,7 +275,9 @@ func incidentGroupedInteger(n float64) string {
 }
 
 // RenderIncidentPage is the port of src/ui.ts renderIncidentPage. It is pure: it reads only the
-// supplied DemoAnalysis-shaped value and returns the internal WTF-8 page.
+// supplied DemoAnalysis-shaped value and returns the internal WTF-8 page. Input must satisfy
+// DemoAnalysis field types, including ASCII verdict/outcome enums and positive integer changedLines.
+// This function does not validate untrusted analysis before rendering.
 func RenderIncidentPage(analysis jsjson.Value) string {
 	prevention := analysis.Get("prevention")
 	minimization := analysis.Get("minimization")
