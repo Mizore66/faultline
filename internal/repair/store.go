@@ -207,8 +207,39 @@ func isLegacyEvidencePacket(v jsjson.Value) bool {
 // 22.22.2; manifest, packet and brief alike) equal the git row of
 // jsjson's stack table on darwin/arm64 (2610/6088/2490/3652) and
 // linux/arm64 (1827/3652/1956/2434).
-func VerifyBriefArtifact(directory string, expected *string) (result BriefVerification) {
+func VerifyBriefArtifact(directory string, expected *string) BriefVerification {
+	return verifyBriefArtifact(directory, expected, nil)
+}
+
+// briefSites are the fixed call sites of the three schema messages read for a
+// `serve --bundle` attachment; nil is ordinary verification (SiteGitProof).
+type briefSites struct{ manifest, packet, brief jsjson.Site }
+
+// VerifyBriefArtifactForAttachment is VerifyBriefArtifact for a `serve
+// --bundle` attachment: the same body, with each schema message read at its
+// own fixed serve site.
+func VerifyBriefArtifactForAttachment(directory string, expected *string) BriefVerification {
+	return verifyBriefArtifact(directory, expected, &briefSites{
+		manifest: jsjson.SiteServeRepairManifest,
+		packet:   jsjson.SiteServeRepairPacket,
+		brief:    jsjson.SiteServeRepairBrief,
+	})
+}
+
+// schemaMessage is ErrorMessage read at site, or at the ambient site for nil.
+func schemaMessage(issues []s.Issue, site *jsjson.Site) string {
+	if site == nil {
+		return s.ErrorMessage(issues)
+	}
+	return jsjson.AtCallSite(*site, func() string { return s.ErrorMessage(issues) })
+}
+
+func verifyBriefArtifact(directory string, expected *string, sites *briefSites) (result BriefVerification) {
 	defer jsjson.UseCallSite(jsjson.SiteGitProof)()
+	var manifestSite, packetSite, briefSite *jsjson.Site
+	if sites != nil {
+		manifestSite, packetSite, briefSite = &sites.manifest, &sites.packet, &sites.brief
+	}
 	var errs []string
 	var manifest jsjson.Value
 	status := "NOT_PROVIDED"
@@ -254,7 +285,7 @@ func VerifyBriefArtifact(directory string, expected *string) (result BriefVerifi
 	}
 
 	if out, issues, ok := s.Parse(BriefArtifactManifestSchema, readJSON(nodefs.Join(root, "manifest.json"), "repair brief manifest", &errs)); !ok {
-		errs = append(errs, jsexc.Concat("Repair brief manifest schema validation failed: ", s.ErrorMessage(issues)))
+		errs = append(errs, jsexc.Concat("Repair brief manifest schema validation failed: ", schemaMessage(issues, manifestSite)))
 	} else {
 		manifest = out
 		digest := manifest.Get("manifestDigest").Str()
@@ -277,12 +308,12 @@ func VerifyBriefArtifact(directory string, expected *string) (result BriefVerifi
 		if isLegacyEvidencePacket(packetValue) {
 			errs = append(errs, "Repair evidence packet uses legacy faultline.repair-evidence.v1 witness binding; recreate the repair artifact with the current FaultLine version.")
 		} else {
-			errs = append(errs, jsexc.Concat("Repair evidence packet schema validation failed: ", s.ErrorMessage(issues)))
+			errs = append(errs, jsexc.Concat("Repair evidence packet schema validation failed: ", schemaMessage(issues, packetSite)))
 		}
 	}
 	brief, issues, briefOK := s.Parse(BriefSchema, readJSON(nodefs.Join(root, "repair-brief.json"), "repair brief", &errs))
 	if !briefOK {
-		errs = append(errs, jsexc.Concat("Repair brief schema validation failed: ", s.ErrorMessage(issues)))
+		errs = append(errs, jsexc.Concat("Repair brief schema validation failed: ", schemaMessage(issues, briefSite)))
 	}
 
 	if manifest.Kind() != jsjson.Undefined && packetOK && briefOK {

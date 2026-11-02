@@ -22,8 +22,7 @@ import (
 // that no golden can produce, each with the reason. Everything else must appear in some golden
 // output, so a dropped or reworded check fails replay.
 var unreachableLiterals = map[string]string{
-	"Git proof bundle directory does not exist":                               "a Git bundle is only recognised by reading its manifest.json, so its directory exists (short of a race)",
-	"Unsafe artifact path:":                                                   "metadata and manifest paths are schema-checked with the same safe-path rule first",
+	"Unsafe artifact path:": "metadata and manifest paths are schema-checked with the same safe-path rule first",
 	"Git range patch exceeds FaultLine's portable artifact limit.":            "git diff output past the 4 MiB maxBuffer fails with ENOBUFS before the 128 MiB artifact limit is checked",
 	"AGENT_DRAFT evidence cannot be exported as a Git proof bundle":           "proof.evidenceGrade is a zod enum without AGENT_DRAFT",
 	"witness digest is invalid":                                               "SandboxAuditSchema requires sha256 digests, and verify parses it first",
@@ -360,6 +359,38 @@ var unreachableLiterals = map[string]string{
 	// Slice 4c Task 10: not an error text. repair.ProposeBrief parses
 	// redactValue's result with bundle.ParseValue, whose input the flow
 	// analysis counts as a message, so redactValue's returns become sites.
+	// Slice 5c: the attachment loaders (internal/proofview/attachment_*.go and
+	// attachments.go). Each row is one exact scanner-discovered text with its own
+	// source proof and mandatory direct test in
+	// internal/proofview/attachments_recheck_test.go; none is a package or file
+	// exemption. The retained TS CLI captures (difftest/testdata/serve-bundle and
+	// serve-bundle-binding golden.jsonl, replayed through the instrumented
+	// flBinary) produce the ordinary attachment and binding refusals a shipped CLI
+	// reaches; only the texts below have no such capture.
+	//
+	// Each "changed during verification" loader runs the same real verifier on
+	// the same path with the same options again after the first accepted pass and
+	// compares what the second pass returns; a refusal needs the artifact to
+	// differ between two passes of one invocation, which no unchanged retained
+	// fixture does (a filesystem race, not manufactured here).
+	"Refusing to attach a minimization record that changed during verification:": "the second minimize.VerifyFile of the same path must return a different valid result/digest or an invalid one, which needs the file to change between the two passes; TestAttachmentMinimizationRecheck stages invalid, digest, canonical-result and missing-result changes",
+	"Refusing to attach repair guidance that changed during verification:":       "the second and third repair verifications and the second read must differ from the first accepted manifest and contents, which needs the package to change between passes; TestAttachmentRepairRecheck stages each manifest, packet, brief and final-content condition independently",
+	"Refusing to attach a prevention proof that changed during verification:":    "the second prevention verification of the same path must return a different root/body or an invalid result, which needs the package to change between the two passes; TestAttachmentPreventionRecheck stages root, body and invalid rejection",
+	// VerifyBriefArtifact has already parsed the same packet and brief with the same
+	// schemas and run ValidateBrief on them before the adapter reads them again.
+	"Refusing to attach an invalid repair brief payload:": "the unchanged packet and brief passed the same schemas and citation validator inside VerifyBriefArtifact (the retained invalid packages are refused there first, as 'Stored repair brief is invalid'), so the adapter's second validation fails only after changed content; TestAttachmentRepairReadValidation calls the real reader on the retained forged-citations package and pins the wrapper",
+	// The first verified manifest already matched these canonical contents.
+	"Refusing to attach repair guidance whose in-memory payload does not match its verified manifest.": "for an unchanged package VerifyBriefArtifact has matched the manifest's packet and brief digests to the same canonical contents the adapter then reads, so a mismatch needs a change between verify and read; TestAttachmentRepairFirstSnapshotMismatch stages the packet-digest and brief-digest mismatches",
+	// Library guard: both shipped public View loaders only call loadAttachments
+	// after the base root verified and pass its address.
+	"Prevention attachment requires the verified Git proof root digest.": "library guard only: LoadVerifiedGitProofViewWithAttachments and its sibling pass the verified base root's address, so no CLI path passes nil; TestAttachmentPreventionRequiresBaseRoot calls the private orchestrator with nil and distinguishes digest-only and no-path calls",
+	// Fallback details used only when a failed second/final verification reports
+	// no error text. A verifier that returns invalid always carries at least one
+	// error, so each fallback is reached only through a valid-but-different pass,
+	// which needs the same change between passes as the row above it.
+	"digest changed":                          "second minimization/prevention pass valid but different (digest, root or body) or missing its result: needs a change between the two passes; TestAttachmentMinimizationRecheck (second-digest-differs, second-result-differs-same-digest, second-valid-without-*, second-invalid-no-errors) and TestAttachmentPreventionRecheck (second-root-differs, second-body-differs, second-*-absent, second-invalid-fallback) stage it",
+	"manifest changed":                        "second repair verification valid but with a different or absent manifest, or invalid with no errors (never from the real verifier): needs a change between passes; TestAttachmentRepairRecheck (second-invalid-fallback, second-manifest-absent, second-manifest-differs) stages it",
+	"artifact contents changed":               "final repair verification valid but with a different manifest or the two reads' contents differing/no longer matching it: needs a change between the reads; TestAttachmentRepairRecheck (final-invalid-fallback, final-manifest-*, second-read-*) stages each condition",
 	"<FAULTLINE_UNSUPPORTED_VALUE:undefined>": "redactValue's placeholder for an undefined value, not an error; the only CLI path that redacts an undefined value is fl witness propose --input without incidentPacket (cli-app.ts:1377-1385, witness.go:258-279), which exercises it (golden propose-input-no-packet: Expected object, received string) but fails in zod before the placeholder text can print, so no golden can contain the literal",
 }
 
@@ -1330,6 +1361,14 @@ func goldenText(t *testing.T, repo string) string {
 	// Slice 5b.1: the additive demo-artifacts corpus. Existing corpus text is
 	// not rewritten; this file only joins the discovery.
 	files = append(files, filepath.Join(repo, "difftest", "testdata", "demo-artifacts", "golden.jsonl"))
+	// Slice 5c: the additive serve-bundle corpus (retained TS CLI captures of the
+	// attachment refusals and serving runs, replayed through the instrumented
+	// flBinary by TestServeBundleCLIReplay) and its supplemental binding corpus
+	// (five self-consistent minimization records the adapter refuses at its Git
+	// proof binding checks, replayed by TestServeBundleBindingCLIReplay). Joined
+	// to the discovery only.
+	files = append(files, filepath.Join(repo, "difftest", "testdata", "serve-bundle", "golden.jsonl"))
+	files = append(files, filepath.Join(repo, "difftest", "testdata", "serve-bundle-binding", "golden.jsonl"))
 	var goldens strings.Builder
 	for _, f := range files {
 		b, err := os.ReadFile(f)

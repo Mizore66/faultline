@@ -391,7 +391,15 @@ func TestValidateSiteTable(t *testing.T) {
 	if got := validateSiteTable(map[siteKey]string{live: "reason"}, "/repo", []errorSite{gateSite(live.file, text, 1), twin}, noLine, goldens); !strings.Contains(strings.Join(got, "\n"), "the file is live-gated") {
 		t.Errorf("live-gated entry file: got %q", got)
 	}
-	dup := siteKey{"internal/a/x.go", "Git proof bundle directory does not exist"}
+	// A text that is currently a key of unreachableLiterals (the validator refuses
+	// an entry for it as redundant). The precondition is checked first so that a
+	// future removal of this key from the real table is diagnosed as fixture
+	// drift rather than as a validator failure. (The previously used text was
+	// removed from the table when a serve-bundle capture made it reachable.)
+	dup := siteKey{"internal/a/x.go", "Unsafe artifact path:"}
+	if _, listed := unreachableLiterals[dup.text]; !listed {
+		t.Fatalf("fixture drift: %q is no longer a key of unreachableLiterals; choose another stable key for the redundant-exemption control", dup.text)
+	}
 	if got := validateSiteTable(map[siteKey]string{dup: "reason"}, "/repo", []errorSite{gateSite(dup.file, dup.text, 10), gateSite("internal/b/x.go", dup.text, 3)}, noLine, dup.text); !strings.Contains(strings.Join(got, "\n"), "is already in unreachableLiterals") {
 		t.Errorf("a text listed in unreachableLiterals: got %q", got)
 	}

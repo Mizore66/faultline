@@ -1,0 +1,38 @@
+{
+  "schema": "faultline.serve-bundle-binding.v1",
+  "source": {
+    "corpus": "serve-bundle",
+    "fixture": "coherent",
+    "proofRoot": "sha256:a72c4f7e04897645b107395f7f3d03394e1c107c8ad092adcfe4cfa37dff0e71",
+    "minimizationDigest": "sha256:062d0e4b3c98556350c615cdca63384bdbe149644f2a69662d46df1025905ec9",
+    "minimizationFile": "minimization.json",
+    "minimizationSha256": "5b4a47d33f0265834b1510cd0937613444eb67f4ef4ffdd0f931bdff48429754"
+  },
+  "files": [
+    {
+      "path": "minimization/different-range.json",
+      "sha256": "60bb887dd17ae86c7ec57670416752160a0320b3f3dfee0bdc5e809e8db3b73f",
+      "bytes": 35267
+    },
+    {
+      "path": "minimization/foreign-frozen.json",
+      "sha256": "c25519c781184e5eed3a434681bcb90d945aea37dc3a7124cddb76750df5d86a",
+      "bytes": 35267
+    },
+    {
+      "path": "minimization/foreign-witness.json",
+      "sha256": "3fca31bbbc21b89600cecf302f86c81793c7996e6ad022a095ec8fe810461bdf",
+      "bytes": 35267
+    },
+    {
+      "path": "minimization/nullable-states.json",
+      "sha256": "f7d639cb4aa0bd908e00e0f85d226e0dc7bf92b061344bc0d4636223a5035606",
+      "bytes": 1708
+    },
+    {
+      "path": "minimization/witness-null.json",
+      "sha256": "6aa249651ab9d08fc3cc1ea22de0089c3ed2d1dfbcfe51e515280b0b6fbbd955",
+      "bytes": 34950
+    }
+  ]
+}

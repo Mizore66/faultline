@@ -86,6 +86,19 @@ func loadCLIHelpCases(t *testing.T) []cliHelpCase {
 	return rows
 }
 
+// oracleNodeVersionOutputMatches reports whether a `node --version` run is the
+// pinned oracle's: the exact version line, empty stderr and exit 0. goos names
+// the platform the process ran on. The version line is exact per platform:
+// Node's text-mode stdout on Windows ends it with CRLF, on every other platform
+// with LF. Nothing is trimmed, stripped or accepted as an alternative.
+func oracleNodeVersionOutputMatches(goos, stdout, stderr string, code int) bool {
+	want := "v22.22.2\n"
+	if goos == "windows" {
+		want = "v22.22.2\r\n"
+	}
+	return stdout == want && stderr == "" && code == 0
+}
+
 func runCLIHelpProcess(t *testing.T, binary, dir string, env []string, args ...string) (string, string, int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -6,3 +6,4 @@ dist/
 coverage/
 # Writer replay scenarios commit the witness store fl writes there.
 !/difftest/testdata/scenarios/**/.faultline/
+!/difftest/testdata/serve-bundle/**/.faultline/

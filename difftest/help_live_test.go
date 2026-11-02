@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
@@ -22,7 +23,7 @@ func TestLiveCLIHelp(t *testing.T) {
 	}
 	outside, env := t.TempDir(), os.Environ()
 	stdout, stderr, code := runCLIHelpProcess(t, node, outside, env, "--version")
-	if stdout != "v22.22.2\n" || stderr != "" || code != 0 {
+	if !oracleNodeVersionOutputMatches(runtime.GOOS, stdout, stderr, code) {
 		t.Fatalf("oracle Node drift: stdout=%q stderr=%q exit=%d", stdout, stderr, code)
 	}
 	raw, err := os.ReadFile(filepath.Join(repo, "package.json"))

@@ -398,6 +398,7 @@ func TestCaptureReusesMatchingCache(t *testing.T) { // :370
 
 func TestCaptureCacheContentChanges(t *testing.T) { // :395, :420
 	t.Parallel()
+	recordTurnsnapStall(t)
 	dir, cache := repositoryFixture(t), cachePath(t)
 	write(t, dir, "tracked.txt", "version A\n")
 	first := snap(t, dir, CaptureOptions{SessionCachePath: cache})

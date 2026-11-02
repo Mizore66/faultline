@@ -274,6 +274,56 @@ type b1Script struct {
 	childDelivered bool
 	done           bool
 	events         []string
+
+	// Structural observations (read-only; they never consume a wait status,
+	// resume a tracee, reorder or substitute anything). B1 models a late parent
+	// event for a SINGLE-THREADED traced program; a sibling thread's exit_group
+	// would be a different (unhealthy) condition, covered by the ESRCH test.
+	observed   map[int]int // stopped tid -> thread count of its process
+	cloneEvts  []string    // every fork/vfork/clone ptrace event seen
+	multiThrd  []string    // violations: processes with != 1 thread, clone events
+	observeErr []string    // inability to establish the invariant (INVALID PROBE)
+}
+
+// observe records, for a real stopped tracee, how many threads its process has
+// (entries of /proc/<tid>/task) and any clone-family event. Observation only.
+func (s *b1Script) observe(tid int, st syscall.WaitStatus) {
+	if !st.Stopped() {
+		return
+	}
+	if st.StopSignal() == syscall.SIGTRAP {
+		switch c := st.TrapCause(); c {
+		case syscall.PTRACE_EVENT_CLONE, syscall.PTRACE_EVENT_FORK, syscall.PTRACE_EVENT_VFORK:
+			msg, e := syscall.PtraceGetEventMsg(tid)
+			if e != nil {
+				s.observeErr = append(s.observeErr, fmt.Sprintf("event msg of tid %d (cause %d): %v", tid, c, e))
+			}
+			s.cloneEvts = append(s.cloneEvts, fmt.Sprintf("event cause=%d tid=%d new=%d", c, tid, msg))
+			if c == syscall.PTRACE_EVENT_CLONE {
+				s.multiThrd = append(s.multiThrd, fmt.Sprintf("clone (thread-creating) event from tid %d created tid %d", tid, msg))
+			}
+		}
+	}
+	if _, ok := s.observed[tid]; ok {
+		return
+	}
+	if s.observed == nil {
+		s.observed = map[int]int{}
+	}
+	ents, e := os.ReadDir("/proc/" + strconv.Itoa(tid) + "/task")
+	if e != nil {
+		s.observeErr = append(s.observeErr, fmt.Sprintf("read /proc/%d/task: %v", tid, e))
+		return
+	}
+	var names []string
+	for _, ent := range ents {
+		names = append(names, ent.Name())
+	}
+	s.observed[tid] = len(ents)
+	s.events = append(s.events, fmt.Sprintf("task-observation tid=%d comm=%s threads=%d tasks=%v", tid, readComm(tid), len(ents), names))
+	if len(ents) != 1 {
+		s.multiThrd = append(s.multiThrd, fmt.Sprintf("tid %d (comm %s) belongs to a process with %d threads %v", tid, readComm(tid), len(ents), names))
+	}
 }
 
 func (s *b1Script) wait(ws *syscall.WaitStatus) (int, error) {
@@ -289,6 +339,7 @@ func (s *b1Script) wait(ws *syscall.WaitStatus) (int, error) {
 			return tid, err
 		}
 		st := *ws
+		s.observe(tid, st)
 		if s.held == nil && !s.done && st.Stopped() && st.StopSignal() == syscall.SIGTRAP {
 			if c := st.TrapCause(); c == evFork || c == evVfork {
 				msg, e := syscall.PtraceGetEventMsg(tid)
@@ -464,7 +515,26 @@ func runHelperWith(t *testing.T, mode, target, variant string, wait func(*syscal
 	t.Setenv("GOMAXPROCS", "4")
 
 	oldArgs, oldFlags := os.Args, flag.CommandLine
-	os.Args = []string{"globalopen", "-errno", "ENOSPC", "-path", target, "-log", logPath, "--", self}
+	traced := []string{self}
+	if mode == "b1" {
+		// B1 only: a real single-threaded shell forks and waits for an external
+		// true, then exits with its status. The path of true is passed as a
+		// positional argument ($1), never interpolated. The trailing "exit"
+		// after the child prevents the shell from exec-optimising the last
+		// command (which would remove the fork). That the shell really forks is
+		// demonstrated by b1Script.complete() and the task observations, not
+		// assumed. The old Go childB1 is retained in TestMain for provenance.
+		sh, err := exec.LookPath("sh")
+		if err != nil {
+			t.Fatalf("INVALID PROBE: sh unavailable: %v", err)
+		}
+		tr, err := exec.LookPath("true")
+		if err != nil {
+			t.Fatalf("INVALID PROBE: true unavailable: %v", err)
+		}
+		traced = []string{sh, "-c", `"$1"; s=$?; exit "$s"`, "sh", tr}
+	}
+	os.Args = append([]string{"globalopen", "-errno", "ENOSPC", "-path", target, "-log", logPath, "--"}, traced...)
 	flag.CommandLine = flag.NewFlagSet("globalopen", flag.PanicOnError)
 
 	reapedTids = map[int]bool{}
@@ -574,6 +644,12 @@ func TestRegressionB1LateParentEventAfterChildReaped(t *testing.T) {
 	if !s.complete() {
 		t.Fatalf("INVALID PROBE: the event ordering was not forced; script events %q\nlog:\n%s", s.events, r.log)
 	}
+	if len(s.observeErr) != 0 || len(s.observed) == 0 {
+		t.Fatalf("INVALID PROBE: could not establish that the B1 fixture is single-threaded (observation errors %q, %d tids observed); script events %q clone events %q\nlog:\n%s", s.observeErr, len(s.observed), s.events, s.cloneEvts, r.log)
+	}
+	if len(s.multiThrd) != 0 {
+		t.Errorf("B1 fixture must be single-threaded: %q (observed tid->threads %v, clone events %q, script events %q)\nlog:\n%s", s.multiThrd, s.observed, s.cloneEvts, s.events, r.log)
+	}
 	if len(r.killViolations) != 0 {
 		t.Errorf("OWNERSHIP VIOLATION (B1): the helper tried to signal tid(s) %v whose exit status it had already consumed (script events %q)", r.killViolations, s.events)
 	}
@@ -587,6 +663,9 @@ func TestRegressionB1LateParentEventAfterChildReaped(t *testing.T) {
 	if h["ok"] != "true" || h["spawned"] != h["reaped"] {
 		t.Errorf("HEALTH not clean: %v", h)
 	}
+	if h["lost_stops"] != "0" {
+		t.Errorf("lost_stops=%s, want 0 (never tolerated in B1; script events %q): %v", h["lost_stops"], s.events, h)
+	}
 	if h["pidfd_fail"] != "0" || h["group_unknown"] != "0" {
 		t.Errorf("pidfd_fail=%s group_unknown=%s, want 0 and 0: every non-leader must be accepted only by a consistent Tgid lookup: %v", h["pidfd_fail"], h["group_unknown"], h)
 	}
@@ -597,6 +676,9 @@ func TestRegressionB1LateParentEventAfterChildReaped(t *testing.T) {
 		t.Errorf("the late parent event was not reconciled against the reaped child (no outcome=matched-reaped record)")
 	}
 	checkConsistency(t, r)
+	// Audit log (shown with -v and on failure): invariant, order and health.
+	t.Logf("B1 audit: observed tid->threads %v; clone/fork events %q; forced order %q; HEALTH ok=%s spawned=%s reaped=%s lost_stops=%s lost_before_injection=%s reconciled=%s",
+		s.observed, s.cloneEvts, s.events, h["ok"], h["spawned"], h["reaped"], h["lost_stops"], h["lost_before_injection"], h["reconciled"])
 }
 
 // ESRCH on a REPORTED syscall stop. HEALTH must be ok=false: the helper never
