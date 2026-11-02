@@ -65,7 +65,7 @@ Only the commit summary is variable. Use explicit paths for staging. Do not use 
 - Produces: JSONL rows `{id: string, analysisJSON: string, htmlJSON: string, afterJSON: string}` in the spec's exact ordered 24-case matrix; baseline metadata and normal UTF-8 baseline HTML. Exports `caseIDs` for test-only checker reuse if useful; no production import.
 - CLI: `node difftest/gen/gen-incident-renderer.mjs [--check|--recapture] --scratch ABSOLUTE_FRESH_DIRECTORY`. `--check` needs no scratch, must not import TS modules or write anything. Initial capture and recapture require a new empty directory; refuse a nonempty directory. Do not delete it.
 
-- [ ] **Step 1: Implement read-only validation before capture.** Use `node:assert/strict`, `node:crypto`, `node:fs`, `node:path`, `node:url` and `node:child_process` only. Validate exact argument grammar and case IDs, canonical JSONL, input/output field types and round trips, input equality, source/runtime metadata, lengths and hashes. All subprocess calls carry finite timeouts and fit the controller's aggregate deadline. For metadata pins use SHA-256:
+- [x] **Step 1: Implement read-only validation before capture.** Use `node:assert/strict`, `node:crypto`, `node:fs`, `node:path`, `node:url` and `node:child_process` only. Validate exact argument grammar and case IDs, canonical JSONL, input/output field types and round trips, input equality, source/runtime metadata, lengths and hashes. All subprocess calls carry finite timeouts and fit the controller's aggregate deadline. For metadata pins use SHA-256:
 
 ```js
 const sha256 = bytes => createHash("sha256").update(bytes).digest("hex");
@@ -79,9 +79,9 @@ const captureRow = (id, analysis, render) => {
 };
 ```
 
-- [ ] **Step 2: Demonstrate missing-evidence failure.** Controller runs the generator's `--check` before any corpus files exist. Expected: nonzero with absent evidence, not successful empty inventory. Preserve receipt/streams. No production code has been written.
+- [x] **Step 2: Demonstrate missing-evidence failure.** Controller runs the generator's `--check` before any corpus files exist. Expected: nonzero with absent evidence, not successful empty inventory. Preserve receipt/streams. No production code has been written.
 
-- [ ] **Step 3: Implement the exact 24-case request matrix and capture.** Use the complete IDs from the spec. Fresh-clone each analysis with `JSON.parse(JSON.stringify(base))`. Make cases independent. Unknown state IDs themselves provide custom labels because `fixtureStateById` falls back to the ID. Exercise every helper mapping and fallback, first-three-only rows, all five verdicts/four evidence kinds, empty collections, stable transition filtering, grades A–D, hostile text in all renderable string paths, UTF-16/lone-surrogate behavior, JS whitespace/case and binary64 number coercion/grouping. Keep mutations consistent with valid DemoAnalysis value types. Do not invoke RERUN or seed any production entropy.
+- [x] **Step 3: Implement the exact 24-case request matrix and capture.** Use the complete IDs from the spec. Fresh-clone each analysis with `JSON.parse(JSON.stringify(base))`. Make cases independent. Unknown state IDs themselves provide custom labels because `fixtureStateById` falls back to the ID. Exercise every helper mapping and fallback, first-three-only rows, all five verdicts/four evidence kinds, empty collections, stable transition filtering, grades A–D, hostile text in all renderable string paths, UTF-16/lone-surrogate behavior, JS whitespace/case and binary64 number coercion/grouping. Keep mutations consistent with valid DemoAnalysis value types. Do not invoke RERUN or seed any production entropy.
 
 ```js
 const sample = JSON.parse(JSON.stringify(replay));
@@ -94,7 +94,7 @@ assert.equal(JSON.parse(row.htmlJSON).includes("&lt;script&gt;not markup&lt;/scr
 
 Preflight compares the complete current `src/` tree to frozen Git source, rejects working-tree source drift, checks Node `22.22.2`, manifest `0.1.4`, and `Intl.NumberFormat().resolvedOptions().locale === "en-US"`. The controller freshly builds frozen TS before capture; bind the actual `dist/ui.js`, transitive fixture/engine/incident-page module hashes, source blobs, generator and retained input. Initial capture checks all outputs absent before exclusive creates. Recapture compares all complete row/HTML bytes; it cannot overwrite pins or normalize output.
 
-- [ ] **Step 4: Capture, validate and independently recapture.** Controller locates the already-installed Node 22.22.2 toolchain without installing/upgrading anything, verifies/builds frozen TS, runs initial capture in a fresh workspace child, then `--check`, then `--recapture` with a different fresh scratch child. Read full completed outputs and receipts. Expected: 24 exact cases; all afterJSON strings equal input; second capture byte-identical. Failure is preserved and investigated, never retried silently.
+- [x] **Step 4: Capture, validate and independently recapture.** Controller locates the already-installed Node 22.22.2 toolchain without installing/upgrading anything, verifies/builds frozen TS, runs initial capture in a fresh workspace child, then `--check`, then `--recapture` with a different fresh scratch child. Read full completed outputs and receipts. Expected: 24 exact cases; all afterJSON strings equal input; second capture byte-identical. Failure is preserved and investigated, never retried silently.
 
 - [ ] **Step 5: Review, verify and commit evidence.** Independent task reviewer receives the task brief, completed report and full diff file; both SPEC and QUALITY verdicts are required. Resolve blocking findings and recheck only affected contracts. Controller stages only the generator, corpus and associated plan/spec, verifies protected paths unchanged and commits with personal identity, intact hook and attribution. This delivers evidence, not an implemented renderer.
 
