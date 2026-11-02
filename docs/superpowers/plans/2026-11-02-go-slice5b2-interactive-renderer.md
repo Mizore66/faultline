@@ -96,7 +96,7 @@ Preflight compares the complete current `src/` tree to frozen Git source, reject
 
 - [x] **Step 4: Capture, validate and independently recapture.** Controller locates the already-installed Node 22.22.2 toolchain without installing/upgrading anything, verifies/builds frozen TS, runs initial capture in a fresh workspace child, then `--check`, then `--recapture` with a different fresh scratch child. Read full completed outputs and receipts. Expected: 24 exact cases; all afterJSON strings equal input; second capture byte-identical. Failure is preserved and investigated, never retried silently.
 
-- [ ] **Step 5: Review, verify and commit evidence.** Independent task reviewer receives the task brief, completed report and full diff file; both SPEC and QUALITY verdicts are required. Resolve blocking findings and recheck only affected contracts. Controller stages only the generator, corpus and associated plan/spec, verifies protected paths unchanged and commits with personal identity, intact hook and attribution. This delivers evidence, not an implemented renderer.
+- [x] **Step 5: Review, verify and commit evidence.** Independent task reviewer receives the task brief, completed report and full diff file; both SPEC and QUALITY verdicts are required. Resolve blocking findings and recheck only affected contracts. Controller stages only the generator, corpus and associated plan/spec, verifies protected paths unchanged and commits with personal identity, intact hook and attribution. This delivers evidence, not an implemented renderer.
 
 ### Task 2: Pure Go renderer with complete parity and regression coverage
 
@@ -106,7 +106,7 @@ Preflight compares the complete current `src/` tree to frozen Git source, reject
 - Consumes: Task 1's exact JSONL schema and baseline pins, `jsjson.Value`, existing `EscapeHTML`, JS number/string helpers and `demofixture.StateLabel`.
 - Produces: `func RenderIncidentPage(analysis jsjson.Value) string`, pure and input-preserving, with exact frozen HTML/CSS/script bytes.
 
-- [ ] **Step 1: Write full-output tests first.** Read the existing `internal/proofview/judge_preview_test.go` only for conventions. Decode JSONL envelopes with test-only `encoding/json`; parse nested input/HTML with `jsjson.Parse` (check actual existing parser signature before use). Validate exact ordered IDs, hashes, lengths, no duplicate/missing rows and all input-before/after pairs. Store no expected HTML derived from Go. The core assertion is:
+- [x] **Step 1: Write full-output tests first.** Read the existing `internal/proofview/judge_preview_test.go` only for conventions. Decode JSONL envelopes with test-only `encoding/json`; parse nested input/HTML with `jsjson.Parse` (check actual existing parser signature before use). Validate exact ordered IDs, hashes, lengths, no duplicate/missing rows and all input-before/after pairs. Store no expected HTML derived from Go. The core assertion is:
 
 ```go
 before := jsjson.Stringify(analysis)
@@ -121,9 +121,9 @@ if after := jsjson.Stringify(analysis); after != before {
 
 Check the existing `Stringify` return signature and use its actual API; do not invent an adapter that silently changes strings. Also compare baseline UTF-8 bytes via `jsstr.ToUTF8`, repeat every call, and run independent parsed values concurrently. Supplement complete pages with precise branch regressions; do not replace complete equality with substrings or lengths.
 
-- [ ] **Step 2: Observe RED before implementation.** Controller runs `go test ./internal/proofview -run '^TestIncident' -count=1 -timeout=120s`. Expected: missing `RenderIncidentPage` feature (or a behavioral failure if a test-local registration seam is used). Fix test infrastructure errors first; preserve every failed attempt. No production implementation is allowed until the missing-feature RED is recorded.
+- [x] **Step 2: Observe RED before implementation.** Controller runs `go test ./internal/proofview -run '^TestIncident' -count=1 -timeout=120s`. Expected: missing `RenderIncidentPage` feature (or a behavioral failure if a test-local registration seam is used). Fix test infrastructure errors first; preserve every failed attempt. No production implementation is allowed until the missing-feature RED is recorded.
 
-- [ ] **Step 3: Port literal sections and dynamic helpers.** Keep source literal bytes authoritative instead of redesigning shared styles. After RED, extracting literal segments is mechanical and can use this bounded controller-owned recipe (the worker supplies the exact command request; do not execute it in an unbounded shell):
+- [x] **Step 3: Port literal sections and dynamic helpers.** Keep source literal bytes authoritative instead of redesigning shared styles. After RED, extracting literal segments is mechanical and can use this bounded controller-owned recipe (the worker supplies the exact command request; do not execute it in an unbounded shell):
 
 ```python
 from pathlib import Path
@@ -166,7 +166,7 @@ func incidentGroupedInteger(n float64) string {
 
 It receives only valid positive integer metrics. If the frozen TS capture rejects a numeric assumption, correct the port and retain the failing evidence; never adjust the golden to Go. For ASCII patterns with `/i`, do not use Unicode `strings.EqualFold` or RE2 `(?i)` blindly: ASCII-only lowercasing plus exact JS whitespace spans avoids long-s/Kelvin false matches. Preserve JS UTF-16/WTF-8 strings through existing helpers. No custom runtime/entropy/config seam is exposed.
 
-- [ ] **Step 4: Observe GREEN and run scoped qualification.** Controller runs targeted proofview/demofixture tests, scoped race tests, vet and build, then corpus `--check` and a fresh independent `--recapture`. Run a compiled targeted test binary from a fresh empty cwd with `PATH` empty (use an absolute corpus path supplied by a test flag/helper rather than reading production testdata). Cross-compile the same test binary for all six native targets in separate bounded commands, with `CGO_ENABLED=0`; run the Darwin ARM64 binary locally. Mark cross-compilation as compilation only, not native execution. Keep source CI definitions, coverage gate and native profiles unchanged. Actual exact-head hosted runs own broader/native gates that cannot fit the local cap. Consume every completed stdout/stderr/receipt fully; retain failures.
+- [x] **Step 4: Observe GREEN and run scoped qualification.** Controller runs targeted proofview/demofixture tests, scoped race tests, vet and build, then corpus `--check` and a fresh independent `--recapture`. Run a compiled targeted test binary from a fresh empty cwd with `PATH` empty (use an absolute corpus path supplied by a test flag/helper rather than reading production testdata). Cross-compile the same test binary for all six native targets in separate bounded commands, with `CGO_ENABLED=0`; run the Darwin ARM64 binary locally. Mark cross-compilation as compilation only, not native execution. Keep source CI definitions, coverage gate and native profiles unchanged. Actual exact-head hosted runs own broader/native gates that cannot fit the local cap. Consume every completed stdout/stderr/receipt fully; retain failures.
 
 - [ ] **Step 5: Correct program status, task review and commit.** Status rows say 5c integrated via PR217/exact merge and 5b.2 library-only; genuine RERUN, full judge-demo/plain serve and remaining slices are still outstanding. Independent task reviewer checks full diff/spec/quality and exact evidence, including numeric/regexp/WTF-8 edges, source pins, nonmutation, no new dispatch/routes and protected drift. Resolve blocking issues using RED/GREEN and scoped re-review. Controller commits scoped files with personal identity, attribution and intact hook after verification.
 
