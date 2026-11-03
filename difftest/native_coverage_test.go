@@ -27,6 +27,78 @@ var nativeCoverageFiles = []string{
 	"internal/demofixture/native_analysis.go",
 	"internal/demofixture/native_run.go",
 	"internal/demofixture/native_witness.go",
+	"internal/cli/judge_demo.go",
+	"internal/bundle/demo/native_evidence.go",
+}
+
+// nativeEvidencePackage is one exact package allowed to produce native evidence.
+// Only a diagnostic parent may emit NATIVE-DIAGNOSTIC, and only demofixture
+// carries the invariant children and the three contract cases.
+type nativeEvidencePackage struct {
+	importPath        string
+	sourceDirectory   string
+	parents           []string
+	diagnosticParents []string
+}
+
+var (
+	nativeDemofixturePackage = nativeEvidencePackage{
+		importPath:        "github.com/Mizore66/faultline/internal/demofixture",
+		sourceDirectory:   "internal/demofixture",
+		parents:           []string{"TestNativeDiagnostics", "TestNativeDiagnosticInvariants", "TestNativeAnalysisFullContract"},
+		diagnosticParents: []string{"TestNativeDiagnostics"},
+	}
+	nativeCLIPackage = nativeEvidencePackage{
+		importPath:        "github.com/Mizore66/faultline/internal/cli",
+		sourceDirectory:   "internal/cli",
+		parents:           []string{"TestJudgeDemoNativeDiagnostics"},
+		diagnosticParents: []string{"TestJudgeDemoNativeDiagnostics"},
+	}
+	nativeDemoPackage = nativeEvidencePackage{
+		importPath:        "github.com/Mizore66/faultline/internal/bundle/demo",
+		sourceDirectory:   "internal/bundle/demo",
+		parents:           []string{"TestNativeEvidenceDiagnostics"},
+		diagnosticParents: []string{"TestNativeEvidenceDiagnostics"},
+	}
+	nativeAllPackages = []nativeEvidencePackage{nativeDemofixturePackage, nativeCLIPackage, nativeDemoPackage}
+
+	nativeDemofixtureFiles = []string{
+		"internal/demofixture/native_analysis.go",
+		"internal/demofixture/native_run.go",
+		"internal/demofixture/native_witness.go",
+	}
+	nativeExportFiles = []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"}
+)
+
+// nativeWaiver is one exact (file, literal) site whose text no fresh diagnostic
+// parent logs. Each is individually proven by the named test or by a defensive
+// impossibility. mustRun keeps the positive-counter obligation for a literal
+// that executes on a fresh path; unreachable defensive refusals cannot run.
+// A waiver is rejected as stale when its text is produced and its position ran.
+type nativeWaiver struct {
+	reason  string
+	mustRun bool
+}
+
+var nativeExportWaivers = map[siteKey]nativeWaiver{
+	{"internal/cli/judge_demo.go", "Native proposal inspection cannot be combined with execution or output options."}: {"judge_demo.go refuses the four forbidden flags before any I/O; TestJudgeDemoValidation inspect+rerun/export/approve/output compare the complete stderr, stdout and exit and require an empty directory", false},
+	{"internal/cli/judge_demo.go", "not yet ported: judge-demo server"}:                                               {"judge_demo.go returns this when --export-only is absent; TestJudgeDemoValidation server, server with rerun and server with approval compare the complete result", false},
+	{"internal/cli/judge_demo.go", "--approve-native requires --rerun-all."}:                                          {"judge_demo.go refuses an approval without --rerun-all before executing; TestJudgeDemoValidation replay approval misuse and replay trailing approval misuse compare the complete result", false},
+	{"internal/cli/judge_demo.go", "Native RERUN requires --approve-native <proposal-digest>."}:                       {"judge_demo.go refuses an absent approval flag before executing; TestJudgeDemoValidation rerun absent approval compares the complete result", false},
+	{"internal/cli/judge_demo.go", "--approve-native"}:                                                                {"argument to requiredOption, whose Missing required option message TestJudgeDemoValidation compares for trailing, empty and flag-like approvals; the native RERUN path must still run it", true},
+	{"internal/cli/judge_demo.go", "Generated proof bundle failed integrity verification: %s"}:                        {"demo.Verify runs on the bundle demo.Write just produced from a fixed analysis; no input can make it invalid, so this defensive refusal has no reachable path", false},
+	{"internal/cli/judge_demo.go", "Generated proof bundle root digest differs from verified root"}:                   {"demo.Verify of a bundle demo.Write just produced always returns that root digest; no input can make it differ, so this defensive refusal has no reachable path", false},
+}
+
+// nativeWaivedText is the quoted text of every waiver for one owned file.
+func nativeWaivedText(file string) string {
+	var out strings.Builder
+	for _, key := range slices.SortedFunc(maps.Keys(nativeExportWaivers), func(a, b siteKey) int { return strings.Compare(a.text, b.text) }) {
+		if key.file == file {
+			out.WriteString(strconv.Quote(key.text) + "\n")
+		}
+	}
+	return out.String()
 }
 
 func nativeLiteralOutputs(repo, pos, goldens string, evidence nativeEvidence) string {
@@ -34,7 +106,7 @@ func nativeLiteralOutputs(repo, pos, goldens string, evidence nativeEvidence) st
 	if err == nil {
 		file, _, _ := strings.Cut(filepath.ToSlash(rel), ":")
 		if slices.Contains(nativeCoverageFiles, file) {
-			return evidence.outputs
+			return evidence.outputs + nativeWaivedText(file)
 		}
 	}
 	return goldens
@@ -89,52 +161,89 @@ func nativeLibraryEvidence(repo string) (nativeEvidence, error) {
 		return nativeEvidence{}, err
 	}
 	defer os.RemoveAll(dir)
-	profile := filepath.Join(dir, "profile.txt")
+	// One deadline covers both sequential subprocesses.
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "test", "-json", "-count=1", "-timeout=150s", "-coverprofile="+profile,
-		"-run=^(TestNativeDiagnostics|TestNativeDiagnosticInvariants|TestNativeAnalysisFullContract)$", "./internal/demofixture",
-		"-native-contract="+filepath.Join(repo, "difftest/testdata/native-demo/native-contract.jsonl"))
-	cmd.Dir, cmd.WaitDelay = repo, time.Second
-	for _, value := range os.Environ() {
-		key, _, _ := strings.Cut(value, "=")
-		if !slices.Contains([]string{"GOTOOLCHAIN", "GOPROXY", "GOSUMDB", "GOFLAGS", "GOCOVERDIR"}, key) {
-			cmd.Env = append(cmd.Env, value)
+	goTest := func(profile, run string, extra ...string) ([]byte, error) {
+		args := append([]string{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=" + profile, "-run=" + run}, extra...)
+		cmd := exec.CommandContext(ctx, "go", args...)
+		cmd.Dir, cmd.WaitDelay = repo, time.Second
+		for _, value := range os.Environ() {
+			key, _, _ := strings.Cut(value, "=")
+			if !slices.Contains([]string{"GOTOOLCHAIN", "GOPROXY", "GOSUMDB", "GOFLAGS", "GOCOVERDIR"}, key) {
+				cmd.Env = append(cmd.Env, value)
+			}
 		}
+		cmd.Env = append(cmd.Env, "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr // nil stdin is closed by os/exec.
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("native library evidence: %w\n%s\n%s", err, stdout.String(), stderr.String())
+		}
+		return stdout.Bytes(), nil
 	}
-	cmd.Env = append(cmd.Env, "GOTOOLCHAIN=local", "GOPROXY=off", "GOSUMDB=off")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr // nil stdin is closed by os/exec.
-	if err := cmd.Run(); err != nil {
-		return nativeEvidence{}, fmt.Errorf("native library evidence: %w\n%s\n%s", err, stdout.String(), stderr.String())
+	nativeProfilePath, exportProfilePath := filepath.Join(dir, "native-profile.txt"), filepath.Join(dir, "export-profile.txt")
+	nativeStream, err := goTest(nativeProfilePath,
+		"^(TestNativeDiagnostics|TestNativeDiagnosticInvariants|TestNativeAnalysisFullContract)$", "./internal/demofixture",
+		"-native-contract="+filepath.Join(repo, "difftest/testdata/native-demo/native-contract.jsonl"))
+	if err != nil {
+		return nativeEvidence{}, err
 	}
-	outputs, err := nativeOutputs(stdout.Bytes(), cases)
+	// The export packages never receive -native-contract.
+	exportStream, err := goTest(exportProfilePath,
+		"^(TestJudgeDemoNativeDiagnostics|TestNativeEvidenceDiagnostics)$", "./internal/cli", "./internal/bundle/demo")
+	if err != nil {
+		return nativeEvidence{}, err
+	}
+	outputs, err := nativeOutputsFor(nativeStream, cases, []nativeEvidencePackage{nativeDemofixturePackage})
+	if err != nil {
+		return nativeEvidence{}, err
+	}
+	exportOutputs, err := nativeOutputsFor(exportStream, nil, []nativeEvidencePackage{nativeCLIPackage, nativeDemoPackage})
 	if err != nil {
 		return nativeEvidence{}, err
 	}
 	// The existing test compared every byte before each required case passed.
 	// These COMPLETE expectations own successful prose, never rejected calls.
-	outputs += expected.String()
-	profileData, err := os.ReadFile(profile)
+	outputs += exportOutputs + expected.String()
+	profileData, err := os.ReadFile(nativeProfilePath)
 	if err != nil {
 		return nativeEvidence{}, err
 	}
-	blocks, err := nativeProfile(profileData)
+	blocks, err := nativeProfileFor(profileData, nativeDemofixtureFiles)
 	if err != nil {
 		return nativeEvidence{}, err
 	}
-	sites, err := errorSites(filepath.Join(repo, "internal/demofixture"))
+	exportProfileData, err := os.ReadFile(exportProfilePath)
 	if err != nil {
 		return nativeEvidence{}, err
+	}
+	exportBlocks, err := nativeProfileFor(exportProfileData, nativeExportFiles)
+	if err != nil {
+		return nativeEvidence{}, err
+	}
+	// The subsets are disjoint: demofixture counters incidentally emitted by the
+	// CLI's imports are discarded, never allowed to replace the original evidence.
+	for file, found := range exportBlocks {
+		if _, dup := blocks[file]; dup {
+			return nativeEvidence{}, fmt.Errorf("native profiles both own %s", file)
+		}
+		blocks[file] = found
 	}
 	var nativeSites []errorSite
-	for _, site := range sites {
-		rel, err := filepath.Rel(repo, site.file)
+	for _, pkg := range nativeAllPackages {
+		sites, err := errorSites(filepath.Join(repo, filepath.FromSlash(pkg.sourceDirectory)))
 		if err != nil {
 			return nativeEvidence{}, err
 		}
-		if slices.Contains(nativeCoverageFiles, filepath.ToSlash(rel)) {
-			nativeSites = append(nativeSites, site)
+		for _, site := range sites {
+			rel, err := filepath.Rel(repo, site.file)
+			if err != nil {
+				return nativeEvidence{}, err
+			}
+			if slices.Contains(nativeCoverageFiles, filepath.ToSlash(rel)) {
+				nativeSites = append(nativeSites, site)
+			}
 		}
 	}
 	evidence := nativeEvidence{outputs: outputs, blocks: blocks}
@@ -188,21 +297,31 @@ func nativeSourceBinding(repo string) (string, error) {
 	return repo + ":" + fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
+// nativeOutputs decodes one stream that must contain every owned package.
 func nativeOutputs(data []byte, cases []string) (string, error) {
-	const pkg = "github.com/Mizore66/faultline/internal/demofixture"
-	parents := []string{"TestNativeDiagnostics", "TestNativeDiagnosticInvariants", "TestNativeAnalysisFullContract"}
-	required := append([]string{}, parents...)
-	for _, name := range []string{"timeline", "partial", "subsets", "environment"} {
-		required = append(required, "TestNativeDiagnosticInvariants/"+name)
+	return nativeOutputsFor(data, cases, nativeAllPackages)
+}
+
+// nativeOutputsFor decodes a complete go test -json stream. Each allowed package
+// must start and end exactly once with its parents, children and diagnostics
+// accounted separately; a foreign package, event after completion, skip, failure,
+// pass-without-run or diagnostic from the wrong test is rejected.
+func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePackage) (string, error) {
+	type state struct {
+		started, ended bool
+		running        map[string]bool
+		passed         map[string]bool
+		diagnostic     map[string][]string
 	}
-	for _, name := range cases {
-		required = append(required, "TestNativeAnalysisFullContract/"+name)
+	packages := map[string]*state{}
+	spec := map[string]nativeEvidencePackage{}
+	for _, pkg := range allowed {
+		packages[pkg.importPath] = &state{running: map[string]bool{}, passed: map[string]bool{}, diagnostic: map[string][]string{}}
+		spec[pkg.importPath] = pkg
 	}
-	if len(cases) == 0 || !bytes.HasSuffix(data, []byte{'\n'}) {
+	if len(packages) == 0 || !bytes.HasSuffix(data, []byte{'\n'}) {
 		return "", fmt.Errorf("native events or contract cases are incomplete")
 	}
-	running, passed, diagnostic := map[string]bool{}, map[string]bool{}, map[string]string{}
-	started, ended := false, false
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	for {
 		var event struct{ Action, Package, Test, Output string }
@@ -213,7 +332,8 @@ func nativeOutputs(data []byte, cases []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("native event JSON: %w", err)
 		}
-		if event.Package != pkg || ended {
+		st, pkg := packages[event.Package], spec[event.Package]
+		if st == nil || st.ended {
 			return "", fmt.Errorf("native events have a foreign package or follow completion")
 		}
 		if event.Action == "fail" || event.Action == "skip" {
@@ -222,15 +342,15 @@ func nativeOutputs(data []byte, cases []string) (string, error) {
 		if event.Test == "" {
 			switch event.Action {
 			case "start":
-				if started {
+				if st.started {
 					return "", fmt.Errorf("duplicate native package start")
 				}
-				started = true
+				st.started = true
 			case "pass":
-				if !started {
+				if !st.started {
 					return "", fmt.Errorf("native package passed without starting")
 				}
-				ended = true
+				st.ended = true
 			case "output":
 				if strings.Contains(event.Output, "NATIVE-DIAGNOSTIC") {
 					return "", fmt.Errorf("native diagnostic has no emitting case")
@@ -241,64 +361,102 @@ func nativeOutputs(data []byte, cases []string) (string, error) {
 			continue
 		}
 		top, _, _ := strings.Cut(event.Test, "/")
-		if !started || !slices.Contains(parents, top) {
+		if !st.started || !slices.Contains(pkg.parents, top) {
 			return "", fmt.Errorf("unexpected native test %q", event.Test)
 		}
 		switch event.Action {
 		case "run":
-			if running[event.Test] || passed[event.Test] {
+			if st.running[event.Test] || st.passed[event.Test] {
 				return "", fmt.Errorf("duplicate native test %s", event.Test)
 			}
-			running[event.Test] = true
+			st.running[event.Test] = true
 		case "pass":
-			if !running[event.Test] {
+			if !st.running[event.Test] {
 				return "", fmt.Errorf("native test %s passed without running", event.Test)
 			}
-			delete(running, event.Test)
-			passed[event.Test] = true
+			delete(st.running, event.Test)
+			st.passed[event.Test] = true
 		case "output":
 			if _, text, found := strings.Cut(event.Output, "NATIVE-DIAGNOSTIC "); found {
-				if !running[event.Test] || !strings.HasPrefix(event.Test, "TestNativeDiagnostics/") || diagnostic[event.Test] != "" {
+				// demofixture and demo emit once per child; the CLI parent logs one
+				// record per invocation it asserts and has no children.
+				_, child, isChild := strings.Cut(event.Test, "/")
+				cliParent := pkg.importPath == nativeCLIPackage.importPath
+				if !st.running[event.Test] || !slices.Contains(pkg.diagnosticParents, top) || isChild == cliParent || isChild && child == "" ||
+					isChild && len(st.diagnostic[event.Test]) != 0 {
 					return "", fmt.Errorf("native diagnostic has invalid or duplicate emitter %s", event.Test)
 				}
 				var message string
 				if err := json.Unmarshal([]byte(strings.TrimSpace(text)), &message); err != nil || message == "" {
 					return "", fmt.Errorf("native diagnostic is not a nonempty JSON string")
 				}
-				diagnostic[event.Test] = message
+				st.diagnostic[event.Test] = append(st.diagnostic[event.Test], message)
 			}
 		case "pause", "cont":
-			if !running[event.Test] {
+			if !st.running[event.Test] {
 				return "", fmt.Errorf("native case resumed without running")
 			}
 		default:
 			return "", fmt.Errorf("unexpected native test action %q", event.Action)
 		}
 	}
-	if !ended || len(running) != 0 || len(diagnostic) == 0 {
-		return "", fmt.Errorf("native evidence has no complete executed diagnostics")
-	}
-	for _, name := range required {
-		if !passed[name] {
-			return "", fmt.Errorf("native evidence is missing passing test %s", name)
-		}
-	}
-	for name := range passed {
-		if strings.HasPrefix(name, "TestNativeDiagnostics/") && diagnostic[name] == "" {
-			return "", fmt.Errorf("native case %s emitted no checked diagnostic", name)
-		}
-	}
 	var outputs strings.Builder
-	for _, name := range slices.Sorted(maps.Keys(diagnostic)) {
-		if !passed[name] {
-			return "", fmt.Errorf("native diagnostic case %s never passed", name)
+	for _, pkg := range allowed {
+		st := packages[pkg.importPath]
+		if !st.ended || len(st.running) != 0 || len(st.diagnostic) == 0 {
+			return "", fmt.Errorf("native evidence has no complete executed diagnostics for %s", pkg.importPath)
 		}
-		outputs.WriteString(strconv.Quote(diagnostic[name]) + "\n")
+		required := append([]string{}, pkg.parents...)
+		if pkg.importPath == nativeDemofixturePackage.importPath {
+			if len(cases) == 0 {
+				return "", fmt.Errorf("native events or contract cases are incomplete")
+			}
+			for _, name := range []string{"timeline", "partial", "subsets", "environment"} {
+				required = append(required, "TestNativeDiagnosticInvariants/"+name)
+			}
+			for _, name := range cases {
+				required = append(required, "TestNativeAnalysisFullContract/"+name)
+			}
+		}
+		for _, name := range required {
+			if !st.passed[name] {
+				return "", fmt.Errorf("native evidence is missing passing test %s in %s", name, pkg.importPath)
+			}
+		}
+		for _, parent := range pkg.diagnosticParents {
+			emitted := len(st.diagnostic[parent]) != 0
+			for name := range st.passed {
+				emitted = emitted || strings.HasPrefix(name, parent+"/") && len(st.diagnostic[name]) != 0
+			}
+			if !emitted {
+				return "", fmt.Errorf("native diagnostic parent %s emitted no checked diagnostic", parent)
+			}
+		}
+		for name := range st.passed {
+			top, _, isChild := strings.Cut(name, "/")
+			if isChild && slices.Contains(pkg.diagnosticParents, top) && len(st.diagnostic[name]) == 0 {
+				return "", fmt.Errorf("native case %s emitted no checked diagnostic", name)
+			}
+		}
+		for _, name := range slices.Sorted(maps.Keys(st.diagnostic)) {
+			if !st.passed[name] {
+				return "", fmt.Errorf("native diagnostic case %s never passed", name)
+			}
+			for _, message := range st.diagnostic[name] {
+				outputs.WriteString(strconv.Quote(message) + "\n")
+			}
+		}
 	}
 	return outputs.String(), nil
 }
 
+// nativeProfile is the all-owned-files wrapper.
 func nativeProfile(data []byte) (map[string][]coverBlock, error) {
+	return nativeProfileFor(data, nativeCoverageFiles)
+}
+
+// nativeProfileFor requires every expected file and retains only that subset.
+func nativeProfileFor(data []byte, expectedFiles []string) (map[string][]coverBlock, error) {
 	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 	if len(lines) < 2 || !slices.Contains([]string{"mode: set", "mode: count", "mode: atomic"}, lines[0]) {
 		return nil, fmt.Errorf("native coverage profile has no valid mode or blocks")
@@ -334,12 +492,12 @@ func nativeProfile(data []byte) (map[string][]coverBlock, error) {
 			return nil, fmt.Errorf("invalid native coverage counts or span")
 		}
 		rel := strings.TrimPrefix(name, "github.com/Mizore66/faultline/")
-		if slices.Contains(nativeCoverageFiles, rel) {
+		if slices.Contains(nativeCoverageFiles, rel) && slices.Contains(expectedFiles, rel) {
 			blocks[rel] = append(blocks[rel], coverBlock{positions[0], positions[2], count})
 		}
 	}
-	for _, name := range nativeCoverageFiles {
-		if len(blocks[name]) == 0 {
+	for _, name := range expectedFiles {
+		if !slices.Contains(nativeCoverageFiles, name) || len(blocks[name]) == 0 {
 			return nil, fmt.Errorf("native coverage profile has no blocks for %s", name)
 		}
 	}
@@ -374,6 +532,12 @@ func validateNativeEvidence(repo string, sites []errorSite, evidence nativeEvide
 		for _, fragment := range messageFragments(site.text) {
 			quoted := strconv.Quote(fragment)
 			reached = reached && strings.Contains(evidence.outputs, quoted[1:len(quoted)-1])
+		}
+		if waiver, waived := nativeExportWaivers[siteKey{rel, site.text}]; waived {
+			if strings.TrimSpace(waiver.reason) == "" || waiver.mustRun && !covered || !waiver.mustRun && (covered || reached) {
+				return fmt.Errorf("%s:%d: native waiver for %q is unexplained, unexecuted or stale", rel, site.line, site.text)
+			}
+			continue
 		}
 		if reason, exempt := exemptions[site.text]; exempt {
 			if strings.TrimSpace(reason) == "" || covered || reached {
