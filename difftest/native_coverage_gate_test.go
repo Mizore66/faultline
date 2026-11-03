@@ -4,8 +4,8 @@ package difftest
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -80,7 +80,7 @@ func TestNativeCoverageEvents(t *testing.T) {
 		}},
 		{"wrong-cli-emitter-package", func(e []map[string]any) []map[string]any {
 			for _, x := range e {
-				if x["Test"] == "TestJudgeDemoNativeDiagnostics" && x["Output"] != nil {
+				if x["Package"] == nativeCLIPkg && x["Output"] != nil {
 					x["Package"] = nativeDemoPkg
 				}
 			}
@@ -103,6 +103,18 @@ func TestNativeCoverageEvents(t *testing.T) {
 				}
 			}
 			return e
+		}},
+		{"cli-parent-level-emitter", func(e []map[string]any) []map[string]any {
+			for _, x := range e {
+				if x["Package"] == nativeCLIPkg && x["Output"] != nil {
+					x["Test"] = "TestJudgeDemoNativeDiagnostics"
+					break
+				}
+			}
+			return e
+		}},
+		{"cli-parent-without-children", func(e []map[string]any) []map[string]any {
+			return nativeWithoutTest(nativeWithoutTest(e, "TestJudgeDemoNativeDiagnostics/server"), "TestJudgeDemoNativeDiagnostics/generated-bundle-invalid")
 		}},
 		{"missing-demo-parent", func(e []map[string]any) []map[string]any {
 			return nativeWithoutTest(e, "TestNativeEvidenceDiagnostics")
@@ -192,7 +204,7 @@ func TestNativeCoverageEvents(t *testing.T) {
 		}
 	}
 	out, err := nativeOutputs(nativeEventJSON(t, valid), []string{"ordinary"})
-	for _, want := range []string{`"native analysis rejected the invocation"`, `"FaultLine error: cli rejected the approval\n"`, `"Native evidence nil-root refused"`, `"Native evidence root-mismatch refused"`} {
+	for _, want := range []string{`"native analysis rejected the invocation"`, `"FaultLine error: cli server refused"`, `"Native evidence nil-root refused"`, `"Native evidence root-mismatch refused"`} {
 		if err != nil || !strings.Contains(out, want+"\n") {
 			t.Fatalf("valid observed output lacks %s: %q %v", want, out, err)
 		}
@@ -240,11 +252,14 @@ func nativeCoverageEvents() []map[string]any {
 		add(nativeDemofixturePkg, "pass", parent)
 	}
 	add(nativeDemofixturePkg, "pass", "")
-	// The CLI parent logs its two invocations itself, with no child case.
 	add(nativeCLIPkg, "start", "")
 	add(nativeCLIPkg, "run", "TestJudgeDemoNativeDiagnostics")
-	diagnostic(nativeCLIPkg, "TestJudgeDemoNativeDiagnostics", `"FaultLine error: cli rejected the approval\n"`)
-	diagnostic(nativeCLIPkg, "TestJudgeDemoNativeDiagnostics", `"FaultLine error: cli rejected the approval\n"`)
+	for _, child := range []string{"server", "generated-bundle-invalid"} {
+		name := "TestJudgeDemoNativeDiagnostics/" + child
+		add(nativeCLIPkg, "run", name)
+		diagnostic(nativeCLIPkg, name, `"FaultLine error: cli `+child+` refused"`)
+		add(nativeCLIPkg, "pass", name)
+	}
 	add(nativeCLIPkg, "pass", "TestJudgeDemoNativeDiagnostics")
 	add(nativeCLIPkg, "pass", "")
 	add(nativeDemoPkg, "start", "")
@@ -470,33 +485,19 @@ func TestNativeCoverageExportSites(t *testing.T) {
 			}
 		})
 	}
-	// Waivers are exact (file, literal) keys. A must-run literal needs its counter,
-	// a defensive one is stale if it ran or was produced, and neither leaks.
-	arg := []errorSite{siteOf(cli, "--approve-native")}
-	if err := validateNativeEvidence(repo, arg, nativeEvidence{blocks: blocks()}, nil); err != nil {
-		t.Fatal(err)
-	}
-	zero := blocks()
-	zero[cli] = []coverBlock{{1, 300, 0}}
-	if err := validateNativeEvidence(repo, arg, nativeEvidence{blocks: zero}, nil); err == nil {
-		t.Fatal("zero-hit must-run argument literal accepted")
-	}
-	if err := validateNativeEvidence(repo, []errorSite{siteOf(writer, "--approve-native")}, nativeEvidence{blocks: blocks()}, nil); err == nil {
-		t.Fatal("argument waiver leaked to another file")
-	}
-	defensive := []errorSite{siteOf(cli, "Generated proof bundle root digest differs from verified root")}
-	if err := validateNativeEvidence(repo, defensive, nativeEvidence{blocks: zero}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateNativeEvidence(repo, defensive, nativeEvidence{blocks: blocks()}, nil); err == nil {
-		t.Fatal("executed defensive waiver accepted as current")
-	}
-	if err := validateNativeEvidence(repo, defensive, nativeEvidence{outputs: "Generated proof bundle root digest differs from verified root", blocks: zero}, nil); err == nil {
-		t.Fatal("produced defensive waiver accepted as current")
-	}
-	for key := range nativeExportWaivers {
-		if !slices.Contains(nativeCoverageFiles[3:], key.file) {
-			t.Fatalf("waiver outside the export files: %v", key)
+	// There is no per-file waiver: a literal needs produced text and a counter.
+	for _, text := range []string{"--approve-native", "Generated proof bundle root digest differs from verified root"} {
+		one := []errorSite{siteOf(cli, text)}
+		if err := validateNativeEvidence(repo, one, nativeEvidence{blocks: blocks()}, nil); err == nil {
+			t.Fatalf("%q accepted without produced text", text)
+		}
+		zero := blocks()
+		zero[cli] = []coverBlock{{1, 300, 0}}
+		if err := validateNativeEvidence(repo, one, nativeEvidence{outputs: text, blocks: zero}, nil); err == nil {
+			t.Fatalf("%q accepted without an executed position", text)
+		}
+		if err := validateNativeEvidence(repo, one, nativeEvidence{outputs: text, blocks: blocks()}, nil); err != nil {
+			t.Fatal(err)
 		}
 	}
 	// An exemption never hides a reached or covered new site.
@@ -521,5 +522,41 @@ func TestNativeCoverageMergeKeepsOriginalCounters(t *testing.T) {
 	}
 	if blocks[cached][0].count != 0 || blocks[nativeCoverageFiles[3]][0].count != 1 || blocks[nativeCoverageFiles[4]][0].count != 1 {
 		t.Fatal("valid merge changed cached evidence")
+	}
+}
+
+// Ownership is exact produced text: the output for an owned file is exactly the
+// fresh evidence, with no per-file addition, and no waiver table exists.
+func TestNativeCoverageNoWaiverBypass(t *testing.T) {
+	repo := t.TempDir()
+	for _, file := range nativeCoverageFiles {
+		pos := filepath.Join(repo, filepath.FromSlash(file)) + ":10:2"
+		if got := nativeLiteralOutputs(repo, pos, "golden", nativeEvidence{outputs: "fresh"}); got != "fresh" {
+			t.Fatalf("%s output is not exactly the fresh evidence: %q", file, got)
+		}
+		if got := nativeLiteralOutputs(repo, pos, "golden", nativeEvidence{}); got != "" {
+			t.Fatalf("%s gained output without evidence: %q", file, got)
+		}
+	}
+	for _, name := range []string{"native_coverage_test.go", "native_coverage_gate_test.go"} {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{"nativeExport" + "Waivers", "nativeWaived" + "Text", "nativeWaiver" + " struct", "nativeArgument" + "Literals"} {
+			if name == "native_coverage_gate_test.go" && strings.Contains(string(data), "\""+forbidden) {
+				continue
+			}
+			if strings.Contains(string(data), forbidden) {
+				t.Fatalf("%s reintroduces %s", name, forbidden)
+			}
+		}
+	}
+	if err := validateNativeEvidence(repo, []errorSite{{text: "unlogged refusal text", file: filepath.Join(repo, "internal/cli/judge_demo.go"), line: 5}},
+		nativeEvidence{blocks: map[string][]coverBlock{
+			"internal/demofixture/native_analysis.go": {{1, 9, 1}}, "internal/demofixture/native_run.go": {{1, 9, 1}},
+			"internal/demofixture/native_witness.go": {{1, 9, 1}}, "internal/cli/judge_demo.go": {{1, 9, 0}},
+			"internal/bundle/demo/native_evidence.go": {{1, 9, 1}}}}, nil); err == nil {
+		t.Fatal("unproduced, unexecuted site accepted")
 	}
 }

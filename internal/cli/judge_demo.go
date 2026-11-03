@@ -5,12 +5,26 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/bundle/demo"
 	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/demofixture"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
+
+// verifyGeneratedBundle independently verifies a bundle just written and
+// requires its verified root to equal the written root.
+func verifyGeneratedBundle(written demo.Written) (bundle.Result, error) {
+	verification := demo.Verify(written.Directory, "", false)
+	if !verification.Valid {
+		return verification, fail("Generated proof bundle failed integrity verification: %s", strings.Join(verification.Errors, "; "))
+	}
+	if verification.RootDigest == nil || *verification.RootDigest != written.RootDigest {
+		return verification, fail("Generated proof bundle root digest differs from verified root")
+	}
+	return verification, nil
+}
 
 // judgeDemoCommand serves native proposal inspection and --export-only. The
 // interactive judge-demo server is not ported. --port has no effect.
@@ -65,12 +79,9 @@ func judgeDemoCommand(e *env, args []string) error {
 	if err != nil {
 		return err
 	}
-	verification := demo.Verify(written.Directory, "", false)
-	if !verification.Valid {
-		return fail("Generated proof bundle failed integrity verification: %s", strings.Join(verification.Errors, "; "))
-	}
-	if verification.RootDigest == nil || *verification.RootDigest != written.RootDigest {
-		return fail("Generated proof bundle root digest differs from verified root")
+	verification, err := verifyGeneratedBundle(written)
+	if err != nil {
+		return err
 	}
 	sidecar := ""
 	if rerun {

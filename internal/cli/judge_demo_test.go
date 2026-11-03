@@ -91,18 +91,82 @@ func TestJudgeDemoValidation(t *testing.T) {
 	}
 }
 
+// judgeDemoDiagnosticCase is one refusal: the complete result is asserted before
+// the diagnostic is emitted, and nothing may be left in the working directory.
 func TestJudgeDemoNativeDiagnostics(t *testing.T) {
-	for _, digest := range []string{"sha256:any-value", "sha256:" + strings.Repeat("0", 64)} {
-		dir := isolatedEmpty(t)
-		var out, errb bytes.Buffer
-		code := Run([]string{"judge-demo", "--export-only", "--rerun-all", "--approve-native", digest}, &out, &errb)
-		want := demoFail(`native analysis APPROVAL (invocation 0, state ""): approval must match the proposal and record a canonical UTC millisecond timestamp no later than execution entry`)
-		t.Logf("NATIVE-DIAGNOSTIC %q", errb.String())
-		if out.Len() != 0 || errb.String() != want || code != 1 {
-			t.Fatalf("%s: stdout=%q stderr=%q exit=%d", digest, out.String(), errb.String(), code)
-		}
-		requireEmptyDir(t, dir)
+	proposal := "Native proposal inspection cannot be combined with execution or output options."
+	server := "not yet ported: judge-demo server"
+	needsRerun := "--approve-native requires --rerun-all."
+	needsApproval := "Native RERUN requires --approve-native <proposal-digest>."
+	missing := "Missing required option: --approve-native"
+	rejected := `native analysis APPROVAL (invocation 0, state ""): approval must match the proposal and record a canonical UTC millisecond timestamp no later than execution entry`
+	cases := []struct {
+		name, message string
+		args          []string
+	}{
+		{"inspect-rerun", proposal, []string{"judge-demo", "--native-proposal", "--rerun-all"}},
+		{"inspect-export", proposal, []string{"judge-demo", "--native-proposal", "--export-only"}},
+		{"inspect-approve", proposal, []string{"judge-demo", "--native-proposal", "--approve-native"}},
+		{"inspect-output", proposal, []string{"judge-demo", "--native-proposal", "--output"}},
+		{"server", server, []string{"judge-demo"}},
+		{"server-rerun", server, []string{"judge-demo", "--rerun-all"}},
+		{"server-approval", server, []string{"judge-demo", "--approve-native", "sha256:x"}},
+		{"replay-approval", needsRerun, []string{"judge-demo", "--export-only", "--approve-native", "sha256:any-value"}},
+		{"replay-trailing-approval", needsRerun, []string{"judge-demo", "--export-only", "--approve-native"}},
+		{"rerun-absent-approval", needsApproval, []string{"judge-demo", "--export-only", "--rerun-all"}},
+		{"rerun-trailing-approval", missing, []string{"judge-demo", "--export-only", "--rerun-all", "--approve-native"}},
+		{"rerun-empty-approval", missing, []string{"judge-demo", "--export-only", "--rerun-all", "--approve-native", ""}},
+		{"rerun-flag-like-approval", missing, []string{"judge-demo", "--export-only", "--rerun-all", "--approve-native", "--output"}},
+		{"rerun-unapproved-any-value", rejected, []string{"judge-demo", "--export-only", "--rerun-all", "--approve-native", "sha256:any-value"}},
+		{"rerun-unapproved-zero-digest", rejected, []string{"judge-demo", "--export-only", "--rerun-all", "--approve-native", "sha256:" + strings.Repeat("0", 64)}},
 	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := isolatedEmpty(t)
+			var out, errb bytes.Buffer
+			code := Run(c.args, &out, &errb)
+			want := demoFail(c.message)
+			if out.Len() != 0 || errb.String() != want || code != 1 {
+				t.Fatalf("stdout=%q stderr=%q exit=%d", out.String(), errb.String(), code)
+			}
+			requireEmptyDir(t, dir)
+			t.Logf("NATIVE-DIAGNOSTIC %q", errb.String())
+		})
+	}
+	t.Run("generated-bundle-invalid", func(t *testing.T) {
+		written := demo.Written{Directory: t.TempDir()}
+		verification := demo.Verify(written.Directory, "", false)
+		if verification.Valid || len(verification.Errors) == 0 {
+			t.Fatalf("an empty directory must be an invalid bundle: %+v", verification)
+		}
+		_, err := verifyGeneratedBundle(written)
+		want := "Generated proof bundle failed integrity verification: " + strings.Join(verification.Errors, "; ")
+		if err == nil || err.Error() != want {
+			t.Fatalf("err=%v want=%q", err, want)
+		}
+		t.Logf("NATIVE-DIAGNOSTIC %q", err.Error())
+	})
+	t.Run("generated-bundle-root-mismatch", func(t *testing.T) {
+		isolatedEmpty(t)
+		directory := nodefs.Resolve(".faultline/bundles/mismatch")
+		if err := os.MkdirAll(filepath.Dir(directory), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		written, err := demo.Write(directory, demofixture.CreateReplayAnalysis(), demo.WriteOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := verifyGeneratedBundle(written); err != nil {
+			t.Fatalf("a genuine bundle must verify against its own root: %v", err)
+		}
+		written.RootDigest = "sha256:" + strings.Repeat("1", 64)
+		_, err = verifyGeneratedBundle(written)
+		want := "Generated proof bundle root digest differs from verified root"
+		if err == nil || err.Error() != want {
+			t.Fatalf("err=%v want=%q", err, want)
+		}
+		t.Logf("NATIVE-DIAGNOSTIC %q", err.Error())
+	})
 }
 
 func readValue(t *testing.T, path string) jsjson.Value {

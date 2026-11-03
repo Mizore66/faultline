@@ -70,43 +70,12 @@ var (
 	nativeExportFiles = []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"}
 )
 
-// nativeWaiver is one exact (file, literal) site whose text no fresh diagnostic
-// parent logs. Each is individually proven by the named test or by a defensive
-// impossibility. mustRun keeps the positive-counter obligation for a literal
-// that executes on a fresh path; unreachable defensive refusals cannot run.
-// A waiver is rejected as stale when its text is produced and its position ran.
-type nativeWaiver struct {
-	reason  string
-	mustRun bool
-}
-
-var nativeExportWaivers = map[siteKey]nativeWaiver{
-	{"internal/cli/judge_demo.go", "Native proposal inspection cannot be combined with execution or output options."}: {"judge_demo.go refuses the four forbidden flags before any I/O; TestJudgeDemoValidation inspect+rerun/export/approve/output compare the complete stderr, stdout and exit and require an empty directory", false},
-	{"internal/cli/judge_demo.go", "not yet ported: judge-demo server"}:                                               {"judge_demo.go returns this when --export-only is absent; TestJudgeDemoValidation server, server with rerun and server with approval compare the complete result", false},
-	{"internal/cli/judge_demo.go", "--approve-native requires --rerun-all."}:                                          {"judge_demo.go refuses an approval without --rerun-all before executing; TestJudgeDemoValidation replay approval misuse and replay trailing approval misuse compare the complete result", false},
-	{"internal/cli/judge_demo.go", "Native RERUN requires --approve-native <proposal-digest>."}:                       {"judge_demo.go refuses an absent approval flag before executing; TestJudgeDemoValidation rerun absent approval compares the complete result", false},
-	{"internal/cli/judge_demo.go", "--approve-native"}:                                                                {"argument to requiredOption, whose Missing required option message TestJudgeDemoValidation compares for trailing, empty and flag-like approvals; the native RERUN path must still run it", true},
-	{"internal/cli/judge_demo.go", "Generated proof bundle failed integrity verification: %s"}:                        {"demo.Verify runs on the bundle demo.Write just produced from a fixed analysis; no input can make it invalid, so this defensive refusal has no reachable path", false},
-	{"internal/cli/judge_demo.go", "Generated proof bundle root digest differs from verified root"}:                   {"demo.Verify of a bundle demo.Write just produced always returns that root digest; no input can make it differ, so this defensive refusal has no reachable path", false},
-}
-
-// nativeWaivedText is the quoted text of every waiver for one owned file.
-func nativeWaivedText(file string) string {
-	var out strings.Builder
-	for _, key := range slices.SortedFunc(maps.Keys(nativeExportWaivers), func(a, b siteKey) int { return strings.Compare(a.text, b.text) }) {
-		if key.file == file {
-			out.WriteString(strconv.Quote(key.text) + "\n")
-		}
-	}
-	return out.String()
-}
-
 func nativeLiteralOutputs(repo, pos, goldens string, evidence nativeEvidence) string {
 	rel, err := filepath.Rel(repo, pos)
 	if err == nil {
 		file, _, _ := strings.Cut(filepath.ToSlash(rel), ":")
 		if slices.Contains(nativeCoverageFiles, file) {
-			return evidence.outputs + nativeWaivedText(file)
+			return evidence.outputs
 		}
 	}
 	return goldens
@@ -378,12 +347,10 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 			st.passed[event.Test] = true
 		case "output":
 			if _, text, found := strings.Cut(event.Output, "NATIVE-DIAGNOSTIC "); found {
-				// demofixture and demo emit once per child; the CLI parent logs one
-				// record per invocation it asserts and has no children.
+				// Every package emits exactly one record from each checked child; a
+				// parent, or an unrelated child of another parent, never emits.
 				_, child, isChild := strings.Cut(event.Test, "/")
-				cliParent := pkg.importPath == nativeCLIPackage.importPath
-				if !st.running[event.Test] || !slices.Contains(pkg.diagnosticParents, top) || isChild == cliParent || isChild && child == "" ||
-					isChild && len(st.diagnostic[event.Test]) != 0 {
+				if !st.running[event.Test] || !slices.Contains(pkg.diagnosticParents, top) || !isChild || child == "" || len(st.diagnostic[event.Test]) != 0 {
 					return "", fmt.Errorf("native diagnostic has invalid or duplicate emitter %s", event.Test)
 				}
 				var message string
@@ -424,7 +391,7 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 			}
 		}
 		for _, parent := range pkg.diagnosticParents {
-			emitted := len(st.diagnostic[parent]) != 0
+			emitted := false
 			for name := range st.passed {
 				emitted = emitted || strings.HasPrefix(name, parent+"/") && len(st.diagnostic[name]) != 0
 			}
@@ -532,12 +499,6 @@ func validateNativeEvidence(repo string, sites []errorSite, evidence nativeEvide
 		for _, fragment := range messageFragments(site.text) {
 			quoted := strconv.Quote(fragment)
 			reached = reached && strings.Contains(evidence.outputs, quoted[1:len(quoted)-1])
-		}
-		if waiver, waived := nativeExportWaivers[siteKey{rel, site.text}]; waived {
-			if strings.TrimSpace(waiver.reason) == "" || waiver.mustRun && !covered || !waiver.mustRun && (covered || reached) {
-				return fmt.Errorf("%s:%d: native waiver for %q is unexplained, unexecuted or stale", rel, site.line, site.text)
-			}
-			continue
 		}
 		if reason, exempt := exemptions[site.text]; exempt {
 			if strings.TrimSpace(reason) == "" || covered || reached {
