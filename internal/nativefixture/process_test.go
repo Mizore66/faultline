@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -144,7 +145,16 @@ func requireReaped(t *testing.T, cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil || cmd.ProcessState == nil {
 		t.Fatal("no observed owned process/reap")
 	}
-	if err := cmd.Process.Kill(); !errors.Is(err, os.ErrProcessDone) {
+	// Windows Wait releases the process handle rather than retaining a zombie;
+	// a subsequent Kill therefore reports EINVAL instead of ErrProcessDone.
+	var want error = os.ErrProcessDone
+	if runtime.GOOS == "windows" {
+		if !cmd.ProcessState.Exited() {
+			t.Fatal("owned Windows process has not exited")
+		}
+		want = syscall.EINVAL
+	}
+	if err := cmd.Process.Kill(); !errors.Is(err, want) {
 		t.Fatalf("owned process not already reaped: %v", err)
 	}
 }
@@ -255,8 +265,14 @@ func TestNativeProcessEnvironmentObservedAndFresh(t *testing.T) {
 	if strings.Join(c.Environment, "\x00") != strings.Join(env, "\x00") {
 		t.Fatalf("effective environment=%q want=%q", c.Environment, env)
 	}
-	sort.Strings(env)
-	if string(c.Stdout) != strings.Join(env, "\n")+"\n" || len(c.Stderr) != 0 {
+	childEnv := append([]string(nil), env...)
+	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
+		// Windows on ARM64 adds this exact architecture entry even when the
+		// parent supplies an explicit minimal environment block.
+		childEnv = append(childEnv, "PROCESSOR_ARCHITECTURE=ARM64")
+	}
+	sort.Strings(childEnv)
+	if string(c.Stdout) != strings.Join(childEnv, "\n")+"\n" || len(c.Stderr) != 0 {
 		t.Fatalf("actual child environment=%q stderr=%q", c.Stdout, c.Stderr)
 	}
 	c.Environment[0] = "changed"
