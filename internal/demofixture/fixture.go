@@ -1,7 +1,6 @@
-// Package demofixture builds the pure cached (REPLAY) demo fixture and
-// analysis. It ports the REPLAY branches of src/fixture.ts and src/engine.ts
-// and never reads artifacts, runs Node or Git: every call returns fresh
-// ordered jsjson values.
+// Package demofixture builds fresh ordered demo values. CreateReplayAnalysis
+// preserves the pure cached fixture; RunNativeAnalysis explicitly executes the
+// reviewed native Go model in bounded child processes. Neither runs Node or Git.
 package demofixture
 
 import (

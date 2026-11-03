@@ -10,6 +10,9 @@ import (
 )
 
 func main() {
+	if code, handled := runNativeSample(); handled {
+		os.Exit(code)
+	}
 	args := nodeArgv()
 	stderr := newStderrWriter(os.Stderr)
 	stdout := newStdoutWriter(os.Stdout)
