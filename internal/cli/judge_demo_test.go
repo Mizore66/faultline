@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -223,49 +224,83 @@ func TestJudgeDemoExport(t *testing.T) {
 func TestJudgeDemoSidecarFailure(t *testing.T) {
 	digest := demofixture.NativeWitnessProposal().Get("digest").Str()
 	for _, c := range []struct {
-		name string
-		args []string
+		name    string
+		args    []string
+		symlink bool
 	}{
-		{"replay", []string{"judge-demo", "--export-only", "--output", ".faultline/bundles/bundle"}},
-		{"native", []string{"judge-demo", "--export-only", "--rerun-all", "--approve-native", digest, "--output", ".faultline/bundles/bundle"}},
+		{"replay-directory", []string{"judge-demo", "--export-only", "--output", ".faultline/bundles/bundle"}, false},
+		{"native-directory", []string{"judge-demo", "--export-only", "--rerun-all", "--approve-native", digest, "--output", ".faultline/bundles/bundle"}, false},
+		{"replay-symlink", []string{"judge-demo", "--export-only", "--output", ".faultline/bundles/bundle"}, true},
+		{"native-symlink", []string{"judge-demo", "--export-only", "--rerun-all", "--approve-native", digest, "--output", ".faultline/bundles/bundle"}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			if c.symlink && runtime.GOOS == "windows" {
+				t.Skip("symlink creation needs privileges on Windows")
+			}
 			isolatedEmpty(t)
 			directory := nodefs.Resolve(".faultline/bundles/bundle")
 			if err := os.MkdirAll(filepath.Dir(directory), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			// A valid pre-existing bundle, and a directory at the reserved path.
-			if _, err := demo.Write(directory, demofixture.CreateReplayAnalysis(), demo.WriteOptions{}); err != nil {
+			// A valid prior bundle, to be replaced by a native bundle that differs.
+			prior := demofixture.CreateReplayAnalysis()
+			priorWritten, err := demo.Write(directory, prior, demo.WriteOptions{})
+			if err != nil {
 				t.Fatal(err)
 			}
 			reserved := sidecarOf(directory)
-			if err := os.Mkdir(reserved, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			keep := filepath.Join(reserved, "keep")
-			if err := os.WriteFile(keep, []byte("keep"), 0o600); err != nil {
-				t.Fatal(err)
+			keep := filepath.Join(t.TempDir(), "keep")
+			if c.symlink {
+				if err := os.WriteFile(keep, []byte("keep"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(keep, reserved); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.Mkdir(reserved, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				keep = filepath.Join(reserved, "keep")
+				if err := os.WriteFile(keep, []byte("keep"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			var out, errb bytes.Buffer
 			code := Run(c.args, &out, &errb)
-			if code != 1 || out.Len() != 0 {
-				t.Fatalf("stdout=%q stderr=%q exit=%d", out.String(), errb.String(), code)
-			}
-			if c.name == "replay" {
-				if want := demoFail("Native evidence destination must be a regular non-symlink file: " + reserved); errb.String() != want {
-					t.Fatalf("stderr=%q want=%q", errb.String(), want)
-				}
-			} else if !strings.HasPrefix(errb.String(), "FaultLine error: ") || !strings.Contains(errb.String(), reserved) {
-				t.Fatalf("stderr=%q", errb.String())
+			want := demoFail("Native evidence destination must be a regular non-symlink file: " + reserved)
+			if code != 1 || out.Len() != 0 || errb.String() != want {
+				t.Fatalf("stdout=%q stderr=%q want=%q exit=%d", out.String(), errb.String(), want, code)
 			}
 			t.Logf("NATIVE-DIAGNOSTIC %q", errb.String())
 			verification := demo.Verify(directory, "", false)
 			if !verification.Valid || verification.RootDigest == nil {
 				t.Fatalf("%+v", verification)
 			}
+			if strings.HasPrefix(c.name, "native") {
+				if *verification.RootDigest == priorWritten.RootDigest || *verification.RootDigest == replayRetainedRoot {
+					t.Fatalf("bundle was not replaced by the native bundle: %s", *verification.RootDigest)
+				}
+				got, err := canonical.DigestJSON(readValue(t, filepath.Join(directory, "analysis.json")))
+				if err != nil {
+					t.Fatal(err)
+				}
+				priorDigest, err := canonical.DigestJSON(prior)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got == priorDigest {
+					t.Fatal("native analysis equals the prior REPLAY analysis")
+				}
+			} else if *verification.RootDigest != priorWritten.RootDigest {
+				t.Fatalf("replay root %s differs from prior %s", *verification.RootDigest, priorWritten.RootDigest)
+			}
 			if body, err := os.ReadFile(keep); err != nil || string(body) != "keep" {
-				t.Fatalf("reserved directory was removed: %v", err)
+				t.Fatalf("reserved entry content was disturbed: %v", err)
+			}
+			info, err := os.Lstat(reserved)
+			if err != nil || (c.symlink && info.Mode()&os.ModeSymlink == 0) || (!c.symlink && !info.IsDir()) {
+				t.Fatalf("reserved entry replaced: %v", err)
 			}
 		})
 	}

@@ -187,6 +187,50 @@ func TestNativeEvidenceDiagnostics(t *testing.T) {
 		}
 		emitDiagnostic(t, err)
 	})
+	t.Run("publish-refuses-directory", func(t *testing.T) {
+		written, verification, analysis := verifiedReplay(t)
+		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		keep := filepath.Join(path, "keep")
+		if err := os.WriteFile(keep, []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := WriteNativeEvidence(written, verification, analysis, syntheticProvenance())
+		if err == nil || err.Error() != "Native evidence destination must be a regular non-symlink file: "+path {
+			t.Fatalf("err=%v", err)
+		}
+		if got, _ := os.ReadFile(keep); string(got) != "keep" {
+			t.Fatalf("directory disturbed")
+		}
+		emitDiagnostic(t, err)
+	})
+	t.Run("publish-refuses-symlink", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlink creation needs privileges on Windows")
+		}
+		written, verification, analysis := verifiedReplay(t)
+		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		_, err := WriteNativeEvidence(written, verification, analysis, syntheticProvenance())
+		if err == nil || err.Error() != "Native evidence destination must be a regular non-symlink file: "+path {
+			t.Fatalf("err=%v", err)
+		}
+		if info, statErr := os.Lstat(path); statErr != nil || info.Mode()&fs.ModeSymlink == 0 {
+			t.Fatalf("symlink disturbed: %v", statErr)
+		}
+		if got, _ := os.ReadFile(target); string(got) != "keep" {
+			t.Fatalf("target %q", got)
+		}
+		emitDiagnostic(t, err)
+	})
 	t.Run("publication-failure-cleans-regular-file", func(t *testing.T) {
 		written, verification, analysis := verifiedReplay(t)
 		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
@@ -203,10 +247,15 @@ func TestNativeEvidenceDiagnostics(t *testing.T) {
 	t.Run("publication-failure-leaves-directory", func(t *testing.T) {
 		written, verification, analysis := verifiedReplay(t)
 		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
-		if err := os.Mkdir(path, 0o700); err != nil {
-			t.Fatal(err)
+		// The directory appears after the destination pre-check, during publication.
+		deps := failing()
+		deps.atomicWrite = func(string, string) (string, error) {
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			return "", forced
 		}
-		_, err := writeNativeEvidence(failing(), written, verification, analysis, syntheticProvenance())
+		_, err := writeNativeEvidence(deps, written, verification, analysis, syntheticProvenance())
 		if err == nil || err.Error() != forced.Error() || !errors.Is(err, forced) {
 			t.Fatalf("err=%v", err)
 		}
@@ -235,7 +284,14 @@ func TestNativeEvidenceDiagnostics(t *testing.T) {
 		written, verification, analysis := verifiedReplay(t)
 		inspect := errors.New("forced lstat failure")
 		deps := failing()
-		deps.lstat = func(string) (fs.FileInfo, error) { return nil, inspect }
+		calls := 0
+		deps.lstat = func(p string) (fs.FileInfo, error) {
+			calls++
+			if calls == 1 { // destination pre-check: absent
+				return nodefs.Lstat(p)
+			}
+			return nil, inspect
+		}
 		_, err := writeNativeEvidence(deps, written, verification, analysis, syntheticProvenance())
 		if err == nil || err.Error() != "forced publication failure\nforced lstat failure" ||
 			!errors.Is(err, forced) || !errors.Is(err, inspect) {

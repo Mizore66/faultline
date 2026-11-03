@@ -60,6 +60,9 @@ func writeNativeEvidence(deps nativeEvidenceDeps, written Written, verification 
 		"provenance", provenance,
 	)
 	path := nativeEvidencePath(written.Directory)
+	if err := checkNativeEvidenceDestination(deps, path); err != nil {
+		return "", err
+	}
 	published, publicationErr := deps.atomicWrite(path, jsjson.StringifyIndent(envelope, "  ")+"\n")
 	if publicationErr != nil {
 		return "", errors.Join(publicationErr, removeNativeEvidence(deps, path, false))
@@ -85,4 +88,21 @@ func removeNativeEvidence(deps nativeEvidenceDeps, path string, strict bool) err
 		return nil
 	}
 	return deps.unlink(path)
+}
+
+// checkNativeEvidenceDestination refuses a present destination that is not a
+// regular non-symlink file, before anything is published.
+func checkNativeEvidenceDestination(deps nativeEvidenceDeps, path string) error {
+	info, err := deps.lstat(path)
+	if err != nil {
+		var fsErr *nodefs.Error
+		if errors.Is(err, fs.ErrNotExist) || (errors.As(err, &fsErr) && fsErr.Code == "ENOENT") {
+			return nil
+		}
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New(jsexc.Concat("Native evidence destination must be a regular non-symlink file: ", path))
+	}
+	return nil
 }
