@@ -30,6 +30,24 @@ func builtBinaryEnv() []string {
 	return env
 }
 
+// deterministicBuildEnv pins the offline, local-toolchain go build environment;
+// the four pinned keys are never inherited from the host.
+func deterministicBuildEnv() []string {
+	pinned := map[string]string{"GOTOOLCHAIN": "local", "GOPROXY": "off", "GOSUMDB": "off", "GOFLAGS": ""}
+	var env []string
+	for _, kv := range os.Environ() {
+		if key, _, _ := strings.Cut(kv, "="); strings.EqualFold(key, "GOTOOLCHAIN") || strings.EqualFold(key, "GOPROXY") ||
+			strings.EqualFold(key, "GOSUMDB") || strings.EqualFold(key, "GOFLAGS") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	for _, key := range []string{"GOTOOLCHAIN", "GOPROXY", "GOSUMDB", "GOFLAGS"} {
+		env = append(env, key+"="+pinned[key])
+	}
+	return env
+}
+
 func TestJudgeDemoBuiltBinaryNodeFree(t *testing.T) {
 	moduleRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -43,6 +61,7 @@ func TestJudgeDemoBuiltBinaryNodeFree(t *testing.T) {
 	binary := filepath.Join(fresh, name)
 	build := exec.Command("go", "build", "-o", binary, "./cmd/fl")
 	build.Dir = moduleRoot
+	build.Env = deterministicBuildEnv()
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
