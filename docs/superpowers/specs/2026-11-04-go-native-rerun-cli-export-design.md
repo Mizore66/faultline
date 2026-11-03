@@ -113,7 +113,7 @@ For native RERUN, the sidecar path is the absolute verified bundle directory plu
 }
 ```
 
-`analysisDigest` is computed as `canonical.DigestJSON(result.Analysis)` after `RunNativeAnalysis` has returned its final analysis, including the API's final `generatedAt`. The exact same `result.Analysis` value is passed to `demo.Write`. `bundleRootDigest` is `verification.RootDigest` from `demo.Verify(written.Directory, "", false)` and must equal `written.RootDigest`; publication requires `verification.Valid`.
+`analysisDigest` is computed as `canonical.DigestJSON(result.Analysis)` after `RunNativeAnalysis` has returned its final analysis, including the API's final `generatedAt`. The exact same `result.Analysis` value is passed to `demo.Write`. `bundleRootDigest` is the non-nil `*verification.RootDigest` from `demo.Verify(written.Directory, "", false)` and must equal `written.RootDigest`; publication requires `verification.Valid`.
 
 `provenance` is the actual `faultline.native-demo-execution.v1` object, not a string. These fields let a consumer detect a sidecar/analysis/bundle mismatch instead of trusting a filename. This slice adds no sidecar reader, automatic consumer, or authentication claim.
 
