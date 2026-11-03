@@ -3,6 +3,7 @@
 package difftest
 
 import (
+	"crypto/sha256"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -331,6 +332,31 @@ func TestLiveTruncate(t *testing.T) {
 	}
 }
 
+// logNativeRunnerMismatch records compact evidence only after the exact
+// comparison failed. The digests and boundaries are diagnostics, never a
+// substitute for comparing the complete outputs.
+func logNativeRunnerMismatch(t *testing.T, label, raw string) {
+	t.Helper()
+	value, err := jsjson.Parse(raw)
+	if err != nil {
+		t.Logf("%s result is not parseable JSON: %v", label, err)
+		return
+	}
+	result := value.Get("result")
+	stdout := []byte(jsstr.ToUTF8(result.Get("stdout").Str()))
+	stderr := []byte(jsstr.ToUTF8(result.Get("stderr").Str()))
+	boundaries := func(data []byte) (prefix, suffix []byte) {
+		return data[:min(16, len(data))], data[max(0, len(data)-16):]
+	}
+	stdoutPrefix, stdoutSuffix := boundaries(stdout)
+	stderrPrefix, stderrSuffix := boundaries(stderr)
+	t.Logf("%s stdoutBytes=%d stderrBytes=%d totalBytes=%d stdoutSHA256=%x stderrSHA256=%x stdoutPrefix=%x stdoutSuffix=%x stderrPrefix=%x stderrSuffix=%x exitCode=%s signal=%s outputTruncated=%s reason=%s",
+		label, len(stdout), len(stderr), len(stdout)+len(stderr), sha256.Sum256(stdout), sha256.Sum256(stderr),
+		stdoutPrefix, stdoutSuffix, stderrPrefix, stderrSuffix,
+		jsjson.Stringify(result.Get("exitCode")), jsjson.Stringify(result.Get("signal")),
+		jsjson.Stringify(result.Get("outputTruncated")), jsjson.Stringify(result.Get("reason")))
+}
+
 // TestLiveNativeRunner runs one plan per fake Docker through
 // executeSandboxPlan's native runner and through Execute(NativeRunner()),
 // with the docker recorder first on PATH, and compares the argv, the result
@@ -451,6 +477,8 @@ func TestLiveNativeRunner(t *testing.T) {
 			o.Set("result", sandbox.Execute(p, sandbox.NativeRunner(), false))
 			got := jsjson.Stringify(jsjson.MakeObject(o))
 			if got != want {
+				logNativeRunnerMismatch(t, "got", got)
+				logNativeRunnerMismatch(t, "want", want)
 				t.Fatalf("got  %s\nwant %s", got, want)
 			}
 			recordOutput(t, want)
