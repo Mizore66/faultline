@@ -16,31 +16,30 @@ import (
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
-// writerInput is synthetic input to the writer, not execution evidence.
-func writerInput() jsjson.Value {
+// syntheticProvenance is writer input only, not execution evidence.
+func syntheticProvenance() jsjson.Value {
 	return jsjson.MustObject(
-		"note", jsjson.MakeString("synthetic writer input, not execution evidence"),
-		"kind", jsjson.MakeString("WRITER_TEST_INPUT"),
+		"label", jsjson.MakeString("synthetic writer input, not execution evidence"),
+		"order", jsjson.MakeNumber(1),
 	)
 }
 
-func nativeFixture(t *testing.T) (Written, bundle.Result, jsjson.Value) {
+func verifiedReplay(t *testing.T) (Written, bundle.Result, jsjson.Value) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "managed")
-	out := filepath.Join(root, "demo")
 	analysis := demofixture.CreateReplayAnalysis()
-	written, err := Write(out, analysis, WriteOptions{ProofRoot: &root})
+	written, err := Write(filepath.Join(root, "demo"), analysis, WriteOptions{ProofRoot: &root})
 	if err != nil {
 		t.Fatal(err)
 	}
-	verification := Verify(out, written.RootDigest, true)
-	if !verification.Valid {
+	verification := Verify(written.Directory, written.RootDigest, true)
+	if !verification.Valid || verification.RootDigest == nil {
 		t.Fatalf("%+v", verification)
 	}
 	return written, verification, analysis
 }
 
-func logNativeDiagnostic(t *testing.T, err error) {
+func emitDiagnostic(t *testing.T, err error) {
 	t.Helper()
 	observed, marshalErr := json.Marshal(err.Error())
 	if marshalErr != nil {
@@ -49,63 +48,66 @@ func logNativeDiagnostic(t *testing.T, err error) {
 	t.Logf("NATIVE-DIAGNOSTIC %s", observed)
 }
 
+func absent(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("%s should be absent: %v", path, err)
+	}
+}
+
 func TestNativeEvidenceWrite(t *testing.T) {
-	written, verification, analysis := nativeFixture(t)
-	provenance := writerInput()
+	written, verification, analysis := verifiedReplay(t)
 	digest, err := canonical.DigestJSON(analysis)
 	if err != nil {
 		t.Fatal(err)
-	}
-	path, err := WriteNativeEvidence(written, verification, analysis, provenance)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := nodefs.Resolve(written.Directory) + ".native-execution.json"; path != want || !filepath.IsAbs(path) {
-		t.Fatalf("path %q want %q", path, want)
 	}
 	want := "{\n" +
 		"  \"schemaVersion\": \"faultline.native-demo-cli-evidence.v1\",\n" +
 		"  \"analysisDigest\": \"" + digest + "\",\n" +
 		"  \"bundleRootDigest\": \"" + written.RootDigest + "\",\n" +
 		"  \"provenance\": {\n" +
-		"    \"note\": \"synthetic writer input, not execution evidence\",\n" +
-		"    \"kind\": \"WRITER_TEST_INPUT\"\n" +
+		"    \"label\": \"synthetic writer input, not execution evidence\",\n" +
+		"    \"order\": 1\n" +
 		"  }\n" +
 		"}\n"
+	wantPath := nodefs.Resolve(written.Directory) + ".native-execution.json"
+
+	// An existing regular file is replaced.
+	if err := os.WriteFile(wantPath, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, err := WriteNativeEvidence(written, verification, analysis, syntheticProvenance())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != wantPath || !filepath.IsAbs(path) {
+		t.Fatalf("path %q want %q", path, wantPath)
+	}
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != want {
-		t.Fatalf("bytes\n%q\nwant\n%q", got, want)
-	}
-
-	// Regular-file replacement.
-	if err := os.WriteFile(path, []byte("stale"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := WriteNativeEvidence(written, verification, analysis, provenance); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := os.ReadFile(path); string(got) != want {
-		t.Fatalf("replacement bytes %q", got)
-	}
-
-	// Removal, then absent removal is a no-op.
-	if err := RemoveNativeEvidence(written.Directory); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("lstat after removal: %v", err)
+		t.Fatalf("bytes %q want %q", got, want)
 	}
 	if err := RemoveNativeEvidence(written.Directory); err != nil {
 		t.Fatal(err)
+	}
+	absent(t, path)
+	if err := RemoveNativeEvidence(written.Directory); err != nil {
+		t.Fatalf("absent removal must be a no-op: %v", err)
 	}
 }
 
 func TestNativeEvidenceDiagnostics(t *testing.T) {
-	t.Run("invalid-verification", func(t *testing.T) {
-		written, verification, analysis := nativeFixture(t)
+	forced := errors.New("forced publication failure")
+	failing := func() nativeEvidenceDeps {
+		d := nativeEvidenceDeps{atomicWrite: nodefs.AtomicWriteFile, lstat: nodefs.Lstat, unlink: nodefs.Unlink}
+		d.atomicWrite = func(string, string) (string, error) { return "", forced }
+		return d
+	}
+	t.Run("invalid-verification-touches-nothing", func(t *testing.T) {
+		written, verification, analysis := verifiedReplay(t)
 		verification.Valid = false
 		calls := 0
 		deps := nativeEvidenceDeps{
@@ -113,37 +115,41 @@ func TestNativeEvidenceDiagnostics(t *testing.T) {
 			lstat:       func(string) (fs.FileInfo, error) { calls++; return nil, nil },
 			unlink:      func(string) error { calls++; return nil },
 		}
-		_, err := writeNativeEvidence(deps, written, verification, analysis, writerInput())
+		_, err := writeNativeEvidence(deps, written, verification, analysis, syntheticProvenance())
 		if err == nil || err.Error() != "Native evidence requires a valid bundle verification" || calls != 0 {
 			t.Fatalf("err=%v calls=%d", err, calls)
 		}
-		logNativeDiagnostic(t, err)
+		emitDiagnostic(t, err)
 	})
 	t.Run("nil-root", func(t *testing.T) {
-		written, verification, analysis := nativeFixture(t)
+		written, verification, analysis := verifiedReplay(t)
 		verification.RootDigest = nil
-		_, err := WriteNativeEvidence(written, verification, analysis, writerInput())
+		_, err := WriteNativeEvidence(written, verification, analysis, syntheticProvenance())
 		if err == nil || err.Error() != "Native evidence requires a verified bundle root digest" {
 			t.Fatalf("err=%v", err)
 		}
-		logNativeDiagnostic(t, err)
+		emitDiagnostic(t, err)
 	})
 	t.Run("root-mismatch", func(t *testing.T) {
-		written, verification, analysis := nativeFixture(t)
-		other := "sha256:" + string(make([]byte, 0)) + "0000000000000000000000000000000000000000000000000000000000000000"
+		written, verification, analysis := verifiedReplay(t)
+		other := "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 		verification.RootDigest = &other
-		_, err := WriteNativeEvidence(written, verification, analysis, writerInput())
+		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
+		if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := WriteNativeEvidence(written, verification, analysis, syntheticProvenance())
 		if err == nil || err.Error() != "Native evidence verified root digest does not match the written bundle root digest" {
 			t.Fatalf("err=%v", err)
 		}
-		if _, statErr := os.Lstat(nativeEvidencePath(written.Directory)); !errors.Is(statErr, fs.ErrNotExist) {
-			t.Fatalf("destination touched: %v", statErr)
+		if got, _ := os.ReadFile(path); string(got) != "keep" {
+			t.Fatalf("pre-existing destination changed: %q", got)
 		}
-		logNativeDiagnostic(t, err)
+		emitDiagnostic(t, err)
 	})
 	t.Run("remove-refuses-directory", func(t *testing.T) {
-		written, _, _ := nativeFixture(t)
-		path := nativeEvidencePath(written.Directory)
+		written, _, _ := verifiedReplay(t)
+		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
 		if err := os.Mkdir(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -154,14 +160,14 @@ func TestNativeEvidenceDiagnostics(t *testing.T) {
 		if info, statErr := os.Lstat(path); statErr != nil || !info.IsDir() {
 			t.Fatalf("directory disturbed: %v", statErr)
 		}
-		logNativeDiagnostic(t, err)
+		emitDiagnostic(t, err)
 	})
 	t.Run("remove-refuses-symlink", func(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("symlink creation needs privileges on Windows")
 		}
-		written, _, _ := nativeFixture(t)
-		path := nativeEvidencePath(written.Directory)
+		written, _, _ := verifiedReplay(t)
+		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
 		target := filepath.Join(t.TempDir(), "target")
 		if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
 			t.Fatal(err)
@@ -179,89 +185,77 @@ func TestNativeEvidenceDiagnostics(t *testing.T) {
 		if got, _ := os.ReadFile(target); string(got) != "keep" {
 			t.Fatalf("target %q", got)
 		}
-		logNativeDiagnostic(t, err)
+		emitDiagnostic(t, err)
 	})
-	t.Run("publication-failure-removes-regular-file", func(t *testing.T) {
-		written, verification, analysis := nativeFixture(t)
-		path := nativeEvidencePath(written.Directory)
+	t.Run("publication-failure-cleans-regular-file", func(t *testing.T) {
+		written, verification, analysis := verifiedReplay(t)
+		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
 		if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		publication := errors.New("forced publication failure")
-		deps := productionNativeEvidenceDeps()
-		deps.atomicWrite = func(string, string) (string, error) { return "", publication }
-		_, err := writeNativeEvidence(deps, written, verification, analysis, writerInput())
-		if err == nil || err.Error() != publication.Error() || !errors.Is(err, publication) {
+		_, err := writeNativeEvidence(failing(), written, verification, analysis, syntheticProvenance())
+		if err == nil || err.Error() != forced.Error() || !errors.Is(err, forced) {
 			t.Fatalf("err=%v", err)
 		}
-		if _, statErr := os.Lstat(path); !errors.Is(statErr, fs.ErrNotExist) {
-			t.Fatalf("regular file not cleaned: %v", statErr)
-		}
-		logNativeDiagnostic(t, err)
-	})
-	t.Run("publication-and-removal-failures-are-joined", func(t *testing.T) {
-		written, verification, analysis := nativeFixture(t)
-		path := nativeEvidencePath(written.Directory)
-		if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		publication := errors.New("forced publication failure")
-		removal := errors.New("forced removal failure")
-		deps := productionNativeEvidenceDeps()
-		deps.atomicWrite = func(string, string) (string, error) { return "", publication }
-		deps.unlink = func(string) error { return removal }
-		_, err := writeNativeEvidence(deps, written, verification, analysis, writerInput())
-		if err == nil || err.Error() != "forced publication failure\nforced removal failure" ||
-			!errors.Is(err, publication) || !errors.Is(err, removal) {
-			t.Fatalf("err=%v", err)
-		}
-		logNativeDiagnostic(t, err)
+		absent(t, path)
+		emitDiagnostic(t, err)
 	})
 	t.Run("publication-failure-leaves-directory", func(t *testing.T) {
-		written, verification, analysis := nativeFixture(t)
-		path := nativeEvidencePath(written.Directory)
+		written, verification, analysis := verifiedReplay(t)
+		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
 		if err := os.Mkdir(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		publication := errors.New("forced publication failure")
-		deps := productionNativeEvidenceDeps()
-		deps.atomicWrite = func(string, string) (string, error) { return "", publication }
-		_, err := writeNativeEvidence(deps, written, verification, analysis, writerInput())
-		if err == nil || err.Error() != publication.Error() || !errors.Is(err, publication) {
+		_, err := writeNativeEvidence(failing(), written, verification, analysis, syntheticProvenance())
+		if err == nil || err.Error() != forced.Error() || !errors.Is(err, forced) {
 			t.Fatalf("err=%v", err)
 		}
 		if info, statErr := os.Lstat(path); statErr != nil || !info.IsDir() {
 			t.Fatalf("directory disturbed: %v", statErr)
 		}
-		logNativeDiagnostic(t, err)
+		emitDiagnostic(t, err)
 	})
-	t.Run("lstat-failure-is-joined", func(t *testing.T) {
-		written, verification, analysis := nativeFixture(t)
-		publication := errors.New("forced publication failure")
-		inspect := errors.New("forced lstat failure")
-		deps := productionNativeEvidenceDeps()
-		deps.atomicWrite = func(string, string) (string, error) { return "", publication }
-		deps.lstat = func(string) (fs.FileInfo, error) { return nil, inspect }
-		_, err := writeNativeEvidence(deps, written, verification, analysis, writerInput())
-		if err == nil || err.Error() != "forced publication failure\nforced lstat failure" ||
-			!errors.Is(err, publication) || !errors.Is(err, inspect) {
+	t.Run("publication-and-removal-failures-joined", func(t *testing.T) {
+		written, verification, analysis := verifiedReplay(t)
+		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
+		if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		removal := errors.New("forced removal failure")
+		deps := failing()
+		deps.unlink = func(string) error { return removal }
+		_, err := writeNativeEvidence(deps, written, verification, analysis, syntheticProvenance())
+		if err == nil || err.Error() != "forced publication failure\nforced removal failure" ||
+			!errors.Is(err, forced) || !errors.Is(err, removal) {
 			t.Fatalf("err=%v", err)
 		}
-		logNativeDiagnostic(t, err)
+		emitDiagnostic(t, err)
 	})
-	t.Run("remove-unlink-failure", func(t *testing.T) {
-		written, _, _ := nativeFixture(t)
-		path := nativeEvidencePath(written.Directory)
+	t.Run("publication-and-lstat-failures-joined", func(t *testing.T) {
+		written, verification, analysis := verifiedReplay(t)
+		inspect := errors.New("forced lstat failure")
+		deps := failing()
+		deps.lstat = func(string) (fs.FileInfo, error) { return nil, inspect }
+		_, err := writeNativeEvidence(deps, written, verification, analysis, syntheticProvenance())
+		if err == nil || err.Error() != "forced publication failure\nforced lstat failure" ||
+			!errors.Is(err, forced) || !errors.Is(err, inspect) {
+			t.Fatalf("err=%v", err)
+		}
+		emitDiagnostic(t, err)
+	})
+	t.Run("remove-reports-unlink-failure", func(t *testing.T) {
+		written, _, _ := verifiedReplay(t)
+		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
 		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		removal := errors.New("forced removal failure")
-		deps := productionNativeEvidenceDeps()
-		deps.unlink = func(string) error { return removal }
+		deps := nativeEvidenceDeps{atomicWrite: nodefs.AtomicWriteFile, lstat: nodefs.Lstat,
+			unlink: func(string) error { return removal }}
 		err := removeNativeEvidence(deps, path, true)
-		if err != removal {
+		if !errors.Is(err, removal) || err.Error() != removal.Error() {
 			t.Fatalf("err=%v", err)
 		}
-		logNativeDiagnostic(t, err)
+		emitDiagnostic(t, err)
 	})
 }

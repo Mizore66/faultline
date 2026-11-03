@@ -11,11 +11,6 @@ import (
 	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
-const (
-	nativeEvidenceSchema = "faultline.native-demo-cli-evidence.v1"
-	nativeEvidenceSuffix = ".native-execution.json"
-)
-
 // nativeEvidenceDeps lets tests force publication and removal failures
 // without a production selector.
 type nativeEvidenceDeps struct {
@@ -28,15 +23,12 @@ func productionNativeEvidenceDeps() nativeEvidenceDeps {
 	return nativeEvidenceDeps{atomicWrite: nodefs.AtomicWriteFile, lstat: nodefs.Lstat, unlink: nodefs.Unlink}
 }
 
-// nativeEvidencePath is the sidecar beside a bundle directory.
 func nativeEvidencePath(bundleDirectory string) string {
-	return nodefs.Resolve(bundleDirectory) + nativeEvidenceSuffix
+	return nodefs.Resolve(bundleDirectory) + ".native-execution.json"
 }
 
-// WriteNativeEvidence publishes the digest-linked native execution sidecar for
-// a verified bundle and returns its absolute path. On a publication error the
-// destination is removed when it is a regular non-symlink file, and the
-// publication and cleanup errors are joined.
+// WriteNativeEvidence atomically publishes the digest-linked native execution
+// sidecar beside a verified bundle and returns its absolute path.
 func WriteNativeEvidence(written Written, verification bundle.Result, analysis, provenance jsjson.Value) (string, error) {
 	return writeNativeEvidence(productionNativeEvidenceDeps(), written, verification, analysis, provenance)
 }
@@ -62,27 +54,26 @@ func writeNativeEvidence(deps nativeEvidenceDeps, written Written, verification 
 		return "", err
 	}
 	envelope := jsjson.MustObject(
-		"schemaVersion", jsjson.MakeString(nativeEvidenceSchema),
+		"schemaVersion", jsjson.MakeString("faultline.native-demo-cli-evidence.v1"),
 		"analysisDigest", jsjson.MakeString(analysisDigest),
 		"bundleRootDigest", jsjson.MakeString(written.RootDigest),
 		"provenance", provenance,
 	)
-	text := jsexc.Concat(jsjson.StringifyIndent(envelope, "  "), "\n")
 	path := nativeEvidencePath(written.Directory)
-	published, publicationErr := deps.atomicWrite(path, text)
+	published, publicationErr := deps.atomicWrite(path, jsjson.StringifyIndent(envelope, "  ")+"\n")
 	if publicationErr != nil {
-		cleanupErr := removeNativeEvidence(deps, path, false)
-		return "", errors.Join(publicationErr, cleanupErr)
+		return "", errors.Join(publicationErr, removeNativeEvidence(deps, path, false))
 	}
 	return published, nil
 }
 
 // removeNativeEvidence unlinks path only when it is a regular non-symlink
-// file. strict refuses other entries; otherwise they are left untouched.
+// file. When strict, any other entry is refused; otherwise it is left alone.
 func removeNativeEvidence(deps nativeEvidenceDeps, path string, strict bool) error {
 	info, err := deps.lstat(path)
 	if err != nil {
-		if isNotExist(err) {
+		var fsErr *nodefs.Error
+		if errors.Is(err, fs.ErrNotExist) || (errors.As(err, &fsErr) && fsErr.Code == "ENOENT") {
 			return nil
 		}
 		return err
@@ -94,12 +85,4 @@ func removeNativeEvidence(deps nativeEvidenceDeps, path string, strict bool) err
 		return nil
 	}
 	return deps.unlink(path)
-}
-
-func isNotExist(err error) bool {
-	var fsErr *nodefs.Error
-	if errors.As(err, &fsErr) && fsErr.Code == "ENOENT" {
-		return true
-	}
-	return errors.Is(err, fs.ErrNotExist)
 }
