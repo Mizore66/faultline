@@ -69,6 +69,15 @@ func coverageGate(repo, coverDir string) error {
 	if len(blocks) == 0 {
 		return fmt.Errorf("coverage gate: the profile has no blocks of the gated packages")
 	}
+	// Library-only native execution supplements these exact files without
+	// removing their positions, or cached CLI positions, from judgeSites.
+	native, err := nativeLibraryEvidence(repo)
+	if err != nil {
+		return err
+	}
+	if err := mergeNativeCoverage(blocks, native.blocks); err != nil {
+		return err
+	}
 	var sites []errorSite
 	for _, dir := range gatedDirs {
 		found, err := errorSites(filepath.Join(repo, filepath.FromSlash(dir)))

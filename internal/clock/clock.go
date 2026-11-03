@@ -58,6 +58,7 @@ func wallTempSuffix() string {
 // itself (the judge-proof server's keep-alive and request timeouts, socket
 // deadlines): it is never seeded, in test builds either, because a seeded
 // clock advances one tick per read and would make those timers fire at
-// once or never. Nothing it returns may reach output, a file or a digest;
-// recorded times come from Now and NowMillis.
+// once or never. Nothing it returns may reach output, a file or a digest.
+// Recorded wall timestamps come from Now and NowMillis; evidence durations use
+// the separate unseeded EvidenceTimer API.
 func Monotonic() time.Time { return time.Now() }
