@@ -70,19 +70,31 @@ var (
 	nativeExportFiles = []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"}
 )
 
+// nativeOwner names the one package whose fresh diagnostics may satisfy an owned
+// file: demofixture text only the original three files, CLI text only
+// judge_demo.go, demo text only native_evidence.go.
+func nativeOwner(file string) string {
+	for _, pkg := range nativeAllPackages {
+		if slices.Contains(nativeCoverageFiles, file) && strings.HasPrefix(file, pkg.sourceDirectory+"/") && !strings.Contains(strings.TrimPrefix(file, pkg.sourceDirectory+"/"), "/") {
+			return pkg.importPath
+		}
+	}
+	return ""
+}
+
 func nativeLiteralOutputs(repo, pos, goldens string, evidence nativeEvidence) string {
 	rel, err := filepath.Rel(repo, pos)
 	if err == nil {
 		file, _, _ := strings.Cut(filepath.ToSlash(rel), ":")
 		if slices.Contains(nativeCoverageFiles, file) {
-			return evidence.outputs
+			return evidence.outputs[nativeOwner(file)]
 		}
 	}
 	return goldens
 }
 
 type nativeEvidence struct {
-	outputs string
+	outputs map[string]string // produced text by owning package import path
 	blocks  map[string][]coverBlock
 }
 
@@ -133,9 +145,10 @@ func nativeLibraryEvidence(repo string) (nativeEvidence, error) {
 	// One deadline covers both sequential subprocesses.
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-	goTest := func(profile, run string, extra ...string) ([]byte, error) {
-		args := append([]string{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=" + profile, "-run=" + run}, extra...)
-		cmd := exec.CommandContext(ctx, "go", args...)
+	commands := nativeEvidenceCommands(repo, filepath.Join(dir, "native-profile.txt"), filepath.Join(dir, "export-profile.txt"))
+	var streams [][]byte
+	for _, command := range commands {
+		cmd := exec.CommandContext(ctx, "go", command.args...)
 		cmd.Dir, cmd.WaitDelay = repo, time.Second
 		for _, value := range os.Environ() {
 			key, _, _ := strings.Cut(value, "=")
@@ -147,34 +160,28 @@ func nativeLibraryEvidence(repo string) (nativeEvidence, error) {
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr // nil stdin is closed by os/exec.
 		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("native library evidence: %w\n%s\n%s", err, stdout.String(), stderr.String())
+			return nativeEvidence{}, fmt.Errorf("native library evidence: %w\n%s\n%s", err, stdout.String(), stderr.String())
 		}
-		return stdout.Bytes(), nil
+		streams = append(streams, stdout.Bytes())
 	}
-	nativeProfilePath, exportProfilePath := filepath.Join(dir, "native-profile.txt"), filepath.Join(dir, "export-profile.txt")
-	nativeStream, err := goTest(nativeProfilePath,
-		"^(TestNativeDiagnostics|TestNativeDiagnosticInvariants|TestNativeAnalysisFullContract)$", "./internal/demofixture",
-		"-native-contract="+filepath.Join(repo, "difftest/testdata/native-demo/native-contract.jsonl"))
+	nativeProfilePath, exportProfilePath := commands[0].profile, commands[1].profile
+	outputs, err := nativeOutputsFor(streams[0], cases, commands[0].packages)
 	if err != nil {
 		return nativeEvidence{}, err
 	}
-	// The export packages never receive -native-contract.
-	exportStream, err := goTest(exportProfilePath,
-		"^(TestJudgeDemoNativeDiagnostics|TestNativeEvidenceDiagnostics)$", "./internal/cli", "./internal/bundle/demo")
+	exportOutputs, err := nativeOutputsFor(streams[1], nil, commands[1].packages)
 	if err != nil {
 		return nativeEvidence{}, err
 	}
-	outputs, err := nativeOutputsFor(nativeStream, cases, []nativeEvidencePackage{nativeDemofixturePackage})
-	if err != nil {
-		return nativeEvidence{}, err
-	}
-	exportOutputs, err := nativeOutputsFor(exportStream, nil, []nativeEvidencePackage{nativeCLIPackage, nativeDemoPackage})
-	if err != nil {
-		return nativeEvidence{}, err
+	for pkg, text := range exportOutputs {
+		if _, dup := outputs[pkg]; dup {
+			return nativeEvidence{}, fmt.Errorf("native streams both own %s", pkg)
+		}
+		outputs[pkg] = text
 	}
 	// The existing test compared every byte before each required case passed.
 	// These COMPLETE expectations own successful prose, never rejected calls.
-	outputs += exportOutputs + expected.String()
+	outputs[nativeDemofixturePackage.importPath] += expected.String()
 	profileData, err := os.ReadFile(nativeProfilePath)
 	if err != nil {
 		return nativeEvidence{}, err
@@ -192,12 +199,9 @@ func nativeLibraryEvidence(repo string) (nativeEvidence, error) {
 		return nativeEvidence{}, err
 	}
 	// The subsets are disjoint: demofixture counters incidentally emitted by the
-	// CLI's imports are discarded, never allowed to replace the original evidence.
-	for file, found := range exportBlocks {
-		if _, dup := blocks[file]; dup {
-			return nativeEvidence{}, fmt.Errorf("native profiles both own %s", file)
-		}
-		blocks[file] = found
+	// CLI's imports were discarded, never allowed to replace the original evidence.
+	if blocks, err = mergeDisjointNativeProfiles(blocks, exportBlocks); err != nil {
+		return nativeEvidence{}, err
 	}
 	var nativeSites []errorSite
 	for _, pkg := range nativeAllPackages {
@@ -267,7 +271,7 @@ func nativeSourceBinding(repo string) (string, error) {
 }
 
 // nativeOutputs decodes one stream that must contain every owned package.
-func nativeOutputs(data []byte, cases []string) (string, error) {
+func nativeOutputs(data []byte, cases []string) (map[string]string, error) {
 	return nativeOutputsFor(data, cases, nativeAllPackages)
 }
 
@@ -275,7 +279,7 @@ func nativeOutputs(data []byte, cases []string) (string, error) {
 // must start and end exactly once with its parents, children and diagnostics
 // accounted separately; a foreign package, event after completion, skip, failure,
 // pass-without-run or diagnostic from the wrong test is rejected.
-func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePackage) (string, error) {
+func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePackage) (map[string]string, error) {
 	type state struct {
 		started, ended bool
 		running        map[string]bool
@@ -289,7 +293,7 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 		spec[pkg.importPath] = pkg
 	}
 	if len(packages) == 0 || !bytes.HasSuffix(data, []byte{'\n'}) {
-		return "", fmt.Errorf("native events or contract cases are incomplete")
+		return nil, fmt.Errorf("native events or contract cases are incomplete")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	for {
@@ -299,49 +303,49 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 			break
 		}
 		if err != nil {
-			return "", fmt.Errorf("native event JSON: %w", err)
+			return nil, fmt.Errorf("native event JSON: %w", err)
 		}
 		st, pkg := packages[event.Package], spec[event.Package]
 		if st == nil || st.ended {
-			return "", fmt.Errorf("native events have a foreign package or follow completion")
+			return nil, fmt.Errorf("native events have a foreign package or follow completion")
 		}
 		if event.Action == "fail" || event.Action == "skip" {
-			return "", fmt.Errorf("native case %s did not pass: %s", event.Test, event.Action)
+			return nil, fmt.Errorf("native case %s did not pass: %s", event.Test, event.Action)
 		}
 		if event.Test == "" {
 			switch event.Action {
 			case "start":
 				if st.started {
-					return "", fmt.Errorf("duplicate native package start")
+					return nil, fmt.Errorf("duplicate native package start")
 				}
 				st.started = true
 			case "pass":
 				if !st.started {
-					return "", fmt.Errorf("native package passed without starting")
+					return nil, fmt.Errorf("native package passed without starting")
 				}
 				st.ended = true
 			case "output":
 				if strings.Contains(event.Output, "NATIVE-DIAGNOSTIC") {
-					return "", fmt.Errorf("native diagnostic has no emitting case")
+					return nil, fmt.Errorf("native diagnostic has no emitting case")
 				}
 			default:
-				return "", fmt.Errorf("unexpected native package action %q", event.Action)
+				return nil, fmt.Errorf("unexpected native package action %q", event.Action)
 			}
 			continue
 		}
 		top, _, _ := strings.Cut(event.Test, "/")
 		if !st.started || !slices.Contains(pkg.parents, top) {
-			return "", fmt.Errorf("unexpected native test %q", event.Test)
+			return nil, fmt.Errorf("unexpected native test %q", event.Test)
 		}
 		switch event.Action {
 		case "run":
 			if st.running[event.Test] || st.passed[event.Test] {
-				return "", fmt.Errorf("duplicate native test %s", event.Test)
+				return nil, fmt.Errorf("duplicate native test %s", event.Test)
 			}
 			st.running[event.Test] = true
 		case "pass":
 			if !st.running[event.Test] {
-				return "", fmt.Errorf("native test %s passed without running", event.Test)
+				return nil, fmt.Errorf("native test %s passed without running", event.Test)
 			}
 			delete(st.running, event.Test)
 			st.passed[event.Test] = true
@@ -351,32 +355,32 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 				// parent, or an unrelated child of another parent, never emits.
 				_, child, isChild := strings.Cut(event.Test, "/")
 				if !st.running[event.Test] || !slices.Contains(pkg.diagnosticParents, top) || !isChild || child == "" || len(st.diagnostic[event.Test]) != 0 {
-					return "", fmt.Errorf("native diagnostic has invalid or duplicate emitter %s", event.Test)
+					return nil, fmt.Errorf("native diagnostic has invalid or duplicate emitter %s", event.Test)
 				}
 				var message string
 				if err := json.Unmarshal([]byte(strings.TrimSpace(text)), &message); err != nil || message == "" {
-					return "", fmt.Errorf("native diagnostic is not a nonempty JSON string")
+					return nil, fmt.Errorf("native diagnostic is not a nonempty JSON string")
 				}
 				st.diagnostic[event.Test] = append(st.diagnostic[event.Test], message)
 			}
 		case "pause", "cont":
 			if !st.running[event.Test] {
-				return "", fmt.Errorf("native case resumed without running")
+				return nil, fmt.Errorf("native case resumed without running")
 			}
 		default:
-			return "", fmt.Errorf("unexpected native test action %q", event.Action)
+			return nil, fmt.Errorf("unexpected native test action %q", event.Action)
 		}
 	}
-	var outputs strings.Builder
+	outputs := map[string]string{}
 	for _, pkg := range allowed {
 		st := packages[pkg.importPath]
 		if !st.ended || len(st.running) != 0 || len(st.diagnostic) == 0 {
-			return "", fmt.Errorf("native evidence has no complete executed diagnostics for %s", pkg.importPath)
+			return nil, fmt.Errorf("native evidence has no complete executed diagnostics for %s", pkg.importPath)
 		}
 		required := append([]string{}, pkg.parents...)
 		if pkg.importPath == nativeDemofixturePackage.importPath {
 			if len(cases) == 0 {
-				return "", fmt.Errorf("native events or contract cases are incomplete")
+				return nil, fmt.Errorf("native events or contract cases are incomplete")
 			}
 			for _, name := range []string{"timeline", "partial", "subsets", "environment"} {
 				required = append(required, "TestNativeDiagnosticInvariants/"+name)
@@ -387,7 +391,7 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 		}
 		for _, name := range required {
 			if !st.passed[name] {
-				return "", fmt.Errorf("native evidence is missing passing test %s in %s", name, pkg.importPath)
+				return nil, fmt.Errorf("native evidence is missing passing test %s in %s", name, pkg.importPath)
 			}
 		}
 		for _, parent := range pkg.diagnosticParents {
@@ -396,25 +400,68 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 				emitted = emitted || strings.HasPrefix(name, parent+"/") && len(st.diagnostic[name]) != 0
 			}
 			if !emitted {
-				return "", fmt.Errorf("native diagnostic parent %s emitted no checked diagnostic", parent)
+				return nil, fmt.Errorf("native diagnostic parent %s emitted no checked diagnostic", parent)
 			}
 		}
 		for name := range st.passed {
 			top, _, isChild := strings.Cut(name, "/")
 			if isChild && slices.Contains(pkg.diagnosticParents, top) && len(st.diagnostic[name]) == 0 {
-				return "", fmt.Errorf("native case %s emitted no checked diagnostic", name)
+				return nil, fmt.Errorf("native case %s emitted no checked diagnostic", name)
 			}
 		}
 		for _, name := range slices.Sorted(maps.Keys(st.diagnostic)) {
 			if !st.passed[name] {
-				return "", fmt.Errorf("native diagnostic case %s never passed", name)
+				return nil, fmt.Errorf("native diagnostic case %s never passed", name)
 			}
 			for _, message := range st.diagnostic[name] {
-				outputs.WriteString(strconv.Quote(message) + "\n")
+				outputs[pkg.importPath] += strconv.Quote(message) + "\n"
 			}
 		}
 	}
-	return outputs.String(), nil
+	return outputs, nil
+}
+
+// nativeEvidenceCommand is one go test invocation: its argv, coverage profile and
+// the packages whose stream it must produce.
+type nativeEvidenceCommand struct {
+	args     []string
+	profile  string
+	packages []nativeEvidencePackage
+}
+
+// nativeEvidenceCommands builds, without running anything, the two sequential
+// invocations. Only the demofixture binary receives -native-contract.
+func nativeEvidenceCommands(repo, nativeProfile, exportProfile string) []nativeEvidenceCommand {
+	base := func(profile, run string) []string {
+		return []string{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=" + profile, "-run=" + run}
+	}
+	return []nativeEvidenceCommand{
+		{
+			args: append(append(base(nativeProfile, "^(TestNativeDiagnostics|TestNativeDiagnosticInvariants|TestNativeAnalysisFullContract)$"),
+				"./internal/demofixture"), "-native-contract="+filepath.Join(repo, "difftest/testdata/native-demo/native-contract.jsonl")),
+			profile:  nativeProfile,
+			packages: []nativeEvidencePackage{nativeDemofixturePackage},
+		},
+		{
+			args: append(base(exportProfile, "^(TestJudgeDemoNativeDiagnostics|TestNativeEvidenceDiagnostics)$"),
+				"./internal/cli", "./internal/bundle/demo"),
+			profile:  exportProfile,
+			packages: []nativeEvidencePackage{nativeCLIPackage, nativeDemoPackage},
+		},
+	}
+}
+
+// mergeDisjointNativeProfiles returns a new map; on overlap it fails and neither
+// input is changed.
+func mergeDisjointNativeProfiles(a, b map[string][]coverBlock) (map[string][]coverBlock, error) {
+	out := maps.Clone(a)
+	for file, found := range b {
+		if _, dup := out[file]; dup {
+			return nil, fmt.Errorf("native profiles both own %s", file)
+		}
+		out[file] = found
+	}
+	return out, nil
 }
 
 // nativeProfile is the all-owned-files wrapper.
@@ -498,7 +545,7 @@ func validateNativeEvidence(repo string, sites []errorSite, evidence nativeEvide
 		reached := true
 		for _, fragment := range messageFragments(site.text) {
 			quoted := strconv.Quote(fragment)
-			reached = reached && strings.Contains(evidence.outputs, quoted[1:len(quoted)-1])
+			reached = reached && strings.Contains(evidence.outputs[nativeOwner(rel)], quoted[1:len(quoted)-1])
 		}
 		if reason, exempt := exemptions[site.text]; exempt {
 			if strings.TrimSpace(reason) == "" || covered || reached {
