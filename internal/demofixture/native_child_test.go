@@ -229,6 +229,7 @@ func TestNativeAnalysisRealExecution(t *testing.T) {
 	approval := NativeApproval{ProposalDigest: NativeWitnessProposal().Get("digest").Str(), ApprovedAt: clock.ISO(clock.Now())}
 	result, err := RunNativeAnalysis(context.Background(), approval)
 	if err != nil {
+		t.Logf("native execution provenance: %s", jsjson.Stringify(result.Provenance))
 		t.Fatal(err)
 	}
 	nativeLiveAudit(t, result)

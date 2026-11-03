@@ -22,6 +22,14 @@ import (
 // that no golden can produce, each with the reason. Everything else must appear in some golden
 // output, so a dropped or reworded check fails replay.
 var unreachableLiterals = map[string]string{
+	// Native library invariants, not CLI-unreachability exemptions. The
+	// freshly executed TestNativeDiagnosticInvariants checks each producer;
+	// nativeLibraryEvidence also rejects observed text or a positive counter.
+	"native timeline does not establish the three expected stable boundaries":         "native_analysis.go checks every adjacent verdict against the three fixed boundary kinds before constructing transitions in that same order; each probe must match its baseline, so the later stable-boundary shape cannot differ (TestNativeDiagnosticInvariants/timeline exhausts all256 binary timelines)",
+	"partial configuration is not unresolved parse evidence":                          "native_run.go returns a partial run only after the exact decoder transcript check, then unconditionally assigns ERROR/FIXTURE_PARSE_ERROR; analyze receives that unchanged record (TestNativeDiagnosticInvariants/partial)",
+	"counterfactual state subsets do not establish the nonempty two-edit interaction": "analyze constructs fresh fixed fixtureStates, never exposes them to an executor, and the candidate has exactly sourceHunk+rendererHunk while reverted and last-good have no hunks (TestNativeDiagnosticInvariants/subsets)",
+	"required child environment missing":                                              "checkNativeIdentity already requires exactly one non-Windows entry or two Windows entries and accepts each required marker/root at most once; an entry outside those cases returns earlier, so an accepted list cannot lack either required entry (TestNativeDiagnosticInvariants/environment)",
+
 	"Unsafe artifact path:": "metadata and manifest paths are schema-checked with the same safe-path rule first",
 	"Git range patch exceeds FaultLine's portable artifact limit.":            "git diff output past the 4 MiB maxBuffer fails with ENOBUFS before the 128 MiB artifact limit is checked",
 	"AGENT_DRAFT evidence cannot be exported as a Git proof bundle":           "proof.evidenceGrade is a zod enum without AGENT_DRAFT",
@@ -1420,6 +1428,10 @@ func demoArtifactsDecodedText(t *testing.T, path string) string {
 func TestGoldensReachEveryErrorLiteral(t *testing.T) {
 	repo := oracle.RepoRoot(t)
 	all := goldenText(t, repo)
+	native, err := nativeLibraryEvidence(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
 	literals := gatedLiterals(t, repo)
 	for lit, pos := range literals {
 		if liveGated(repo, pos) {
@@ -1428,7 +1440,7 @@ func TestGoldensReachEveryErrorLiteral(t *testing.T) {
 		reached := true
 		for _, frag := range messageFragments(lit) {
 			quoted := strconv.Quote(frag)
-			reached = reached && strings.Contains(all, quoted[1:len(quoted)-1])
+			reached = reached && strings.Contains(nativeLiteralOutputs(repo, pos, all, native), quoted[1:len(quoted)-1])
 		}
 		if reached {
 			if reason, ok := unreachableLiterals[lit]; ok {
