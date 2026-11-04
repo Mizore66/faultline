@@ -90,6 +90,13 @@ func TestNativeEvidenceWrite(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("bytes %q want %q", got, want)
 	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("sidecar is not a regular file: %v %v", info, err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("sidecar mode %o, want 0600", info.Mode().Perm())
+	}
 	if err := RemoveNativeEvidence(written.Directory); err != nil {
 		t.Fatal(err)
 	}

@@ -9,9 +9,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Mizore66/faultline/internal/bundle/demo"
-	"github.com/Mizore66/faultline/internal/canonical"
+	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/demofixture"
 	"github.com/Mizore66/faultline/internal/jsjson"
 )
@@ -46,6 +47,23 @@ func deterministicBuildEnv() []string {
 		env = append(env, key+"="+pinned[key])
 	}
 	return env
+}
+
+// goVersionOfBinary is the Go version the built binary was compiled with,
+// read from the same toolchain that built it.
+func goVersionOfBinary(t *testing.T, binary string) string {
+	t.Helper()
+	cmd := exec.Command("go", "version", binary)
+	cmd.Env = deterministicBuildEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go version: %v", err)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 {
+		t.Fatalf("go version output %q", out)
+	}
+	return fields[1]
 }
 
 func TestJudgeDemoBuiltBinaryNodeFree(t *testing.T) {
@@ -90,6 +108,9 @@ func TestJudgeDemoBuiltBinaryNodeFree(t *testing.T) {
 
 	digest := proposal.Get("digest").Str()
 	output := filepath.Join(work, ".faultline", "bundles", "native")
+	// The binary is built without the test tag, so it reads the real wall
+	// clock even when this test process runs under a seeded one.
+	started := clock.ISO(time.Now())
 	stdout, _ := run("judge-demo", "--export-only", "--rerun-all", "--approve-native", digest, "--output", output)
 
 	verification := demo.Verify(output, "", false)
@@ -103,38 +124,12 @@ func TestJudgeDemoBuiltBinaryNodeFree(t *testing.T) {
 		t.Fatalf("stdout: %q", stdout)
 	}
 
-	read := func(path string) jsjson.Value {
-		text, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v, err := jsjson.Parse(string(text))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return v
-	}
-	analysisDigest, err := canonical.DigestJSON(read(filepath.Join(output, "analysis.json")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	evidence := read(sidecar)
-	if evidence.Get("schemaVersion").Str() != "faultline.native-demo-cli-evidence.v1" ||
-		evidence.Get("analysisDigest").Str() != analysisDigest ||
-		evidence.Get("bundleRootDigest").Str() != *verification.RootDigest {
-		t.Fatalf("sidecar linkage: %s", jsjson.Stringify(evidence))
-	}
-	provenance := evidence.Get("provenance")
-	receipts := provenance.Get("invocations").Items()
-	if provenance.Get("status").Str() != "COMPLETE" || len(receipts) != 39 ||
-		provenance.Get("approval").Get("proposalDigest").Str() != digest {
-		t.Fatalf("provenance: status=%q receipts=%d", provenance.Get("status").Str(), len(receipts))
-	}
-	for i, r := range receipts {
-		if int(r.Get("ordinal").Num()) != i+1 {
-			t.Fatalf("receipt %d ordinal %v", i, r.Get("ordinal").Num())
-		}
-	}
+	analysisDigest := auditNativeSidecar(t, nativeAudit{
+		sidecar: sidecar, directory: output, executable: binary, goVersion: goVersionOfBinary(t, binary),
+		proposalDigest: digest, notBefore: started, notAfter: clock.ISO(time.Now()),
+	})
+	evidence := readValue(t, sidecar)
+	receipts := evidence.Get("provenance").Get("invocations").Items()
 	t.Logf("NODE-FREE-EVIDENCE binary=%s bundle=%s sidecar=%s root=%s analysisDigest=%s checkedFiles=%d receipts=%d",
 		binary, output, sidecar, *verification.RootDigest, analysisDigest, verification.CheckedFiles, len(receipts))
 }
