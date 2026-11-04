@@ -700,7 +700,7 @@ func TestNativeEvidenceCommands(t *testing.T) {
 	want := [][]string{
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/a.txt",
 			"-run=^(TestNativeDiagnostics|TestNativeDiagnosticInvariants|TestNativeAnalysisFullContract)$", "./internal/demofixture",
-			"-native-contract=/repo/difftest/testdata/native-demo/native-contract.jsonl"},
+			"-native-contract=" + filepath.Join("/repo", "difftest", "testdata", "native-demo", "native-contract.jsonl")},
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/b.txt",
 			"-run=^(TestJudgeDemoNativeDiagnostics|TestNativeEvidenceDiagnostics)$", "./internal/cli", "./internal/bundle/demo"},
 	}

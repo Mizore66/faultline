@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -22,6 +23,34 @@ func syntheticProvenance() jsjson.Value {
 		"label", jsjson.MakeString("synthetic writer input, not execution evidence"),
 		"order", jsjson.MakeNumber(1),
 	)
+}
+
+func makeDirectoryLink(t *testing.T, target, link string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		targetAbs, err := filepath.Abs(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		linkAbs, err := filepath.Abs(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", linkAbs, targetAbs).CombinedOutput(); err != nil {
+			t.Fatalf("mklink /J: %v %s", err, out)
+		}
+		return
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func isSpecialLink(info fs.FileInfo) bool {
+	if runtime.GOOS == "windows" {
+		return !info.IsDir() && !info.Mode().IsRegular()
+	}
+	return info.Mode()&fs.ModeSymlink != 0
 }
 
 func verifiedReplay(t *testing.T) (Written, bundle.Result, jsjson.Value) {
@@ -170,26 +199,24 @@ func TestNativeEvidenceDiagnostics(t *testing.T) {
 		emitDiagnostic(t, err)
 	})
 	t.Run("remove-refuses-symlink", func(t *testing.T) {
-		if runtime.GOOS == "windows" {
-			t.Skip("symlink creation needs privileges on Windows")
-		}
 		written, _, _ := verifiedReplay(t)
 		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
 		target := filepath.Join(t.TempDir(), "target")
-		if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		if err := os.Mkdir(target, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(target, path); err != nil {
+		if err := os.WriteFile(filepath.Join(target, "keep"), []byte("keep"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		makeDirectoryLink(t, target, path)
 		err := RemoveNativeEvidence(written.Directory)
 		if err == nil || err.Error() != "Native evidence destination must be a regular non-symlink file: "+path {
 			t.Fatalf("err=%v", err)
 		}
-		if info, statErr := os.Lstat(path); statErr != nil || info.Mode()&fs.ModeSymlink == 0 {
+		if info, statErr := os.Lstat(path); statErr != nil || !isSpecialLink(info) {
 			t.Fatalf("symlink disturbed: %v", statErr)
 		}
-		if got, _ := os.ReadFile(target); string(got) != "keep" {
+		if got, _ := os.ReadFile(filepath.Join(target, "keep")); string(got) != "keep" {
 			t.Fatalf("target %q", got)
 		}
 		emitDiagnostic(t, err)
@@ -214,26 +241,24 @@ func TestNativeEvidenceDiagnostics(t *testing.T) {
 		emitDiagnostic(t, err)
 	})
 	t.Run("publish-refuses-symlink", func(t *testing.T) {
-		if runtime.GOOS == "windows" {
-			t.Skip("symlink creation needs privileges on Windows")
-		}
 		written, verification, analysis := verifiedReplay(t)
 		path := nodefs.Resolve(written.Directory) + ".native-execution.json"
 		target := filepath.Join(t.TempDir(), "target")
-		if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		if err := os.Mkdir(target, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(target, path); err != nil {
+		if err := os.WriteFile(filepath.Join(target, "keep"), []byte("keep"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		makeDirectoryLink(t, target, path)
 		_, err := WriteNativeEvidence(written, verification, analysis, syntheticProvenance())
 		if err == nil || err.Error() != "Native evidence destination must be a regular non-symlink file: "+path {
 			t.Fatalf("err=%v", err)
 		}
-		if info, statErr := os.Lstat(path); statErr != nil || info.Mode()&fs.ModeSymlink == 0 {
+		if info, statErr := os.Lstat(path); statErr != nil || !isSpecialLink(info) {
 			t.Fatalf("symlink disturbed: %v", statErr)
 		}
-		if got, _ := os.ReadFile(target); string(got) != "keep" {
+		if got, _ := os.ReadFile(filepath.Join(target, "keep")); string(got) != "keep" {
 			t.Fatalf("target %q", got)
 		}
 		emitDiagnostic(t, err)

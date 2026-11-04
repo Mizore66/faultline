@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,6 +51,52 @@ func emitDiagnostic(t *testing.T, message string) {
 		t.Fatal(err)
 	}
 	t.Logf("NATIVE-DIAGNOSTIC %s", observed)
+}
+
+func makeDirectoryLink(t *testing.T, target, link string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		targetAbs, err := filepath.Abs(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		linkAbs, err := filepath.Abs(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", linkAbs, targetAbs).CombinedOutput(); err != nil {
+			t.Fatalf("mklink /J: %v %s", err, out)
+		}
+		return
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func isSpecialLink(info fs.FileInfo) bool {
+	if runtime.GOOS == "windows" {
+		return !info.IsDir() && !info.Mode().IsRegular()
+	}
+	return info.Mode()&fs.ModeSymlink != 0
+}
+
+func makeSpecialFile(t *testing.T, path string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		listener, err := net.Listen("unix", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		listener.(*net.UnixListener).SetUnlinkOnClose(false)
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if out, err := exec.Command("mkfifo", path).CombinedOutput(); err != nil {
+		t.Fatalf("mkfifo: %v %s", err, out)
+	}
 }
 
 func demoFail(message string) string { return "FaultLine error: " + message + demoNext }
@@ -889,8 +936,6 @@ func TestJudgeDemoOutputRefusal(t *testing.T) {
 		args    func(string) []string
 		prepare func(t *testing.T, path string)
 		message string
-		needOS  bool // needs a unix mkfifo
-		symlink bool
 	}{
 		{"replay-unverified-directory", replay, func(t *testing.T, path string) {
 			if err := os.Mkdir(path, 0o755); err != nil {
@@ -899,7 +944,7 @@ func TestJudgeDemoOutputRefusal(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(path, "notes.txt"), []byte("mine"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-		}, "Proof bundle output can only replace a verified FaultLine bundle: ", false, false},
+		}, "Proof bundle output can only replace a verified FaultLine bundle: "},
 		{"native-unverified-directory", native, func(t *testing.T, path string) {
 			if err := os.Mkdir(path, 0o755); err != nil {
 				t.Fatal(err)
@@ -907,35 +952,26 @@ func TestJudgeDemoOutputRefusal(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(path, "notes.txt"), []byte("mine"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-		}, "Proof bundle output can only replace a verified FaultLine bundle: ", false, false},
+		}, "Proof bundle output can only replace a verified FaultLine bundle: "},
 		{"replay-regular-file", replay, func(t *testing.T, path string) {
 			if err := os.WriteFile(path, []byte("mine"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-		}, "Proof bundle output must be a directory: ", false, false},
+		}, "Proof bundle output must be a directory: "},
 		{"replay-symlink", replay, func(t *testing.T, path string) {
 			if err := os.Mkdir(path+"-target", 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Symlink(filepath.Base(path)+"-target", path); err != nil {
-				t.Fatal(err)
-			}
-		}, "Proof bundle output cannot traverse a symbolic link: ", false, true},
+			makeDirectoryLink(t, path+"-target", path)
+		}, "Proof bundle output cannot traverse a symbolic link: "},
 		{"replay-fifo", replay, func(t *testing.T, path string) {
-			if out, err := exec.Command("mkfifo", path).CombinedOutput(); err != nil {
-				t.Fatalf("mkfifo: %v %s", err, out)
-			}
-		}, "Proof bundle output must be a directory: ", true, false},
+			makeSpecialFile(t, path)
+		}, "Proof bundle output must be a directory: "},
 		{"native-fifo", native, func(t *testing.T, path string) {
-			if out, err := exec.Command("mkfifo", path).CombinedOutput(); err != nil {
-				t.Fatalf("mkfifo: %v %s", err, out)
-			}
-		}, "Proof bundle output must be a directory: ", true, false},
+			makeSpecialFile(t, path)
+		}, "Proof bundle output must be a directory: "},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if (c.needOS || c.symlink) && runtime.GOOS == "windows" {
-				t.Skip("symlinks and FIFOs are not available on Windows")
-			}
 			dir := isolatedEmpty(t)
 			relative := filepath.Join(".faultline", "bundles", "target")
 			path := nodefs.Resolve(relative)
@@ -972,9 +1008,6 @@ func TestJudgeDemoSidecarFailure(t *testing.T) {
 		{"native-symlink", []string{"judge-demo", "--export-only", "--rerun-all", "--approve-native", digest, "--output", ".faultline/bundles/bundle"}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if c.symlink && runtime.GOOS == "windows" {
-				t.Skip("symlink creation needs privileges on Windows")
-			}
 			isolatedEmpty(t)
 			directory := nodefs.Resolve(".faultline/bundles/bundle")
 			if err := os.MkdirAll(filepath.Dir(directory), 0o755); err != nil {
@@ -987,22 +1020,21 @@ func TestJudgeDemoSidecarFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			reserved := sidecarOf(directory)
-			keep := filepath.Join(t.TempDir(), "keep")
+			keepDir := filepath.Join(t.TempDir(), "target")
 			if c.symlink {
-				if err := os.WriteFile(keep, []byte("keep"), 0o600); err != nil {
+				if err := os.Mkdir(keepDir, 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Symlink(keep, reserved); err != nil {
-					t.Fatal(err)
-				}
+				makeDirectoryLink(t, keepDir, reserved)
 			} else {
 				if err := os.Mkdir(reserved, 0o755); err != nil {
 					t.Fatal(err)
 				}
-				keep = filepath.Join(reserved, "keep")
-				if err := os.WriteFile(keep, []byte("keep"), 0o600); err != nil {
-					t.Fatal(err)
-				}
+				keepDir = reserved
+			}
+			keep := filepath.Join(keepDir, "keep")
+			if err := os.WriteFile(keep, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
 			}
 			var out, errb bytes.Buffer
 			code := Run(c.args, &out, &errb)
@@ -1037,7 +1069,7 @@ func TestJudgeDemoSidecarFailure(t *testing.T) {
 				t.Fatalf("reserved entry content was disturbed: %v", err)
 			}
 			info, err := os.Lstat(reserved)
-			if err != nil || (c.symlink && info.Mode()&os.ModeSymlink == 0) || (!c.symlink && !info.IsDir()) {
+			if err != nil || (c.symlink && !isSpecialLink(info)) || (!c.symlink && !info.IsDir()) {
 				t.Fatalf("reserved entry replaced: %v", err)
 			}
 		})
