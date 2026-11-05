@@ -108,6 +108,22 @@ func isolatedEmpty(t *testing.T) string {
 	return dir
 }
 
+// isolatedEmptyShort keeps Windows Unix-socket paths below their 108-byte limit.
+func isolatedEmptyShort(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "fl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove short temporary directory: %v", err)
+		}
+	})
+	t.Chdir(dir)
+	return dir
+}
+
 func requireEmptyDir(t *testing.T, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -972,7 +988,7 @@ func TestJudgeDemoOutputRefusal(t *testing.T) {
 		}, "Proof bundle output must be a directory: "},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			dir := isolatedEmpty(t)
+			dir := isolatedEmptyShort(t)
 			relative := filepath.Join(".faultline", "bundles", "target")
 			path := nodefs.Resolve(relative)
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
