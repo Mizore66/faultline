@@ -2,6 +2,7 @@
 
 - **Date:** 2026-11-04
 - **Status:** Approved design after explicit scope, approval-UX and evidence-output choices; remaining design alternatives resolved using the user's standing choice of the recommended option.
+- **Implementation status (2026-11-05):** Local implementation and independent whole-branch review are complete. Windows AMD64/ARM64 hosted refusal tests passed at `f7cceead32cbec19a01b7489b34e2183588de66e` after the NTFS alternate-data-stream fixture correction. At `c44c8cb284ee656eeeefa955ccec89bd7d68ecf4`, both Verify FaultLine workflows and push Go succeeded; PR Go failed only `TestLiveHardenedGit/fake_flood` when the TypeScript oracle hit the execution-time limit while Go hit the output-size limit. That timing-sensitive failure outside this change and the earlier close-EIO harness race remain recorded, not waived. Exact-head acceptance and merge remain pending; this is not a completion claim.
 - **Baseline:** PR219 merged at `5ae63724d3d3a909eba30e57c75f25fda2625285`; accepted source `ae5ce48339ca7411bb16b6cbcce9f5d6e7444a7d` passed all four hosted workflows before the authorized merge.
 - **Parent:** [Native demo RERUN execution/provenance](2026-11-03-go-native-demo-rerun-design.md), [Slice 5 dependency map](2026-10-30-go-slice5a-cli-surfaces-design.md#5-remaining-slice-5-dependency-map).
 
