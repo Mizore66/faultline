@@ -94,6 +94,8 @@ func dispatch(e *env, args []string) error {
 		return investigateCommand(e, rest)
 	case command == "minimize":
 		return minimizeCommand(e, rest)
+	case command == "judge-demo":
+		return judgeDemoCommand(e, rest)
 	case command == "judge-proof":
 		return judgeProofCommand(e, rest)
 	case command == "commit-proof-preview":

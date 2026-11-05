@@ -265,8 +265,8 @@ func TestJudgePreviewDispatchIsolation(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"judge-demo"}, "FaultLine error: not yet ported: judge-demo\nNext: pnpm fl help\n"},
-		{[]string{"judge-demo", "--export-only"}, "FaultLine error: not yet ported: judge-demo\nNext: pnpm fl help\n"},
+		{[]string{"judge-demo"}, "FaultLine error: not yet ported: judge-demo server\nNext: pnpm fl help\n"},
+		{[]string{"judge-demo", "--export-only", "--approve-native", "sha256:any-value"}, "FaultLine error: --approve-native requires --rerun-all.\nNext: pnpm fl help\n"},
 		{[]string{"serve"}, "FaultLine error: not yet ported: serve\nNext: pnpm fl help\n"},
 		{[]string{"judge-previews"}, "FaultLine error: Unknown command: judge-previews\nNext: pnpm fl help\n"},
 	} {
