@@ -1,7 +1,7 @@
 # Native interactive RERUN for judge-demo — design
 
 - **Date:** 2026-11-05
-- **Status:** Design approved by the user in three sections (scope/approval, HTTP security/concurrency, artifacts/verification). Written-spec review and an implementation-plan approval remain separate gates. No implementation is authorized by this document.
+- **Status:** Design approved by the user in three sections (scope/approval, HTTP security/concurrency, artifacts/verification); written specification approved on 2026-11-05. Implementation-plan approval remains a separate gate. Planning clarified body-framing and parser-level missing-Host behavior in Sections 4 and 7 without changing the approved security direction. No implementation is authorized by this document.
 - **Parent:** [Migration overview](2026-09-25-go-migration-overview.md), [Slice 5 dependency map](2026-10-30-go-slice5a-cli-surfaces-design.md#5-remaining-slice-5-dependency-map), [Native execution/provenance](2026-11-03-go-native-demo-rerun-design.md), and [Native RERUN CLI export](2026-11-04-go-native-rerun-cli-export-design.md).
 - **Baseline:** PR #220 source `e8425ecd4a6dff4b40f23d3a578182d0b03fddae`. Its exact-head acceptance and merge are still pending while this specification is drafted; the implementation plan must rebase on and record the actual merged main commit.
 
@@ -120,12 +120,12 @@ Unknown routes and methods return 404 `Not found` with `Content-Type: text/plain
 
 Generate one 32-byte cryptographically random credential per server with `crypto/rand`, encoded with `base64.RawURLEncoding`. Use it as both the HTML script nonce and the required custom RERUN header value. Production generates it internally; tests may supply a fixed credential through an unexported constructor dependency, never a production environment override.
 
-Every request must have a `Host` equal to the actual bound `127.0.0.1:<port>` authority. A mismatch, including a DNS name or missing Host, receives 403 plain `Forbidden` before route handling.
+Every request that reaches the handler must have a `Host` equal to the actual bound `127.0.0.1:<port>` authority. A mismatch, including a DNS name, receives 403 plain `Forbidden` before route handling. An HTTP/1.0 request without Host reaches the same 403. A malformed HTTP/1.1 request without Host can be rejected by the shared net/http parser with its existing 400 response before handler dispatch; that parser behavior is not relabeled a 403.
 
 `POST /api/rerun` additionally requires:
 
 - Header `X-FaultLine-Native-RERUN` whose single value equals the server credential.
-- Zero decoded body bytes. The shared framing layer must reject any nonempty body before the callback; no JSON request schema is invented.
+- No request-body framing: no `Transfer-Encoding`, and either an absent `Content-Length` or exactly `Content-Length: 0`. Any positive Content-Length or any Transfer-Encoding, including a terminal zero-length chunk, receives 403 before the callback. The shared framing layer attaches a private zero/nonzero marker after validating framing; it does not expose decoded bodies to the handler, and no JSON request schema is invented.
 - If `Origin` is present, exactly the server's `http://127.0.0.1:<port>` origin without a trailing slash.
 - If `Sec-Fetch-Site` is present, exactly `same-origin`.
 
@@ -142,7 +142,7 @@ For `POST /api/rerun`, evaluate Host and route matching first, then token/body/O
 | Condition | Status and body |
 | --- | --- |
 | Server started without approval | 403 `{"ok":false,"error":"Native RERUN requires --approve-native <proposal-digest> at server startup."}` |
-| Bad/missing token, nonempty body, or invalid Origin/fetch metadata | 403 `{"ok":false,"error":"Forbidden"}` |
+| Bad/missing token, positive Content-Length, any Transfer-Encoding, or invalid Origin/fetch metadata | 403 `{"ok":false,"error":"Forbidden"}` |
 | Another native run is active | 409 `{"ok":false,"error":"native RERUN already running"}` |
 | Native execution, cancellation, bundle write/verification, or sidecar publication failure | 500 `{"ok":false,"error":<JSON-string-encoded actual error message>}` |
 
@@ -231,7 +231,7 @@ Capture exact HTTP status, body bytes, headers, and connection behavior from the
 
 ### 7.3 Hostile HTTP and state
 
-Cover Host variants, DNS rebinding, missing/duplicate/wrong token, cross-site Origin/fetch metadata, absent metadata with valid token, nonempty/chunked bodies, unknown methods/routes, HEAD, query strings, security headers, no-store on every failure, and absence of CORS permission.
+Cover Host variants, DNS rebinding, HTTP/1.0 missing Host, malformed HTTP/1.1 missing Host parser behavior, missing/duplicate/wrong token, cross-site Origin/fetch metadata, absent metadata with valid token, positive Content-Length and chunked bodies including a terminal zero-length chunk, unknown methods/routes, HEAD, query strings, security headers, no-store on every failure, and absence of CORS permission.
 
 Exercise concurrent POSTs from separate clients and tabs: exactly one native run executes, others receive 409, GETs retain the previous snapshot, and no queue/background rerun remains. Race-test state transitions. Exercise disconnect and close during real child execution, publication failure, and close/publication races. Assert actual process/artifact state without sleeps/load races or detached test children.
 
