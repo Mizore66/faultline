@@ -89,9 +89,12 @@ func makeSpecialFile(t *testing.T, path string) {
 			t.Fatal(err)
 		}
 		listener.(*net.UnixListener).SetUnlinkOnClose(false)
-		if err := listener.Close(); err != nil {
-			t.Fatal(err)
-		}
+		// Windows removes the socket entry when the last listener handle closes.
+		t.Cleanup(func() {
+			if err := listener.Close(); err != nil {
+				t.Errorf("close special-file listener: %v", err)
+			}
+		})
 		return
 	}
 	if out, err := exec.Command("mkfifo", path).CombinedOutput(); err != nil {
