@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,25 +80,28 @@ func isSpecialLink(info fs.FileInfo) bool {
 	return info.Mode()&fs.ModeSymlink != 0
 }
 
-func makeSpecialFile(t *testing.T, path string) {
+func makeSpecialFile(t *testing.T, path string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		listener, err := net.Listen("unix", path)
-		if err != nil {
+		// A named alternate data stream is a distinct non-directory filesystem
+		// object that nodefs can open, unlike an AF_UNIX reparse point.
+		if err := os.WriteFile(path, []byte("base"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		listener.(*net.UnixListener).SetUnlinkOnClose(false)
-		// Windows removes the socket entry when the last listener handle closes.
-		t.Cleanup(func() {
-			if err := listener.Close(); err != nil {
-				t.Errorf("close special-file listener: %v", err)
-			}
-		})
-		return
+		stream := path + ":fixture"
+		if err := os.WriteFile(stream, []byte("mine"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		info, err := nodefs.Lstat(stream)
+		if !nodefs.Exists(stream) || err != nil || info.IsDir() {
+			t.Fatalf("alternate data stream is not a non-directory output: info=%v err=%v", info, err)
+		}
+		return stream
 	}
 	if out, err := exec.Command("mkfifo", path).CombinedOutput(); err != nil {
 		t.Fatalf("mkfifo: %v %s", err, out)
 	}
+	return path
 }
 
 func demoFail(message string) string { return "FaultLine error: " + message + demoNext }
@@ -107,22 +109,6 @@ func demoFail(message string) string { return "FaultLine error: " + message + de
 func isolatedEmpty(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	t.Chdir(dir)
-	return dir
-}
-
-// isolatedEmptyShort keeps Windows Unix-socket paths below their 108-byte limit.
-func isolatedEmptyShort(t *testing.T) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "fl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(dir); err != nil {
-			t.Errorf("remove short temporary directory: %v", err)
-		}
-	})
 	t.Chdir(dir)
 	return dir
 }
@@ -953,51 +939,56 @@ func TestJudgeDemoOutputRefusal(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		args    func(string) []string
-		prepare func(t *testing.T, path string)
+		prepare func(t *testing.T, path string) string
 		message string
 	}{
-		{"replay-unverified-directory", replay, func(t *testing.T, path string) {
+		{"replay-unverified-directory", replay, func(t *testing.T, path string) string {
 			if err := os.Mkdir(path, 0o755); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(path, "notes.txt"), []byte("mine"), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			return path
 		}, "Proof bundle output can only replace a verified FaultLine bundle: "},
-		{"native-unverified-directory", native, func(t *testing.T, path string) {
+		{"native-unverified-directory", native, func(t *testing.T, path string) string {
 			if err := os.Mkdir(path, 0o755); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(path, "notes.txt"), []byte("mine"), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			return path
 		}, "Proof bundle output can only replace a verified FaultLine bundle: "},
-		{"replay-regular-file", replay, func(t *testing.T, path string) {
+		{"replay-regular-file", replay, func(t *testing.T, path string) string {
 			if err := os.WriteFile(path, []byte("mine"), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			return path
 		}, "Proof bundle output must be a directory: "},
-		{"replay-symlink", replay, func(t *testing.T, path string) {
+		{"replay-symlink", replay, func(t *testing.T, path string) string {
 			if err := os.Mkdir(path+"-target", 0o755); err != nil {
 				t.Fatal(err)
 			}
 			makeDirectoryLink(t, path+"-target", path)
+			return path
 		}, "Proof bundle output cannot traverse a symbolic link: "},
-		{"replay-fifo", replay, func(t *testing.T, path string) {
-			makeSpecialFile(t, path)
+		{"replay-special-output", replay, func(t *testing.T, path string) string {
+			return makeSpecialFile(t, path)
 		}, "Proof bundle output must be a directory: "},
-		{"native-fifo", native, func(t *testing.T, path string) {
-			makeSpecialFile(t, path)
+		{"native-special-output", native, func(t *testing.T, path string) string {
+			return makeSpecialFile(t, path)
 		}, "Proof bundle output must be a directory: "},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			dir := isolatedEmptyShort(t)
+			dir := isolatedEmpty(t)
 			relative := filepath.Join(".faultline", "bundles", "target")
 			path := nodefs.Resolve(relative)
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			c.prepare(t, path)
+			path = c.prepare(t, path)
+			relative = filepath.Join(filepath.Dir(relative), filepath.Base(path))
 			stale := sidecarOf(path)
 			if err := os.WriteFile(stale, []byte("stale evidence"), 0o600); err != nil {
 				t.Fatal(err)
@@ -1010,6 +1001,15 @@ func TestJudgeDemoOutputRefusal(t *testing.T) {
 				t.Fatalf("stdout=%q stderr=%q want=%q exit=%d", out.String(), errb.String(), want, code)
 			}
 			sameTree(t, "working tree", tree(t, dir), before)
+			if runtime.GOOS == "windows" && strings.HasSuffix(path, ":fixture") {
+				// WalkDir does not enumerate alternate data streams.
+				for _, check := range []struct{ path, want string }{{path, "mine"}, {stale, "stale evidence"}} {
+					got, err := os.ReadFile(check.path)
+					if err != nil || string(got) != check.want {
+						t.Fatalf("stream %q changed: content=%q err=%v", check.path, got, err)
+					}
+				}
+			}
 		})
 	}
 }
