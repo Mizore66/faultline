@@ -2,11 +2,57 @@ name: Go
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
+  scope:
+    name: ci scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+      - name: Classify changed paths
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/scope.out"
+          sh .github/scripts/ci_scope.sh "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" > "$out"
+          scope="$(sed -n 's/^scope=//p;q' "$out")"
+          case "$scope" in
+            code | docs-only) ;;
+            *) echo "::error::unexpected scope '$scope'"; exit 1 ;;
+          esac
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "CI-SCOPE $scope"
+          grep '^path=' "$out" | sort || true
+      - name: Validate docs-only change
+        if: steps.scope.outputs.scope == 'docs-only'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            git diff --check "$BASE_SHA...$HEAD_SHA" --
+          else
+            git diff --check "$BASE_SHA..$HEAD_SHA" --
+          fi
+
   go:
-    name: go test (${{ matrix.os }})
+    name: go test (${{ matrix.os }}, ${{ matrix.variant }})
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     strategy:
@@ -16,14 +62,20 @@ jobs:
         # glibc can change the directory-listing cases (KNOWN_DIFFERENCES).
         # macos-15-intel covers darwin/amd64, which no other job runs.
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest, windows-11-arm]
+        # Untagged is what release builds see; tagged adds the seeded clock,
+        # golden replay and writer replay. Each runs on its own runner.
+        variant: [untagged, tagged]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: "1.27"
-      - run: go mod tidy -diff
-      - run: go vet ./...
-      - run: go vet -tags faultline_test ./...
+      - if: matrix.variant == 'untagged'
+        run: go mod tidy -diff
+      - if: matrix.variant == 'untagged'
+        run: go vet ./...
+      - if: matrix.variant == 'tagged'
+        run: go vet -tags faultline_test ./...
       # Untagged first: that is what release builds see, and difftest builds
       # only with the faultline_test tag (seeded clock), so it is an empty
       # package there. Then everything tagged: the internal tests that need
@@ -67,14 +119,18 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          go test -count=1 -timeout 30m -v ./... | tee "$RUNNER_TEMP/go.log" || status=$?
-          go test -tags faultline_test -count=1 -timeout 120m -v ./... | tee -a "$RUNNER_TEMP/go.log" || status=$?
+          log="$RUNNER_TEMP/go-${{ matrix.variant }}.log"
+          if [ "${{ matrix.variant }}" = untagged ]; then
+            go test -count=1 -timeout 30m -v ./... | tee "$log" || status=$?
+          else
+            go test -tags faultline_test -count=1 -timeout 120m -v ./... | tee "$log" || status=$?
+          fi
           # ./... skips testdata, so the default-built globalopen helper package
           # (including its native ARM64 suppression regression) is run by path,
           # on Linux only, with its own timeout. Same log, status preserved, and
           # the final check-skips guard below still covers it.
-          if [ "$RUNNER_OS" = Linux ]; then
-            go test -count=1 -timeout 15m -v ./difftest/testdata/globalopen/ | tee -a "$RUNNER_TEMP/go.log" || status=$?
+          if [ "$RUNNER_OS" = Linux ] && [ "${{ matrix.variant }}" = untagged ]; then
+            go test -count=1 -timeout 15m -v ./difftest/testdata/globalopen/ | tee -a "$log" || status=$?
           fi
           allowed='TestLive[A-Za-z0-9]*|TestSortMatchesV8|TestToNumberMatchesNode|TestEchoRoundTripsLoneSurrogate|TestWriterSameDirectory|TestSidecarReachedFromDump|TestCoverageWindows'
           case "$RUNNER_OS" in
@@ -83,16 +139,17 @@ jobs:
               posix=$(tr -d '\r' < .github/scripts/windows-writer-skips.txt | grep -v '^#' | paste -sd '|' -)
               allowed="$allowed|TestReadDirNamesDecodesLikeNode|TestResolveUsesPhysicalCwd|TestCwdRemovedDirectory|TestUnnamedErrno|TestV8AbortThresholds|TestReadSizeLimitsMatchNode|TestGitVerifierLeavesNoTemporaryRepository|TestErrorPathReplacesLoneSurrogate|TestMkdirAllFollowsSymlinks|TestLoadRejectsSymlinkDirectoryAndOversize|TestCaptureRefusesSymlink|TestEnsureRealDirectoryTree|TestChmodMutationAfterResetModes|TestGoldenReplay/.+|TestDemoWriterSymlinks(/writer-linked-(root|output|bundle-file))?|TestJudgePreviewSymlinks(/(linked-parent|linked-output|dangling-output))?|TestJudgePreviewCLISymlinks/(cli-linked-parent|cli-linked-output|cli-dangling-output)|TestDemoArtifactsReplay/(writer-linked-root|writer-linked-output|writer-linked-bundle-file|cli-linked-parent|cli-linked-output|cli-dangling-output)|TestInventoryRejectsLinksInRetainedTree|TestPermissionBitsAreNotInventoried|TestAttachmentHostileRootSymlink/(minimization|repair|prevention)|TestAttachmentHostileChildSymlink/(repair|prevention)|TestServeBundleBindingLoaderRejectsLinks/(minimization/foreign-frozen\.json|cases\.jsonl|golden\.jsonl|inventory\.json|baseline\.json|\.gitattributes)|$posix" ;;
           esac
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/go.log" "^($allowed)\$" || status=1
+          .github/scripts/check-skips.sh "$log" "^($allowed)\$" || status=1
           # Slice 5c: the serve-bundle Windows skips above are accepted by name
           # only here; this separate audit also requires each one's exact reason
           # (and fails any such skip on a non-Windows runner or any other skip of
           # those test families), without widening check-skips.sh.
-          .github/scripts/check-serve-bundle-skip-reasons.sh "$RUNNER_TEMP/go.log" "$RUNNER_OS" || status=1
+          .github/scripts/check-serve-bundle-skip-reasons.sh "$log" "$RUNNER_OS" || status=1
           exit $status
         env:
-          FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-24.04' && '1' || '' }}
+          FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-24.04' && matrix.variant == 'tagged' && '1' || '' }}
       - name: Release binary holds no test override
+        if: matrix.variant == 'untagged'
         # internal/repair's FAULTLINE_TEST_OPENAI_URL override (the Go side of
         # difftest/gen/fetch-shim.mjs) exists only in faultline_test builds.
         # The tagged build must hold it (so the grep means something) and the
@@ -111,6 +168,8 @@ jobs:
   # with go test -list and leaves out the ones named here).
   difftest-goldens:
     name: difftest goldens (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -174,6 +233,8 @@ jobs:
 
   difftest-live:
     name: difftest live (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -319,6 +380,8 @@ jobs:
 
   difftest-live-investigate:
     name: difftest live investigate (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
@@ -351,6 +414,8 @@ jobs:
 
   difftest-live-writers:
     name: difftest live writers (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
@@ -383,6 +448,8 @@ jobs:
 
   difftest-live-replay:
     name: difftest live writer replay (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -443,9 +510,35 @@ jobs:
   # first) with its own count and duration; no combined count or duration is
   # claimed, and neither has been measured on CI.
   difftest-live-faults:
-    name: difftest live writer faults and real Docker (frozen TS oracle)
+    name: difftest live writer faults ${{ matrix.shard }} (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Whole caseID sets (never split by errno or syscall); disjoint,
+          # 654 in total, enforced by .github/scripts/check-writer-fault-shards.sh.
+          - shard: core
+            count: 105
+            cases: propose-input policy-freeze ratify freeze ledger-bind minimize-git investigate-two-states commit-proof-preview
+          - shard: runtime-init
+            count: 114
+            cases: runtime-resolve-node runtime-mapping-nested-output init-yes-dirty init-standing init-cli doctor-security
+          - shard: incident-prevention
+            count: 147
+            cases: incident-start-command incident-continue-unapproved incident-continue-inherit-digest prevention-write-bundle-ok prevention-write-input-summary prevention-write-input-agents-append
+          - shard: turns
+            count: 75
+            cases: turns-proof turns-minimize
+          - shard: attest-repair
+            count: 111
+            cases: attest-create-git provenance-create-ok repair-brief-input-ok witness-implement-template repair-bundle-codex-ok
+          - shard: record-sidecar
+            count: 102
+            cases: record-init record-checkpoint codex-snapshot-clean codex-gc-force codex-gc-alternates-other-entries sidecar-hook-session-quiet sidecar-hook-full-turn
     env:
       LC_ALL: C.UTF-8
     steps:
@@ -468,6 +561,7 @@ jobs:
         # strace -e inject; it fails rather than skips without strace in CI.
         run: sudo apt-get update -qq && sudo apt-get install -y -qq strace
       - name: Docker's classic image store
+        if: matrix.shard == 'core'
         # TestLiveRealDockerProjectBuild's case is a local build with no
         # RepoDigest (PROJECT_IMAGE_BUILT_NEEDS_REGISTRY_DIGEST), which only
         # the classic store gives; the containerd store (Docker 29's default)
@@ -482,10 +576,12 @@ jobs:
           echo "$status"
           case "$status" in *io.containerd.snapshotter*) echo "::error title=docker store::the containerd image store is still on"; exit 1 ;; esac
       - name: Pull the pinned image
+        if: matrix.shard == 'core'
         # TestLiveRealDocker runs investigate against the real daemon with
         # --pull never; TestLiveRealDockerProjectBuild builds FROM it.
         run: docker pull node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
       - name: GLOBALOPEN helper native controls (native, before the writer matrix)
+        if: matrix.shard == 'core'
         # The ordinary first-open fault rows of TestLiveWriterFaults run under
         # the test-only ptrace helper difftest/testdata/globalopen (stock strace
         # counts the first call per tracee and cannot express one tree-wide
@@ -518,43 +614,57 @@ jobs:
           cat "$p/hooks.stdout"; cat "$p/hooks.stderr" >&2
           .github/scripts/check-skips.sh "$p/hooks.stdout" '^$' "$p/hooks.list" || status=1
           exit $status
-      - name: Writer faults, real Docker
-        # FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 makes
-        # TestLiveRealDockerProjectBuild fail unless the daemon recorded no
-        # RepoDigest, so the NEEDS_REGISTRY_DIGEST comparison is what ran.
+      - name: Writer faults (sharded)
+        # Runs this shard's whole caseID set as the exact first segment of
+        # -run. The leaf guard parses the actual terminal result of every
+        # caseID/label/call-errno leaf; the printed len(matrix) and the parent
+        # PASS are not evidence. The raw log is uploaded for the total guard.
+        env:
+          SHARD_CASES: ${{ matrix.cases }}
         run: |
           set -o pipefail
           status=0
-          # TestLiveWriterFaults has 654 cases (see difftest-live-faults'
-          # comment): slice 4a's 102 (record- 39, codex- 24, sidecar- 39) took
-          # 26 s, 11 s and 96 s in podman as uid 1000 when run alone. Every
-          # group of the spec 2.6 table fired, so none was dropped.
-          # TestLiveDemoArtifactFaults is named here and in difftest-live's
-          # elsewhere list, so it runs once, where strace is installed, and
-          # check-skips.sh '^$' fails if it (or its canonical-shim subtest)
-          # is skipped.
-          tests='TestLiveWriterFaults TestLiveRealDocker TestLiveRealDockerProjectBuild TestLiveDemoArtifactFaults'
-          printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
+          tests='TestLiveWriterFaults'
+          printf '%s\n' $tests > "$RUNNER_TEMP/writer-${{ matrix.shard }}.list"
           # The ordinary first-open rows retain every raw GLOBALOPEN trace (passed
           # or failed) and its metadata here for the artifact step below.
           mkdir -p "$RUNNER_TEMP/globalopen-evidence"
-          FAULTLINE_GLOBALOPEN_EVIDENCE_DIR="$RUNNER_TEMP/globalopen-evidence" FAULTLINE_REAL_DOCKER=1 FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/live.log" || status=$?
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" '^$' "$RUNNER_TEMP/live.list" || status=1
+          FAULTLINE_GLOBALOPEN_EVIDENCE_DIR="$RUNNER_TEMP/globalopen-evidence" FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^TestLiveWriterFaults\$/^($(echo $SHARD_CASES | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/writer-${{ matrix.shard }}.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/writer-${{ matrix.shard }}.log" '^$' "$RUNNER_TEMP/writer-${{ matrix.shard }}.list" || status=1
+          .github/scripts/check-writer-fault-shards.sh "${{ matrix.shard }}" "${{ matrix.count }}" "$RUNNER_TEMP/writer-${{ matrix.shard }}.log" || status=1
           exit $status
-      - name: Retain GLOBALOPEN proof artifacts
-        # Raw stdout, stderr and traces are kept whether the steps above passed
-        # or failed. An upload problem is reported but must not hide a test
-        # failure (continue-on-error), and a missing path warns instead of
-        # failing a run that has nothing to keep.
+      - name: Real Docker and demo artifact faults
+        # Core only. FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 makes
+        # TestLiveRealDockerProjectBuild fail unless the daemon recorded no
+        # RepoDigest, so the NEEDS_REGISTRY_DIGEST comparison is what ran.
+        # TestLiveDemoArtifactFaults runs once, here, where strace is
+        # installed, and check-skips.sh '^$' fails if it (or its
+        # canonical-shim subtest) is skipped.
+        if: always() && matrix.shard == 'core'
+        run: |
+          set -o pipefail
+          status=0
+          tests='TestLiveRealDocker TestLiveRealDockerProjectBuild TestLiveDemoArtifactFaults'
+          printf '%s\n' $tests > "$RUNNER_TEMP/docker-core.list"
+          FAULTLINE_GLOBALOPEN_EVIDENCE_DIR="$RUNNER_TEMP/globalopen-evidence" FAULTLINE_REAL_DOCKER=1 FAULTLINE_REAL_DOCKER_CLASSIC_STORE=1 FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 60m | tee "$RUNNER_TEMP/docker-core.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/docker-core.log" '^$' "$RUNNER_TEMP/docker-core.list" || status=1
+          exit $status
+      - name: Retain writer fault artifacts
+        # Raw logs (and, on core, GLOBALOPEN stdout, stderr and traces) are
+        # kept whether the steps above passed or failed. The artifact name is
+        # shard-suffixed so the six legs never collide; go-ci-gate downloads
+        # the six writer-*.log files for the total guard. An upload problem is
+        # reported but must not hide a test failure (continue-on-error).
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: globalopen-proof
+          name: writer-faults-${{ matrix.shard }}
           path: |
+            ${{ runner.temp }}/writer-${{ matrix.shard }}.log
+            ${{ runner.temp }}/docker-core.log
             ${{ runner.temp }}/globalopen-proof
             ${{ runner.temp }}/globalopen-evidence
-            ${{ runner.temp }}/live.log
           if-no-files-found: warn
           retention-days: 14
 
@@ -587,13 +697,29 @@ jobs:
     # TestLiveCpSyncTree (cpSync modes and the /private/var realpath). The
     # latter models Node's libstdc++ C++ copy and skips on macOS, whose
     # libc++ differs (KNOWN_DIFFERENCES), so only the arm64 Linux leg runs it.
-    name: stack thresholds vs Node (${{ matrix.os }})
+    # Sharded into platform-process, turn-incident and context-sidecar (whole
+    # top-level tests only, so no internal case is narrowed: all 150
+    # turn-snapshot cases, 120 investigate-turn sessions and 103 stores run).
+    # The serve-bundle stack call-site test runs in serve-bundle-native on the
+    # same two targets, so it is not repeated here. Depth reporting and the
+    # sort check run once, in platform-process.
+    name: stack ${{ matrix.suite }} vs Node (${{ matrix.os }})
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04-arm, macos-latest]
+        suite: [platform-process, turn-incident, context-sidecar]
+        include:
+          - suite: platform-process
+            tests: 'TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveResolveCodexRunner'
+          - suite: turn-incident
+            tests: 'TestLiveInvestigateTurns TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft'
+          - suite: context-sidecar
+            tests: 'TestLiveProjectContext TestLiveSidecarHooks TestLiveCpSyncTree'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
@@ -607,15 +733,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Live platform tests
+        env:
+          SUITE_TESTS: ${{ matrix.tests }}
         run: |
           set -o pipefail
           status=0
-          unset FAULTLINE_TURNSNAP_CASES
-          tests='TestLiveInvestigateTurns TestLiveStackThresholdsMatchNode TestLiveServeBundleStackCallSites TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft TestLiveSidecarHooks TestLiveResolveCodexRunner TestLiveCpSyncTree'
-          printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
-          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 70m | tee "$RUNNER_TEMP/live.log" || status=$?
+          unset FAULTLINE_TURNSNAP_CASES FAULTLINE_TURNINV_CASES FAULTLINE_TURNPACK_CASES FAULTLINE_TURNWRITE_CASES FAULTLINE_CP_CASES FAULTLINE_SIDECAR_SEQS FAULTLINE_SIDECAR_STORES FAULTLINE_SIDECAR_STORES_FROM FAULTLINE_REPAIR_WT_CASES FAULTLINE_REPAIR_ONLY FAULTLINE_ABORT_CASE FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY FAULTLINE_COVER_ONLY
+          tests="$SUITE_TESTS"
+          printf '%s\n' $tests > "$RUNNER_TEMP/live-${{ matrix.suite }}.list"
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 70m | tee "$RUNNER_TEMP/live-${{ matrix.suite }}.log" || status=$?
           if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode|TestLiveProjectContext/sparse256MiB|TestLiveCpSyncTree)$'; else allowed='^$'; fi
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" "$allowed" "$RUNNER_TEMP/live.list" || status=1
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live-${{ matrix.suite }}.log" "$allowed" "$RUNNER_TEMP/live-${{ matrix.suite }}.list" || status=1
           exit $status
       - name: Measured stack depths
         # The CLI site's darwin/arm64 offset (jsjson.SiteCLI) was fitted from
@@ -624,14 +752,15 @@ jobs:
         # per site (its four shapes on one line): GitHub keeps only ten
         # notices per step. The test measures the cli site first and also
         # logs an unexpected output there before failing.
-        if: always()
+        if: always() && matrix.suite == 'platform-process'
         run: |
-          grep -E '^ *stack_live_test\.go:[0-9]+: [a-z0-9]+/[a-z0-9_]+ ' "$RUNNER_TEMP/live.log" | sed 's/^ *stack_live_test\.go:[0-9]*: //' |
+          grep -E '^ *stack_live_test\.go:[0-9]+: [a-z0-9]+/[a-z0-9_]+ ' "$RUNNER_TEMP/live-${{ matrix.suite }}.log" | sed 's/^ *stack_live_test\.go:[0-9]*: //' |
             awk '{ key = $1 " " $2; $1 = ""; $2 = ""; sub(/^ +/, ""); rows[key] = rows[key] (rows[key] == "" ? "" : "; ") $0; if (!(key in seen)) { seen[key] = 1; order[++n] = key } }
                  END { for (i = 1; i <= n; i++) print order[i] " " rows[order[i]] }' |
             while read -r line; do echo "::notice title=stack depth::$line"; done
-          grep -E 'stack_live_test\.go:[0-9]+: .*(unexpected output|lacks)' "$RUNNER_TEMP/live.log" | head -5 | while read -r line; do echo "::warning title=stack site::$line"; done
+          grep -E 'stack_live_test\.go:[0-9]+: .*(unexpected output|lacks)' "$RUNNER_TEMP/live-${{ matrix.suite }}.log" | head -5 | while read -r line; do echo "::warning title=stack site::$line"; done
       - name: TimSort against V8
+        if: matrix.suite == 'platform-process'
         run: |
           set -o pipefail
           status=0
@@ -653,6 +782,8 @@ jobs:
   # or an earlier head.
   serve-bundle-native:
     name: serve --bundle native (${{ matrix.os }})
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     strategy:
@@ -788,6 +919,8 @@ jobs:
   # or weaken any other job.
   windows-console-diagnostic:
     name: windows console Ctrl+C diagnostic (${{ matrix.os }})
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -841,3 +974,64 @@ jobs:
           path: ${{ runner.temp }}/console-diagnostic.log
           if-no-files-found: error
           retention-days: 14
+
+  go-ci-gate:
+    name: go ci gate
+    needs: [scope, go, difftest-goldens, difftest-live, difftest-live-investigate, difftest-live-writers, difftest-live-replay, difftest-live-faults, stack-live, serve-bundle-native, windows-console-diagnostic]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Download writer-faults-core
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-core
+          path: ${{ runner.temp }}/writer-faults/core
+      - name: Download writer-faults-runtime-init
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-runtime-init
+          path: ${{ runner.temp }}/writer-faults/runtime-init
+      - name: Download writer-faults-incident-prevention
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-incident-prevention
+          path: ${{ runner.temp }}/writer-faults/incident-prevention
+      - name: Download writer-faults-turns
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-turns
+          path: ${{ runner.temp }}/writer-faults/turns
+      - name: Download writer-faults-attest-repair
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-attest-repair
+          path: ${{ runner.temp }}/writer-faults/attest-repair
+      - name: Download writer-faults-record-sidecar
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-record-sidecar
+          path: ${{ runner.temp }}/writer-faults/record-sidecar
+      - name: Writer fault total (654 leaves)
+        if: needs.scope.outputs.scope == 'code'
+        shell: bash
+        run: |
+          set -euo pipefail
+          .github/scripts/check-writer-fault-shards.sh total 654 "$RUNNER_TEMP/writer-faults/core/writer-core.log" "$RUNNER_TEMP/writer-faults/runtime-init/writer-runtime-init.log" "$RUNNER_TEMP/writer-faults/incident-prevention/writer-incident-prevention.log" "$RUNNER_TEMP/writer-faults/turns/writer-turns.log" "$RUNNER_TEMP/writer-faults/attest-repair/writer-attest-repair.log" "$RUNNER_TEMP/writer-faults/record-sidecar/writer-record-sidecar.log"
+      - name: Aggregate gate
+        shell: bash
+        env:
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 -I .github/scripts/ci_gate.py --scope "$SCOPE" --event "$EVENT_NAME" --ref "$REF" --needs-json "$NEEDS_JSON"
