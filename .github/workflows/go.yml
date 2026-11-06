@@ -1029,7 +1029,9 @@ jobs:
         shell: bash
         env:
           SCOPE: ${{ needs.scope.outputs.scope }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
-          python3 -I .github/scripts/ci_gate.py --scope "$SCOPE" --event "${{ github.event_name }}" --ref "${{ github.ref }}" --needs-json "$NEEDS_JSON"
+          python3 -I .github/scripts/ci_gate.py --scope "$SCOPE" --event "$EVENT_NAME" --ref "$REF" --needs-json "$NEEDS_JSON"

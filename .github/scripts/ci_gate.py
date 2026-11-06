@@ -26,6 +26,9 @@ def main():
             raise SystemExit(f"malformed needs entry: {name}")
 
     if args.scope == "docs-only":
+        scope_job = needs.get("scope")
+        if scope_job is None or scope_job.get("result") != "success":
+            raise SystemExit("docs-only requires a successful scope job")
         print("CI-SCOPE docs-only")
         raise SystemExit(0)
     if args.scope != "code":

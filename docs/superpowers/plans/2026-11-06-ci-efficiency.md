@@ -54,7 +54,7 @@ Expected: missing script/executable failures. Do not create workflow YAML yet.
 
 - [ ] **Step 3: Implement the classifier and gate**
 
-`ci_scope.sh` resolves `BASE...HEAD` for `pull_request`, `BASE..HEAD` for main push, treats zero/missing before as code, selects code for every other event (including `workflow_dispatch`), and fails closed to code on any Git/classification error. Docs-only requires at least one changed path, all entries exactly in `docs/**`, `README.md`, `LICENSE`, `NOTICE`, `CHANGELOG.md`, plus successful `git diff --check`. Print deterministic sorted paths.
+`ci_scope.sh` resolves `BASE...HEAD` for `pull_request`, `BASE..HEAD` for main push, treats zero/missing before as code, selects code for every other event (including `workflow_dispatch`), and fails closed to code on any Git/classification error. Docs-only requires at least one changed path, all entries exactly in `docs/superpowers/**` (other docs, `README.md`, `LICENSE`, `NOTICE` and `CHANGELOG.md` can be read by tests, so they are code), plus successful `git diff --check`. Print deterministic sorted paths.
 
 `ci_gate.py` parses the complete needs object and applies the interface exactly:
 

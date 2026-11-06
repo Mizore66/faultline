@@ -49,10 +49,12 @@ NUL=$(tr -cd '\0' <"$PATHS_FILE" | wc -c | tr -d ' ')
 LINES=$(cat "$TMPDIR_/count")
 [ "$NUL" = "$LINES" ] || code
 
+# Docs-only is exactly docs/superpowers/**: other docs, README.md, LICENSE,
+# NOTICE and CHANGELOG.md can be read by tests, so they are code.
 DOCS=1
 while IFS= read -r p; do
 	case "$p" in
-	docs/?* | README.md | LICENSE | NOTICE | CHANGELOG.md) ;;
+	docs/superpowers/?*) ;;
 	*) DOCS=0 ;;
 	esac
 done <<EOT

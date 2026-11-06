@@ -74,15 +74,23 @@ class ScopeTest(unittest.TestCase):
         head = self.change({"difftest/KNOWN_DIFFERENCES.md": "k\n"})
         self.assertScope(self.run_scope("pull_request", self.base, head), "code")
 
-    def test_root_allowlist(self):
-        head = self.change({"README.md": "r\n", "LICENSE": "l\n", "NOTICE": "n\n", "CHANGELOG.md": "c\n"})
+    def test_superpowers_docs_only(self):
+        head = self.change({"docs/superpowers/plans/x.md": "x\n", "docs/superpowers/specs/y.md": "y\n"})
         r = self.run_scope("pull_request", self.base, head)
         self.assertScope(r, "docs-only")
         self.assertEqual(r.stdout.splitlines()[1:],
-                         ["path=CHANGELOG.md", "path=LICENSE", "path=NOTICE", "path=README.md"])
+                         ["path=docs/superpowers/plans/x.md", "path=docs/superpowers/specs/y.md"])
+
+    def test_other_docs_and_root_files_are_code(self):
+        for name in ("docs/samples/a.md", "docs/a.md", "README.md", "LICENSE", "NOTICE", "CHANGELOG.md",
+                     "docs/superpowers"):
+            with self.subTest(name=name):
+                base = self.rev()
+                head = self.change({name: "z\n"})
+                self.assertScope(self.run_scope("pull_request", base, head), "code")
 
     def test_root_lookalikes_are_code(self):
-        for name in ("README.md.sh", "LICENSE2", "docs.go", "Docs/a.md", "NOTICE.txt", "sub/README.md"):
+        for name in ("README.md.sh", "LICENSE2", "docs.go", "Docs/a.md", "NOTICE.txt", "sub/README.md", "docs/superpowers2/a.md", "xdocs/superpowers/a.md"):
             with self.subTest(name=name):
                 base = self.rev()
                 head = self.change({name: "z\n"})
@@ -93,7 +101,7 @@ class ScopeTest(unittest.TestCase):
         self.assertScope(self.run_scope("pull_request", self.base, self.rev()), "code")
 
     def test_zero_before_is_code(self):
-        head = self.change({"docs/a.md": "a\n"})
+        head = self.change({"docs/superpowers/a.md": "a\n"})
         self.assertScope(self.run_scope("push", ZERO, head), "code")
         self.assertScope(self.run_scope("push", "", head), "code")
 
@@ -107,30 +115,30 @@ class ScopeTest(unittest.TestCase):
             self.assertScope(r, "code")
 
     def test_diff_check_failure_is_code(self):
-        head = self.change({"docs/a.md": "trailing   \n"})
+        head = self.change({"docs/superpowers/a.md": "trailing   \n"})
         self.assertScope(self.run_scope("pull_request", self.base, head), "code")
 
     def test_other_events_are_code(self):
-        head = self.change({"docs/a.md": "a\n"})
+        head = self.change({"docs/superpowers/a.md": "a\n"})
         for ev in ("workflow_dispatch", "schedule", "merge_group", "bogus"):
             with self.subTest(ev=ev):
                 self.assertScope(self.run_scope(ev, self.base, head), "code")
 
     def test_push_two_dot(self):
-        head = self.change({"docs/a.md": "a\n"})
+        head = self.change({"docs/superpowers/a.md": "a\n"})
         self.assertScope(self.run_scope("push", self.base, head), "docs-only")
 
     def test_pr_three_dot_ignores_base_advance(self):
         self.git("checkout", "-q", "-b", "feature")
-        fhead = self.change({"docs/a.md": "a\n"})
+        fhead = self.change({"docs/superpowers/a.md": "a\n"})
         self.git("checkout", "-q", "-")
         mbase = self.change({"internal/x.go": "package x\n"})
         r = self.run_scope("pull_request", mbase, fhead)
         self.assertScope(r, "docs-only")
-        self.assertEqual(r.stdout.splitlines()[1:], ["path=docs/a.md"])
+        self.assertEqual(r.stdout.splitlines()[1:], ["path=docs/superpowers/a.md"])
 
     def test_workdir_argument(self):
-        head = self.change({"docs/a.md": "a\n"})
+        head = self.change({"docs/superpowers/a.md": "a\n"})
         with tempfile.TemporaryDirectory() as d:
             r = self.run_scope("pull_request", self.base, head, workdir=self.repo, cwd=d)
             self.assertScope(r, "docs-only")
@@ -145,19 +153,19 @@ class ScopeTest(unittest.TestCase):
         self.assertFalse(os.path.exists("/tmp/ci_scope_pwn"))
 
     def test_path_with_spaces_and_newline_is_code(self):
-        head = self.change({"docs/a b.md": "a\n"})
+        head = self.change({"docs/superpowers/a b.md": "a\n"})
         r = self.run_scope("pull_request", self.base, head)
         self.assertScope(r, "docs-only")
-        self.assertIn("path=docs/a b.md\n", r.stdout)
+        self.assertIn("path=docs/superpowers/a b.md\n", r.stdout)
 
     def test_docs_deletion_and_rename(self):
-        self.change({"docs/a.md": "a\n"})
+        self.change({"docs/superpowers/a.md": "a\n"})
         b = self.rev()
-        os.rename(os.path.join(self.repo, "docs/a.md"), os.path.join(self.repo, "internal.go"))
+        os.rename(os.path.join(self.repo, "docs/superpowers/a.md"), os.path.join(self.repo, "internal.go"))
         self.commit("rename out")
         r = self.run_scope("pull_request", b, self.rev())
         self.assertScope(r, "code")
-        self.assertIn("path=docs/a.md\n", r.stdout)
+        self.assertIn("path=docs/superpowers/a.md\n", r.stdout)
         self.assertIn("path=internal.go\n", r.stdout)
 
 

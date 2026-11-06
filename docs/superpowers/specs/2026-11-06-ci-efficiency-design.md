@@ -53,14 +53,12 @@ Add a reviewed standard-shell classifier under `.github/scripts/`, invoked by a 
 Docs-only is exactly this allowlist:
 
 ```text
-docs/**
-README.md
-LICENSE
-NOTICE
-CHANGELOG.md
+docs/superpowers/**
 ```
 
-Every other path, including `difftest/KNOWN_DIFFERENCES.md`, `.github/**`, `internal/**`, `src/**`, `package.json`, `pnpm-lock.yaml`, testdata and root build files, selects code CI. No content-based attempt is made to judge whether code is consequential.
+Reason: tests read files under other `docs/**` paths and the root `README.md`, `LICENSE`, `NOTICE` and `CHANGELOG.md`, so changing them can alter test results. Only the planning/spec tree `docs/superpowers/**` is never read by tests.
+
+Every other path, including `docs/samples/**`, `README.md`, `difftest/KNOWN_DIFFERENCES.md`, `.github/**`, `internal/**`, `src/**`, `package.json`, `pnpm-lock.yaml`, testdata and root build files, selects code CI. No content-based attempt is made to judge whether code is consequential.
 
 The classifier emits `docs-only` or `code` and the exact changed-path list. It validates docs-only changes with `git diff --check` and the required base/head evidence. It does not compile, test or claim code coverage for docs-only changes.
 

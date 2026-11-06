@@ -68,7 +68,18 @@ class GateTest(unittest.TestCase):
         self.bad(gate("code", BRANCH, {PROV: {"result": "failure"}}))
 
     def test_docs_only_ignores_heavy(self):
-        self.ok(gate("docs-only", BRANCH, jobs(a="skipped", b="skipped")), "CI-SCOPE docs-only")
+        needs = {"scope": {"result": "success"}, "a": {"result": "skipped"}, "b": {"result": "skipped"}}
+        self.ok(gate("docs-only", BRANCH, needs), "CI-SCOPE docs-only")
+
+    def test_docs_only_scope_failure_rejected(self):
+        for res in ("failure", "cancelled", "skipped", "Success"):
+            with self.subTest(res=res):
+                needs = {"scope": {"result": res}, "a": {"result": "skipped"}, "b": {"result": "skipped"}}
+                self.bad(gate("docs-only", BRANCH, needs))
+
+    def test_docs_only_missing_scope_rejected(self):
+        self.bad(gate("docs-only", BRANCH, jobs(a="skipped", b="skipped")))
+        self.bad(gate("docs-only", BRANCH, {}))
 
     def test_unknown_scope(self):
         self.bad(gate("weird", BRANCH, jobs(a="success")))

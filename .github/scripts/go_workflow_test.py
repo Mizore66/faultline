@@ -315,6 +315,11 @@ class Gating:
         self.assertEqual(t.count("ci_gate.py"), 1)
         for frag in ["--scope", "needs.scope.outputs.scope", "github.event_name", "github.ref", "toJSON(needs)"]:
             self.assertIn(frag, t)
+        self.assertIn("EVENT_NAME: ${{ github.event_name }}", t)
+        self.assertIn("REF: ${{ github.ref }}", t)
+        self.assertIn('--event "$EVENT_NAME" --ref "$REF"', t)
+        run = t.rsplit("run: |", 1)[1]
+        self.assertNotIn("${{", run)
 
     def test_no_third_party_paths_action(self):
         text = self.path.read_text()
