@@ -242,5 +242,134 @@ class WriterFaultShards(unittest.TestCase):
         self.assertIn("TestLiveWriterFaults", live)
 
 
+VERIFY = WORKFLOW.parent / "verify.yml"
+GO_JOBS = ["go", "difftest-goldens", "difftest-live", "difftest-live-investigate", "difftest-live-writers",
+           "difftest-live-replay", "difftest-live-faults", "stack-live", "serve-bundle-native",
+           "windows-console-diagnostic"]
+VERIFY_JOBS = ["submission-freeze", "test", "docker-integration", "docker-integration-windows",
+               "docker-integration-macos-colima", "tag-checkout", "provenance"]
+
+
+def job_ids(path):
+    text = path.read_text()
+    body = text.split("\njobs:\n", 1)[1]
+    return re.findall(r"^  ([A-Za-z_][\w-]*):\n", body, re.M)
+
+
+def job_text(path, name):
+    body = path.read_text().split("\njobs:\n", 1)[1]
+    m = re.search(r"^  %s:\n(.*?)(?=^  [A-Za-z_][\w-]*:\n|\Z)" % re.escape(name), body, re.S | re.M)
+    assert m, name
+    return m.group(1)
+
+
+def needs_of(text):
+    m = re.search(r"^    needs: \[([^\]]*)\]", text, re.M)
+    return [v.strip() for v in m.group(1).split(",")] if m else []
+
+
+class Gating:
+    path = None
+    heavy = []
+    gate = None
+
+    def test_triggers(self):
+        text = self.path.read_text()
+        on = text.split("\njobs:\n", 1)[0]
+        self.assertRegex(on, r"(?m)^  pull_request:\n")
+        self.assertRegex(on, r"(?m)^  push:\n    branches: \[main\]\n")
+        self.assertEqual(len(re.findall(r"(?m)^  push:", on)), 1)
+
+    def test_job_inventory(self):
+        self.assertEqual(sorted(job_ids(self.path)), sorted(["scope", self.gate] + self.heavy))
+
+    def test_heavy_jobs_scoped(self):
+        for name in self.heavy:
+            t = job_text(self.path, name)
+            self.assertIn("scope", needs_of(t), name)
+            self.assertIn("needs.scope.outputs.scope == 'code'", t.split("    steps:", 1)[0], name)
+
+    def test_scope_job(self):
+        t = job_text(self.path, "scope")
+        self.assertIn("fetch-depth: 0", t)
+        self.assertIn(".github/scripts/ci_scope.sh", t)
+        self.assertIn("GITHUB_OUTPUT", t)
+        self.assertIn("github.event.pull_request.base.sha", t)
+        self.assertIn("github.event.pull_request.head.sha", t)
+        self.assertIn("github.event.before", t)
+        self.assertIn("github.sha", t)
+        self.assertIn("scope: ${{ steps.scope.outputs.scope }}", t)
+        self.assertIn("sort", t)
+        self.assertIn("git diff --check", t)
+        self.assertRegex(t, r"docs-only")
+
+    def test_gate_needs_complete(self):
+        t = job_text(self.path, self.gate)
+        needs = needs_of(t)
+        self.assertEqual(len(needs), len(set(needs)), "duplicate needs")
+        self.assertEqual(sorted(needs), sorted(["scope"] + self.heavy))
+        self.assertIn("if: always()\n", t)
+
+    def test_gate_invocation(self):
+        t = job_text(self.path, self.gate)
+        self.assertEqual(t.count("ci_gate.py"), 1)
+        for frag in ["--scope", "needs.scope.outputs.scope", "github.event_name", "github.ref", "toJSON(needs)"]:
+            self.assertIn(frag, t)
+
+    def test_no_third_party_paths_action(self):
+        text = self.path.read_text()
+        for bad in ["dorny/paths-filter", "tj-actions/changed-files", "paths-ignore"]:
+            self.assertNotIn(bad, text)
+        self.assertNotRegex(text, r"(?m)^\s+paths:")
+
+
+class GoGating(Gating, unittest.TestCase):
+    path = WORKFLOW
+    heavy = GO_JOBS
+    gate = "go-ci-gate"
+
+    def test_writer_artifacts_and_total(self):
+        t = job_text(self.path, "go-ci-gate")
+        downloads = [s for s in steps(t) if "download-artifact" in s]
+        self.assertEqual(len(downloads), 6)
+        dirs = []
+        for shard in WRITER_SHARDS:
+            d = [s for s in downloads if "name: writer-faults-%s\n" % shard in s]
+            self.assertEqual(len(d), 1, shard)
+            self.assertIn("needs.scope.outputs.scope == 'code'", d[0])
+            self.assertIn("download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", d[0])
+            m = re.search(r"path: (.+)", d[0])
+            dirs.append(m.group(1))
+            self.assertIn(shard, m.group(1))
+        self.assertEqual(len(set(dirs)), 6)
+        total = [s for s in steps(t) if "check-writer-fault-shards.sh total 654" in s]
+        self.assertEqual(len(total), 1)
+        self.assertIn("needs.scope.outputs.scope == 'code'", total[0])
+        for shard in WRITER_SHARDS:
+            self.assertEqual(total[0].count("writer-%s.log" % shard), 1, shard)
+
+    def test_provenance_not_in_go(self):
+        self.assertNotIn("provenance", job_text(self.path, "go-ci-gate"))
+
+
+class VerifyGating(Gating, unittest.TestCase):
+    path = VERIFY
+    heavy = VERIFY_JOBS
+    gate = "verify-ci-gate"
+
+    def test_dispatch_preserved(self):
+        on = self.path.read_text().split("\njobs:\n", 1)[0]
+        self.assertIn("workflow_dispatch:", on)
+        self.assertIn("unfreeze_override:", on)
+
+    def test_provenance_graph_and_skip_name(self):
+        p = job_text(self.path, "provenance")
+        self.assertEqual(sorted(needs_of(p)), ["docker-integration", "scope", "test"])
+        self.assertIn("github.event_name == 'push' && github.ref == 'refs/heads/main'", p)
+        self.assertIn("name: signed GitHub CI provenance", p)
+        g = job_text(self.path, "verify-ci-gate")
+        self.assertIn("signed GitHub CI provenance", g)
+
+
 if __name__ == "__main__":
     unittest.main()

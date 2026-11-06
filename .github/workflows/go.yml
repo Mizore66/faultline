@@ -2,11 +2,57 @@ name: Go
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
+  scope:
+    name: ci scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+      - name: Classify changed paths
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/scope.out"
+          sh .github/scripts/ci_scope.sh "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" > "$out"
+          scope="$(sed -n 's/^scope=//p;q' "$out")"
+          case "$scope" in
+            code | docs-only) ;;
+            *) echo "::error::unexpected scope '$scope'"; exit 1 ;;
+          esac
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "CI-SCOPE $scope"
+          grep '^path=' "$out" | sort || true
+      - name: Validate docs-only change
+        if: steps.scope.outputs.scope == 'docs-only'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            git diff --check "$BASE_SHA...$HEAD_SHA" --
+          else
+            git diff --check "$BASE_SHA..$HEAD_SHA" --
+          fi
+
   go:
     name: go test (${{ matrix.os }}, ${{ matrix.variant }})
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     strategy:
@@ -122,6 +168,8 @@ jobs:
   # with go test -list and leaves out the ones named here).
   difftest-goldens:
     name: difftest goldens (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -185,6 +233,8 @@ jobs:
 
   difftest-live:
     name: difftest live (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -330,6 +380,8 @@ jobs:
 
   difftest-live-investigate:
     name: difftest live investigate (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
@@ -362,6 +414,8 @@ jobs:
 
   difftest-live-writers:
     name: difftest live writers (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
@@ -394,6 +448,8 @@ jobs:
 
   difftest-live-replay:
     name: difftest live writer replay (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -455,6 +511,8 @@ jobs:
   # claimed, and neither has been measured on CI.
   difftest-live-faults:
     name: difftest live writer faults ${{ matrix.shard }} (frozen TS oracle)
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -646,6 +704,8 @@ jobs:
     # same two targets, so it is not repeated here. Depth reporting and the
     # sort check run once, in platform-process.
     name: stack ${{ matrix.suite }} vs Node (${{ matrix.os }})
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
     strategy:
@@ -722,6 +782,8 @@ jobs:
   # or an earlier head.
   serve-bundle-native:
     name: serve --bundle native (${{ matrix.os }})
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     strategy:
@@ -857,6 +919,8 @@ jobs:
   # or weaken any other job.
   windows-console-diagnostic:
     name: windows console Ctrl+C diagnostic (${{ matrix.os }})
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -910,3 +974,62 @@ jobs:
           path: ${{ runner.temp }}/console-diagnostic.log
           if-no-files-found: error
           retention-days: 14
+
+  go-ci-gate:
+    name: go ci gate
+    needs: [scope, go, difftest-goldens, difftest-live, difftest-live-investigate, difftest-live-writers, difftest-live-replay, difftest-live-faults, stack-live, serve-bundle-native, windows-console-diagnostic]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Download writer-faults-core
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-core
+          path: ${{ runner.temp }}/writer-faults/core
+      - name: Download writer-faults-runtime-init
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-runtime-init
+          path: ${{ runner.temp }}/writer-faults/runtime-init
+      - name: Download writer-faults-incident-prevention
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-incident-prevention
+          path: ${{ runner.temp }}/writer-faults/incident-prevention
+      - name: Download writer-faults-turns
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-turns
+          path: ${{ runner.temp }}/writer-faults/turns
+      - name: Download writer-faults-attest-repair
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-attest-repair
+          path: ${{ runner.temp }}/writer-faults/attest-repair
+      - name: Download writer-faults-record-sidecar
+        if: needs.scope.outputs.scope == 'code'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: writer-faults-record-sidecar
+          path: ${{ runner.temp }}/writer-faults/record-sidecar
+      - name: Writer fault total (654 leaves)
+        if: needs.scope.outputs.scope == 'code'
+        shell: bash
+        run: |
+          set -euo pipefail
+          .github/scripts/check-writer-fault-shards.sh total 654 "$RUNNER_TEMP/writer-faults/core/writer-core.log" "$RUNNER_TEMP/writer-faults/runtime-init/writer-runtime-init.log" "$RUNNER_TEMP/writer-faults/incident-prevention/writer-incident-prevention.log" "$RUNNER_TEMP/writer-faults/turns/writer-turns.log" "$RUNNER_TEMP/writer-faults/attest-repair/writer-attest-repair.log" "$RUNNER_TEMP/writer-faults/record-sidecar/writer-record-sidecar.log"
+      - name: Aggregate gate
+        shell: bash
+        env:
+          SCOPE: ${{ needs.scope.outputs.scope }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 -I .github/scripts/ci_gate.py --scope "$SCOPE" --event "${{ github.event_name }}" --ref "${{ github.ref }}" --needs-json "$NEEDS_JSON"
