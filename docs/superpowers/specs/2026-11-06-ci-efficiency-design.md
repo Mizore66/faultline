@@ -1,7 +1,7 @@
 # FaultLine CI efficiency and determinism — design
 
 - **Date:** 2026-11-06
-- **Status:** Design approved by the user after trigger, delivery, scope, gate/cost and acceptance choices. Written-spec review and implementation-plan approval remain separate gates. No workflow edit is authorized by this document.
+- **Status:** Design and written specification approved by the user on 2026-11-06 after trigger, delivery, scope, gate/cost and acceptance choices. Implementation-plan approval remains a separate gate. No workflow edit is authorized by this document.
 - **Baseline:** PR #220 merged normally at `1f128e015a757b24fc8583b463f91f02d92fbee8`; both post-merge main workflows succeeded with all 35 check runs successful. Accepted pre-merge head `ecd8416d58c3395f0c3591bbc85f6d7ea3d8008f` had 70 check runs: 68 successful and two expected provenance skips.
 - **Delivery:** Two PRs. PR 1 changes triggers, scoped gates and measured job shards. PR 2 adds safe caching/build reuse and deterministic flaky-harness fixes, then reassesses serve-bundle evidence sharding.
 
@@ -79,7 +79,7 @@ No third-party paths action or branch-protection dependency is added. Test the c
 
 ## 3. PR 1 — six-OS ordinary/tagged split
 
-Split the current `go test (${{ matrix.os }})` into two jobs per OS with explicit names such as `go test (ubuntu-24.04, untagged)` and `go test (ubuntu-24.04, tagged)`.
+Split the current `go test (${{ matrix.os }})` into two matrix legs per OS with explicit names such as `go test (ubuntu-24.04, untagged)` and `go test (ubuntu-24.04, tagged)`. A two-valued `variant` matrix under one job ID is preferred to duplicating the entire job definition.
 
 Untagged leg:
 
@@ -119,7 +119,7 @@ The existing parent test/skip checks are insufficient under narrowing because th
 2. No leaf fails, skips, is absent, is duplicated or belongs to another shard.
 3. The six shard manifests have exactly 654 unique leaves and exactly match the source table; they do not infer completeness from `len(matrix)` or a parent PASS.
 
-The `core` job alone owns Docker setup/pull, `TestLiveRealDocker`, `TestLiveRealDockerProjectBuild`, `TestLiveDemoArtifactFaults`, and the GLOBALOPEN native controls. Their setup steps are conditional to core. All six retain the no-skip guard with `TestLiveWriterFaults` listed. Uploaded artifacts use shard suffixes rather than collide on `globalopen-proof`.
+The `core` job alone owns Docker setup/pull, `TestLiveRealDocker`, `TestLiveRealDockerProjectBuild`, `TestLiveDemoArtifactFaults`, and the GLOBALOPEN native controls. Their setup steps are conditional to core. All six retain the no-skip guard with `TestLiveWriterFaults` listed. Uploaded artifacts use shard suffixes rather than collide on `globalopen-proof`. Each shard retains its raw log as an artifact; after all six, `go-ci-gate` downloads the six logs into distinct directories and runs the total 654-leaf uniqueness guard before reporting success. Docs-only gates do not download code-test artifacts.
 
 ## 5. PR 1 — stack/live shards
 
