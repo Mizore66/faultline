@@ -598,13 +598,27 @@ jobs:
     # TestLiveCpSyncTree (cpSync modes and the /private/var realpath). The
     # latter models Node's libstdc++ C++ copy and skips on macOS, whose
     # libc++ differs (KNOWN_DIFFERENCES), so only the arm64 Linux leg runs it.
-    name: stack thresholds vs Node (${{ matrix.os }})
+    # Sharded into platform-process, turn-incident and context-sidecar (whole
+    # top-level tests only, so no internal case is narrowed: all 150
+    # turn-snapshot cases, 120 investigate-turn sessions and 103 stores run).
+    # The serve-bundle stack call-site test runs in serve-bundle-native on the
+    # same two targets, so it is not repeated here. Depth reporting and the
+    # sort check run once, in platform-process.
+    name: stack ${{ matrix.suite }} vs Node (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04-arm, macos-latest]
+        suite: [platform-process, turn-incident, context-sidecar]
+        include:
+          - suite: platform-process
+            tests: 'TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveResolveCodexRunner'
+          - suite: turn-incident
+            tests: 'TestLiveInvestigateTurns TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft'
+          - suite: context-sidecar
+            tests: 'TestLiveProjectContext TestLiveSidecarHooks TestLiveCpSyncTree'
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
@@ -618,15 +632,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Live platform tests
+        env:
+          SUITE_TESTS: ${{ matrix.tests }}
         run: |
           set -o pipefail
           status=0
-          unset FAULTLINE_TURNSNAP_CASES
-          tests='TestLiveInvestigateTurns TestLiveStackThresholdsMatchNode TestLiveServeBundleStackCallSites TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveProjectContext TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft TestLiveSidecarHooks TestLiveResolveCodexRunner TestLiveCpSyncTree'
-          printf '%s\n' $tests > "$RUNNER_TEMP/live.list"
-          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 70m | tee "$RUNNER_TEMP/live.log" || status=$?
+          unset FAULTLINE_TURNSNAP_CASES FAULTLINE_TURNINV_CASES FAULTLINE_TURNPACK_CASES FAULTLINE_TURNWRITE_CASES FAULTLINE_CP_CASES FAULTLINE_SIDECAR_SEQS FAULTLINE_SIDECAR_STORES FAULTLINE_SIDECAR_STORES_FROM FAULTLINE_REPAIR_WT_CASES FAULTLINE_REPAIR_ONLY FAULTLINE_ABORT_CASE FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY FAULTLINE_COVER_ONLY
+          tests="$SUITE_TESTS"
+          printf '%s\n' $tests > "$RUNNER_TEMP/live-${{ matrix.suite }}.list"
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 70m | tee "$RUNNER_TEMP/live-${{ matrix.suite }}.log" || status=$?
           if [ "$RUNNER_OS" = macOS ]; then allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode|TestLiveProjectContext/sparse256MiB|TestLiveCpSyncTree)$'; else allowed='^$'; fi
-          .github/scripts/check-skips.sh "$RUNNER_TEMP/live.log" "$allowed" "$RUNNER_TEMP/live.list" || status=1
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/live-${{ matrix.suite }}.log" "$allowed" "$RUNNER_TEMP/live-${{ matrix.suite }}.list" || status=1
           exit $status
       - name: Measured stack depths
         # The CLI site's darwin/arm64 offset (jsjson.SiteCLI) was fitted from
@@ -635,14 +651,15 @@ jobs:
         # per site (its four shapes on one line): GitHub keeps only ten
         # notices per step. The test measures the cli site first and also
         # logs an unexpected output there before failing.
-        if: always()
+        if: always() && matrix.suite == 'platform-process'
         run: |
-          grep -E '^ *stack_live_test\.go:[0-9]+: [a-z0-9]+/[a-z0-9_]+ ' "$RUNNER_TEMP/live.log" | sed 's/^ *stack_live_test\.go:[0-9]*: //' |
+          grep -E '^ *stack_live_test\.go:[0-9]+: [a-z0-9]+/[a-z0-9_]+ ' "$RUNNER_TEMP/live-${{ matrix.suite }}.log" | sed 's/^ *stack_live_test\.go:[0-9]*: //' |
             awk '{ key = $1 " " $2; $1 = ""; $2 = ""; sub(/^ +/, ""); rows[key] = rows[key] (rows[key] == "" ? "" : "; ") $0; if (!(key in seen)) { seen[key] = 1; order[++n] = key } }
                  END { for (i = 1; i <= n; i++) print order[i] " " rows[order[i]] }' |
             while read -r line; do echo "::notice title=stack depth::$line"; done
-          grep -E 'stack_live_test\.go:[0-9]+: .*(unexpected output|lacks)' "$RUNNER_TEMP/live.log" | head -5 | while read -r line; do echo "::warning title=stack site::$line"; done
+          grep -E 'stack_live_test\.go:[0-9]+: .*(unexpected output|lacks)' "$RUNNER_TEMP/live-${{ matrix.suite }}.log" | head -5 | while read -r line; do echo "::warning title=stack site::$line"; done
       - name: TimSort against V8
+        if: matrix.suite == 'platform-process'
         run: |
           set -o pipefail
           status=0

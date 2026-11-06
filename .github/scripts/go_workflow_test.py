@@ -89,5 +89,72 @@ class GoWorkflow(unittest.TestCase):
         self.assertIn("matrix.variant == 'untagged'", found[0])
 
 
+SHARDS = {
+    "platform-process": "TestLiveStackThresholdsMatchNode TestLiveSpreadLimitsMatchNode TestLiveRimrafDepthMatchesNode TestLiveStdoutMatchesNode TestLiveSignalsMatchNode TestLiveNofileMatchesNode TestLiveGroupSignalMatchesNode TestLiveStderrMatchesNode TestLiveJudgeServer TestLiveJudgeSignalStop TestLiveBrowserOpen TestLiveSeedPreload TestLiveSpawn TestLiveHardenedGit TestLiveMaterialize TestLiveHostCmd TestLiveResolveCodexRunner".split(),
+    "turn-incident": "TestLiveInvestigateTurns TestLiveTurnSnapshotCapture TestLiveIncidentSuggest TestLiveIncidentDraft".split(),
+    "context-sidecar": "TestLiveProjectContext TestLiveSidecarHooks TestLiveCpSyncTree".split(),
+}
+NARROWING = [
+    "FAULTLINE_TURNSNAP_CASES", "FAULTLINE_TURNINV_CASES", "FAULTLINE_TURNPACK_CASES",
+    "FAULTLINE_TURNWRITE_CASES", "FAULTLINE_CP_CASES", "FAULTLINE_SIDECAR_SEQS",
+    "FAULTLINE_SIDECAR_STORES", "FAULTLINE_SIDECAR_STORES_FROM", "FAULTLINE_REPAIR_WT_CASES",
+    "FAULTLINE_REPAIR_ONLY", "FAULTLINE_ABORT_CASE", "FAULTLINE_TURN_SNAPSHOT_TRACKED_ONLY",
+    "FAULTLINE_COVER_ONLY",
+]
+
+
+def named_job(name):
+    text = WORKFLOW.read_text()
+    m = re.search(r"^  %s:\n(.*?)(?=^  \S|\Z)" % re.escape(name), text, re.S | re.M)
+    assert m, name + " job not found"
+    return m.group(1)
+
+
+class StackLiveShards(unittest.TestCase):
+    def setUp(self):
+        self.job = named_job("stack-live")
+
+    def test_matrix(self):
+        self.assertEqual(matrix_list(self.job, "os"), ["ubuntu-24.04-arm", "macos-latest"])
+        self.assertEqual(matrix_list(self.job, "suite"), list(SHARDS))
+
+    def test_exact_groups(self):
+        for suite, tests in SHARDS.items():
+            m = re.search(r"- suite: %s\n\s+tests: (.*)" % suite, self.job)
+            self.assertIsNotNone(m, suite)
+            self.assertEqual(m.group(1).strip().strip("'\"").split(), tests, suite)
+        every = [t for ts in SHARDS.values() for t in ts]
+        self.assertEqual(len(every), len(set(every)))
+        self.assertEqual(len(every), 24)
+
+    def test_duplicate_removed(self):
+        self.assertNotIn("TestLiveServeBundleStackCallSites", self.job)
+        self.assertIn("TestLiveServeBundleStackCallSites", named_job("serve-bundle-native"))
+
+    def test_full_sets_and_unset(self):
+        run = self.job.split("name: Live platform tests", 1)[1].split("\n      - name:", 1)[0]
+        for v in NARROWING:
+            self.assertRegex(run, r"unset [^\n]*\b%s\b" % v)
+            self.assertNotRegex(self.job, r"%s=" % v)
+        self.assertNotIn("t.Parallel", self.job)
+
+    def test_per_shard_log_and_skips(self):
+        self.assertIn("live-${{ matrix.suite }}.log", self.job)
+        self.assertIn("live-${{ matrix.suite }}.list", self.job)
+        self.assertNotIn("/live.log", self.job)
+        self.assertIn(
+            "allowed='^(TestLiveRimrafDepthMatchesNode|TestLiveSignalsMatchNode|TestLiveStdoutMatchesNode|TestLiveProjectContext/sparse256MiB|TestLiveCpSyncTree)$'",
+            self.job)
+        self.assertIn("check-skips.sh", self.job)
+
+    def test_platform_only_steps(self):
+        for marker in ["Measured stack depths", "TimSort against V8"]:
+            self.assertEqual(self.job.count(marker), 1, marker)
+            step = self.job.split("name: " + marker, 1)[1].split("\n      - ", 1)[0]
+            self.assertIn("matrix.suite == 'platform-process'", step, marker)
+        self.assertEqual(self.job.count("TestSortMatchesV8 -v"), 1)
+        self.assertEqual(self.job.count("stack_live_test"), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
