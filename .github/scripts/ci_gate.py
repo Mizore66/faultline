@@ -35,7 +35,9 @@ def main():
     for name, job in needs.items():
         result = job.get("result")
         allowed_provenance_skip = (
-            name == PROVENANCE and result == "skipped" and args.ref != MAIN_REF
+            name == PROVENANCE
+            and result == "skipped"
+            and (args.event != "push" or args.ref != MAIN_REF)
         )
         if result != "success" and not allowed_provenance_skip:
             raise SystemExit(f"required job {name}: {result}")

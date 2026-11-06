@@ -10,9 +10,9 @@ MAIN = "refs/heads/main"
 BRANCH = "refs/pull/1/merge"
 
 
-def gate(scope, ref, needs, raw=None):
+def gate(scope, ref, needs, raw=None, event="pull_request"):
     nj = raw if raw is not None else json.dumps(needs)
-    args = [sys.executable, "-I", GATE, "--scope", scope, "--event", "pull_request",
+    args = [sys.executable, "-I", GATE, "--scope", scope, "--event", event,
             "--ref", ref, "--needs-json", nj]
     return subprocess.run(args, text=True, capture_output=True)
 
@@ -46,7 +46,23 @@ class GateTest(unittest.TestCase):
         self.ok(gate("code", BRANCH, needs), "CI-SCOPE code")
 
     def test_provenance_skip_main_rejected(self):
-        self.bad(gate("code", MAIN, {"a": {"result": "success"}, PROV: {"result": "skipped"}}))
+        self.bad(gate("code", MAIN, {"a": {"result": "success"}, PROV: {"result": "skipped"}}, event="push"))
+
+    def test_provenance_skip_dispatch_main_allowed(self):
+        needs = {"a": {"result": "success"}, PROV: {"result": "skipped"}}
+        self.ok(gate("code", MAIN, needs, event="workflow_dispatch"), "CI-SCOPE code")
+
+    def test_provenance_skip_push_main_rejected(self):
+        needs = {"a": {"result": "success"}, PROV: {"result": "skipped"}}
+        self.bad(gate("code", MAIN, needs, event="push"))
+
+    def test_provenance_skip_pull_request_allowed(self):
+        needs = {"a": {"result": "success"}, PROV: {"result": "skipped"}}
+        self.ok(gate("code", BRANCH, needs, event="pull_request"), "CI-SCOPE code")
+
+    def test_other_skip_dispatch_main_rejected(self):
+        needs = {"a": {"result": "skipped"}, PROV: {"result": "skipped"}}
+        self.bad(gate("code", MAIN, needs, event="workflow_dispatch"))
 
     def test_provenance_failure_non_main_rejected(self):
         self.bad(gate("code", BRANCH, {PROV: {"result": "failure"}}))
