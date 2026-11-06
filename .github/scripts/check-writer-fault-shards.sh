@@ -38,10 +38,18 @@ for f in "$@"; do
 done
 
 awk -v shard="$shard" -v want="$want" '
+function def(sh, n, list,   a, i, k) {
+	exp_n[sh] = n
+	k = split(list, a, " ")
+	for (i = 1; i <= k; i++) owner[a[i]] = sh
+}
 BEGIN {
-	exp_n["core"] = 105; exp_n["runtime-init"] = 114
-	exp_n["incident-prevention"] = 147; exp_n["turns"] = 75
-	exp_n["attest-repair"] = 111; exp_n["record-sidecar"] = 102
+	def("core", 105, "propose-input policy-freeze ratify freeze ledger-bind minimize-git investigate-two-states commit-proof-preview")
+	def("runtime-init", 114, "runtime-resolve-node runtime-mapping-nested-output init-yes-dirty init-standing init-cli doctor-security")
+	def("incident-prevention", 147, "incident-start-command incident-continue-unapproved incident-continue-inherit-digest prevention-write-bundle-ok prevention-write-input-summary prevention-write-input-agents-append")
+	def("turns", 75, "turns-proof turns-minimize")
+	def("attest-repair", 111, "attest-create-git provenance-create-ok repair-brief-input-ok witness-implement-template repair-bundle-codex-ok")
+	def("record-sidecar", 102, "record-init record-checkpoint codex-snapshot-clean codex-gc-force codex-gc-alternates-other-entries sidecar-hook-session-quiet sidecar-hook-full-turn")
 	bad = 0
 }
 {
@@ -51,11 +59,15 @@ BEGIN {
 	status = line; sub(/^--- /, "", status); sub(/:.*/, "", status)
 	name = line; sub(/^--- [A-Z]+: /, "", name); sub(/[ \t].*/, "", name)
 	n = split(name, p, "/")
-	if (n != 4) next              # parent (case or label level), not a leaf
-	if (p[4] !~ /^[^\/]+-[A-Za-z0-9_]+$/) next
-	leaf = name
+	if (n < 4) next               # case or label parent, not a leaf
 	cid = p[2]
-	if (!(cid in exp_n) || (shard != "total" && cid != shard)) {
+	call = p[n]
+	if (p[3] == "" || call !~ /^[^-]+-[A-Za-z0-9_]+$/) {
+		printf "check-writer-fault-shards: malformed leaf %s in %s\n", name, FILENAME > "/dev/stderr"
+		bad = 1; next
+	}
+	leaf = name
+	if (!(cid in owner) || (shard != "total" && owner[cid] != shard)) {
 		printf "check-writer-fault-shards: foreign caseID %s in %s (%s) [%s]\n", cid, FILENAME, shard, leaf > "/dev/stderr"
 		bad = 1; next
 	}
@@ -68,14 +80,14 @@ BEGIN {
 		bad = 1; next
 	}
 	seen[leaf] = FILENAME
-	count[cid]++
+	count[owner[cid]]++
 	total++
 }
 END {
 	if (shard == "total") {
 		for (c in exp_n)
 			if (count[c] != exp_n[c]) {
-				printf "check-writer-fault-shards: case %s has %d unique PASS leaves, expected %d\n", c, count[c] + 0, exp_n[c] > "/dev/stderr"
+				printf "check-writer-fault-shards: shard %s has %d unique PASS leaves, expected %d\n", c, count[c] + 0, exp_n[c] > "/dev/stderr"
 				bad = 1
 			}
 	}

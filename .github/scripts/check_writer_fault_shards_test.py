@@ -15,18 +15,40 @@ SHARDS = [
 ]
 
 
-def leaves(case, n, status="PASS"):
-    return [
-        "    --- %s: TestLiveWriterFaults/%s/label%d/close-EIO (0.01s)" % (status, case, i)
-        for i in range(n)
-    ]
+CASES = {
+    "core": ["propose-input", "policy-freeze", "ratify", "freeze", "ledger-bind",
+             "minimize-git", "investigate-two-states", "commit-proof-preview"],
+    "runtime-init": ["runtime-resolve-node", "runtime-mapping-nested-output",
+                     "init-yes-dirty", "init-standing", "init-cli", "doctor-security"],
+    "incident-prevention": ["incident-start-command", "incident-continue-unapproved",
+                            "incident-continue-inherit-digest", "prevention-write-bundle-ok",
+                            "prevention-write-input-summary",
+                            "prevention-write-input-agents-append"],
+    "turns": ["turns-proof", "turns-minimize"],
+    "attest-repair": ["attest-create-git", "provenance-create-ok", "repair-brief-input-ok",
+                      "witness-implement-template", "repair-bundle-codex-ok"],
+    "record-sidecar": ["record-init", "record-checkpoint", "codex-snapshot-clean",
+                       "codex-gc-force", "codex-gc-alternates-other-entries",
+                       "sidecar-hook-session-quiet", "sidecar-hook-full-turn"],
+}
 
 
-def log_lines(case, n):
+def leaf(case, i, status="PASS"):
+    return "    --- %s: TestLiveWriterFaults/%s/label%d/close-EIO (0.01s)" % (status, case, i)
+
+
+def leaves(shard, n, start=0):
+    cs = CASES[shard]
+    return [leaf(cs[i % len(cs)], i + start) for i in range(n)]
+
+
+def log_lines(shard, n):
+    cs = CASES[shard]
     return (
-        ["=== RUN   TestLiveWriterFaults/%s" % case]
-        + leaves(case, n)
-        + ["--- PASS: TestLiveWriterFaults/%s (1.00s)" % case, "PASS"]
+        ["=== RUN   TestLiveWriterFaults/%s" % cs[0],
+         "    --- PASS: TestLiveWriterFaults/%s/label0 (0.01s)" % cs[0]]
+        + leaves(shard, n)
+        + ["--- PASS: TestLiveWriterFaults/%s (1.00s)" % cs[0], "PASS"]
     )
 
 
@@ -66,31 +88,54 @@ class GuardTest(unittest.TestCase):
 
     def test_duplicate_leaf(self):
         lines = log_lines("turns", 75)
-        lines.insert(3, lines[2])
+        lines.insert(4, lines[3])
         p = self.write("t", lines)
         self.fail(self.run_guard("turns", "75", p), "duplicate leaf")
 
-    def test_foreign_case(self):
-        lines = log_lines("turns", 74) + leaves("core", 1)
+    def test_foreign_case_other_shard(self):
+        lines = log_lines("turns", 74) + [leaf("propose-input", 900)]
+        p = self.write("t", lines)
+        self.fail(self.run_guard("turns", "75", p), "foreign caseID")
+
+    def test_turns_proof_in_core_is_foreign(self):
+        lines = log_lines("core", 104) + [leaf("turns-proof", 900)]
+        p = self.write("c", lines)
+        self.fail(self.run_guard("core", "105", p), "foreign caseID")
+
+    def test_shard_name_is_not_a_case_id(self):
+        lines = log_lines("turns", 74) + [leaf("turns", 900)]
         p = self.write("t", lines)
         self.fail(self.run_guard("turns", "75", p), "foreign caseID")
 
     def test_unknown_case(self):
-        lines = log_lines("turns", 75) + leaves("bogus", 1)
+        lines = log_lines("turns", 75) + [leaf("bogus", 1)]
         p = self.write("t", lines)
         self.fail(self.run_guard("turns", "75", p), "foreign caseID")
 
     def test_failed_leaf(self):
-        lines = log_lines("turns", 74) + leaves("turns", 1, "FAIL")[:0]
-        lines.append("    --- FAIL: TestLiveWriterFaults/turns/zz/close-EIO (0.01s)")
+        lines = log_lines("turns", 74) + [leaf("turns-proof", 900, "FAIL")]
         p = self.write("t", lines)
         self.fail(self.run_guard("turns", "75", p), "non-PASS leaf")
 
     def test_skipped_leaf(self):
-        lines = log_lines("turns", 74)
-        lines.append("    --- SKIP: TestLiveWriterFaults/turns/zz/close-EIO (0.00s)")
+        lines = log_lines("turns", 74) + [leaf("turns-minimize", 900, "SKIP")]
         p = self.write("t", lines)
         self.fail(self.run_guard("turns", "75", p), "non-PASS leaf")
+
+    def test_label_with_slash_counts(self):
+        lines = log_lines("turns", 74) + [
+            "    --- PASS: TestLiveWriterFaults/turns-proof/a/b/close-EIO (0.01s)"
+        ]
+        p = self.write("t", lines)
+        proc = self.run_guard("turns", "75", p)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_malformed_leaf_fails_loudly(self):
+        lines = log_lines("turns", 75) + [
+            "    --- PASS: TestLiveWriterFaults/turns-proof/label/closeEIO (0.01s)"
+        ]
+        p = self.write("t", lines)
+        self.fail(self.run_guard("turns", "75", p), "malformed leaf")
 
     def test_wrong_expected(self):
         p = self.write("t", log_lines("turns", 74))
@@ -98,18 +143,28 @@ class GuardTest(unittest.TestCase):
 
     def test_duplicate_across_shards(self):
         logs = self.six()
-        extra = self.write("dup", leaves("core", 1))
-        # replace one turns leaf-count neutral: core log already has label0
-        proc = self.run_guard("total", "654", *logs, extra)
-        self.fail(proc, "duplicate leaf")
+        # same leaf as the first one in the core log, placed in turns log
+        # instead of a turns leaf, so per-log counts stay exact.
+        with open(logs[0]) as f:
+            core_leaf = [l for l in f.read().splitlines() if "close-EIO" in l][0]
+        turns = log_lines("turns", 74) + [core_leaf]
+        logs[3] = self.write("turns2", turns)
+        self.fail(self.run_guard("total", "654", *logs), "duplicate leaf")
 
     def test_total_missing_shard(self):
         self.fail(self.run_guard("total", "654", *self.six()[:5]), "expected 654")
 
+    def test_total_checks_per_shard_sums(self):
+        logs = self.six()
+        # move one core leaf's worth: core 104 + turns 76 keeps 654 total.
+        logs[0] = self.write("c", log_lines("core", 104))
+        logs[3] = self.write("t", log_lines("turns", 76))
+        self.fail(self.run_guard("total", "654", *logs), "shard core has 104")
+
     def test_parent_only_summary(self):
         lines = [
             "--- PASS: TestLiveWriterFaults (9.00s)",
-            "--- PASS: TestLiveWriterFaults/core (1.00s)",
+            "--- PASS: TestLiveWriterFaults/ratify (1.00s)",
             "len(matrix)=654",
             "654",
             "PASS",
