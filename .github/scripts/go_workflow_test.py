@@ -156,5 +156,91 @@ class StackLiveShards(unittest.TestCase):
         self.assertEqual(self.job.count("stack_live_test"), 3)
 
 
+WRITER_SHARDS = {
+    "core": (105, "propose-input policy-freeze ratify freeze ledger-bind minimize-git investigate-two-states commit-proof-preview"),
+    "runtime-init": (114, "runtime-resolve-node runtime-mapping-nested-output init-yes-dirty init-standing init-cli doctor-security"),
+    "incident-prevention": (147, "incident-start-command incident-continue-unapproved incident-continue-inherit-digest prevention-write-bundle-ok prevention-write-input-summary prevention-write-input-agents-append"),
+    "turns": (75, "turns-proof turns-minimize"),
+    "attest-repair": (111, "attest-create-git provenance-create-ok repair-brief-input-ok witness-implement-template repair-bundle-codex-ok"),
+    "record-sidecar": (102, "record-init record-checkpoint codex-snapshot-clean codex-gc-force codex-gc-alternates-other-entries sidecar-hook-session-quiet sidecar-hook-full-turn"),
+}
+
+
+def step_named(job, name):
+    found = [s for s in steps(job) if s.startswith("name: " + name)]
+    assert len(found) == 1, name
+    return found[0]
+
+
+class WriterFaultShards(unittest.TestCase):
+    def setUp(self):
+        self.job = named_job("difftest-live-faults")
+
+    def test_matrix_membership(self):
+        entries = re.findall(r"- shard: (\S+)\n\s+count: (\d+)\n\s+cases: (.*)", self.job)
+        self.assertEqual([e[0] for e in entries], list(WRITER_SHARDS))
+        seen = []
+        for shard, count, cases in entries:
+            self.assertEqual(int(count), WRITER_SHARDS[shard][0], shard)
+            self.assertEqual(cases.strip().strip("'\"").split(), WRITER_SHARDS[shard][1].split(), shard)
+            seen += cases.strip().strip("'\"").split()
+        self.assertEqual(len(seen), len(set(seen)))
+        self.assertEqual(sum(int(e[1]) for e in entries), 654)
+
+    def test_matrix_runner(self):
+        self.assertIn("runs-on: ubuntu-24.04\n", self.job)
+        self.assertIn("fail-fast: false", self.job)
+
+    def test_exact_first_segment_and_guards(self):
+        run = step_named(self.job, "Writer faults (sharded)")
+        self.assertIn("^TestLiveWriterFaults\\$/^(", run)
+        self.assertIn("matrix.cases", run + self.job)
+        self.assertIn("tests='TestLiveWriterFaults'", run)
+        self.assertIn("printf '%s\\n' $tests", run)
+        self.assertIn("check-skips.sh", run)
+        self.assertIn("'^$'", run)
+        self.assertIn('check-writer-fault-shards.sh "${{ matrix.shard }}" "${{ matrix.count }}"', run)
+        self.assertIn("writer-${{ matrix.shard }}.log", run)
+        self.assertNotIn("TestLiveRealDocker", run)
+        self.assertNotIn("t.Parallel", self.job)
+
+    def test_every_leg_installs_strace(self):
+        s = step_named(self.job, "Install strace")
+        self.assertNotIn("if:", s)
+        self.assertIn("install -y -qq strace", s)
+
+    def test_core_owns_docker_and_globalopen(self):
+        for name in [
+            "Docker's classic image store",
+            "Pull the pinned image",
+            "GLOBALOPEN helper native controls",
+            "Real Docker and demo artifact faults",
+        ]:
+            self.assertRegex(step_named(self.job, name), r"if: (always\(\) && )?matrix\.shard == 'core'", name)
+        for marker in ["TestLiveRealDocker ", "TestLiveRealDockerProjectBuild", "TestLiveDemoArtifactFaults", "docker pull", "TestGlobalOpenDefaultHelperScenarios"]:
+            self.assertEqual(self.job.count(marker) >= 1, True, marker)
+        real = step_named(self.job, "Real Docker and demo artifact faults")
+        self.assertIn("tests='TestLiveRealDocker TestLiveRealDockerProjectBuild TestLiveDemoArtifactFaults'", real)
+        self.assertEqual(self.job.count("docker pull"), 1)
+        self.assertEqual(self.job.count("FAULTLINE_REAL_DOCKER=1"), 1)
+        self.assertNotIn("TestLiveWriterFaults", real.replace("TestLiveWriterFaults fails", ""))
+
+    def test_unique_artifacts_with_raw_log(self):
+        uploads = [s for s in steps(self.job) if "upload-artifact" in s]
+        self.assertEqual(len(uploads), 1)
+        up = uploads[0]
+        self.assertIn("name: writer-faults-${{ matrix.shard }}", up)
+        self.assertIn("writer-${{ matrix.shard }}.log", up)
+        self.assertNotIn("name: globalopen-proof\n", up)
+        self.assertIn("if: always()", up)
+
+    def test_no_seventh_job_and_difftest_live_exclusion(self):
+        text = WORKFLOW.read_text()
+        self.assertEqual(len(re.findall(r"^  difftest-live-faults:", text, re.M)), 1)
+        self.assertNotIn("difftest-live-faults-", text)
+        live = named_job("difftest-live")
+        self.assertIn("TestLiveWriterFaults", live)
+
+
 if __name__ == "__main__":
     unittest.main()
