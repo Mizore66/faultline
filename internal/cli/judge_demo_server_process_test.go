@@ -2,120 +2,59 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"testing"
 	"time"
 
+	"github.com/Mizore66/faultline/difftest/servefixture"
 	"github.com/Mizore66/faultline/internal/bundle/demo"
 	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/demofixture"
 	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
-// judgeDemoStream is an append-only process stream whose readers are woken by
-// writes rather than by timing sleeps.
-type judgeDemoStream struct {
-	mu      sync.Mutex
-	buf     strings.Builder
-	changed chan struct{}
-}
-
-func newJudgeDemoStream() *judgeDemoStream { return &judgeDemoStream{changed: make(chan struct{})} }
-
-func (s *judgeDemoStream) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	n, err := s.buf.Write(p)
-	close(s.changed)
-	s.changed = make(chan struct{})
-	return n, err
-}
-
-func (s *judgeDemoStream) snapshot() (string, <-chan struct{}) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.String(), s.changed
-}
-
-func (s *judgeDemoStream) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.buf.String()
-}
-
 type judgeDemoProcess struct {
-	cmd           *exec.Cmd
-	stdout        *judgeDemoStream
-	stderr        *judgeDemoStream
-	done          chan struct{}
-	waitErr       error
+	*servefixture.Started
 	url           string
 	startup       string
 	output        string
 	consoleHelper string
 }
 
-func (p *judgeDemoProcess) exited() bool {
-	select {
-	case <-p.done:
-		return true
-	default:
-		return false
-	}
-}
-
-func (p *judgeDemoProcess) wait(t *testing.T) error {
+func (p *judgeDemoProcess) wait(t *testing.T) servefixture.ProcessResult {
 	t.Helper()
-	select {
-	case <-p.done:
-		return p.waitErr
-	case <-time.After(30 * time.Second):
-		_ = p.cmd.Process.Kill()
-		<-p.done
-		t.Fatal("judge-demo did not exit after its signal")
-		return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	result, err := p.Started.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return result
 }
 
 func (p *judgeDemoProcess) interrupt(t *testing.T) {
 	t.Helper()
-	if runtime.GOOS != "windows" {
-		if err := p.cmd.Process.Signal(os.Interrupt); err != nil {
-			t.Fatalf("SIGINT: %v", err)
-		}
-		return
-	}
-	if p.consoleHelper == "" {
-		t.Fatal("Windows console helper was not built")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, p.consoleHelper, strconv.Itoa(p.cmd.Process.Pid)).CombinedOutput()
-	if err != nil {
-		t.Fatalf("CTRL_C_EVENT: %v\n%s", err, out)
+	if err := p.Started.Interrupt(ctx, p.consoleHelper); err != nil {
+		t.Fatalf("interrupt: %v", err)
 	}
 }
 
 func (p *judgeDemoProcess) terminate(t *testing.T) {
 	t.Helper()
-	var err error
-	if runtime.GOOS == "windows" {
-		err = p.cmd.Process.Kill()
-	} else {
-		err = p.cmd.Process.Signal(syscall.SIGTERM)
-	}
-	if err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := p.Started.Terminate(ctx); err != nil {
 		t.Fatalf("default termination: %v", err)
 	}
 }
@@ -125,65 +64,56 @@ func (p *judgeDemoProcess) terminate(t *testing.T) {
 // lines. Its environment contains neither Node nor Go.
 func startJudgeDemoProcess(t *testing.T, binary, work, output, displayedOutput, consoleHelper string, initialNative bool, args ...string) *judgeDemoProcess {
 	t.Helper()
-	cmd := exec.Command(binary, args...)
-	cmd.Dir = work
-	cmd.Env = builtBinaryEnv()
-	p := &judgeDemoProcess{
-		cmd: cmd, stdout: newJudgeDemoStream(), stderr: newJudgeDemoStream(), done: make(chan struct{}),
-		output: output, consoleHelper: consoleHelper,
+	return startJudgeDemoProcessWithEnv(t, binary, work, output, displayedOutput, consoleHelper, builtBinaryEnv(), initialNative, args...)
+}
+
+func startJudgeDemoProcessWithEnv(t *testing.T, binary, work, output, displayedOutput, consoleHelper string, env []string, initialNative bool, args ...string) *judgeDemoProcess {
+	t.Helper()
+	startupLines := 7
+	if initialNative {
+		startupLines = 8
 	}
-	cmd.Stdout, cmd.Stderr = p.stdout, p.stderr
-	if runtime.GOOS == "windows" {
-		// Match servefixture's isolated console without introducing a second
-		// platform-specific test file. This field exists only on Windows.
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-		field := reflect.ValueOf(cmd.SysProcAttr).Elem().FieldByName("CreationFlags")
-		if !field.IsValid() || !field.CanSet() {
-			t.Fatal("Windows SysProcAttr.CreationFlags is unavailable")
-		}
-		field.SetUint(0x10) // CREATE_NEW_CONSOLE
-	}
-	if err := cmd.Start(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	var startup string
+	started, err := servefixture.StartWithOptions(ctx, binary, nil, args, env, work, servefixture.StartOptions{
+		StartupLines: startupLines, StartupDescription: "judge-demo startup lines",
+		ValidateStartup: func(out []byte) (string, error) {
+			text := string(out)
+			_, rest, ok := strings.Cut(text, "🚀 Launching FaultLine Judge Demo at ")
+			url, after, found := strings.Cut(rest, "...\n")
+			if !ok || !found || after != "Press Ctrl+C to stop.\n" ||
+				!regexp.MustCompile(`^http://127\.0\.0\.1:[1-9][0-9]*$`).MatchString(url) {
+				return "", fmt.Errorf("invalid judge-demo startup output %q", text)
+			}
+			startup = text
+			return url, nil
+		},
+	})
+	if err != nil {
 		t.Fatalf("start judge-demo: %v", err)
 	}
-	go func() {
-		p.waitErr = cmd.Wait()
-		close(p.done)
-	}()
+	p := &judgeDemoProcess{Started: started, url: started.URL, startup: startup, output: output, consoleHelper: consoleHelper}
 	t.Cleanup(func() {
-		if !p.exited() {
-			_ = p.cmd.Process.Kill()
-			<-p.done
-			t.Errorf("judge-demo was still running at teardown")
+		if err := started.Dispose(); err != nil {
+			t.Errorf("judge-demo teardown: %v", err)
 		}
 	})
+	requireJudgeDemoStartup(t, p, displayedOutput, initialNative)
+	return p
+}
 
-	deadline := time.NewTimer(90 * time.Second)
-	defer deadline.Stop()
-	const stopLine = "Press Ctrl+C to stop.\n"
-	for {
-		out, changed := p.stdout.snapshot()
-		if strings.HasSuffix(out, stopLine) {
-			p.startup = out
-			_, rest, ok := strings.Cut(out, "🚀 Launching FaultLine Judge Demo at ")
-			url, after, found := strings.Cut(rest, "...\n")
-			if !ok || !found || after != stopLine || !regexp.MustCompile(`^http://127\.0\.0\.1:[1-9][0-9]*$`).MatchString(url) {
-				t.Fatalf("invalid startup output %q", out)
-			}
-			p.url = url
-			requireJudgeDemoStartup(t, p, displayedOutput, initialNative)
-			return p
+func judgeDemoEnvironmentWithTemp(directory string) []string {
+	env := builtBinaryEnv()
+	kept := env[:0]
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(key, "TMPDIR") || strings.EqualFold(key, "TMP") || strings.EqualFold(key, "TEMP") {
+			continue
 		}
-		select {
-		case <-changed:
-		case <-p.done:
-			t.Fatalf("judge-demo exited before readiness: %v stdout=%q stderr=%q", p.waitErr, p.stdout.String(), p.stderr.String())
-		case <-deadline.C:
-			_ = p.cmd.Process.Kill()
-			<-p.done
-			t.Fatalf("judge-demo startup deadline; stdout=%q stderr=%q", p.stdout.String(), p.stderr.String())
-		}
+		kept = append(kept, entry)
 	}
+	return append(kept, "TMPDIR="+directory, "TMP="+directory, "TEMP="+directory)
 }
 
 func requireJudgeDemoStartup(t *testing.T, p *judgeDemoProcess, displayedOutput string, initialNative bool) {
@@ -216,9 +146,6 @@ func requireJudgeDemoStartup(t *testing.T, p *judgeDemoProcess, displayedOutput 
 	want += "🚀 Launching FaultLine Judge Demo at " + p.url + "...\nPress Ctrl+C to stop.\n"
 	if p.startup != want {
 		t.Fatalf("startup stdout=%q want=%q", p.startup, want)
-	}
-	if p.stderr.String() != "" {
-		t.Fatalf("startup stderr=%q", p.stderr.String())
 	}
 }
 
@@ -305,11 +232,9 @@ func requireJudgeDemoNativePost(t *testing.T, p *judgeDemoProcess, binary, goVer
 func requireJudgeDemoCleanInterrupt(t *testing.T, p *judgeDemoProcess) {
 	t.Helper()
 	p.interrupt(t)
-	if err := p.wait(t); err != nil {
-		t.Fatalf("SIGINT exit: %v stdout=%q stderr=%q", err, p.stdout.String(), p.stderr.String())
-	}
-	if p.stdout.String() != p.startup || p.stderr.String() != "" {
-		t.Fatalf("output after SIGINT: stdout=%q stderr=%q", p.stdout.String(), p.stderr.String())
+	result := p.wait(t)
+	if result.ExitCode == nil || *result.ExitCode != 0 || result.Signal != nil || result.Stdout != p.startup || result.Stderr != "" {
+		t.Fatalf("SIGINT result: code=%v signal=%v stdout=%q stderr=%q", result.ExitCode, result.Signal, result.Stdout, result.Stderr)
 	}
 }
 
@@ -326,6 +251,44 @@ func buildJudgeDemoConsoleHelper(t *testing.T, moduleRoot, directory string) str
 		t.Fatalf("build console helper: %v\n%s", err, out)
 	}
 	return helper
+}
+
+// awaitJudgeDemoNativeConfig observes the real native executor's per-child
+// directory. The config is written before the private child starts and removed
+// by the executor's cleanup, so its existence is an execution-phase barrier,
+// not an inference from HTTP single-flight or publication state.
+func awaitJudgeDemoNativeConfig(t *testing.T, p *judgeDemoProcess, temp string, response <-chan judgeDemoResponse) string {
+	t.Helper()
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		entries, err := os.ReadDir(temp)
+		if err != nil {
+			t.Fatalf("read controlled native TMPDIR: %v", err)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "faultline-native-demo-") {
+				continue
+			}
+			config := filepath.Join(temp, entry.Name(), "native-config.json")
+			info, err := os.Lstat(config)
+			if err == nil && info.Mode().IsRegular() {
+				return config
+			}
+		}
+		select {
+		case result := <-response:
+			t.Fatalf("native POST completed before the execution-phase barrier: %+v", result)
+		case <-ticker.C:
+			if p.Exited() {
+				t.Fatal("judge-demo exited before the execution-phase barrier")
+			}
+		case <-deadline.C:
+			t.Fatal("native-config.json did not appear under controlled TMPDIR")
+		}
+	}
 }
 
 func TestJudgeDemoInteractiveProcess(t *testing.T) {
@@ -432,45 +395,31 @@ func TestJudgeDemoInteractiveProcess(t *testing.T) {
 	t.Run("active native rerun interrupt", func(t *testing.T) {
 		work := newWork(t)
 		output := filepath.Join(work, ".faultline", "bundles", "active")
-		p := start(t, work, output, filepath.Join(".faultline", "bundles", "active"), false,
+		nativeTemp := filepath.Join(work, "native-tmp")
+		if err := os.Mkdir(nativeTemp, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		p := startJudgeDemoProcessWithEnv(t, binary, work, output, filepath.Join(".faultline", "bundles", "active"), consoleHelper,
+			judgeDemoEnvironmentWithTemp(nativeTemp), false,
 			"judge-demo", "--approve-native", proposalDigest, "--port", "0", "--output", output)
 		_, nonce := judgeDemoPageAndNonce(t, p)
-		var before map[string]string
-		interrupted := false
-		for attempt := 0; attempt < 5 && !interrupted; attempt++ {
-			before = tree(t, work)
-			responses := make(chan judgeDemoResponse, 2)
-			go func() { responses <- judgeDemoRequest(http.MethodPost, p.url+"/api/rerun", nonce) }()
-			go func() { responses <- judgeDemoRequest(http.MethodPost, p.url+"/api/rerun", nonce) }()
-			first := <-responses
-			if first.err != nil || first.status != http.StatusConflict {
-				second := <-responses
-				if first.err != nil || second.err != nil || first.status != http.StatusOK && second.status != http.StatusOK {
-					t.Fatalf("native requests failed before the active barrier: first=%+v second=%+v", first, second)
-				}
-				continue
-			}
-			if first.body != `{"ok":false,"error":"native RERUN already running"}` {
-				t.Fatalf("single-flight barrier: %+v", first)
-			}
-			// The conflict response arrived while the other request was active.
-			// Signal before waiting for that request, rather than accidentally
-			// observing the active request's success and interrupting an idle server.
-			p.interrupt(t)
-			active := <-responses
-			if active.err == nil && active.status == http.StatusOK {
-				t.Fatalf("cancelled native POST returned success: %+v", active)
-			}
-			interrupted = true
+		before := tree(t, work)
+		response := make(chan judgeDemoResponse, 1)
+		go func() { response <- judgeDemoRequest(http.MethodPost, p.url+"/api/rerun", nonce) }()
+		config := awaitJudgeDemoNativeConfig(t, p, nativeTemp, response)
+		// The real per-child config exists: native execution, not bundle or
+		// sidecar publication, is the phase interrupted here.
+		p.interrupt(t)
+		active := <-response
+		if active.err == nil && active.status == http.StatusOK {
+			t.Fatalf("cancelled native POST returned success: %+v", active)
 		}
-		if !interrupted {
-			t.Fatal("could not observe an active native RERUN")
+		result := p.wait(t)
+		if result.ExitCode == nil || *result.ExitCode != 0 || result.Signal != nil || result.Stdout != p.startup || result.Stderr != "" {
+			t.Fatalf("active SIGINT result: code=%v signal=%v stdout=%q stderr=%q", result.ExitCode, result.Signal, result.Stdout, result.Stderr)
 		}
-		if err := p.wait(t); err != nil {
-			t.Fatalf("active SIGINT exit: %v", err)
-		}
-		if p.stdout.String() != p.startup || p.stderr.String() != "" {
-			t.Fatalf("active SIGINT output: stdout=%q stderr=%q", p.stdout.String(), p.stderr.String())
+		if _, err := os.Lstat(config); !os.IsNotExist(err) {
+			t.Fatalf("native child config survived cancellation cleanup: %v", err)
 		}
 		sameTree(t, "cancelled native publication", tree(t, work), before)
 	})
@@ -480,19 +429,16 @@ func TestJudgeDemoInteractiveProcess(t *testing.T) {
 		output := filepath.Join(work, ".faultline", "bundles", "terminate")
 		p := start(t, work, output, filepath.Join(".faultline", "bundles", "terminate"), false, "judge-demo", "--port", "0", "--output", output)
 		p.terminate(t)
-		err := p.wait(t)
+		result := p.wait(t)
 		if runtime.GOOS == "windows" {
-			if err == nil || p.cmd.ProcessState.ExitCode() == 0 {
-				t.Fatalf("Windows termination status: %v", err)
+			if result.Signal != nil || result.ExitCode == nil || *result.ExitCode == 0 {
+				t.Fatalf("Windows termination result: code=%v signal=%v", result.ExitCode, result.Signal)
 			}
-		} else {
-			status, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus)
-			if !ok || !status.Signaled() || status.Signal() != syscall.SIGTERM {
-				t.Fatalf("termination did not take the default SIGTERM action: %v", err)
-			}
+		} else if result.ExitCode != nil || result.Signal == nil || *result.Signal != "SIGTERM" {
+			t.Fatalf("termination did not take the default SIGTERM action: code=%v signal=%v", result.ExitCode, result.Signal)
 		}
-		if p.stdout.String() != p.startup || p.stderr.String() != "" {
-			t.Fatalf("termination output: stdout=%q stderr=%q", p.stdout.String(), p.stderr.String())
+		if result.Stdout != p.startup || result.Stderr != "" {
+			t.Fatalf("termination output: stdout=%q stderr=%q", result.Stdout, result.Stderr)
 		}
 	})
 }
