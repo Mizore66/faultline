@@ -44,6 +44,11 @@ const (
 // "continue" (write `100 Continue`, then respond) or "fail" (417).
 const expectMarker = "Faultline-Node-Expect"
 
+// bodyMarker tells the handler whether the request carried body framing:
+// "zero" (no Transfer-Encoding, Content-Length absent or 0) or "nonzero".
+// Every request head gets exactly one; caller copies are stripped.
+const bodyMarker = "Faultline-Node-Body"
+
 // What Node writes before destroying a socket whose request it cannot parse
 // (socketOnError).
 const (
@@ -414,6 +419,7 @@ func (c *nodeConn) endHead() {
 	var expect []byte
 	var length uint64
 	hasExpect, hasLength, hasTE, chunked := false, false, false, false
+	hasTEHeader := false
 	for lines := 0; ; lines++ {
 		end = bytes.IndexByte(rest, '\n') + 1
 		raw := rest[:end]
@@ -427,6 +433,11 @@ func (c *nodeConn) endHead() {
 				}
 				out = append(out, expectMarker+": "+decision+"\r\n"...)
 			}
+			body := "zero"
+			if hasTEHeader || length > 0 {
+				body = "nonzero"
+			}
+			out = append(out, bodyMarker+": "+body+"\r\n"...)
 			out = append(out, raw...)
 			break
 		}
@@ -441,6 +452,7 @@ func (c *nodeConn) endHead() {
 			}
 			length, hasLength = n, true
 		case bytes.EqualFold(name, []byte("Transfer-Encoding")):
+			hasTEHeader = true
 			if hasLength {
 				c.fail(badRequestResponse)
 				return
@@ -465,7 +477,7 @@ func (c *nodeConn) endHead() {
 			}
 			expect = append(expect, bytes.TrimRight(value, " \t")...)
 			hasExpect = true
-		case bytes.EqualFold(name, []byte(expectMarker)):
+		case bytes.EqualFold(name, []byte(expectMarker)), bytes.EqualFold(name, []byte(bodyMarker)):
 		default:
 			out = append(out, raw...)
 		}
