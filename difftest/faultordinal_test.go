@@ -59,22 +59,43 @@ func firstInjected(trace string) string {
 	return ""
 }
 
-// injectedOrdinal reports whether the first (INJECTED) line of trace is the
-// n-th line of the traced group (the trace holds only that group's calls),
-// and that nothing in it aborted.
+// injectedOrdinal reports whether the first (INJECTED) call of trace is the
+// n-th completed call of the thread that made it (strace counts when= per
+// thread, and the trace holds other threads' calls too), and that the trace
+// parses cleanly and nothing in it aborted.
 func injectedOrdinal(trace string, n int) bool {
 	if strings.Contains(trace, "SIGABRT") {
 		return false
 	}
+	calls, err := parseStrace(trace)
+	if err != nil {
+		return false
+	}
+	pid := ""
+	for _, c := range calls {
+		if c.Injected {
+			pid = c.PID
+			break
+		}
+	}
 	count := 0
-	for _, line := range strings.Split(trace, "\n") {
-		if !strings.Contains(line, "(") || strings.Contains(line, "---") || strings.Contains(line, "+++") {
+	for _, c := range calls {
+		if c.PID != pid {
 			continue
 		}
 		count++
-		if strings.Contains(line, "(INJECTED)") {
-			return count == n
+		if c.Injected {
+			return pid != "" && count == n
 		}
 	}
 	return false
+}
+
+// threadAffinityPrefix pins the Go CLI to one OS thread (the faultline_test
+// linux hook) for onlyCalls rows, so strace's per-thread when= counts one thread.
+func threadAffinityPrefix(tsSide, onlyCalls bool) string {
+	if tsSide || !onlyCalls {
+		return ""
+	}
+	return "export FAULTLINE_TEST_LOCK_OS_THREAD=1; "
 }

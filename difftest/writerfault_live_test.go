@@ -446,7 +446,7 @@ func runWithFault(t *testing.T, repo string, tpl writerTemplate, f writerFault, 
 				return "'" + strings.ReplaceAll(p, "<PID>", `'"$$"'`) + "'"
 			}
 			abs := filepath.Join(r.root, filepath.FromSlash(rel))
-			script := "exec strace -D -f -qq -s 4096 -o " + quote(trace)
+			script := threadAffinityPrefix(tsSide, faultOrdinals[f.caseID+"/"+f.label+"/"+f.call].onlyCalls) + "exec strace -D -f -qq -s 4096 -o " + quote(trace)
 			when := "+" // every call from the ordinal on
 			// Go makes the same seeded mkdir by name, on a thread that varies
 			// between runs (when= counts per thread), so Go is faulted by path.
