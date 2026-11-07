@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mizore66/faultline/internal/bundle"
 	"github.com/Mizore66/faultline/internal/bundle/demo"
 	"github.com/Mizore66/faultline/internal/canonical"
 	"github.com/Mizore66/faultline/internal/clock"
@@ -124,7 +127,6 @@ func requireEmptyDir(t *testing.T, dir string) {
 func TestJudgeDemoValidation(t *testing.T) {
 	proposal := jsjson.StringifyIndent(demofixture.NativeWitnessProposal(), "  ") + "\n"
 	combined := "Native proposal inspection cannot be combined with execution or output options."
-	server := "not yet ported: judge-demo server"
 	needsRerun := "--approve-native requires --rerun-all."
 	needsApproval := "Native RERUN requires --approve-native <proposal-digest>."
 	missing := "Missing required option: --approve-native"
@@ -143,9 +145,6 @@ func TestJudgeDemoValidation(t *testing.T) {
 		{"inspect+export", []string{"judge-demo", "--native-proposal", "--export-only"}, "", demoFail(combined), 1},
 		{"inspect+approve", []string{"judge-demo", "--native-proposal", "--approve-native"}, "", demoFail(combined), 1},
 		{"inspect+output", []string{"judge-demo", "--native-proposal", "--output"}, "", demoFail(combined), 1},
-		{"server", []string{"judge-demo"}, "", demoFail(server), 1},
-		{"server with rerun", []string{"judge-demo", "--rerun-all"}, "", demoFail(server), 1},
-		{"server with approval", []string{"judge-demo", "--approve-native", "sha256:x"}, "", demoFail(server), 1},
 		{"replay approval misuse", []string{"judge-demo", "--export-only", "--approve-native", "sha256:any-value"}, "", demoFail(needsRerun), 1},
 		{"replay trailing approval misuse", []string{"judge-demo", "--export-only", "--approve-native"}, "", demoFail(needsRerun), 1},
 		{"rerun absent approval", []string{"judge-demo", "--export-only", "--rerun-all"}, "", demoFail(needsApproval), 1},
@@ -172,11 +171,224 @@ func TestJudgeDemoValidation(t *testing.T) {
 	}
 }
 
+// runJudgeDemoServer drives the real incident server through one command
+// invocation, replacing only the signal wait. The visitor runs after readiness
+// and before the real server Close.
+func runJudgeDemoServer(t *testing.T, args []string, visit func(url string)) (string, string, int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	original := judgeDemoAwaitInterrupt
+	judgeDemoAwaitInterrupt = func(start func() (func() error, error)) error {
+		closeServer, err := start()
+		if err != nil {
+			return err
+		}
+		if visit != nil {
+			_, rest, ok := strings.Cut(out.String(), "🚀 Launching FaultLine Judge Demo at ")
+			url, _, found := strings.Cut(rest, "...\nPress Ctrl+C to stop.\n")
+			if !ok || !found {
+				return fail("interactive readiness URL missing")
+			}
+			visit(url)
+		}
+		return closeServer()
+	}
+	defer func() { judgeDemoAwaitInterrupt = original }()
+	code := Run(args, &out, &errb)
+	return out.String(), errb.String(), code
+}
+
+// TestJudgeDemoInteractive checks the validation and publication that must
+// happen before an interactive listener is exposed. Successful serving and the
+// native POST protocol are exercised against the real binary in
+// TestJudgeDemoInteractiveProcess.
+func TestJudgeDemoInteractive(t *testing.T) {
+	digest := demofixture.NativeWitnessProposal().Get("digest").Str()
+	wrongDigest := "sha256:" + strings.Repeat("0", 64)
+	needsApproval := "Native RERUN requires --approve-native <proposal-digest>."
+	missing := "Missing required option: --approve-native"
+	rejected := `native analysis APPROVAL (invocation 0, state ""): approval must match the proposal and record a canonical UTC millisecond timestamp no later than execution entry`
+	for _, c := range []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{"rerun requires approval", []string{"judge-demo", "--rerun-all"}, needsApproval},
+		{"rerun with replay requires approval", []string{"judge-demo", "--replay", "--rerun-all"}, needsApproval},
+		{"rerun trailing approval", []string{"judge-demo", "--rerun-all", "--approve-native"}, missing},
+		{"rerun empty approval", []string{"judge-demo", "--rerun-all", "--approve-native", ""}, missing},
+		{"replay trailing approval", []string{"judge-demo", "--approve-native"}, missing},
+		{"replay empty approval", []string{"judge-demo", "--approve-native", ""}, missing},
+		{"replay wrong digest", []string{"judge-demo", "--approve-native", wrongDigest}, rejected},
+		{"rerun wrong digest", []string{"judge-demo", "--rerun-all", "--approve-native", wrongDigest}, rejected},
+		{"duplicate replay approval first wins", []string{"judge-demo", "--approve-native", wrongDigest, "--approve-native", digest}, rejected},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := isolatedEmpty(t)
+			var out, errb bytes.Buffer
+			code := Run(append(c.args, "--output", ".faultline/bundles/must-not-exist"), &out, &errb)
+			if code != 1 || out.Len() != 0 || errb.String() != demoFail(c.message) {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, out.String(), errb.String())
+			}
+			requireEmptyDir(t, dir)
+		})
+	}
+
+	for _, c := range []struct{ port, rendered string }{
+		{"not-a-number", "NaN"}, {"-1", "-1"}, {"1.5", "1.5"}, {"65536", "65536"},
+	} {
+		t.Run("invalid port "+c.port, func(t *testing.T) {
+			isolatedEmpty(t)
+			relative := filepath.Join(".faultline", "bundles", "invalid-port")
+			var out, errb bytes.Buffer
+			code := Run([]string{"judge-demo", "--port", c.port, "--output", relative}, &out, &errb)
+			wantErr := demoFail("options.port should be >= 0 and < 65536. Received type number (" + c.rendered + ").")
+			if code != 1 || errb.String() != wantErr {
+				t.Fatalf("exit=%d stdout=%q stderr=%q want stderr=%q", code, out.String(), errb.String(), wantErr)
+			}
+			directory := nodefs.Resolve(relative)
+			verification := demo.Verify(directory, "", false)
+			if !verification.Valid || verification.RootDigest == nil || *verification.RootDigest != replayRetainedRoot {
+				t.Fatalf("initial publication missing or invalid: %+v", verification)
+			}
+			wantOut := "FaultLine cached replay investigation prepared.\n" +
+				"Stable sample boundary: not certified from cached replay\n" +
+				"Proof bundle self-consistency: VALID (" + strconv.Itoa(verification.CheckedFiles) + " declared files)\n" +
+				"Bundle root: " + replayRetainedRoot + "\n" +
+				"Proof bundle: " + relative + "\n"
+			if out.String() != wantOut {
+				t.Fatalf("stdout=%q want=%q", out.String(), wantOut)
+			}
+		})
+	}
+
+	makeFailureVisit := func(dir string, before *map[string]string, post, snapshot *judgeDemoResponse) func(string) {
+		return func(url string) {
+			*before = tree(t, dir)
+			page := judgeDemoRequest(http.MethodGet, url+"/", "")
+			match := regexp.MustCompile(`<script nonce="([^"]+)">`).FindStringSubmatch(page.body)
+			if page.err != nil || page.status != http.StatusOK || len(match) != 2 {
+				*post = judgeDemoResponse{err: errors.New("interactive page or nonce unavailable")}
+				return
+			}
+			*post = judgeDemoRequest(http.MethodPost, url+"/api/rerun", match[1])
+			*snapshot = judgeDemoRequest(http.MethodGet, url+"/api/analysis", "")
+		}
+	}
+	requireFailureReply := func(t *testing.T, out, errb string, code int, post, snapshot judgeDemoResponse, message string) {
+		t.Helper()
+		if code != 0 || errb != "" || !strings.Contains(out, "Press Ctrl+C to stop.\n") {
+			t.Fatalf("interactive command exit=%d stdout=%q stderr=%q", code, out, errb)
+		}
+		want := `{"ok":false,"error":` + jsjson.Stringify(jsjson.MakeString(message)) + `}`
+		if post.err != nil || post.status != http.StatusInternalServerError || post.body != want {
+			t.Fatalf("failed publication response: %+v want exact 500 %q", post, want)
+		}
+		replay := jsjson.Stringify(demofixture.CreateReplayAnalysis())
+		if snapshot.err != nil || snapshot.status != http.StatusOK || snapshot.body != replay {
+			t.Fatalf("prior page was not retained: %+v", snapshot)
+		}
+	}
+
+	t.Run("execution failure happens before writes", func(t *testing.T) {
+		dir := isolatedEmpty(t)
+		original := judgeDemoRunNativeAnalysis
+		judgeDemoRunNativeAnalysis = func(context.Context, demofixture.NativeApproval) (demofixture.NativeResult, error) {
+			return demofixture.NativeResult{}, errors.New("execution stopped")
+		}
+		defer func() { judgeDemoRunNativeAnalysis = original }()
+		var before map[string]string
+		var post, snapshot judgeDemoResponse
+		args := []string{"judge-demo", "--approve-native", digest, "--port", "0"}
+		out, errb, code := runJudgeDemoServer(t, args, makeFailureVisit(dir, &before, &post, &snapshot))
+		requireFailureReply(t, out, errb, code, post, snapshot, "execution stopped")
+		sameTree(t, "execution failure", tree(t, dir), before)
+	})
+
+	t.Run("bundle failure happens before sidecar", func(t *testing.T) {
+		dir := isolatedEmpty(t)
+		original := judgeDemoWriteBundle
+		calls := 0
+		judgeDemoWriteBundle = func(output string, analysis jsjson.Value, options demo.WriteOptions) (demo.Written, error) {
+			calls++
+			if calls == 2 {
+				return demo.Written{}, errors.New("bundle stopped")
+			}
+			return original(output, analysis, options)
+		}
+		defer func() { judgeDemoWriteBundle = original }()
+		var before map[string]string
+		var post, snapshot judgeDemoResponse
+		args := []string{"judge-demo", "--approve-native", digest, "--port", "0"}
+		out, errb, code := runJudgeDemoServer(t, args, makeFailureVisit(dir, &before, &post, &snapshot))
+		requireFailureReply(t, out, errb, code, post, snapshot, "bundle stopped")
+		sameTree(t, "bundle failure", tree(t, dir), before)
+	})
+
+	t.Run("sidecar failure follows bundle publication", func(t *testing.T) {
+		dir := isolatedEmpty(t)
+		original := judgeDemoWriteNativeEvidence
+		judgeDemoWriteNativeEvidence = func(demo.Written, bundle.Result, jsjson.Value, jsjson.Value) (string, error) {
+			return "", errors.New("sidecar stopped")
+		}
+		defer func() { judgeDemoWriteNativeEvidence = original }()
+		directory := nodefs.Resolve(".faultline/bundles/judge-demo")
+		sidecar := sidecarOf(directory)
+		var before map[string]string
+		var post, snapshot judgeDemoResponse
+		visit := makeFailureVisit(dir, &before, &post, &snapshot)
+		args := []string{"judge-demo", "--approve-native", digest, "--port", "0"}
+		out, errb, code := runJudgeDemoServer(t, args, func(url string) {
+			if err := os.WriteFile(sidecar, []byte("prior stale evidence"), 0o600); err != nil {
+				post = judgeDemoResponse{err: err}
+				return
+			}
+			visit(url)
+		})
+		requireFailureReply(t, out, errb, code, post, snapshot, "sidecar stopped")
+		verification := demo.Verify(directory, "", false)
+		if !verification.Valid || verification.RootDigest == nil || *verification.RootDigest == replayRetainedRoot {
+			t.Fatalf("native bundle was not published before the sidecar failure: %+v", verification)
+		}
+		requireString(t, "published mode", readValue(t, filepath.Join(directory, "analysis.json")).Get("mode"), "RERUN")
+		if body, err := os.ReadFile(sidecar); err != nil || string(body) != "prior stale evidence" {
+			t.Fatalf("prior sidecar changed: body=%q err=%v", body, err)
+		}
+		entries, err := os.ReadDir(filepath.Dir(directory))
+		if err != nil || len(entries) != 2 || entries[0].Name() != filepath.Base(directory) || entries[1].Name() != filepath.Base(sidecar) {
+			t.Fatalf("publication left temporary artifacts: %v (%v)", entries, err)
+		}
+	})
+
+	t.Run("stale sidecar refusal prevents startup", func(t *testing.T) {
+		dir := isolatedEmpty(t)
+		directory := nodefs.Resolve(".faultline/bundles/judge-demo")
+		if err := os.MkdirAll(filepath.Dir(directory), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := demo.Write(directory, demofixture.CreateReplayAnalysis(), demo.WriteOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(sidecarOf(directory), []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before := tree(t, dir)
+		original := judgeDemoRemoveNativeEvidence
+		judgeDemoRemoveNativeEvidence = func(string) error { return errors.New("stale evidence refused") }
+		defer func() { judgeDemoRemoveNativeEvidence = original }()
+		var out, errb bytes.Buffer
+		code := Run([]string{"judge-demo", "--port", "0"}, &out, &errb)
+		if code != 1 || out.Len() != 0 || errb.String() != demoFail("stale evidence refused") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, out.String(), errb.String())
+		}
+		sameTree(t, "stale sidecar refusal", tree(t, dir), before)
+	})
+}
+
 // judgeDemoDiagnosticCase is one refusal: the complete result is asserted before
 // the diagnostic is emitted, and nothing may be left in the working directory.
 func TestJudgeDemoNativeDiagnostics(t *testing.T) {
 	proposal := "Native proposal inspection cannot be combined with execution or output options."
-	server := "not yet ported: judge-demo server"
 	needsRerun := "--approve-native requires --rerun-all."
 	needsApproval := "Native RERUN requires --approve-native <proposal-digest>."
 	missing := "Missing required option: --approve-native"
@@ -189,9 +401,6 @@ func TestJudgeDemoNativeDiagnostics(t *testing.T) {
 		{"inspect-export", proposal, []string{"judge-demo", "--native-proposal", "--export-only"}},
 		{"inspect-approve", proposal, []string{"judge-demo", "--native-proposal", "--approve-native"}},
 		{"inspect-output", proposal, []string{"judge-demo", "--native-proposal", "--output"}},
-		{"server", server, []string{"judge-demo"}},
-		{"server-rerun", server, []string{"judge-demo", "--rerun-all"}},
-		{"server-approval", server, []string{"judge-demo", "--approve-native", "sha256:x"}},
 		{"replay-approval", needsRerun, []string{"judge-demo", "--export-only", "--approve-native", "sha256:any-value"}},
 		{"replay-trailing-approval", needsRerun, []string{"judge-demo", "--export-only", "--approve-native"}},
 		{"rerun-absent-approval", needsApproval, []string{"judge-demo", "--export-only", "--rerun-all"}},

@@ -11,6 +11,7 @@ import (
 	"github.com/Mizore66/faultline/internal/demofixture"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/nodefs"
+	"github.com/Mizore66/faultline/internal/proofview"
 )
 
 // verifyGeneratedBundle independently verifies a bundle just written and
@@ -26,8 +27,85 @@ func verifyGeneratedBundle(written demo.Written) (bundle.Result, error) {
 	return verification, nil
 }
 
-// judgeDemoCommand serves native proposal inspection and --export-only. The
-// interactive judge-demo server is not ported. --port has no effect.
+// Package-private seams let the CLI tests stop publication at each real
+// filesystem boundary without adding test behavior to the built executable.
+var (
+	judgeDemoRunNativeAnalysis    = demofixture.RunNativeAnalysis
+	judgeDemoWriteBundle          = demo.Write
+	judgeDemoWriteNativeEvidence  = demo.WriteNativeEvidence
+	judgeDemoRemoveNativeEvidence = demo.RemoveNativeEvidence
+	judgeDemoStartIncidentServer  = proofview.StartIncidentServer
+	judgeDemoAwaitInterrupt       = awaitBundleInterrupt
+)
+
+type judgeDemoPublication struct {
+	written      demo.Written
+	verification bundle.Result
+	analysis     jsjson.Value
+	sidecar      string
+}
+
+// publishJudgeDemo performs the complete artifact sequence. In particular, a
+// native callback does not expose its analysis until the bundle, independent
+// verification, root match, and native sidecar have all completed.
+func publishJudgeDemo(ctx context.Context, output string, rerun bool, approval demofixture.NativeApproval) (judgeDemoPublication, error) {
+	var publication judgeDemoPublication
+	analysis := demofixture.CreateReplayAnalysis()
+	var provenance jsjson.Value
+	if rerun {
+		result, err := judgeDemoRunNativeAnalysis(ctx, approval)
+		if err != nil {
+			return publication, err
+		}
+		analysis, provenance = result.Analysis, result.Provenance
+	}
+	written, err := judgeDemoWriteBundle(output, analysis, demo.WriteOptions{})
+	if err != nil {
+		return publication, err
+	}
+	publication.written = written
+	verification, err := verifyGeneratedBundle(written)
+	if err != nil {
+		return publication, err
+	}
+	publication.verification = verification
+	publication.analysis = analysis
+	if rerun {
+		if publication.sidecar, err = judgeDemoWriteNativeEvidence(written, verification, analysis, provenance); err != nil {
+			return publication, err
+		}
+	} else if err := judgeDemoRemoveNativeEvidence(written.Directory); err != nil {
+		return publication, err
+	}
+	return publication, nil
+}
+
+func writeJudgeDemoSummary(e *env, publication judgeDemoPublication, rerun bool) {
+	mode := "cached replay"
+	if rerun {
+		mode = "executed"
+	}
+	boundary := "not certified from cached replay"
+	for _, transition := range publication.analysis.Get("transitions").Items() {
+		if transition.Get("kind").Str() == "PASS_TO_FAIL" && transition.Get("stable").Bool() {
+			boundary = transition.Get("beforeStateId").Str() + " → " + transition.Get("afterStateId").Str()
+			break
+		}
+	}
+	e.out("FaultLine " + mode + " investigation prepared.\n")
+	e.out("Stable sample boundary: " + boundary + "\n")
+	e.out("Proof bundle self-consistency: VALID (" + strconv.Itoa(publication.verification.CheckedFiles) + " declared files)\n")
+	e.out("Bundle root: " + publication.written.RootDigest + "\n")
+	e.out("Proof bundle: " + describeBundlePath(publication.written.Directory) + "\n")
+	if rerun {
+		e.out("Native execution evidence: " + publication.sidecar + "\n")
+	}
+}
+
+// judgeDemoCommand publishes the selected initial analysis, then either returns
+// for --export-only or serves the interactive incident page. An approval given
+// with interactive REPLAY enables later native RERUNs; export-only REPLAY keeps
+// its original refusal.
 func judgeDemoCommand(e *env, args []string) error {
 	if hasFlag(args, "--native-proposal") {
 		for _, flag := range []string{"--rerun-all", "--export-only", "--approve-native", "--output"} {
@@ -38,20 +116,20 @@ func judgeDemoCommand(e *env, args []string) error {
 		e.out(jsjson.StringifyIndent(demofixture.NativeWitnessProposal(), "  ") + "\n")
 		return nil
 	}
-	if !hasFlag(args, "--export-only") {
-		return fail("not yet ported: judge-demo server")
-	}
+
 	rerun := hasFlag(args, "--rerun-all")
-	if !rerun && hasFlag(args, "--approve-native") {
+	exportOnly := hasFlag(args, "--export-only")
+	approved := hasFlag(args, "--approve-native")
+	if exportOnly && !rerun && approved {
 		return fail("--approve-native requires --rerun-all.")
 	}
-	if rerun && !hasFlag(args, "--approve-native") {
+	if rerun && !approved {
 		return fail("Native RERUN requires --approve-native <proposal-digest>.")
 	}
-	approval := ""
-	if rerun {
-		var err error
-		if approval, err = requiredOption(args, "--approve-native"); err != nil {
+	approvalText := ""
+	var err error
+	if approved {
+		if approvalText, err = requiredOption(args, "--approve-native"); err != nil {
 			return err
 		}
 	}
@@ -63,53 +141,43 @@ func judgeDemoCommand(e *env, args []string) error {
 		}
 		output = nodefs.Resolve(value)
 	}
+	approval := demofixture.NativeApproval{}
+	if approved {
+		approval = demofixture.NativeApproval{ProposalDigest: approvalText, ApprovedAt: clock.ISO(clock.Now())}
+		if err := demofixture.ValidateNativeApproval(approval); err != nil {
+			return err
+		}
+	}
 
-	analysis := demofixture.CreateReplayAnalysis()
-	var provenance jsjson.Value
-	if rerun {
-		result, err := demofixture.RunNativeAnalysis(context.Background(), demofixture.NativeApproval{
-			ProposalDigest: approval, ApprovedAt: clock.ISO(clock.Now()),
-		})
+	publication, err := publishJudgeDemo(context.Background(), output, rerun, approval)
+	if err != nil {
+		return err
+	}
+	writeJudgeDemoSummary(e, publication, rerun)
+	if exportOnly {
+		return nil
+	}
+	port, ok := option(args, "--port")
+	if !ok {
+		port = "4173"
+	}
+	return judgeDemoAwaitInterrupt(func() (func() error, error) {
+		options := proofview.IncidentServerOptions{Analysis: publication.analysis, RerunEnabled: approved}
+		if approved {
+			options.Rerun = func(ctx context.Context) (jsjson.Value, error) {
+				rerunPublication, err := publishJudgeDemo(ctx, output, true, approval)
+				if err != nil {
+					return jsjson.Value{}, err
+				}
+				return rerunPublication.analysis, nil
+			}
+		}
+		server, err := judgeDemoStartIncidentServer(options, jsjson.ToNumber(port))
 		if err != nil {
-			return err
+			return nil, err
 		}
-		analysis, provenance = result.Analysis, result.Provenance
-	}
-	written, err := demo.Write(output, analysis, demo.WriteOptions{})
-	if err != nil {
-		return err
-	}
-	verification, err := verifyGeneratedBundle(written)
-	if err != nil {
-		return err
-	}
-	sidecar := ""
-	if rerun {
-		if sidecar, err = demo.WriteNativeEvidence(written, verification, analysis, provenance); err != nil {
-			return err
-		}
-	} else if err := demo.RemoveNativeEvidence(written.Directory); err != nil {
-		return err
-	}
-
-	mode := "cached replay"
-	if rerun {
-		mode = "executed"
-	}
-	boundary := "not certified from cached replay"
-	for _, t := range analysis.Get("transitions").Items() {
-		if t.Get("kind").Str() == "PASS_TO_FAIL" && t.Get("stable").Bool() {
-			boundary = t.Get("beforeStateId").Str() + " → " + t.Get("afterStateId").Str()
-			break
-		}
-	}
-	e.out("FaultLine " + mode + " investigation prepared.\n")
-	e.out("Stable sample boundary: " + boundary + "\n")
-	e.out("Proof bundle self-consistency: VALID (" + strconv.Itoa(verification.CheckedFiles) + " declared files)\n")
-	e.out("Bundle root: " + written.RootDigest + "\n")
-	e.out("Proof bundle: " + describeBundlePath(written.Directory) + "\n")
-	if rerun {
-		e.out("Native execution evidence: " + sidecar + "\n")
-	}
-	return nil
+		e.out("🚀 Launching FaultLine Judge Demo at " + server.URL() + "...\n")
+		e.out("Press Ctrl+C to stop.\n")
+		return server.Close, nil
+	})
 }
