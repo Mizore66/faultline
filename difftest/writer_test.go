@@ -1833,15 +1833,15 @@ func TestWriterReplay(t *testing.T) {
 	goldens := loadWriterGoldens(t, repo)
 	checkScenarioDirs(t, repo)
 	seen := map[string]bool{}
-	ran, selected := 0, 0
+	var counts writerReplayCounts
 	defer func() {
-		liveSummary(t, "%d of %d writer cases run (%d golden invocations), %d Go bundles verified by TS", ran, len(templates), len(goldens), tsCrossVerified.Load())
+		liveSummary(t, "%s, %d Go bundles verified by TS", counts.summary(), tsCrossVerified.Load())
 		// A -run pattern that names no writer case (posixOnly cases sit
 		// under posix/, so "TestWriterReplay/investigate-x" matches
 		// nothing) would otherwise pass having compared nothing (round 11,
 		// r11-3).
-		if selected == 0 && runFilter() != "" {
-			t.Errorf("-run %q selects none of the %d writer cases nor the recorder self-test (posixOnly cases are TestWriterReplay/posix/<id>)", runFilter(), len(templates))
+		if msg := counts.refusal(runFilter(), len(templates)); msg != "" {
+			t.Error(msg)
 		}
 	}()
 	for _, tpl := range templates {
@@ -1857,11 +1857,11 @@ func TestWriterReplay(t *testing.T) {
 			}
 		}
 		t.Run(writerSubtest(tpl), func(t *testing.T) {
-			selected++
+			counts.selected++
 			if tpl.PosixOnly && windows {
 				t.Skip("POSIX fake git/docker recorders")
 			}
-			ran++
+			counts.executed++
 			for _, got := range runWriterCase(t, repo, tpl) {
 				key := tpl.ID + "|" + itoa(int64(got.Inv))
 				want, ok := goldens[key]
@@ -1869,6 +1869,7 @@ func TestWriterReplay(t *testing.T) {
 					t.Fatalf("no golden for %s", key)
 				}
 				compareWriter(t, key, got, want) // stdout, stderr, exit, argv, tree and modes (naming changed files)
+				counts.compared++
 				// Temporary files fl makes (mkdtemp roots, the snapshot
 				// index, the doctor --security fixture) must be gone, as
 				// gen-writers.ts requires of TS (spec 3.3).
@@ -1884,10 +1885,11 @@ func TestWriterReplay(t *testing.T) {
 		}
 	}
 	t.Run("posix/recorder-fake-docker", func(t *testing.T) {
-		selected++
+		counts.selected++
 		if windows {
 			t.Skip("POSIX fake git/docker recorders")
 		}
+		counts.executed++
 		testRecorderFakeDocker(t, repo)
 	})
 }
