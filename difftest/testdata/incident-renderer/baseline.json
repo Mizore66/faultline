@@ -470,8 +470,8 @@
   },
   "generator": {
     "path": "difftest/gen/gen-incident-renderer.mjs",
-    "bytes": 38970,
-    "sha256": "f883b02ec119ca87d45b404c935c126f867de257e9d9f0153189b10c78a92bb5"
+    "bytes": 44245,
+    "sha256": "20990a80200e254b3b18f52127e8361fa416500308d58f846b82bab7cfa995df"
   },
   "compiledModules": {
     "roots": [
