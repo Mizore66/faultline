@@ -153,6 +153,8 @@ func TestLiveHardenedGit(t *testing.T) {
 		opts  gitinv.HardenedOptions
 		path  string
 		async bool // run Go alongside the oracle (the 30 s timeout)
+		// wantError, when set, is the exact error the oracle must report.
+		wantError string
 	}
 	cases := []hardenedCase{
 		{name: "success", args: []string{"rev-parse", "HEAD"}, opts: gitinv.HardenedOptions{Repository: repo}},
@@ -179,8 +181,8 @@ func TestLiveHardenedGit(t *testing.T) {
 		{name: "fake filter-config", args: []string{"config", "--local", "--get-regexp", `^filter\.`}, opts: gitinv.HardenedOptions{Repository: repo}, path: fake("filter-config")},
 		{name: "fake filter-config passthrough", args: []string{"rev-parse", "HEAD"}, opts: gitinv.HardenedOptions{Repository: repo}, path: fake("filter-config")},
 		{name: "fake attrs-filter", args: []string{"grep", "-n", "filter", commits[1]}, opts: gitinv.HardenedOptions{Repository: repo}, path: fake("attrs-filter")},
-		{name: "fake flood", args: []string{"cat-file", "-p", commits[1]}, opts: gitinv.HardenedOptions{Repository: repo}, path: fake("flood")},
-		{name: "fake slow", args: []string{"status"}, opts: gitinv.HardenedOptions{Repository: repo}, path: fake("slow"), async: true},
+		{name: "fake flood", args: []string{"cat-file", "-p", commits[1]}, opts: gitinv.HardenedOptions{Repository: repo}, path: fake("flood"), wantError: "Git command exceeded bounded output limit"},
+		{name: "fake slow", args: []string{"status"}, opts: gitinv.HardenedOptions{Repository: repo}, path: fake("slow"), async: true, wantError: "Git command exceeded bounded execution time"},
 	}
 	cwd, _ := os.Getwd()
 	for _, tc := range cases {
@@ -223,6 +225,9 @@ func TestLiveHardenedGit(t *testing.T) {
 				got = gitinv.RunHardenedGit(tc.args, tc.opts)
 			}
 			gotErr := deref(want.Error)
+			if msg := wantErrorMismatch(tc.wantError, gotErr, got.Error); msg != "" {
+				t.Fatal(msg)
+			}
 			if !equalPtr(got.ExitCode, want.ExitCode) || got.Error != gotErr ||
 				!viewEqual(viewOf(got.Stdout), want.Stdout) || !viewEqual(viewOf(got.Stderr), want.Stderr) {
 				t.Fatalf("got  exit %v error %q stdout %d %.200q stderr %d %.400q\nwant exit %v error %q stdout %d %.200q stderr %d %.400q",
@@ -242,6 +247,31 @@ func TestLiveHardenedGit(t *testing.T) {
 		if !strings.Contains(recordedOutputs(t), reason) {
 			t.Errorf("no case reached %q", reason)
 		}
+	}
+}
+
+// wantErrorMismatch reports a failure unless both the oracle and Go
+// produced exactly the pinned error (empty want pins nothing).
+func wantErrorMismatch(want, oracleErr, goErr string) string {
+	if want == "" || (oracleErr == want && goErr == want) {
+		return ""
+	}
+	return fmt.Sprintf("pinned error %q: oracle %q, go %q", want, oracleErr, goErr)
+}
+
+func TestWantErrorMismatchRejectsBothTimeout(t *testing.T) {
+	const flood, slow = "Git command exceeded bounded output limit", "Git command exceeded bounded execution time"
+	if wantErrorMismatch(flood, slow, slow) == "" {
+		t.Error("both-timeout must fail a flood case")
+	}
+	if wantErrorMismatch(slow, flood, flood) == "" {
+		t.Error("both-flood must fail a slow case")
+	}
+	if wantErrorMismatch(slow, slow, flood) == "" || wantErrorMismatch(slow, flood, slow) == "" {
+		t.Error("one-sided match must fail")
+	}
+	if wantErrorMismatch(slow, slow, slow) != "" || wantErrorMismatch("", slow, flood) != "" {
+		t.Error("exact match or unpinned must pass")
 	}
 }
 
