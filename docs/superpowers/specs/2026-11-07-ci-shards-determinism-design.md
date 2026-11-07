@@ -1,7 +1,7 @@
 # FaultLine CI targeted shards and deterministic harnesses — design
 
 - **Date:** 2026-11-07
-- **Status:** Design approved by the user after scope, split, harness and acceptance choices. Written-spec review and implementation-plan approval remain separate gates. No implementation is authorized by this document.
+- **Status:** Design and written specification approved by the user on 2026-11-07 after scope, split, harness and acceptance choices. Implementation-plan approval remains a separate gate. No implementation is authorized by this document.
 - **Baseline:** PR #221 merged at `e6dd62324e3fbcd3827b0967d2e2138a4b754bcf`; PR #222 merged at `89a5d07cbba29be072a8019805ed41983145b722`. Both post-merge main workflows succeeded, and both docs-only gates printed `CI-SCOPE docs-only`.
 - **Scope selected:** deterministic harness corrections plus two targeted splits. No broad caching, no serve evidence partition, no production deadline change and no coverage waiver.
 
