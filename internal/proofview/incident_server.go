@@ -34,20 +34,28 @@ type IncidentServer struct {
 	running  bool
 	closing  bool
 	cancel   context.CancelFunc
+	// activeDone is closed once the active callback has returned and its
+	// state is published; nil when idle.
+	activeDone chan struct{}
 }
 
 // URL is the server's http://127.0.0.1:<port> address.
 func (s *IncidentServer) URL() string { return s.server.URL() }
 
-// Close rejects new runs, cancels the active one and closes the transport,
-// which completes once every connection (and so every handler) is done.
+// Close rejects new runs, cancels the active one, waits for its callback to
+// finish (a zero-body request counts as idle to the transport, so the
+// transport's drain does not cover it), then closes the transport.
 func (s *IncidentServer) Close() error {
 	s.mu.Lock()
 	s.closing = true
 	if s.cancel != nil {
 		s.cancel()
 	}
+	done := s.activeDone
 	s.mu.Unlock()
+	if done != nil {
+		<-done
+	}
 	return s.server.Close()
 }
 
@@ -173,7 +181,7 @@ func (s *IncidentServer) rerun(w http.ResponseWriter, r *http.Request, enabled b
 	s.mu.Lock()
 	if s.closing {
 		s.mu.Unlock()
-		failure(w, r, http.StatusConflict, "native RERUN server is closing")
+		failure(w, r, http.StatusConflict, "native RERUN already running")
 		return
 	}
 	if s.running {
@@ -182,16 +190,26 @@ func (s *IncidentServer) rerun(w http.ResponseWriter, r *http.Request, enabled b
 		return
 	}
 	ctx, cancel := context.WithCancel(r.Context())
-	s.running, s.cancel = true, cancel
+	done := make(chan struct{})
+	s.running, s.cancel, s.activeDone = true, cancel, done
 	s.mu.Unlock()
-	analysis, err := run(ctx)
-	cancel()
-	s.mu.Lock()
-	s.running, s.cancel = false, nil
-	if err == nil {
-		s.analysis = analysis
-	}
-	s.mu.Unlock()
+	var analysis jsjson.Value
+	var err error
+	completed := false
+	func() {
+		defer func() {
+			cancel()
+			s.mu.Lock()
+			s.running, s.cancel, s.activeDone = false, nil, nil
+			if completed && err == nil {
+				s.analysis = analysis
+			}
+			s.mu.Unlock()
+			close(done)
+		}()
+		analysis, err = run(ctx)
+		completed = true
+	}()
 	if err != nil {
 		failure(w, r, http.StatusInternalServerError, err.Error())
 		return

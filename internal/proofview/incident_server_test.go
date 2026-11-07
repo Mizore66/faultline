@@ -270,39 +270,48 @@ func TestIncidentServerHTTP(t *testing.T) {
 		}
 	})
 	t.Run("single flight and close", func(t *testing.T) {
-		started, release, cancelled := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+		started, release, observed := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 		s, err := startIncidentServer(IncidentServerOptions{
 			Analysis:     incidentServerAnalysis(t, ""),
 			RerunEnabled: true,
 			Rerun: func(ctx context.Context) (jsjson.Value, error) {
 				close(started)
-				select {
-				case <-release:
-					return rerunAnalysis, nil
-				case <-ctx.Done():
-					cancelled <- ctx.Err()
-					return jsjson.Value{}, ctx.Err()
-				}
+				<-ctx.Done()
+				observed <- ctx.Err()
+				<-release // stay blocked after observing cancellation
+				return jsjson.Value{}, ctx.Err()
 			},
 		}, testCredential, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		first := make(chan incidentReply)
-		go func() { first <- incidentExchange(t, s, post(s, token)) }()
+		first := make(chan error, 1)
+		go func() {
+			_, err := rawExchangeErr(s.URL(), post(s, token))
+			first <- err
+		}()
 		<-started
 		reply := incidentExchange(t, s, post(s, token))
 		if reply.status() != "HTTP/1.1 409 Conflict" || reply.decoded() != `{"ok":false,"error":"native RERUN already running"}` {
 			t.Fatalf("%s\n%s", reply.head, reply.body)
 		}
-		s.Close() // cancels the active run
-		// Node's close() destroys the idle connection of a request whose
-		// handler is still running, so the reply may be lost; the run must
-		// still have been cancelled and finished by the time Close returns.
-		if err := <-cancelled; !errors.Is(err, context.Canceled) {
+		closed := make(chan struct{})
+		go func() { s.Close(); close(closed) }()
+		if err := <-observed; !errors.Is(err, context.Canceled) {
 			t.Fatalf("run context: %v", err)
 		}
-		<-first
+		// The callback has seen the cancellation but has not returned: Close
+		// must still be waiting for it.
+		select {
+		case <-closed:
+			t.Fatal("Close returned while the callback was still running")
+		default:
+		}
+		close(release)
+		<-closed
+		if err := <-first; err != nil {
+			t.Fatal(err)
+		}
 	})
 }
 

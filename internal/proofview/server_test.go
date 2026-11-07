@@ -12,15 +12,24 @@ import (
 // rawExchange sends request and reads the reply until the server closes.
 func rawExchange(t *testing.T, url, request string) string {
 	t.Helper()
-	conn, err := net.Dial("tcp", strings.TrimPrefix(url, "http://"))
+	reply, err := rawExchangeErr(url, request)
 	if err != nil {
 		t.Fatal(err)
+	}
+	return reply
+}
+
+// rawExchangeErr is rawExchange for goroutines other than the test's.
+func rawExchangeErr(url, request string) (string, error) {
+	conn, err := net.Dial("tcp", strings.TrimPrefix(url, "http://"))
+	if err != nil {
+		return "", err
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 	io.WriteString(conn, request)
 	reply, _ := io.ReadAll(conn)
-	return string(reply)
+	return string(reply), nil
 }
 
 func TestStartNodeServer(t *testing.T) {
