@@ -158,7 +158,7 @@ func filterSelects(t *testing.T, filter, sub string) bool {
 // past the skip, and golden invocations compared. Subtests run sequentially.
 type writerReplayCounts struct{ selected, executed, compared int }
 
-func (c writerReplayCounts) summary(templates, goldens int) string {
+func (c writerReplayCounts) summary() string {
 	return fmt.Sprintf("%d selected, %d executed writer cases, %d golden invocations compared", c.selected, c.executed, c.compared)
 }
 
@@ -429,6 +429,23 @@ func TestWriterShardFilters(t *testing.T) {
 	}
 }
 
+// The Python guard (check-writer-replay-shards.py filter) must emit exactly this
+// string for the same fixture; check_writer_replay_shards_test.py pins the same
+// literal. Real caseIDs never contain '+' or '\\'; the fixture does to cover quoting.
+func TestWriterShardFilterPythonGolden(t *testing.T) {
+	const want = `^TestWriterReplay$/^(?:a\.b|c\+d|e\\f|posix)$/^(?:p-1|q\+r)$`
+	got, err := writerShardFilterFor(writerShardManifest{Ordinary: []string{"a.b", "c+d", `e\f`}, Posix: []string{"p-1", "q+r"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("filter = %s, want %s", got, want)
+	}
+	if got, _ := writerShardFilterFor(writerShardManifest{Ordinary: []string{"a.b"}}); got != `^TestWriterReplay$/^(?:a\.b)$` {
+		t.Errorf("ordinary-only filter = %s", got)
+	}
+}
+
 func TestWriterShardManifestMalformed(t *testing.T) {
 	for name, raw := range map[string]string{
 		"unknown field": `{"shard":0,"ordinary":[],"posix":[],"golden":0,"windowsPass":0,"windowsSkip":0,"windowsCompared":0,"extra":1}`,
@@ -464,7 +481,7 @@ func (f *fatalCatcher) Fatal(...any) { f.failed = true; panic("fatal") }
 func TestWriterReplayAccounting(t *testing.T) {
 	c := writerReplayCounts{}
 	c.selected, c.executed, c.compared = 3, 2, 5
-	got := c.summary(1075, 1295)
+	got := c.summary()
 	if strings.Contains(got, "1075") || strings.Contains(got, "1295") {
 		t.Errorf("summary leaks corpus size: %q", got)
 	}
@@ -498,7 +515,7 @@ func TestWriterReplayAccountingLegacyWrong(t *testing.T) {
 		t.Fatalf("legacy summary no longer shows the corpus totals: %q", old)
 	}
 	c := writerReplayCounts{selected: 1, executed: 1, compared: 1}
-	cur := c.summary(1075, 1295)
+	cur := c.summary()
 	if strings.Contains(cur, "1075") || strings.Contains(cur, "1295") {
 		t.Errorf("filtered summary still reports corpus totals: %q", cur)
 	}

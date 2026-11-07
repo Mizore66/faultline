@@ -1835,7 +1835,7 @@ func TestWriterReplay(t *testing.T) {
 	seen := map[string]bool{}
 	var counts writerReplayCounts
 	defer func() {
-		liveSummary(t, "%s, %d Go bundles verified by TS", counts.summary(len(templates), len(goldens)), tsCrossVerified.Load())
+		liveSummary(t, "%s, %d Go bundles verified by TS", counts.summary(), tsCrossVerified.Load())
 		// A -run pattern that names no writer case (posixOnly cases sit
 		// under posix/, so "TestWriterReplay/investigate-x" matches
 		// nothing) would otherwise pass having compared nothing (round 11,

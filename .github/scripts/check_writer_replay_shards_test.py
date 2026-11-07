@@ -21,6 +21,24 @@ def manifest(n):
         return json.load(f)
 
 
+def load_guard():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("check_writer_replay_shards", GUARD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class FilterGolden(unittest.TestCase):
+    """Must equal Go's TestWriterShardFilterPythonGolden literal (writerShardFilterFor)."""
+
+    def test_matches_go_filter(self):
+        guard = load_guard()
+        m = {"ordinary": ["a.b", "c+d", "e\\f"], "posix": ["p-1", "q+r"]}
+        self.assertEqual(guard.run_filter(m), r"^TestWriterReplay$/^(?:a\.b|c\+d|e\\f|posix)$/^(?:p-1|q\+r)$")
+        self.assertEqual(guard.run_filter({"ordinary": ["a.b"], "posix": []}), r"^TestWriterReplay$/^(?:a\.b)$")
+
+
 def run(*args):
     p = subprocess.run([sys.executable, "-I", GUARD, *args], capture_output=True, text=True)
     return p.returncode, p.stdout + p.stderr

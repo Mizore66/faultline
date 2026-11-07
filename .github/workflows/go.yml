@@ -205,7 +205,7 @@ jobs:
           guard=.github/scripts/check-writer-replay-shards.py
           manifest="difftest/testdata/writer-shards/shard-${{ matrix.shard }}.json"
           log="$RUNNER_TEMP/writer-replay-shard-${{ matrix.shard }}.log"
-          filter=$("$py" -I "$guard" filter "${{ matrix.shard }}" "$manifest")
+          filter=$("$py" -I "$guard" filter "${{ matrix.shard }}" "$manifest" | tr -d '\r')
           echo "writer replay filter: $filter"
           go test -tags faultline_test -count=1 -timeout 120m -v -run "$filter" ./difftest/ | tee "$log" || status=$?
           # Only the posix cases may skip, and only on Windows (no sh recorders).
@@ -993,8 +993,6 @@ jobs:
           - { os: windows-11-arm, goos: windows, goarch: arm64 }
     env:
       LC_ALL: C.UTF-8
-      FAULTLINE_EVIDENCE_EXPECT_GOOS: ${{ matrix.goos }}
-      FAULTLINE_EVIDENCE_EXPECT_GOARCH: ${{ matrix.goarch }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6

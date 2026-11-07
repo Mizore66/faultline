@@ -177,8 +177,11 @@ class ServeStackProbes(unittest.TestCase):
         self.assertEqual(targets(self.native), SERVE_TARGETS)
         self.assertEqual(targets(self.stack), SERVE_TARGETS)
         self.assertIn("fail-fast: false", self.stack)
-        self.assertIn("FAULTLINE_EVIDENCE_EXPECT_GOOS: ${{ matrix.goos }}", self.stack)
-        self.assertIn("FAULTLINE_EVIDENCE_EXPECT_GOARCH: ${{ matrix.goarch }}", self.stack)
+        self.assertIn("FAULTLINE_EVIDENCE_EXPECT_GOOS: ${{ matrix.goos }}", self.native)
+        self.assertIn("FAULTLINE_EVIDENCE_EXPECT_GOARCH: ${{ matrix.goarch }}", self.native)
+        # The stack test records no evidence identity, so it needs no expectation.
+        self.assertNotIn("FAULTLINE_EVIDENCE_EXPECT_GOOS", self.stack)
+        self.assertNotIn("FAULTLINE_EVIDENCE_EXPECT_GOARCH", self.stack)
 
     def test_whole_stack_test_only_in_stack_job(self):
         self.assertNotIn("TestLiveServeBundleStackCallSites", self.native)
@@ -342,6 +345,8 @@ class WriterReplayShards(unittest.TestCase):
         self.assertIn("guard=.github/scripts/check-writer-replay-shards.py", run)
         self.assertIn("difftest/testdata/writer-shards/shard-${{ matrix.shard }}.json", run)
         self.assertIn('-run "$filter"', run)
+        # Python text stdout is CRLF on Windows; bash $(...) keeps the trailing CR.
+        self.assertIn('"$manifest" | tr -d \'\\r\')', run)
         self.assertNotIn("FAULTLINE_NODE_ORACLE", self.job)
         self.assertNotIn("t.Parallel", self.job)
         self.assertIsNone(re.search(r"[ (]-skip ", self.job))
