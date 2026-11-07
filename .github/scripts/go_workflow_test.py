@@ -47,7 +47,7 @@ class GoWorkflow(unittest.TestCase):
             "go vet ./...",
             "go test -count=1 -timeout 30m -v ./...",
             "go vet -tags faultline_test ./...",
-            "go test -tags faultline_test -count=1 -timeout 120m -v ./...",
+            'go test -tags faultline_test -count=1 -timeout 120m -v "${args[@]}" ./...',
             "go test -count=1 -timeout 15m -v ./difftest/testdata/globalopen/",
         ]:
             self.assertEqual(self.job.count(cmd), 1, cmd)
@@ -310,8 +310,109 @@ class WriterFaultShards(unittest.TestCase):
         self.assertIn("TestLiveWriterFaults", live)
 
 
+REPLAY_OSES = {"ubuntu-24.04-arm": False, "macos-latest": False, "macos-15-intel": False, "windows-latest": True, "windows-11-arm": True}
+NON_UBUNTU = list(REPLAY_OSES)
+
+
+class WriterReplayShards(unittest.TestCase):
+    def setUp(self):
+        self.job = named_job("go-writer-replay")
+        self.go = go_job()
+
+    def test_matrix_is_four_non_ubuntu_legs_by_four_shards(self):
+        self.assertEqual(matrix_list(self.job, "os"), NON_UBUNTU)
+        self.assertEqual(matrix_list(self.job, "shard"), ["0", "1", "2", "3"])
+        self.assertIn("fail-fast: false", self.job)
+        head = self.job.split("    steps:", 1)[0]
+        self.assertIn("ubuntu-24.04-arm", matrix_list(self.job, "os"))
+        self.assertNotIn("ubuntu-24.04", matrix_list(self.job, "os"))
+        self.assertNotRegex(head, r"ubuntu-24\.04(?!-arm)")
+        self.assertIn("timeout-minutes: 180", head)
+        self.assertIn("needs: [scope]", self.job)
+        self.assertIn("needs.scope.outputs.scope == 'code'", self.job.split("    steps:", 1)[0])
+        self.assertIn("runs-on: ${{ matrix.os }}", self.job)
+
+    def test_runs_only_difftest_with_manifest_filter(self):
+        run = step_named(self.job, "Writer replay shard")
+        self.assertEqual(self.job.count("go test"), 1)
+        self.assertIn("go test -tags faultline_test -count=1 -timeout 120m -v -run", run)
+        self.assertIn("./difftest/", run)
+        self.assertNotIn("./...", run)
+        self.assertIn('"$py" -I "$guard" filter "${{ matrix.shard }}" "$manifest"', run)
+        self.assertIn("guard=.github/scripts/check-writer-replay-shards.py", run)
+        self.assertIn("difftest/testdata/writer-shards/shard-${{ matrix.shard }}.json", run)
+        self.assertIn('-run "$filter"', run)
+        self.assertNotIn("FAULTLINE_NODE_ORACLE", self.job)
+        self.assertNotIn("t.Parallel", self.job)
+        self.assertIsNone(re.search(r"[ (]-skip ", self.job))
+
+    def test_terminal_guard_and_windows_flag(self):
+        run = step_named(self.job, "Writer replay shard")
+        self.assertIn("check-writer-replay-shards.py", run)
+        self.assertIn('"$RUNNER_OS" = Windows', run)
+        self.assertIn("--windows", run)
+        self.assertIn('"${{ matrix.shard }}"', run)
+        self.assertIn("writer-replay-shard-${{ matrix.shard }}.log", run)
+        self.assertIn("check-skips.sh", run)
+        self.assertIn("status=1", run)
+        self.assertIn("exit $status", run)
+
+    def test_skip_policy(self):
+        run = step_named(self.job, "Writer replay shard")
+        self.assertIn("'^TestWriterReplay/posix/.+$'", run)
+        self.assertIn("'^$'", run)
+        self.assertIn("TestWriterReplay", run)
+
+    def test_unique_artifact(self):
+        ups = [s for s in steps(self.job) if "upload-artifact" in s]
+        self.assertEqual(len(ups), 1)
+        self.assertIn("name: writer-replay-${{ matrix.os }}-shard-${{ matrix.shard }}", ups[0])
+        self.assertIn("writer-replay-shard-${{ matrix.shard }}.log", ups[0])
+        self.assertIn("if: always()", ups[0])
+        self.assertIn("if-no-files-found: error", ups[0])
+
+    def test_remaining_suite_skips_replay_only_off_linux(self):
+        self.assertEqual(self.go.count("-skip '^TestWriterReplay$'"), 1)
+        self.assertEqual(len(re.findall(r"[ (]-skip ", self.go)), 1)
+        run = step_named(self.go, "go test")
+        before = run.split("-skip '^TestWriterReplay$'", 1)[0]
+        cond = before.rsplit("if ", 1)[1]
+        self.assertIn('"${{ matrix.os }}" != ubuntu-24.04 ]', cond)
+        self.assertNotIn("RUNNER_OS", cond)
+        # inside the tagged branch only: after the untagged command's else
+        self.assertGreater(before.index("else"), before.index("go test -count=1 -timeout 30m"))
+        self.assertIn('"${args[@]}"', run)
+        self.assertIn("args=()", run)
+        # the Linux (Ubuntu) tagged command stays exactly the unnarrowed one
+        self.assertEqual(run.count("go test -tags faultline_test"), 1)
+        self.assertNotIn("-run", run.split("elif", 1)[-1])
+
+    def test_ubuntu_arm_shards_and_amd64_does_not(self):
+        # ubuntu-24.04-arm participates in sharding and the remaining-suite skip;
+        # only ubuntu-24.04 (AMD64, coverage gate) stays unnarrowed.
+        self.assertIn("ubuntu-24.04-arm", OSES)
+        self.assertEqual([o for o in matrix_list(self.job, "os") if o.startswith("ubuntu")], ["ubuntu-24.04-arm"])
+        self.assertIn("ubuntu-24.04-arm", REPLAY_OSES)
+        self.assertNotIn("ubuntu-24.04", REPLAY_OSES)
+        run = step_named(self.go, "go test")
+        self.assertIn("""if [ "${{ matrix.os }}" != ubuntu-24.04 ]; then args=(-skip '^TestWriterReplay$'); fi""", run)
+        self.assertNotIn("RUNNER_OS\" != Linux", run)
+        self.assertIn("matrix.os == 'ubuntu-24.04' && matrix.variant == 'tagged'", self.go)
+
+    def test_ubuntu_coverage_and_crossverify_unnarrowed(self):
+        self.assertIn("FAULTLINE_COVERAGE_GATE: ${{ matrix.os == 'ubuntu-24.04' && matrix.variant == 'tagged' && '1' || '' }}", self.go)
+        replay = named_job("difftest-live-replay")
+        self.assertNotIn("TestWriterReplay$", replay)
+        self.assertIn("tests='TestWriterReplay TestThreadIDsBindUnderRoot", replay)
+        self.assertIsNone(re.search(r"[ (]-skip ", replay))
+        self.assertNotIn("writer-shards", replay)
+
+    def test_gate_needs_replay_job(self):
+        self.assertIn("go-writer-replay", needs_of(job_text(WORKFLOW, "go-ci-gate")))
+
+
 VERIFY = WORKFLOW.parent / "verify.yml"
-GO_JOBS = ["go", "difftest-goldens", "difftest-live", "difftest-live-investigate", "difftest-live-writers",
+GO_JOBS = ["go", "go-writer-replay", "difftest-goldens", "difftest-live", "difftest-live-investigate", "difftest-live-writers",
            "difftest-live-replay", "difftest-live-faults", "stack-live", "serve-bundle-native",
            "serve-bundle-stack-native", "windows-console-diagnostic"]
 VERIFY_JOBS = ["submission-freeze", "test", "docker-integration", "docker-integration-windows",
@@ -404,6 +505,8 @@ class GoGating(Gating, unittest.TestCase):
     def test_writer_artifacts_and_total(self):
         t = job_text(self.path, "go-ci-gate")
         downloads = [s for s in steps(t) if "download-artifact" in s]
+        self.assertEqual(len(downloads), 6 + len(REPLAY_OSES))
+        downloads = [d for d in downloads if "writer-faults-" in d]
         self.assertEqual(len(downloads), 6)
         dirs = []
         for shard in WRITER_SHARDS:
@@ -420,6 +523,29 @@ class GoGating(Gating, unittest.TestCase):
         self.assertIn("needs.scope.outputs.scope == 'code'", total[0])
         for shard in WRITER_SHARDS:
             self.assertEqual(total[0].count("writer-%s.log" % shard), 1, shard)
+
+    def test_replay_artifacts_and_total(self):
+        t = job_text(self.path, "go-ci-gate")
+        downloads = [s for s in steps(t) if "download-artifact" in s and "writer-replay-" in s]
+        self.assertEqual(len(downloads), len(REPLAY_OSES))
+        dirs = []
+        for os_name, win in REPLAY_OSES.items():
+            d = [s for s in downloads if "pattern: writer-replay-%s-shard-*\n" % os_name in s]
+            self.assertEqual(len(d), 1, os_name)
+            self.assertIn("needs.scope.outputs.scope == 'code'", d[0])
+            self.assertIn("download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093", d[0])
+            self.assertNotIn("merge-multiple: true", d[0])
+            path = re.search(r"path: (.+)", d[0]).group(1)
+            dirs.append(path)
+            self.assertIn(os_name, path)
+            total = [s for s in steps(t) if "check-writer-replay-shards.py" in s and path.replace("${{ runner.temp }}", "$RUNNER_TEMP") in s]
+            self.assertEqual(len(total), 1, os_name)
+            self.assertIn("needs.scope.outputs.scope == 'code'", total[0])
+            self.assertIn("total difftest/testdata/writer-shards ", total[0])
+            self.assertEqual("--windows" in total[0], win, os_name)
+        self.assertEqual(len(set(dirs)), len(REPLAY_OSES))
+        self.assertEqual(t.count("check-writer-replay-shards.py"), len(REPLAY_OSES))
+        self.assertEqual(t.count("check-writer-fault-shards.sh total 654"), 1)
 
     def test_provenance_not_in_go(self):
         self.assertNotIn("provenance", job_text(self.path, "go-ci-gate"))
