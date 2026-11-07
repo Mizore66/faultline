@@ -37,6 +37,8 @@ type IncidentServer struct {
 	// activeDone is closed once the active callback has returned and its
 	// state is published; nil when idle.
 	activeDone chan struct{}
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 // URL is the server's http://127.0.0.1:<port> address.
@@ -46,17 +48,20 @@ func (s *IncidentServer) URL() string { return s.server.URL() }
 // finish (a zero-body request counts as idle to the transport, so the
 // transport's drain does not cover it), then closes the transport.
 func (s *IncidentServer) Close() error {
-	s.mu.Lock()
-	s.closing = true
-	if s.cancel != nil {
-		s.cancel()
-	}
-	done := s.activeDone
-	s.mu.Unlock()
-	if done != nil {
-		<-done
-	}
-	return s.server.Close()
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closing = true
+		if s.cancel != nil {
+			s.cancel()
+		}
+		done := s.activeDone
+		s.mu.Unlock()
+		if done != nil {
+			<-done
+		}
+		s.closeErr = s.server.Close()
+	})
+	return s.closeErr
 }
 
 const rerunTokenHeader = "X-FaultLine-Native-RERUN"
