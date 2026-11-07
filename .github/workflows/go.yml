@@ -700,8 +700,8 @@ jobs:
     # Sharded into platform-process, turn-incident and context-sidecar (whole
     # top-level tests only, so no internal case is narrowed: all 150
     # turn-snapshot cases, 120 investigate-turn sessions and 103 stores run).
-    # The serve-bundle stack call-site test runs in serve-bundle-native on the
-    # same two targets, so it is not repeated here. Depth reporting and the
+    # The serve-bundle stack call-site test runs whole in
+    # serve-bundle-stack-native on the same two targets, so it is not repeated here. Depth reporting and the
     # sort check run once, in platform-process.
     name: stack ${{ matrix.suite }} vs Node (${{ matrix.os }})
     needs: [scope]
@@ -848,7 +848,7 @@ jobs:
         run: |
           set -o pipefail
           status=0
-          tests='TestLiveServeBundleEvidenceIdentity TestLiveServeBundle TestLiveServeBundleBinding TestLiveServeBundleStackCallSites TestLiveServeBundleSignals TestServeBundleCLIReplay TestServeBundleBindingCLIReplay TestServeBundleHTTP TestServeBundleStartupOrdinaryInterrupt TestServeBundleStartupRepeatedInterrupt'
+          tests='TestLiveServeBundleEvidenceIdentity TestLiveServeBundle TestLiveServeBundleBinding TestLiveServeBundleSignals TestServeBundleCLIReplay TestServeBundleBindingCLIReplay TestServeBundleHTTP TestServeBundleStartupOrdinaryInterrupt TestServeBundleStartupRepeatedInterrupt'
           if [ "$RUNNER_OS" = Linux ]; then tests="$tests TestLiveServeBundleInheritedSignals"; fi
           # Windows only: the observational console-interrupt diagnostic
           # (baseline and clear-ignore variants of a tiny target). It runs in this
@@ -903,6 +903,61 @@ jobs:
             ${{ runner.temp }}/serve-live.log
             ${{ runner.temp }}/serve-audit.log
             ${{ runner.temp }}/standalone.log
+          if-no-files-found: error
+          retention-days: 14
+
+  # The whole TestLiveServeBundleStackCallSites (every site and shape) on the
+  # same six native targets as serve-bundle-native, split out so it runs in
+  # parallel with the evidence job. It has its own log and list, may not skip,
+  # and records no serve-bundle evidence (that stays in serve-bundle-native).
+  serve-bundle-stack-native:
+    name: serve --bundle stack probes native (${{ matrix.os }})
+    needs: [scope]
+    if: needs.scope.outputs.scope == 'code'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, goos: linux, goarch: amd64 }
+          - { os: ubuntu-24.04-arm, goos: linux, goarch: arm64 }
+          - { os: macos-latest, goos: darwin, goarch: arm64 }
+          - { os: macos-15-intel, goos: darwin, goarch: amd64 }
+          - { os: windows-latest, goos: windows, goarch: amd64 }
+          - { os: windows-11-arm, goos: windows, goarch: arm64 }
+    env:
+      LC_ALL: C.UTF-8
+      FAULTLINE_EVIDENCE_EXPECT_GOOS: ${{ matrix.goos }}
+      FAULTLINE_EVIDENCE_EXPECT_GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22.22.2"
+          cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Native stack call-site probes
+        shell: bash
+        run: |
+          set -o pipefail
+          status=0
+          tests='TestLiveServeBundleStackCallSites'
+          printf '%s\n' $tests > "$RUNNER_TEMP/serve-stack.list"
+          FAULTLINE_NODE_ORACLE=1 go test -tags faultline_test -count=1 ./difftest/ -run "^($(echo $tests | tr ' ' '|'))\$" -v -timeout 100m | tee "$RUNNER_TEMP/serve-stack.log" || status=$?
+          .github/scripts/check-skips.sh "$RUNNER_TEMP/serve-stack.log" '^$' "$RUNNER_TEMP/serve-stack.list" || status=1
+          exit $status
+      - name: Retain the stack probe log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: serve-bundle-stack-native-${{ matrix.os }}
+          path: ${{ runner.temp }}/serve-stack.log
           if-no-files-found: error
           retention-days: 14
 
@@ -977,7 +1032,7 @@ jobs:
 
   go-ci-gate:
     name: go ci gate
-    needs: [scope, go, difftest-goldens, difftest-live, difftest-live-investigate, difftest-live-writers, difftest-live-replay, difftest-live-faults, stack-live, serve-bundle-native, windows-console-diagnostic]
+    needs: [scope, go, difftest-goldens, difftest-live, difftest-live-investigate, difftest-live-writers, difftest-live-replay, difftest-live-faults, stack-live, serve-bundle-native, serve-bundle-stack-native, windows-console-diagnostic]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 10

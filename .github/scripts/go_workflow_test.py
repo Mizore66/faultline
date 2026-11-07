@@ -129,7 +129,8 @@ class StackLiveShards(unittest.TestCase):
 
     def test_duplicate_removed(self):
         self.assertNotIn("TestLiveServeBundleStackCallSites", self.job)
-        self.assertIn("TestLiveServeBundleStackCallSites", named_job("serve-bundle-native"))
+        self.assertNotIn("TestLiveServeBundleStackCallSites", named_job("serve-bundle-native"))
+        self.assertIn("TestLiveServeBundleStackCallSites", named_job("serve-bundle-stack-native"))
 
     def test_full_sets_and_unset(self):
         run = self.job.split("name: Live platform tests", 1)[1].split("\n      - name:", 1)[0]
@@ -154,6 +155,73 @@ class StackLiveShards(unittest.TestCase):
             self.assertIn("matrix.suite == 'platform-process'", step, marker)
         self.assertEqual(self.job.count("TestSortMatchesV8 -v"), 1)
         self.assertEqual(self.job.count("stack_live_test"), 3)
+
+
+SERVE_TARGETS = [
+    ("ubuntu-24.04", "linux", "amd64"), ("ubuntu-24.04-arm", "linux", "arm64"),
+    ("macos-latest", "darwin", "arm64"), ("macos-15-intel", "darwin", "amd64"),
+    ("windows-latest", "windows", "amd64"), ("windows-11-arm", "windows", "arm64"),
+]
+
+
+def targets(job):
+    return re.findall(r"- \{ os: (\S+), goos: (\S+), goarch: (\S+) \}", job)
+
+
+class ServeStackProbes(unittest.TestCase):
+    def setUp(self):
+        self.native = named_job("serve-bundle-native")
+        self.stack = named_job("serve-bundle-stack-native")
+
+    def test_same_six_targets(self):
+        self.assertEqual(targets(self.native), SERVE_TARGETS)
+        self.assertEqual(targets(self.stack), SERVE_TARGETS)
+        self.assertIn("fail-fast: false", self.stack)
+        self.assertIn("FAULTLINE_EVIDENCE_EXPECT_GOOS: ${{ matrix.goos }}", self.stack)
+        self.assertIn("FAULTLINE_EVIDENCE_EXPECT_GOARCH: ${{ matrix.goarch }}", self.stack)
+
+    def test_whole_stack_test_only_in_stack_job(self):
+        self.assertNotIn("TestLiveServeBundleStackCallSites", self.native)
+        self.assertEqual(self.stack.count("TestLiveServeBundleStackCallSites"), 1)
+        self.assertIn("tests='TestLiveServeBundleStackCallSites'", self.stack)
+        self.assertNotIn("TestLiveServeBundleStackCallSites/", self.stack)
+        for other in ["TestLiveServeBundleEvidenceIdentity", "TestLiveServeBundleBinding", "TestLiveServeBundleSignals",
+                      "TestServeBundleEvidenceAudit", "TestServeBundleStandalone"]:
+            self.assertNotIn(other, self.stack, other)
+
+    def test_own_log_list_and_no_skip(self):
+        self.assertIn("serve-stack.list", self.stack)
+        self.assertIn("serve-stack.log", self.stack)
+        self.assertNotIn("serve-live.", self.stack)
+        self.assertIn('check-skips.sh "$RUNNER_TEMP/serve-stack.log" \'^$\' "$RUNNER_TEMP/serve-stack.list"', self.stack)
+        self.assertIn("-timeout 100m", self.stack)
+        self.assertNotIn("t.Parallel", self.stack)
+        self.assertNotIn("EVIDENCE_DIR", self.stack)
+
+    def test_unique_artifact(self):
+        ups = [s for s in steps(self.stack) if "upload-artifact" in s]
+        self.assertEqual(len(ups), 1)
+        self.assertIn("name: serve-bundle-stack-native-${{ matrix.os }}", ups[0])
+        self.assertIn("serve-stack.log", ups[0])
+        self.assertIn("if: always()", ups[0])
+        nat = [s for s in steps(self.native) if "upload-artifact" in s]
+        self.assertEqual(len(nat), 1)
+        self.assertIn("name: serve-bundle-native-${{ matrix.os }}\n", nat[0])
+
+    def test_native_evidence_preserved(self):
+        for frag in ["TestLiveServeBundleEvidenceIdentity TestLiveServeBundle TestLiveServeBundleBinding TestLiveServeBundleSignals",
+                     "check-serve-bundle-counts.sh", "check-serve-bundle-skip-reasons.sh",
+                     "TestServeBundleEvidenceAudit", "SERVE-BUNDLE-EVIDENCE-AUDIT ok",
+                     "TestServeBundleStandalone",
+                     "${{ runner.temp }}/serve-bundle-evidence"]:
+            self.assertIn(frag, self.native, frag)
+        self.assertEqual(self.native.count("serve-bundle-evidence"), 2)
+        for bad in ["partition", "merge"]:
+            self.assertNotIn(bad, self.native.lower().replace("merge ref", ""))
+            self.assertNotIn(bad, self.stack.lower())
+
+    def test_gate_needs_stack_job(self):
+        self.assertIn("serve-bundle-stack-native", needs_of(job_text(WORKFLOW, "go-ci-gate")))
 
 
 WRITER_SHARDS = {
@@ -245,7 +313,7 @@ class WriterFaultShards(unittest.TestCase):
 VERIFY = WORKFLOW.parent / "verify.yml"
 GO_JOBS = ["go", "difftest-goldens", "difftest-live", "difftest-live-investigate", "difftest-live-writers",
            "difftest-live-replay", "difftest-live-faults", "stack-live", "serve-bundle-native",
-           "windows-console-diagnostic"]
+           "serve-bundle-stack-native", "windows-console-diagnostic"]
 VERIFY_JOBS = ["submission-freeze", "test", "docker-integration", "docker-integration-windows",
                "docker-integration-macos-colima", "tag-checkout", "provenance"]
 
