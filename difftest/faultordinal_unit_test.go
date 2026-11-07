@@ -4,6 +4,7 @@ package difftest
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -68,6 +69,31 @@ func TestWriterFaultThreadAffinity(t *testing.T) {
 	}
 	if strings.Contains(string(main), "FAULTLINE_TEST_LOCK_OS_THREAD") {
 		t.Error("untagged CLI source references the hook")
+	}
+	const hook = "thread_affinity_faultline_linux.go"
+	for _, c := range []struct {
+		goos, tags string
+		want       bool
+	}{
+		{"linux", "faultline_test", true},
+		{"linux", "", false},
+		{"darwin", "faultline_test", false},
+	} {
+		args := []string{"list"}
+		if c.tags != "" {
+			args = append(args, "-tags", c.tags)
+		}
+		args = append(args, "-f", "{{.GoFiles}}", "./cmd/fl")
+		cmd := exec.Command("go", args...)
+		cmd.Dir = ".."
+		cmd.Env = append(os.Environ(), "GOOS="+c.goos, "CGO_ENABLED=0")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("go %v (GOOS=%s): %v\n%s", args, c.goos, err, out)
+		}
+		if got := strings.Contains(string(out), hook); got != c.want {
+			t.Errorf("GOOS=%s tags=%q: hook in GoFiles = %v, want %v\n%s", c.goos, c.tags, got, c.want, out)
+		}
 	}
 	for _, c := range []struct {
 		tsSide, onlyCalls bool
