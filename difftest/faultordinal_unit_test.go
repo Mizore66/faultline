@@ -46,6 +46,21 @@ func TestInjectedOrdinal(t *testing.T) {
 	}
 }
 
+// normalizeNewlines turns CRLF (a Windows checkout) into LF.
+func normalizeNewlines(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
+
+// TestNormalizeNewlinesCRLF pins that a CRLF checkout of the hook still
+// satisfies the build-constraint prefix check.
+func TestNormalizeNewlinesCRLF(t *testing.T) {
+	crlf := "//go:build faultline_test && linux\r\n\r\npackage main\r\n"
+	if !strings.HasPrefix(normalizeNewlines(crlf), "//go:build faultline_test && linux\n") {
+		t.Error("CRLF source not normalized")
+	}
+	if strings.Contains(normalizeNewlines(crlf), "\r") {
+		t.Error("CR left after normalization")
+	}
+}
+
 // TestWriterFaultThreadAffinity pins the test-only thread-lock hook: the CLI
 // links it only under faultline_test on linux, and only the Go side of an
 // onlyCalls row exports its switch.
@@ -54,7 +69,7 @@ func TestWriterFaultThreadAffinity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := string(b)
+	src := normalizeNewlines(string(b))
 	if !strings.HasPrefix(src, "//go:build faultline_test && linux\n") {
 		t.Errorf("hook is not restricted to faultline_test && linux:\n%s", src)
 	}
