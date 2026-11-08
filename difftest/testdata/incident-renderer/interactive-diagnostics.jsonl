@@ -1,0 +1,5 @@
+{"id":"replace-count-drift","text":"proofview: interactive incident literal count drift: <script>"}
+{"id":"listener-start-drift","text":"proofview: interactive incident listener start drift"}
+{"id":"listener-end-drift","text":"proofview: interactive incident listener end drift"}
+{"id":"server-no-approval","text":"{\"ok\":false,\"error\":\"Native RERUN requires --approve-native <proposal-digest> at server startup.\"}"}
+{"id":"server-busy","text":"{\"ok\":false,\"error\":\"native RERUN already running\"}"}

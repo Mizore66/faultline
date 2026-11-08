@@ -93,7 +93,7 @@ func TestIncidentServerSingleFlight(t *testing.T) {
 	<-started
 	second := incidentAsyncExchange(s.URL(), incidentRaceRequest(s, "POST", "/api/rerun", true))
 	reply := incidentRawReply(t, <-second)
-	if reply.status() != "HTTP/1.1 409 Conflict" || reply.decoded() != `{"ok":false,"error":"native RERUN already running"}` {
+	if reply.status() != "HTTP/1.1 409 Conflict" || reply.decoded() != incidentDiagnostic(t, "server-busy") {
 		t.Fatalf("second POST:\n%s\n%s", reply.head, reply.body)
 	}
 	if got := calls.Load(); got != 1 {
@@ -272,7 +272,7 @@ func TestIncidentServerClose(t *testing.T) {
 				t.Fatal(err)
 			}
 			reply := incidentRawReply(t, incidentAsyncReply{raw: string(raw)})
-			if reply.status() != "HTTP/1.1 409 Conflict" || reply.decoded() != `{"ok":false,"error":"native RERUN already running"}` {
+			if reply.status() != "HTTP/1.1 409 Conflict" || reply.decoded() != incidentDiagnostic(t, "server-busy") {
 				t.Fatalf("POST after Close:\n%s\n%s", reply.head, reply.body)
 			}
 		}

@@ -217,7 +217,7 @@ func TestIncidentServerHTTP(t *testing.T) {
 	t.Run("no approval", func(t *testing.T) {
 		s := start(t, false)
 		reply := incidentExchange(t, s, post(s, token))
-		const body = `{"ok":false,"error":"Native RERUN requires --approve-native <proposal-digest> at server startup."}`
+		body := incidentDiagnostic(t, "server-no-approval")
 		if reply.status() != "HTTP/1.1 403 Forbidden" || !reply.has("Content-Type: application/json; charset=utf-8") || reply.decoded() != body {
 			t.Fatalf("%s\n%s", reply.head, reply.body)
 		}
@@ -292,7 +292,7 @@ func TestIncidentServerHTTP(t *testing.T) {
 		}()
 		<-started
 		reply := incidentExchange(t, s, post(s, token))
-		if reply.status() != "HTTP/1.1 409 Conflict" || reply.decoded() != `{"ok":false,"error":"native RERUN already running"}` {
+		if reply.status() != "HTTP/1.1 409 Conflict" || reply.decoded() != incidentDiagnostic(t, "server-busy") {
 			t.Fatalf("%s\n%s", reply.head, reply.body)
 		}
 		closed := make(chan struct{})
