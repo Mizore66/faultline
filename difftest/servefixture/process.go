@@ -63,12 +63,32 @@ type Started struct {
 	own      ownership // platform ownership (process group on Unix)
 }
 
+// StartOptions describes the complete stdout prefix that marks a process
+// ready. Validation must reject any extra bytes beyond that prefix.
+type StartOptions struct {
+	StartupLines       int
+	StartupDescription string
+	ValidateStartup    func([]byte) (string, error)
+}
+
 // Start launches executable with prefix+argv, reads exactly two complete LF
 // lines (banner with the actual bound http://127.0.0.1:<port> URL, then the
 // stop line), and retains both output streams. It fails, after terminating and
 // joining the child, on a startup exit, any extra byte after the two lines, a
 // wrong host or an invalid port. env is the complete child environment.
 func Start(ctx context.Context, executable string, prefix, argv, env []string, cwd string) (*Started, error) {
+	return StartWithOptions(ctx, executable, prefix, argv, env, cwd, StartOptions{
+		StartupLines: 2, StartupDescription: "two startup lines", ValidateStartup: validateStartup,
+	})
+}
+
+// StartWithOptions is Start with a configurable readiness prefix. It retains
+// exactly the same platform preparation, process ownership, output collection,
+// startup failure cleanup, signal delivery, and Dispose behavior.
+func StartWithOptions(ctx context.Context, executable string, prefix, argv, env []string, cwd string, options StartOptions) (*Started, error) {
+	if options.StartupLines < 1 || options.StartupDescription == "" || options.ValidateStartup == nil {
+		return nil, errors.New("invalid serve fixture startup options")
+	}
 	args := append(append([]string{}, prefix...), argv...)
 	cmd := exec.Command(executable, args...)
 	cmd.Dir = cwd
@@ -97,8 +117,8 @@ func Start(ctx context.Context, executable string, prefix, argv, env []string, c
 	}
 	for {
 		out, changed := p.stdout.snapshot()
-		if bytes.Count(out, []byte("\n")) >= 2 {
-			url, err := validateStartup(out)
+		if bytes.Count(out, []byte("\n")) >= options.StartupLines {
+			url, err := options.ValidateStartup(out)
 			if err != nil {
 				return fail(err)
 			}
@@ -109,10 +129,10 @@ func Start(ctx context.Context, executable string, prefix, argv, env []string, c
 		case <-changed:
 		case <-p.done:
 			// The final writes happen before Wait returns; look once more.
-			if out, _ = p.stdout.snapshot(); bytes.Count(out, []byte("\n")) >= 2 {
+			if out, _ = p.stdout.snapshot(); bytes.Count(out, []byte("\n")) >= options.StartupLines {
 				continue
 			}
-			return fail(errors.New("fl exited before printing its two startup lines"))
+			return fail(errors.New("fl exited before printing its " + options.StartupDescription))
 		case <-ctx.Done():
 			return fail(fmt.Errorf("startup deadline: %w", ctx.Err()))
 		}

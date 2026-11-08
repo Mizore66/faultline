@@ -406,3 +406,48 @@ func RenderIncidentPage(analysis jsjson.Value) string {
 	b.WriteString(incidentLiteral50)
 	return b.String()
 }
+
+// incidentInteraction configures the native-RERUN variant of the incident page.
+type incidentInteraction struct {
+	credential string
+	enabled    bool
+}
+
+func incidentReplaceOnce(page, from, to string) string {
+	if strings.Count(page, from) != 1 {
+		panic("proofview: interactive incident literal count drift: " + from)
+	}
+	return strings.Replace(page, from, to, 1)
+}
+
+// renderInteractiveIncidentPage derives the nonce-bearing interactive page from the default
+// page. RenderIncidentPage itself is unchanged.
+func renderInteractiveIncidentPage(analysis jsjson.Value, in incidentInteraction) string {
+	page := RenderIncidentPage(analysis)
+	page = incidentReplaceOnce(page, "<script>", `<script nonce="`+EscapeHTML(in.credential)+`">`)
+	if in.enabled {
+		return incidentReplaceOnce(page, `fetch("/api/rerun",{method:"POST"})`,
+			`fetch("/api/rerun",{method:"POST",headers:{"X-FaultLine-Native-RERUN":`+
+				jsjson.Stringify(jsjson.MakeString(in.credential))+`}})`)
+	}
+	page = incidentReplaceOnce(page, `<button id="rerun" type="button">`, `<button id="rerun" type="button" disabled>`)
+	page = incidentReplaceOnce(page, `<span class="action-status" id="action-status">uses the safe built-in example</span>`,
+		`<span class="action-status" id="action-status">native RERUN requires startup --approve-native</span>`)
+	return incidentStripListener(page)
+}
+
+// incidentStripListener removes the rerun click listener from a disabled page
+// and refuses a page whose listener markers have drifted.
+func incidentStripListener(page string) string {
+	const start = `const rerun=document.getElementById("rerun");`
+	const end = "rerun.disabled=false}});\n"
+	i := strings.Index(page, start)
+	if i < 0 || strings.Count(page, start) != 1 {
+		panic("proofview: interactive incident listener start drift")
+	}
+	j := strings.Index(page[i:], end)
+	if j < 0 {
+		panic("proofview: interactive incident listener end drift")
+	}
+	return page[:i] + page[i+j+len(end):]
+}

@@ -49,6 +49,9 @@ const rel = {
   golden: "difftest/testdata/incident-renderer/golden.jsonl",
   html: "difftest/testdata/incident-renderer/incident.html",
   baseline: "difftest/testdata/incident-renderer/baseline.json",
+  interactiveEnabled: "difftest/testdata/incident-renderer/interactive-enabled.html",
+  interactiveDisabled: "difftest/testdata/incident-renderer/interactive-disabled.html",
+  interactiveBaseline: "difftest/testdata/incident-renderer/interactive-baseline.json",
   evidenceDir: "difftest/testdata/incident-renderer",
   src: "src",
   distRoots: ["dist/ui.js", "dist/engine.js"],
@@ -482,6 +485,84 @@ function assertOracleRuntime(runtime, label) {
   for (const k of ["icu", "unicode", "cldr"]) assert.ok(runtime[k] === null || typeof runtime[k] === "string", `${label}: ${k}`);
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Interactive pages: pure literal derivation from the frozen incident.html (never from Go output).
+// ---------------------------------------------------------------------------------------------
+const interactiveSchema = "faultline.native-interactive-renderer.v1";
+export const interactiveCredential = "test_nonce-ABC123";
+const interactiveDisabledStatus = "native RERUN requires startup --approve-native";
+
+function replaceExactly(text, from, to, count, label) {
+  const parts = text.split(from);
+  assert.equal(parts.length - 1, count, `interactive: ${label} literal count`);
+  return parts.join(to);
+}
+
+export function deriveInteractive(html, credential = interactiveCredential) {
+  const scriptOpen = "<script>";
+  const nonceOpen = `<script nonce="${credential}">`;
+  const fetchFrom = 'fetch("/api/rerun",{method:"POST"})';
+  const fetchTo = `fetch("/api/rerun",{method:"POST",headers:{"X-FaultLine-Native-RERUN":${JSON.stringify(credential)}}})`;
+  const enabled = replaceExactly(
+    replaceExactly(html, scriptOpen, nonceOpen, 1, "script open"), fetchFrom, fetchTo, 1, "rerun fetch");
+
+  const buttonFrom = '<button id="rerun" type="button">';
+  const statusFrom = '<span class="action-status" id="action-status">uses the safe built-in example</span>';
+  const listenerStart = 'const rerun=document.getElementById("rerun");';
+  const listenerEnd = "rerun.disabled=false}});\n";
+  let disabled = replaceExactly(html, scriptOpen, nonceOpen, 1, "script open");
+  disabled = replaceExactly(disabled, buttonFrom, '<button id="rerun" type="button" disabled>', 1, "button");
+  disabled = replaceExactly(disabled, statusFrom,
+    `<span class="action-status" id="action-status">${interactiveDisabledStatus}</span>`, 1, "status");
+  const start = disabled.indexOf(listenerStart);
+  assert.ok(start >= 0 && disabled.indexOf(listenerStart, start + 1) < 0, "interactive: listener start literal count");
+  const end = disabled.indexOf(listenerEnd, start);
+  assert.ok(end > start, "interactive: listener end literal");
+  assert.ok(disabled.slice(start, end).split("\n").length === 1, "interactive: listener spans one line");
+  disabled = disabled.slice(0, start) + disabled.slice(end + listenerEnd.length);
+  assert.ok(!disabled.includes("/api/rerun"), "interactive: disabled page still references /api/rerun");
+  assert.ok(!disabled.includes("addEventListener(\"click\",async"), "interactive: disabled page keeps rerun listener");
+  return { enabled, disabled };
+}
+
+function buildInteractiveBaseline(htmlBytes, enabledBytes, disabledBytes) {
+  return {
+    schema: interactiveSchema,
+    source: fileDescriptor(rel.html, htmlBytes),
+    credential: interactiveCredential,
+    pages: {
+      enabled: fileDescriptor(rel.interactiveEnabled, enabledBytes),
+      disabled: fileDescriptor(rel.interactiveDisabled, disabledBytes),
+    },
+  };
+}
+
+function interactiveCandidates(htmlBytes) {
+  const { enabled, disabled } = deriveInteractive(htmlBytes.toString("utf8"));
+  const e = Buffer.from(enabled, "utf8");
+  const d = Buffer.from(disabled, "utf8");
+  return {
+    "interactive-enabled.html": e,
+    "interactive-disabled.html": d,
+    "interactive-baseline.json": Buffer.from(baselineText(buildInteractiveBaseline(htmlBytes, e, d)), "utf8"),
+  };
+}
+const interactiveTargets = {
+  "interactive-enabled.html": rel.interactiveEnabled,
+  "interactive-disabled.html": rel.interactiveDisabled,
+  "interactive-baseline.json": rel.interactiveBaseline,
+};
+
+export function checkInteractive() {
+  const htmlBytes = regularFile(abs(rel.html), rel.html);
+  const want = interactiveCandidates(htmlBytes);
+  for (const [name, r] of Object.entries(interactiveTargets)) {
+    assert.ok(existsSync(abs(r)), `absent interactive evidence: ${r}`);
+    assert.ok(regularFile(abs(r), r).equals(want[name]), `${r} differs from the pure derivation of ${rel.html}`);
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Read-only validation (--check). Imports no TS/dist module and spawns nothing.
 // ---------------------------------------------------------------------------------------------
@@ -543,15 +624,17 @@ export function checkEvidence() {
   assert.equal(parsed.currentManifestVersion, currentManifestVersion);
   for (const f of parsed.frozenSource.files) assert.ok(hex(40).test(f.gitBlob) && hex(64).test(f.sha256), `bad pin ${f.path}`);
   for (const f of parsed.compiledModules.files) assert.ok(hex(64).test(f.sha256), `bad pin ${f.path}`);
+  checkInteractive();
   return { rows: caseIDs.length, parsed };
 }
 
 // ---------------------------------------------------------------------------------------------
 // Argument grammar
 // ---------------------------------------------------------------------------------------------
-const usage = "usage: gen-incident-renderer.mjs --check | [--recapture] --scratch ABSOLUTE_FRESH_DIRECTORY";
+const usage = "usage: gen-incident-renderer.mjs --check | --write-interactive | [--recapture] --scratch ABSOLUTE_FRESH_DIRECTORY";
 export function parseArgs(argv) {
   if (argv.length === 1 && argv[0] === "--check") return { mode: "check" };
+  if (argv.length === 1 && argv[0] === "--write-interactive") return { mode: "write-interactive" };
   let mode = "capture";
   let rest = argv;
   if (argv[0] === "--recapture") { mode = "recapture"; rest = argv.slice(1); }
@@ -698,6 +781,11 @@ async function capture(mode, scratchArg) {
     for (const [name, r] of Object.entries(targets)) {
       assert.ok(readFileSync(abs(r)).equals(candidate[name]), `recapture: ${r} differs from fresh real-call bytes`);
     }
+    const interactive = interactiveCandidates(htmlBytes);
+    for (const [name, r] of Object.entries(interactiveTargets)) {
+      writeNew(join(dirs.candidate, name), interactive[name]);
+      assert.ok(readFileSync(abs(r)).equals(interactive[name]), `recapture: ${r} differs from fresh derivation`);
+    }
     console.log(`incident-renderer recapture identical: ${rows.length} cases, scratch ${scratch}`);
   }
 }
@@ -707,6 +795,17 @@ async function main(argv) {
   if (args.mode === "check") {
     const { rows } = checkEvidence();
     console.log(`incident-renderer evidence valid: ${rows} cases`);
+    return;
+  }
+  if (args.mode === "write-interactive") {
+    // Pure derivation from the committed frozen incident.html; refuses to overwrite.
+    const want = interactiveCandidates(regularFile(abs(rel.html), rel.html));
+    for (const r of Object.values(interactiveTargets)) assert.ok(lstatOrNull(abs(r)) === null, `refusing to overwrite: ${r}`);
+    for (const name of ["interactive-enabled.html", "interactive-disabled.html", "interactive-baseline.json"]) {
+      writeNew(abs(interactiveTargets[name]), want[name]);
+    }
+    checkInteractive();
+    console.log("incident-renderer interactive pages written");
     return;
   }
   await capture(args.mode, args.scratch);

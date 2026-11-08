@@ -261,11 +261,36 @@ func TestJudgePreviewCLISymlinks(t *testing.T) {
 
 func TestJudgePreviewDispatchIsolation(t *testing.T) {
 	t.Chdir(t.TempDir())
+	// The bare judge-demo case now starts an idle read-only server. Drive one
+	// controlled start/close lifecycle so dispatch isolation does not wait for a
+	// process signal, then require the complete startup output and nothing else.
+	originalAwait := judgeDemoAwaitInterrupt
+	judgeDemoAwaitInterrupt = func(start func() (func() error, error)) error {
+		closeServer, err := start()
+		if err != nil {
+			return err
+		}
+		return closeServer()
+	}
+	var demoOut, demoErr bytes.Buffer
+	demoCode := Run([]string{"judge-demo"}, &demoOut, &demoErr)
+	judgeDemoAwaitInterrupt = originalAwait
+	prefix := "FaultLine cached replay investigation prepared.\n" +
+		"Stable sample boundary: not certified from cached replay\n" +
+		"Proof bundle self-consistency: VALID (67 declared files)\n" +
+		"Bundle root: " + replayRetainedRoot + "\n" +
+		"Proof bundle: " + filepath.Join(".faultline", "bundles", "judge-demo") + "\n" +
+		"🚀 Launching FaultLine Judge Demo at "
+	const suffix = "...\nPress Ctrl+C to stop.\n"
+	url, found := strings.CutSuffix(strings.TrimPrefix(demoOut.String(), prefix), suffix)
+	if demoCode != 0 || demoErr.Len() != 0 || !found || !strings.HasPrefix(demoOut.String(), prefix) ||
+		!strings.HasPrefix(url, "http://127.0.0.1:") || strings.ContainsAny(url, "\r\n") {
+		t.Errorf("bare judge-demo: stdout=%q stderr=%q exit=%d, want one complete idle server startup", demoOut.String(), demoErr.String(), demoCode)
+	}
 	for _, c := range []struct {
 		args []string
 		want string
 	}{
-		{[]string{"judge-demo"}, "FaultLine error: not yet ported: judge-demo server\nNext: pnpm fl help\n"},
 		{[]string{"judge-demo", "--export-only", "--approve-native", "sha256:any-value"}, "FaultLine error: --approve-native requires --rerun-all.\nNext: pnpm fl help\n"},
 		{[]string{"serve"}, "FaultLine error: not yet ported: serve\nNext: pnpm fl help\n"},
 		{[]string{"judge-previews"}, "FaultLine error: Unknown command: judge-previews\nNext: pnpm fl help\n"},

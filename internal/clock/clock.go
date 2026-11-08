@@ -39,6 +39,13 @@ func wallNewUUID() string {
 	return formatUUID(b)
 }
 
+// UnseededRandRead fills b from the system CSPRNG and returns its error.
+// Security credentials use this path in every build, never the seeded stream.
+func UnseededRandRead(b []byte) error {
+	_, err := crand.Read(b)
+	return err
+}
+
 // wallRandRead fills b from the system CSPRNG (OpenSSL's RAND_priv_bytes).
 func wallRandRead(b []byte) {
 	if _, err := crand.Read(b); err != nil {

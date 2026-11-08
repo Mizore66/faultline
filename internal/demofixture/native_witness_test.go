@@ -234,3 +234,22 @@ func TestNativeApprovalExecutorErrorRetainsCause(t *testing.T) {
 		t.Fatalf("lost environment failure or fabricated session: %v", err)
 	}
 }
+
+func TestValidateNativeApproval(t *testing.T) {
+	digest := NativeWitnessProposal().Get("digest").Str()
+	valid := NativeApproval{ProposalDigest: digest, ApprovedAt: "2026-11-05T12:00:00.000Z"}
+	if err := ValidateNativeApproval(valid); err != nil {
+		t.Fatal(err)
+	}
+	const want = "approval must match the proposal and record a canonical UTC millisecond timestamp no later than execution entry"
+	for name, bad := range map[string]NativeApproval{
+		"wrong-digest":         {ProposalDigest: "sha256:" + string(bytes.Repeat([]byte("0"), 64)), ApprovedAt: valid.ApprovedAt},
+		"noncanonical-instant": {ProposalDigest: digest, ApprovedAt: "2026-11-05T12:00:00Z"},
+	} {
+		err := ValidateNativeApproval(bad)
+		var nativeErr *NativeAnalysisError
+		if !errors.As(err, &nativeErr) || nativeErr.Kind != "APPROVAL" || nativeErr.Err.Error() != want {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}

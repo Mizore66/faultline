@@ -94,11 +94,24 @@ func cloneNativeValue(v jsjson.Value) jsjson.Value {
 	return jsexc.Must(jsjson.Parse(jsjson.Stringify(v)))
 }
 
+// ValidateNativeApproval checks approval against the current proposal and clock
+// without creating an executor or child process.
+func ValidateNativeApproval(approval NativeApproval) error {
+	return validateNativeApprovalDigest(approval, NativeWitnessProposal().Get("digest").Str(), clock.Now())
+}
+
+func validateNativeApprovalDigest(approval NativeApproval, digest string, startedAt time.Time) error {
+	approvedAt, err := time.Parse(time.RFC3339Nano, approval.ApprovedAt)
+	if approval.ProposalDigest != digest || err != nil || clock.ISO(approvedAt) != approval.ApprovedAt || approvedAt.After(startedAt) {
+		return &NativeAnalysisError{Kind: "APPROVAL", Err: errors.New("approval must match the proposal and record a canonical UTC millisecond timestamp no later than execution entry")}
+	}
+	return nil
+}
+
 func newNativeSession(approval NativeApproval, deps nativeDeps, startedAt time.Time) (*nativeSession, error) {
 	proposal := NativeWitnessProposal()
-	approvedAt, err := time.Parse(time.RFC3339Nano, approval.ApprovedAt)
-	if approval.ProposalDigest != proposal.Get("digest").Str() || err != nil || clock.ISO(approvedAt) != approval.ApprovedAt || approvedAt.After(startedAt) {
-		return nil, &NativeAnalysisError{Kind: "APPROVAL", Err: errors.New("approval must match the proposal and record a canonical UTC millisecond timestamp no later than execution entry")}
+	if err := validateNativeApprovalDigest(approval, proposal.Get("digest").Str(), startedAt); err != nil {
+		return nil, err
 	}
 	executor, err := deps.newExecutor()
 	if err != nil {

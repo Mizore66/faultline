@@ -1,0 +1,21 @@
+{
+  "schema": "faultline.native-interactive-renderer.v1",
+  "source": {
+    "path": "difftest/testdata/incident-renderer/incident.html",
+    "bytes": 33257,
+    "sha256": "97b431fcb07d4b900bc06c52a50253415c57fec6f9307e41754759ef3e4c0c0d"
+  },
+  "credential": "test_nonce-ABC123",
+  "pages": {
+    "enabled": {
+      "path": "difftest/testdata/incident-renderer/interactive-enabled.html",
+      "bytes": 33340,
+      "sha256": "3dfa6de3c400f805edff0ab522c91e0b28737e98c9766c5cae684829da2194ca"
+    },
+    "disabled": {
+      "path": "difftest/testdata/incident-renderer/interactive-disabled.html",
+      "bytes": 32765,
+      "sha256": "47d79eabe2bc3184911f7ccb55d385178633d39ca91f78c827ae4e491bc38bd8"
+    }
+  }
+}

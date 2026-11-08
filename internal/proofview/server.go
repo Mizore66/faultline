@@ -352,10 +352,30 @@ func writeNodeBody(w http.ResponseWriter, r *http.Request, status int, body stri
 	io.WriteString(w, body)
 }
 
-// Port of src/server.ts:65 startGitProofServer. The page is rendered once;
-// GET / serves it and every other request is a 404.
-func StartGitProofServer(v View, port float64) (*Server, error) {
-	page := jsstr.ToUTF8(RenderGitProofIncidentPage(v))
+// nodeHandler wraps a route handler with the connection bookkeeping and the
+// expectation decision the framing layer made (parserOnIncoming's check,
+// HTTP/1.1 only): a value matching continueExpression gets `100 Continue`
+// before the response, any other the empty 417 (no checkContinue or
+// checkExpectation listener).
+func nodeHandler(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c := r.Context().Value(connKey{}).(*nodeConn)
+		defer func() { c.responseFinished(w.Header().Get("Connection") == "keep-alive") }()
+		switch r.Header.Get(expectMarker) {
+		case "continue":
+			w.WriteHeader(http.StatusContinue)
+		case "fail":
+			nodeHeaders(w.Header(), r)
+			writeNodeBody(w, r, http.StatusExpectationFailed, "")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// startNodeServer listens on 127.0.0.1:port and serves the routes the
+// factory builds for the bound URL.
+func startNodeServer(port float64, routes func(string) http.HandlerFunc) (*Server, error) {
 	// net.Server.listen validates the port (validatePort, allowZero).
 	if math.IsNaN(port) || port != math.Trunc(port) || port < 0 || port > 0xFFFF {
 		return nil, errors.New("options.port should be >= 0 and < 65536. Received type number (" + jsjson.FormatNumber(port) + ").")
@@ -366,40 +386,9 @@ func StartGitProofServer(v View, port float64) (*Server, error) {
 		code := nodefs.ErrnoCode(err)
 		return nil, errors.New("listen " + code + ": " + nodefs.Describe(code) + " " + address)
 	}
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c := r.Context().Value(connKey{}).(*nodeConn)
-		defer func() { c.responseFinished(w.Header().Get("Connection") == "keep-alive") }()
-		h := w.Header()
-		// parserOnIncoming's expectation check (HTTP/1.1 only): a value
-		// matching continueExpression gets `100 Continue` before the
-		// response, any other the empty 417 (no checkContinue or
-		// checkExpectation listener).
-		switch r.Header.Get(expectMarker) {
-		case "continue":
-			w.WriteHeader(http.StatusContinue)
-		case "fail":
-			nodeHeaders(h, r)
-			writeNodeBody(w, r, http.StatusExpectationFailed, "")
-			return
-		}
-		if r.Method == "GET" && requestPathname(r.RequestURI) == "/" {
-			h.Set("Content-Type", "text/html; charset=utf-8")
-			h.Set("Cache-Control", "no-store")
-			h.Set("Content-Security-Policy", contentSecurityPolicy)
-			h.Set("Referrer-Policy", "no-referrer")
-			h.Set("X-Content-Type-Options", "nosniff")
-			nodeHeaders(h, r)
-			writeNodeBody(w, r, 200, page)
-			return
-		}
-		h.Set("Content-Type", "text/plain; charset=utf-8")
-		h.Set("Cache-Control", "no-store")
-		h.Set("X-Content-Type-Options", "nosniff")
-		nodeHeaders(h, r)
-		writeNodeBody(w, r, 404, "Not found")
-	})
+	url := "http://127.0.0.1:" + strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
 	s := &Server{
-		url:      "http://127.0.0.1:" + strconv.Itoa(listener.Addr().(*net.TCPAddr).Port),
+		url:      url,
 		listener: listener,
 		stop:     make(chan struct{}),
 		conns:    map[*nodeConn]struct{}{},
@@ -412,7 +401,7 @@ func StartGitProofServer(v View, port float64) (*Server, error) {
 	// by the framing, Node's way, and Node 22.22.2 has no limit on the
 	// number of header lines.
 	s.srv = &http.Server{
-		Handler:                      handler,
+		Handler:                      nodeHandler(routes(url)),
 		DisableGeneralOptionsHandler: true,
 		MaxHeaderBytes:               maxHeadBytes + 4096,
 		MaxHeaderValueCount:          maxHeadBytes,
@@ -434,4 +423,30 @@ func StartGitProofServer(v View, port float64) (*Server, error) {
 	// A TCP listener always reports a TCP address, so the TS "did not
 	// report a TCP address" branch is unreachable and not ported.
 	return s, nil
+}
+
+// Port of src/server.ts:65 startGitProofServer. The page is rendered once;
+// GET / serves it and every other request is a 404.
+func StartGitProofServer(v View, port float64) (*Server, error) {
+	page := jsstr.ToUTF8(RenderGitProofIncidentPage(v))
+	return startNodeServer(port, func(string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			if r.Method == "GET" && requestPathname(r.RequestURI) == "/" {
+				h.Set("Content-Type", "text/html; charset=utf-8")
+				h.Set("Cache-Control", "no-store")
+				h.Set("Content-Security-Policy", contentSecurityPolicy)
+				h.Set("Referrer-Policy", "no-referrer")
+				h.Set("X-Content-Type-Options", "nosniff")
+				nodeHeaders(h, r)
+				writeNodeBody(w, r, 200, page)
+				return
+			}
+			h.Set("Content-Type", "text/plain; charset=utf-8")
+			h.Set("Cache-Control", "no-store")
+			h.Set("X-Content-Type-Options", "nosniff")
+			nodeHeaders(h, r)
+			writeNodeBody(w, r, 404, "Not found")
+		}
+	})
 }

@@ -115,6 +115,15 @@ func TestNativeCoverageEvents(t *testing.T) {
 			}
 			return e
 		}},
+		{"proofview-parent-missing", func(e []map[string]any) []map[string]any {
+			return nativeWithoutTest(e, "TestIncidentServerClose")
+		}},
+		{"proofview-drift-without-children", func(e []map[string]any) []map[string]any {
+			return nativeWithoutTest(nativeWithoutTest(e, "TestInteractiveIncidentListenerDrift/listener-start-drift"), "TestInteractiveIncidentListenerDrift/listener-end-drift")
+		}},
+		{"proofview-non-diagnostic-emitter", func(e []map[string]any) []map[string]any {
+			return append(e, map[string]any{"Action": "output", "Package": nativeProofviewPkg, "Test": "TestIncidentServerClose", "Output": "NATIVE-DIAGNOSTIC \"x\"\n"})
+		}},
 		{"cli-parent-without-children", func(e []map[string]any) []map[string]any {
 			return nativeWithoutTest(nativeWithoutTest(e, "TestJudgeDemoNativeDiagnostics/server"), "TestJudgeDemoNativeDiagnostics/generated-bundle-invalid")
 		}},
@@ -210,6 +219,7 @@ func TestNativeCoverageEvents(t *testing.T) {
 		nativeDemofixturePkg: `"native analysis rejected the invocation"`,
 		nativeCLIPkg:         `"FaultLine error: cli server refused"`,
 		nativeDemoPkg:        `"Native evidence nil-root refused"`,
+		nativeProofviewPkg:   `"proofview: interactive incident listener-start-drift"`,
 	} {
 		if err != nil || !strings.Contains(out[pkg], want+"\n") {
 			t.Fatalf("package %s lacks %s: %q %v", pkg, want, out, err)
@@ -226,6 +236,7 @@ const (
 	nativeDemofixturePkg = "github.com/Mizore66/faultline/internal/demofixture"
 	nativeCLIPkg         = "github.com/Mizore66/faultline/internal/cli"
 	nativeDemoPkg        = "github.com/Mizore66/faultline/internal/bundle/demo"
+	nativeProofviewPkg   = "github.com/Mizore66/faultline/internal/proofview"
 )
 
 // nativeCoverageEvents is one complete valid stream per owned package, in the
@@ -283,6 +294,20 @@ func nativeCoverageEvents() []map[string]any {
 	}
 	add(nativeDemoPkg, "pass", "TestNativeEvidenceDiagnostics")
 	add(nativeDemoPkg, "pass", "")
+	add(nativeProofviewPkg, "start", "")
+	for _, parent := range nativeProofviewPackage.parents {
+		add(nativeProofviewPkg, "run", parent)
+		if parent == "TestInteractiveIncidentListenerDrift" {
+			for _, child := range []string{"listener-start-drift", "listener-end-drift"} {
+				name := parent + "/" + child
+				add(nativeProofviewPkg, "run", name)
+				diagnostic(nativeProofviewPkg, name, `"proofview: interactive incident `+child+`"`)
+				add(nativeProofviewPkg, "pass", name)
+			}
+		}
+		add(nativeProofviewPkg, "pass", parent)
+	}
+	add(nativeProofviewPkg, "pass", "")
 	return events
 }
 
@@ -362,7 +387,7 @@ func TestNativeCoverageProfile(t *testing.T) {
 		profile += "github.com/Mizore66/faultline/" + file + ":1.1,300.2 1 1\n"
 	}
 	blocks, err := nativeProfile([]byte(profile))
-	if err != nil || len(blocks) != 5 {
+	if err != nil || len(blocks) != 7 {
 		t.Fatalf("valid native profile: %v", err)
 	}
 	for _, file := range []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"} {
@@ -434,6 +459,8 @@ func TestNativeCoverageOwnedFiles(t *testing.T) {
 		"internal/demofixture/native_witness.go",
 		"internal/cli/judge_demo.go",
 		"internal/bundle/demo/native_evidence.go",
+		"internal/proofview/incident.go",
+		"internal/proofview/incident_server.go",
 	}
 	if strings.Join(nativeCoverageFiles, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("native files: %v", nativeCoverageFiles)
@@ -576,7 +603,7 @@ func nativeOutputsFrom(file, text string) map[string]string {
 
 // nativeAllOutputs is the same text produced by every owning package.
 func nativeAllOutputs(text string) map[string]string {
-	return map[string]string{nativeDemofixturePkg: text, nativeCLIPkg: text, nativeDemoPkg: text}
+	return map[string]string{nativeDemofixturePkg: text, nativeCLIPkg: text, nativeDemoPkg: text, nativeProofviewPkg: text}
 }
 
 // Diagnostic text is owned by the package that produced it, in both the literal
@@ -588,6 +615,12 @@ func TestNativeCoverageOutputIsolation(t *testing.T) {
 		nativeDemofixturePkg: "internal/demofixture/native_run.go",
 		nativeCLIPkg:         "internal/cli/judge_demo.go",
 		nativeDemoPkg:        "internal/bundle/demo/native_evidence.go",
+		nativeProofviewPkg:   "internal/proofview/incident_server.go",
+	}
+	for _, file := range nativeProofviewFiles {
+		if nativeOwner(file) != nativeProofviewPkg {
+			t.Fatalf("%s owner %q", file, nativeOwner(file))
+		}
 	}
 	for _, file := range nativeDemofixtureFiles {
 		if nativeOwner(file) != nativeDemofixturePkg {
@@ -680,8 +713,30 @@ func TestNativeCoverageProfileSubsets(t *testing.T) {
 			t.Fatalf("export subset accepted without %s", missing)
 		}
 	}
+	var proofviewOnly string
+	for _, file := range nativeProofviewFiles {
+		proofviewOnly += line(file, 1)
+	}
+	proofview, err := nativeProfileFor([]byte("mode: set\n"+incidentalDemofixture+incidentalExport+proofviewOnly), nativeProofviewFiles)
+	if err != nil || len(proofview) != 2 || proofview[nativeExportFiles[0]] != nil || proofview[nativeDemofixtureFiles[0]] != nil {
+		t.Fatalf("proofview subset: %v %v", proofview, err)
+	}
+	for _, missing := range nativeProofviewFiles {
+		var data string
+		for _, file := range nativeProofviewFiles {
+			if file != missing {
+				data += line(file, 1)
+			}
+		}
+		if _, err := nativeProfileFor([]byte("mode: set\n"+data), nativeProofviewFiles); err == nil {
+			t.Fatalf("proofview subset accepted without %s", missing)
+		}
+	}
 	merged, err := mergeDisjointNativeProfiles(native, export)
-	if err != nil || len(merged) != 5 || len(native) != 3 || len(export) != 2 {
+	if err == nil {
+		merged, err = mergeDisjointNativeProfiles(merged, proofview)
+	}
+	if err != nil || len(merged) != 7 || len(native) != 3 || len(export) != 2 || len(proofview) != 2 {
 		t.Fatalf("disjoint merge: %v %d", err, len(merged))
 	}
 	original := native[nativeDemofixtureFiles[0]][0].count
@@ -693,8 +748,8 @@ func TestNativeCoverageProfileSubsets(t *testing.T) {
 
 // The two invocations are built purely and exactly.
 func TestNativeEvidenceCommands(t *testing.T) {
-	commands := nativeEvidenceCommands("/repo", "/tmp/a.txt", "/tmp/b.txt")
-	if len(commands) != 2 {
+	commands := nativeEvidenceCommands("/repo", "/tmp/a.txt", "/tmp/b.txt", "/tmp/c.txt")
+	if len(commands) != 3 {
 		t.Fatalf("commands: %d", len(commands))
 	}
 	want := [][]string{
@@ -703,13 +758,15 @@ func TestNativeEvidenceCommands(t *testing.T) {
 			"-native-contract=" + filepath.Join("/repo", "difftest", "testdata", "native-demo", "native-contract.jsonl")},
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/b.txt",
 			"-run=^(TestJudgeDemoNativeDiagnostics|TestNativeEvidenceDiagnostics)$", "./internal/cli", "./internal/bundle/demo"},
+		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/c.txt",
+			"-run=^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose)$", "./internal/proofview"},
 	}
 	for i, command := range commands {
 		if strings.Join(command.args, "\x00") != strings.Join(want[i], "\x00") {
 			t.Fatalf("command %d argv: %q", i, command.args)
 		}
 	}
-	for i, flagCount := range []int{1, 0} {
+	for i, flagCount := range []int{1, 0, 0} {
 		n := 0
 		for _, arg := range commands[i].args {
 			if strings.HasPrefix(arg, "-native-contract=") {
@@ -720,21 +777,22 @@ func TestNativeEvidenceCommands(t *testing.T) {
 			t.Fatalf("command %d has %d -native-contract flags", i, n)
 		}
 	}
-	if commands[0].profile != "/tmp/a.txt" || commands[1].profile != "/tmp/b.txt" {
+	if commands[0].profile != "/tmp/a.txt" || commands[1].profile != "/tmp/b.txt" || commands[2].profile != "/tmp/c.txt" {
 		t.Fatal("profiles are crossed")
 	}
 	if len(commands[0].packages) != 1 || commands[0].packages[0].importPath != nativeDemofixturePkg ||
-		len(commands[1].packages) != 2 || commands[1].packages[0].importPath != nativeCLIPkg || commands[1].packages[1].importPath != nativeDemoPkg {
+		len(commands[1].packages) != 2 || commands[1].packages[0].importPath != nativeCLIPkg || commands[1].packages[1].importPath != nativeDemoPkg ||
+		len(commands[2].packages) != 1 || commands[2].packages[0].importPath != nativeProofviewPkg {
 		t.Fatal("package ownership is wrong")
 	}
-	// One shared 180-second context covers both exec commands.
+	// One shared 240-second context covers all exec commands.
 	data, err := os.ReadFile("native_coverage_test.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(data), "context.WithTimeout(context.Background(), 180*time.Second)") != 1 ||
+	if strings.Count(string(data), "context.WithTimeout(context.Background(), 240*time.Second)") != 1 ||
 		strings.Count(string(data), "exec.CommandContext(ctx") != 1 {
-		t.Fatal("both commands must share one 180-second context")
+		t.Fatal("all commands must share one 240-second context")
 	}
 }
 

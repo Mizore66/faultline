@@ -1377,6 +1377,9 @@ func goldenText(t *testing.T, repo string) string {
 	// to the discovery only.
 	files = append(files, filepath.Join(repo, "difftest", "testdata", "serve-bundle", "golden.jsonl"))
 	files = append(files, filepath.Join(repo, "difftest", "testdata", "serve-bundle-binding", "golden.jsonl"))
+	// Interactive incident diagnostics: committed renderer drift and native
+	// RERUN server bodies, checked by internal/proofview tests.
+	files = append(files, filepath.Join(repo, "difftest", "testdata", "incident-renderer", "interactive-diagnostics.jsonl"))
 	var goldens strings.Builder
 	for _, f := range files {
 		b, err := os.ReadFile(f)
@@ -1389,6 +1392,15 @@ func goldenText(t *testing.T, repo string) string {
 	// JSON string, so a rendered page's quotes and newlines are escaped twice
 	// there and a plain containment check cannot find them.
 	goldens.WriteString(demoArtifactsDecodedText(t, filepath.Join(repo, "difftest", "testdata", "demo-artifacts", "golden.jsonl")))
+	// The committed interactive pages, searchable in the same quoted form.
+	for _, name := range []string{"incident.html", "interactive-enabled.html", "interactive-disabled.html"} {
+		b, err := os.ReadFile(filepath.Join(repo, "difftest", "testdata", "incident-renderer", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := strconv.Quote(string(b))
+		goldens.WriteString(q[1 : len(q)-1])
+	}
 	return goldens.String()
 }
 
