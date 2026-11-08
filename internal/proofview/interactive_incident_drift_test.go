@@ -112,6 +112,21 @@ func TestInteractiveIncidentListenerDrift(t *testing.T) {
 				t.Fatalf("child failed: %v\n%s", err, out)
 			}
 			want := incidentDiagnostic(t, c.id)
+			// The overlay child's counters are not part of this process, so the
+			// same mutated page is also refused in-process.
+			analysis, err := jsjson.Parse(incidentTestLoad(t).rows[0].AnalysisJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			drifted := strings.Replace(RenderIncidentPage(analysis), c.from, c.to, 1)
+			func() {
+				defer func() {
+					if got, _ := recover().(string); got != want {
+						t.Errorf("in-process panic %q, want %q", got, want)
+					}
+				}()
+				incidentStripListener(drifted)
+			}()
 			found := false
 			for _, line := range strings.Split(string(out), "\n") {
 				if _, after, ok := strings.Cut(line, "DRIFT-DIAGNOSTIC:"); ok {
@@ -119,6 +134,11 @@ func TestInteractiveIncidentListenerDrift(t *testing.T) {
 					if after != want {
 						t.Errorf("got %q want %q", after, want)
 					}
+					observed, err := json.Marshal(after)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Logf("NATIVE-DIAGNOSTIC %s", observed)
 				}
 			}
 			if !found {

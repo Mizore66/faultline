@@ -29,6 +29,8 @@ var nativeCoverageFiles = []string{
 	"internal/demofixture/native_witness.go",
 	"internal/cli/judge_demo.go",
 	"internal/bundle/demo/native_evidence.go",
+	"internal/proofview/incident.go",
+	"internal/proofview/incident_server.go",
 }
 
 // nativeEvidencePackage is one exact package allowed to produce native evidence.
@@ -60,14 +62,36 @@ var (
 		parents:           []string{"TestNativeEvidenceDiagnostics"},
 		diagnosticParents: []string{"TestNativeEvidenceDiagnostics"},
 	}
-	nativeAllPackages = []nativeEvidencePackage{nativeDemofixturePackage, nativeCLIPackage, nativeDemoPackage}
+	// The proofview owner's diagnostic parent is the overlay drift test; its
+	// start/end children each emit one checked record. The other parents must
+	// pass but never emit.
+	nativeProofviewPackage = nativeEvidencePackage{
+		importPath:      "github.com/Mizore66/faultline/internal/proofview",
+		sourceDirectory: "internal/proofview",
+		parents: []string{
+			"TestInteractiveIncidentPage", "TestInteractiveIncidentReplaceOnceDrift", "TestInteractiveIncidentListenerDrift",
+			"TestIncidentServerHTTP", "TestIncidentServerSingleFlight", "TestIncidentServerClose",
+		},
+		diagnosticParents: []string{"TestInteractiveIncidentListenerDrift"},
+	}
+	nativeAllPackages = []nativeEvidencePackage{nativeDemofixturePackage, nativeCLIPackage, nativeDemoPackage, nativeProofviewPackage}
 
 	nativeDemofixtureFiles = []string{
 		"internal/demofixture/native_analysis.go",
 		"internal/demofixture/native_run.go",
 		"internal/demofixture/native_witness.go",
 	}
-	nativeExportFiles = []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"}
+	nativeExportFiles    = []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"}
+	nativeProofviewFiles = []string{"internal/proofview/incident.go", "internal/proofview/incident_server.go"}
+
+	// Committed, independently reviewed proofview expectations. They are read
+	// as data, never produced by the code under test.
+	nativeProofviewDiagnostics = "difftest/testdata/incident-renderer/interactive-diagnostics.jsonl"
+	nativeProofviewPages       = []string{
+		"difftest/testdata/incident-renderer/incident.html",
+		"difftest/testdata/incident-renderer/interactive-enabled.html",
+		"difftest/testdata/incident-renderer/interactive-disabled.html",
+	}
 )
 
 // nativeOwner names the one package whose fresh diagnostics may satisfy an owned
@@ -137,15 +161,19 @@ func nativeLibraryEvidence(repo string) (nativeEvidence, error) {
 	if len(cases) != 3 {
 		return nativeEvidence{}, fmt.Errorf("native contract needs its three complete reference cases")
 	}
+	proofviewExpected, err := nativeProofviewExpectedText(repo)
+	if err != nil {
+		return nativeEvidence{}, err
+	}
 	dir, err := os.MkdirTemp("", "faultline-native-coverage-")
 	if err != nil {
 		return nativeEvidence{}, err
 	}
 	defer os.RemoveAll(dir)
-	// One deadline covers both sequential subprocesses.
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	// One deadline covers all three sequential subprocesses.
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
-	commands := nativeEvidenceCommands(repo, filepath.Join(dir, "native-profile.txt"), filepath.Join(dir, "export-profile.txt"))
+	commands := nativeEvidenceCommands(repo, filepath.Join(dir, "native-profile.txt"), filepath.Join(dir, "export-profile.txt"), filepath.Join(dir, "proofview-profile.txt"))
 	var streams [][]byte
 	for _, command := range commands {
 		cmd := exec.CommandContext(ctx, "go", command.args...)
@@ -173,12 +201,19 @@ func nativeLibraryEvidence(repo string) (nativeEvidence, error) {
 	if err != nil {
 		return nativeEvidence{}, err
 	}
-	for pkg, text := range exportOutputs {
-		if _, dup := outputs[pkg]; dup {
-			return nativeEvidence{}, fmt.Errorf("native streams both own %s", pkg)
-		}
-		outputs[pkg] = text
+	proofviewOutputs, err := nativeOutputsFor(streams[2], nil, commands[2].packages)
+	if err != nil {
+		return nativeEvidence{}, err
 	}
+	for _, more := range []map[string]string{exportOutputs, proofviewOutputs} {
+		for pkg, text := range more {
+			if _, dup := outputs[pkg]; dup {
+				return nativeEvidence{}, fmt.Errorf("native streams both own %s", pkg)
+			}
+			outputs[pkg] = text
+		}
+	}
+	outputs[nativeProofviewPackage.importPath] += proofviewExpected
 	// The existing test compared every byte before each required case passed.
 	// These COMPLETE expectations own successful prose, never rejected calls.
 	outputs[nativeDemofixturePackage.importPath] += expected.String()
@@ -198,9 +233,20 @@ func nativeLibraryEvidence(repo string) (nativeEvidence, error) {
 	if err != nil {
 		return nativeEvidence{}, err
 	}
+	proofviewProfileData, err := os.ReadFile(commands[2].profile)
+	if err != nil {
+		return nativeEvidence{}, err
+	}
+	proofviewBlocks, err := nativeProfileFor(proofviewProfileData, nativeProofviewFiles)
+	if err != nil {
+		return nativeEvidence{}, err
+	}
 	// The subsets are disjoint: demofixture counters incidentally emitted by the
 	// CLI's imports were discarded, never allowed to replace the original evidence.
 	if blocks, err = mergeDisjointNativeProfiles(blocks, exportBlocks); err != nil {
+		return nativeEvidence{}, err
+	}
+	if blocks, err = mergeDisjointNativeProfiles(blocks, proofviewBlocks); err != nil {
 		return nativeEvidence{}, err
 	}
 	var nativeSites []errorSite
@@ -262,12 +308,49 @@ func nativeSourceBinding(repo string) (string, error) {
 	}); err != nil {
 		return "", err
 	}
-	for _, path := range []string{"go.mod", "go.sum", "difftest/testdata/native-demo/native-contract.jsonl"} {
+	inputs := append([]string{"go.mod", "go.sum", "difftest/testdata/native-demo/native-contract.jsonl", nativeProofviewDiagnostics}, nativeProofviewPages...)
+	for _, path := range inputs {
 		if err := add(filepath.Join(repo, filepath.FromSlash(path))); err != nil {
 			return "", err
 		}
 	}
 	return repo + ":" + fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// nativeProofviewExpectedText is the proofview owner's committed expected text:
+// each diagnostic row decoded and quoted, then each committed page quoted, in
+// the searchable form the literal gate compares against.
+func nativeProofviewExpectedText(repo string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(nativeProofviewDiagnostics)))
+	if err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	rows := 0
+	for _, line := range bytes.Split(bytes.TrimSuffix(data, []byte{'\n'}), []byte{'\n'}) {
+		var row struct{ ID, Text string }
+		if err := json.Unmarshal(line, &row); err != nil {
+			return "", err
+		}
+		if row.ID == "" || row.Text == "" {
+			return "", fmt.Errorf("proofview diagnostics have an empty row")
+		}
+		out.WriteString(strconv.Quote(row.Text) + "\n")
+		rows++
+	}
+	if rows != 5 {
+		return "", fmt.Errorf("proofview diagnostics need their five committed rows")
+	}
+	for _, name := range nativeProofviewPages {
+		page, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(name)))
+		if err != nil {
+			return "", err
+		}
+		q := strconv.Quote(string(page))
+		out.WriteString(q[1 : len(q)-1])
+		out.WriteByte('\n')
+	}
+	return out.String(), nil
 }
 
 // nativeOutputs decodes one stream that must contain every owned package.
@@ -429,9 +512,9 @@ type nativeEvidenceCommand struct {
 	packages []nativeEvidencePackage
 }
 
-// nativeEvidenceCommands builds, without running anything, the two sequential
+// nativeEvidenceCommands builds, without running anything, the three sequential
 // invocations. Only the demofixture binary receives -native-contract.
-func nativeEvidenceCommands(repo, nativeProfile, exportProfile string) []nativeEvidenceCommand {
+func nativeEvidenceCommands(repo, nativeProfile, exportProfile, proofviewProfile string) []nativeEvidenceCommand {
 	base := func(profile, run string) []string {
 		return []string{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=" + profile, "-run=" + run}
 	}
@@ -447,6 +530,12 @@ func nativeEvidenceCommands(repo, nativeProfile, exportProfile string) []nativeE
 				"./internal/cli", "./internal/bundle/demo"),
 			profile:  exportProfile,
 			packages: []nativeEvidencePackage{nativeCLIPackage, nativeDemoPackage},
+		},
+		{
+			args: append(base(proofviewProfile, "^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose)$"),
+				"./internal/proofview"),
+			profile:  proofviewProfile,
+			packages: []nativeEvidencePackage{nativeProofviewPackage},
 		},
 	}
 }

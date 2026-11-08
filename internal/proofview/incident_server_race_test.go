@@ -213,6 +213,12 @@ func TestIncidentServerClose(t *testing.T) {
 			default:
 			}
 		}
+		// The listener is still open and the run still active: a second
+		// authorized POST reaches the closing 409.
+		closing := incidentRawReply(t, <-incidentAsyncExchange(s.URL(), incidentRaceRequest(s, "POST", "/api/rerun", true)))
+		if closing.status() != "HTTP/1.1 409 Conflict" || closing.decoded() != incidentDiagnostic(t, "server-busy") {
+			t.Fatalf("closing-window POST:\n%s\n%s", closing.head, closing.body)
+		}
 		close(release)
 		<-returned
 		<-done

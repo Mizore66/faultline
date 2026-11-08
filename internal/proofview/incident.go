@@ -433,6 +433,12 @@ func renderInteractiveIncidentPage(analysis jsjson.Value, in incidentInteraction
 	page = incidentReplaceOnce(page, `<button id="rerun" type="button">`, `<button id="rerun" type="button" disabled>`)
 	page = incidentReplaceOnce(page, `<span class="action-status" id="action-status">uses the safe built-in example</span>`,
 		`<span class="action-status" id="action-status">native RERUN requires startup --approve-native</span>`)
+	return incidentStripListener(page)
+}
+
+// incidentStripListener removes the rerun click listener from a disabled page
+// and refuses a page whose listener markers have drifted.
+func incidentStripListener(page string) string {
 	const start = `const rerun=document.getElementById("rerun");`
 	const end = "rerun.disabled=false}});\n"
 	i := strings.Index(page, start)
