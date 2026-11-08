@@ -2,12 +2,12 @@ package proofview
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"net/http"
 	"sync"
 
+	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 )
@@ -70,7 +70,7 @@ const rerunTokenHeader = "X-FaultLine-Native-RERUN"
 // credential used as both the script nonce and the RERUN header value.
 func StartIncidentServer(options IncidentServerOptions, port float64) (*IncidentServer, error) {
 	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
+	if err := clock.UnseededRandRead(raw); err != nil {
 		return nil, err
 	}
 	return startIncidentServer(options, base64.RawURLEncoding.EncodeToString(raw), port)

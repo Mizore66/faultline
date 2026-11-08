@@ -52,13 +52,10 @@ func TestInteractiveIncidentReplaceOnceDrift(t *testing.T) {
 
 const incidentDriftChildEnv = "FAULTLINE_INCIDENT_DRIFT_CHILD"
 
-// TestInteractiveIncidentListenerDriftChild only runs inside the mutated
-// overlay build started by TestInteractiveIncidentListenerDrift. It renders the
-// disabled page and reports the recovered panic on a marked line.
-func TestInteractiveIncidentListenerDriftChild(t *testing.T) {
-	if os.Getenv(incidentDriftChildEnv) == "" {
-		t.Skip("child of TestInteractiveIncidentListenerDrift")
-	}
+// runInteractiveIncidentListenerDriftChild renders the disabled page in the
+// mutated overlay build and reports the recovered panic on a marked line.
+func runInteractiveIncidentListenerDriftChild(t *testing.T) {
+	t.Helper()
 	analysis, err := jsjson.Parse(incidentTestLoad(t).rows[0].AnalysisJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +71,10 @@ func TestInteractiveIncidentListenerDriftChild(t *testing.T) {
 // a copy of incident_template.go through a go build overlay and the real
 // renderer is run against it.
 func TestInteractiveIncidentListenerDrift(t *testing.T) {
+	if os.Getenv(incidentDriftChildEnv) != "" {
+		runInteractiveIncidentListenerDriftChild(t)
+		return
+	}
 	gobin, err := exec.LookPath("go")
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +105,7 @@ func TestInteractiveIncidentListenerDrift(t *testing.T) {
 			if err := os.WriteFile(overlayPath, overlay, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command(gobin, "test", "-overlay="+overlayPath, "-count=1", "-v", "-run", "^TestInteractiveIncidentListenerDriftChild$", ".")
+			cmd := exec.Command(gobin, "test", "-overlay="+overlayPath, "-count=1", "-v", "-run", "^TestInteractiveIncidentListenerDrift$", ".")
 			cmd.Env = append(os.Environ(), incidentDriftChildEnv+"=1")
 			out, err := cmd.CombinedOutput()
 			if err != nil {
