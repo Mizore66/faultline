@@ -26,17 +26,17 @@ Not included:
 
 ## 2. Selected architecture
 
-Use a judge-demo-specific lifecycle unit rather than generalizing the read-only bundle server's waiter.
+Reuse the existing frozen browser and dual-signal helpers rather than adding a second lifecycle implementation or generalizing the read-only bundle server's waiter.
 
 | Component | Responsibility |
 | --- | --- |
-| New `internal/cli/judge_demo_lifecycle.go` | Environment-gated browser launch, asynchronous opener completion/error reporting, and judge-demo SIGINT/SIGTERM waiting. |
-| `internal/cli/judge_demo.go` | Preserve publication and startup ordering; invoke browser opening after readiness; wait with the new lifecycle helper; print the initial-root stop summary after close. |
+| `internal/cli/browser.go` | Already implements environment-gated browser launch, asynchronous opener completion/error reporting, and judge SIGINT/SIGTERM waiting. Its behavior remains unchanged. |
+| `internal/cli/judge_demo.go` | Preserve publication and startup ordering; invoke `openLocalDemoURL` after readiness; wait with `awaitServeInterrupt`; print the initial-root stop summary after close. |
 | `internal/proofview` | Unchanged incident server, immutable snapshots, native cancellation, single-flight, and transport close semantics. |
 | `internal/cli/serve_bundle_wait.go` | Unchanged. In particular, no browser, SIGTERM subscription, timer, or stop line is added to `serve --bundle`. |
 | Tests and independent corpus | Fake opener behavior, real signal/process behavior, exact output, and frozen-TypeScript-derived expectations without new production test hooks. |
 
-Use Go 1.27 and the standard library only. Production browser launch uses `os/exec`; no shell framework, browser package, or new dependency is introduced. The accepted package-private publication seams remain test-only and are not moved into exported production configuration.
+Use Go 1.27 and the standard library only. Production browser launch continues through the existing `nodeproc` shell helper; no new dependency or framework is introduced. The accepted package-private publication seams remain test-only and are not moved into exported production configuration.
 
 ## 3. Startup and browser contract
 
@@ -137,7 +137,7 @@ Update `difftest/KNOWN_DIFFERENCES.md`, the migration overview, and the Slice 5 
 
 Production and focused tests:
 
-- Add `internal/cli/judge_demo_lifecycle.go` and focused lifecycle tests.
+- Add focused judge-demo lifecycle tests without creating another browser or signal helper.
 - Modify `internal/cli/judge_demo.go`, `judge_demo_test.go`, and `judge_demo_server_process_test.go`.
 - Add platform-specific signal tests only where real delivery is supported; do not add platform skips to make a red case pass.
 
