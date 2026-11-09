@@ -289,9 +289,9 @@ Frozen TS has no native RERUN. The Go `judge-demo` accepts three Go-only options
 - **Cleanup and refusal:** a REPLAY export removes a stale regular-file sidecar. A destination that is a directory or symlink is refused (`Native evidence destination must be a regular non-symlink file: <path>`) before publication, on both modes. If publication fails, the partial regular-file sidecar is removed and the publication error is reported joined with any cleanup error; a non-regular entry is left alone.
 - **Coverage ownership:** `internal/cli/judge_demo.go` and `internal/bundle/demo/native_evidence.go` join the three native analysis files in `nativeCoverageFiles`, bound to the freshly run `TestJudgeDemoNativeDiagnostics` and `TestNativeEvidenceDiagnostics` through exact per-package accounting, per-package produced text and disjoint profile subsets. Every error literal in these two files needs produced diagnostic text and a positive counter from its own package; there is no waiver, exemption or live-gating for either file.
 
-## Native demo RERUN: interactive `judge-demo` (Go-only, additive, local qualification only)
+## Native demo RERUN: interactive `judge-demo` (Go-only, additive, merged)
 
-**Status: local qualification only; hosted six-target execution and hosted acceptance pending until CI actually passes.** This is not full judge-demo, plain `serve`, Slice 5 completion, release readiness, a general sandbox or TS retirement.
+**Status: merged via [PR #224](https://github.com/Mizore66/faultline/pull/224) at `0b430b94c6295bbb56d652646bce39daf88823e9`, 2026-11-08 UTC.** Accepted head `9c26c9ff5797c66502bb37c7d3d015f13ab574c4` completed 79 successful checks and one expected main-push-only provenance skip; both exact-merge main workflows succeeded (15 Verify and 65 Go jobs). This is not full judge-demo, plain `serve`, Slice 5 completion, release readiness, a general sandbox or TS retirement.
 
 Frozen TS has no native RERUN. Without `--export-only`, Go `judge-demo` now serves an interactive incident page on loopback. The ordinary REPLAY export, the export-only mode above and every old golden/corpus byte are unchanged.
 
@@ -307,4 +307,4 @@ Frozen TS has no native RERUN. Without `--export-only`, Go `judge-demo` now serv
   - Focused race: 35 proofview and 713 of 714 other-package tests passed, but `internal/cli` timed out at 240 seconds with no individual test failure. The full CLI race suite is incomplete, not passed.
   - Cross-compilation is compilation evidence only, not native execution on another platform.
   - The existing full-suite local proofview timeout and the tolerated Zod advisory remain open caveats.
-  - No hosted checks have been run by this branch.
+  - Hosted execution supplements, but does not erase, the retained local failures and incomplete runs above.
