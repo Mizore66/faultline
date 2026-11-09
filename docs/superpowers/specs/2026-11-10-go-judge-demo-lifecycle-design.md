@@ -175,7 +175,7 @@ Update existing process expectations only for the new contract: POSIX first-SIGT
 
 ### 7.3 Regression and acceptance gates
 
-Use meaningful RED before production changes, then GREEN. Run affected ordinary/tagged suites, focused and package race checks, vet, literal/native coverage, independent generator no-drift, actual-process tests, and six-target cross-compilation. Every shell command remains below five minutes; retain failures, skips, timeouts, and incomplete attempts rather than calling them passes.
+Use meaningful RED before production changes, then GREEN. Run affected ordinary/tagged suites, focused and package race checks, vet, literal/native coverage, pinned live-oracle comparisons, actual-process tests, and six-target cross-compilation. Every shell command remains below five minutes; retain failures, skips, timeouts, and incomplete attempts rather than calling them passes.
 
 Require independent task/spec-quality review and a final whole-branch review. Hosted execution on all six targets and all required PR checks must pass before any separate ready/merge authorization. Cross-compilation is compilation evidence only.
 
