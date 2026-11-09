@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
+	"github.com/Mizore66/faultline/internal/bundle/demo"
 )
 
 // startJudgeDemo starts one side's `judge-demo` in a fresh workspace and
@@ -35,13 +36,17 @@ var judgeDemoRoot = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 // differ (a pre-existing, spec-allowed difference), so each is checked
 // against its own side's bundle, never against the other side.
 func judgeDemoMaskRoot(t *testing.T, side string, dir, output string) string {
-	raw, err := os.ReadFile(filepath.Join(dir, ".faultline", "bundles", "judge-demo", "ROOT.sha256"))
+	bundleDir := filepath.Join(dir, ".faultline", "bundles", "judge-demo")
+	raw, err := os.ReadFile(filepath.Join(bundleDir, "ROOT.sha256"))
 	if err != nil {
 		t.Fatalf("%s: %v", side, err)
 	}
 	root := strings.TrimSpace(string(raw))
 	if !judgeDemoRoot.MatchString(root) {
 		t.Fatalf("%s: malformed bundle root %q", side, root)
+	}
+	if v := demo.Verify(bundleDir, "", false); !v.Valid || v.RootDigest == nil || *v.RootDigest != root {
+		t.Fatalf("%s: independent bundle verification disagrees with ROOT.sha256 %s: %+v", side, root, v)
 	}
 	if !strings.Contains(output, "\nBundle root: "+root+"\n") || !strings.Contains(output, judgeDemoStopPrefix+root+"\n") {
 		t.Errorf("%s: startup/stop summary does not use the bundle root %s\n%s", side, root, output)
