@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -25,6 +26,28 @@ func startJudgeDemo(t *testing.T, repo string, side judgeSide, env []string, arg
 
 // judgeDemoStopPrefix starts the initial-root stop summary both sides print.
 const judgeDemoStopPrefix = "FaultLine judge-demo stopped. Bundle root: "
+
+var judgeDemoRoot = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// judgeDemoMaskRoot reads the side's own bundle root from the ROOT.sha256 it
+// wrote, requires the startup and stop summaries to print that same root, and
+// replaces only that validated root with <ROOT>. The roots of the two sides
+// differ (a pre-existing, spec-allowed difference), so each is checked
+// against its own side's bundle, never against the other side.
+func judgeDemoMaskRoot(t *testing.T, side string, dir, output string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, ".faultline", "bundles", "judge-demo", "ROOT.sha256"))
+	if err != nil {
+		t.Fatalf("%s: %v", side, err)
+	}
+	root := strings.TrimSpace(string(raw))
+	if !judgeDemoRoot.MatchString(root) {
+		t.Fatalf("%s: malformed bundle root %q", side, root)
+	}
+	if !strings.Contains(output, "\nBundle root: "+root+"\n") || !strings.Contains(output, judgeDemoStopPrefix+root+"\n") {
+		t.Errorf("%s: startup/stop summary does not use the bundle root %s\n%s", side, root, output)
+	}
+	return strings.ReplaceAll(output, root, "<ROOT>")
+}
 
 // TestLiveJudgeDemoSignalStop stops each side's judge-demo with SIGINT and
 // SIGTERM and compares stdout, stderr and the process result with the
@@ -46,12 +69,12 @@ func TestLiveJudgeDemoSignalStop(t *testing.T) {
 				tail, _ := io.ReadAll(rest)
 				out.Write(tail)
 				cmd.Wait()
-				got[side.name] = loopbackPort.ReplaceAllString(out.String(), "127.0.0.1:<PORT>") + "--- stderr\n" + stderr.String() + "--- " + cmd.ProcessState.String()
+				got[side.name] = judgeDemoMaskRoot(t, side.name, cmd.Dir, loopbackPort.ReplaceAllString(out.String(), "127.0.0.1:<PORT>")+"--- stderr\n"+stderr.String()+"--- "+cmd.ProcessState.String())
 			}
 			if got["Go"] != got["TS"] {
 				t.Errorf("Go\n%s\nTS\n%s", got["Go"], got["TS"])
 			}
-			if !strings.Contains(got["Go"], judgeDemoStopPrefix) || !strings.HasSuffix(got["Go"], "exit status 0") || strings.Contains(got["Go"], "ELIFECYCLE") {
+			if !strings.Contains(got["Go"], judgeDemoStopPrefix+"<ROOT>") || !strings.HasSuffix(got["Go"], "exit status 0") || strings.Contains(got["Go"], "ELIFECYCLE") {
 				t.Errorf("not a clean stop:\n%s", got["Go"])
 			}
 		})
@@ -95,7 +118,7 @@ func TestLiveJudgeDemoBrowserOpen(t *testing.T) {
 				<-done
 				werr := cmd.Wait()
 				logged, _ := os.ReadFile(log)
-				got[side.name] = loopbackPort.ReplaceAllString("--- stdout\n"+out.String()+"--- stderr\n"+stderr.String()+"--- opener\n"+string(logged)+"--- "+cmd.ProcessState.String(), "127.0.0.1:<PORT>")
+				got[side.name] = judgeDemoMaskRoot(t, side.name, cmd.Dir, loopbackPort.ReplaceAllString("--- stdout\n"+out.String()+"--- stderr\n"+stderr.String()+"--- opener\n"+string(logged)+"--- "+cmd.ProcessState.String(), "127.0.0.1:<PORT>"))
 				if werr != nil {
 					t.Errorf("%s: %v\n%s", side.name, werr, got[side.name])
 				}
@@ -106,7 +129,7 @@ func TestLiveJudgeDemoBrowserOpen(t *testing.T) {
 			if (exit == "1") != strings.Contains(got["Go"], "could not open a browser") {
 				t.Errorf("exit %s: unexpected browser failure report\n%s", exit, got["Go"])
 			}
-			if !strings.Contains(got["Go"], judgeDemoStopPrefix) || strings.Contains(got["Go"], "ELIFECYCLE") {
+			if !strings.Contains(got["Go"], judgeDemoStopPrefix+"<ROOT>") || strings.Contains(got["Go"], "ELIFECYCLE") {
 				t.Errorf("not a clean stop:\n%s", got["Go"])
 			}
 		})
