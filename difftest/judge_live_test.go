@@ -130,7 +130,13 @@ func fetch(t *testing.T, address string, r judgeRequest) httpReply {
 // startJudge starts one side's `judge-proof` in a fresh workspace and reads
 // its stdout up to the page URL.
 func startJudge(t *testing.T, repo string, side judgeSide, env []string, args ...string) (cmd *exec.Cmd, url string, out *strings.Builder, rest *bufio.Reader, stderr *lockedBuffer) {
-	cmd = exec.Command(side.argv[0], append(append(side.argv[1:], "judge-proof"), args...)...)
+	return startJudgeCommand(t, repo, side, env, "judge-proof", "FaultLine COMMIT_PROOF page: ", args...)
+}
+
+// startJudgeCommand starts one side's command in a fresh workspace and reads
+// its stdout up to the line starting with banner; url is the rest of it.
+func startJudgeCommand(t *testing.T, repo string, side judgeSide, env []string, command, banner string, args ...string) (cmd *exec.Cmd, url string, out *strings.Builder, rest *bufio.Reader, stderr *lockedBuffer) {
+	cmd = exec.Command(side.argv[0], append(append(side.argv[1:], command), args...)...)
 	cmd.Dir = judgeWorkspace(t, repo)
 	cmd.Env = env
 	stdout, err := cmd.StdoutPipe()
@@ -150,7 +156,7 @@ func startJudge(t *testing.T, repo string, side judgeSide, env []string, args ..
 		if err != nil {
 			t.Fatalf("%s: no page URL\n%s%s", side.name, out.String(), stderr.String())
 		}
-		if u, ok := strings.CutPrefix(line, "FaultLine COMMIT_PROOF page: "); ok {
+		if u, ok := strings.CutPrefix(line, banner); ok {
 			url = strings.TrimSuffix(u, "\n")
 		}
 	}
