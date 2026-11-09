@@ -428,6 +428,15 @@ func TestJudgeDemoInteractiveProcess(t *testing.T) {
 		if active.err == nil && active.status == http.StatusOK {
 			t.Fatalf("cancelled native POST returned success: %+v", active)
 		}
+		if runtime.GOOS == "windows" && label == "active SIGTERM" {
+			// TerminateProcess ends the process outright: no graceful stop
+			// summary, and no cleanup or tree guarantee to assert.
+			result := p.wait(t)
+			if result.Signal != nil || result.ExitCode == nil || *result.ExitCode == 0 || result.Stdout != p.startup || result.Stderr != "" {
+				t.Fatalf("Windows active termination: code=%v signal=%v stdout=%q stderr=%q", result.ExitCode, result.Signal, result.Stdout, result.Stderr)
+			}
+			return
+		}
 		requireJudgeDemoCleanStop(t, p, label)
 		if _, err := os.Lstat(config); !os.IsNotExist(err) {
 			t.Fatalf("native child config survived cancellation cleanup: %v", err)
@@ -438,9 +447,6 @@ func TestJudgeDemoInteractiveProcess(t *testing.T) {
 		activeNative(t, "active SIGINT", (*judgeDemoProcess).interrupt)
 	})
 	t.Run("active native rerun terminate", func(t *testing.T) {
-		if runtime.GOOS == "windows" {
-			t.Skip("Windows termination is TerminateProcess, not graceful SIGTERM")
-		}
 		activeNative(t, "active SIGTERM", (*judgeDemoProcess).terminate)
 	})
 
