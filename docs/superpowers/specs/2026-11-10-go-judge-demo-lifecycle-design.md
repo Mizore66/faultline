@@ -30,7 +30,7 @@ Reuse the existing frozen browser and dual-signal helpers rather than adding a s
 
 | Component | Responsibility |
 | --- | --- |
-| `internal/cli/browser.go` | Already implements environment-gated browser launch, asynchronous opener completion/error reporting, and judge SIGINT/SIGTERM waiting. Its behavior remains unchanged. |
+| `internal/cli/browser.go` | Already implements environment-gated browser launch, asynchronous opener completion/error reporting, and judge SIGINT/SIGTERM waiting. Reuse it directly and factor only its subscription setup so judge-demo can subscribe before startup while judge-proof behavior remains unchanged. |
 | `internal/cli/judge_demo.go` | Preserve publication and startup ordering; invoke `openLocalDemoURL` after readiness; wait with `awaitServeInterrupt`; print the initial-root stop summary after close. |
 | `internal/proofview` | Unchanged incident server, immutable snapshots, native cancellation, single-flight, and transport close semantics. |
 | `internal/cli/serve_bundle_wait.go` | Unchanged. In particular, no browser, SIGTERM subscription, timer, or stop line is added to `serve --bundle`. |
@@ -137,14 +137,15 @@ Update `difftest/KNOWN_DIFFERENCES.md`, the migration overview, and the Slice 5 
 
 Production and focused tests:
 
-- Add focused judge-demo lifecycle tests without creating another browser or signal helper.
+- Modify `internal/cli/browser.go` only to factor its existing subscription setup for an early-subscribing judge-demo caller; existing judge-proof behavior remains unchanged.
+- Add focused judge-demo lifecycle tests without creating another browser or signal implementation.
 - Modify `internal/cli/judge_demo.go`, `judge_demo_test.go`, and `judge_demo_server_process_test.go`.
 - Add platform-specific signal tests only where real delivery is supported; do not add platform skips to make a red case pass.
 
 Independent evidence:
 
-- Add a bounded `difftest/testdata/judge-demo-lifecycle/` corpus and its pinned generator/capture tooling under `difftest/gen/`.
-- Retain exact expected startup, suppression, opener-failure, shutdown, and second-signal behavior for supported frozen-TypeScript oracle cases. Dynamic URLs, ports, roots, and process results must be derived from the actual case, not hidden by blanket normalization.
+- Add `difftest/judge_demo_live_test.go` with bounded independent lifecycle cases and pinned live TypeScript captures, reusing the existing fake openers and process helpers.
+- Retain and compare exact startup, suppression, opener-failure, shutdown, and second-signal behavior for supported frozen-TypeScript oracle cases. Dynamic URLs, ports, roots, and process results must be derived from the actual case, not hidden by blanket normalization.
 - Modify `difftest/KNOWN_DIFFERENCES.md` and the two existing migration status documents after implementation and acceptance.
 
 `serve_bundle_wait.go`, `serve --bundle`, UI helpers, native executor/verifier code, `src/`, workflows, `package.json`, and `pnpm-lock.yaml` remain unchanged.
