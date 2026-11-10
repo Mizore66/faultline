@@ -83,6 +83,26 @@ func openerCommand(goos, url string) string {
 // run yet (SIGTERM after a SIGINT, or either after the timer) is consumed
 // without effect.
 func awaitServeInterrupt(close func() error, serveMs *float64, onStop func()) {
+	signals, timer := subscribeServeInterrupt(serveMs)
+	finishServeInterrupt(signals, timer, close, onStop)
+}
+
+// awaitJudgeDemoServeInterrupt subscribes to the serve signals before start
+// runs, so a signal arriving while the server starts is not lost. A start
+// error is returned without close or onStop; otherwise it waits and performs
+// the same close/onStop sequence as awaitServeInterrupt (no serve timer).
+func awaitJudgeDemoServeInterrupt(start func() (func() error, error), onStop func()) error {
+	signals, timer := subscribeServeInterrupt(nil)
+	close, err := start()
+	if err != nil {
+		return err
+	}
+	finishServeInterrupt(signals, timer, close, onStop)
+	return nil
+}
+
+// subscribeServeInterrupt is the subscription phase of awaitServeInterrupt.
+func subscribeServeInterrupt(serveMs *float64) (chan os.Signal, <-chan time.Time) {
 	signals := make(chan os.Signal, 8)
 	// Notify first: a signal arriving between the two calls then reaches
 	// this channel (and boot's handler dies of it, as Node would before the
@@ -94,6 +114,11 @@ func awaitServeInterrupt(close func() error, serveMs *float64, onStop func()) {
 	if serveMs != nil && !math.IsInf(*serveMs, 0) && !math.IsNaN(*serveMs) && *serveMs >= 0 {
 		timer = time.After(timeoutDuration(*serveMs))
 	}
+	return signals, timer
+}
+
+// finishServeInterrupt is the wait/close/onStop phase of awaitServeInterrupt.
+func finishServeInterrupt(signals chan os.Signal, timer <-chan time.Time, close func() error, onStop func()) {
 	listenerRan := map[syscall.Signal]bool{}
 	select {
 	case sig := <-signals:

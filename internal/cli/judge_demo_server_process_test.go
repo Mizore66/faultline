@@ -28,6 +28,7 @@ type judgeDemoProcess struct {
 	startup       string
 	output        string
 	consoleHelper string
+	root          string
 }
 
 func (p *judgeDemoProcess) wait(t *testing.T) servefixture.ProcessResult {
@@ -69,9 +70,9 @@ func startJudgeDemoProcess(t *testing.T, binary, work, output, displayedOutput, 
 
 func startJudgeDemoProcessWithEnv(t *testing.T, binary, work, output, displayedOutput, consoleHelper string, env []string, initialNative bool, args ...string) *judgeDemoProcess {
 	t.Helper()
-	startupLines := 7
+	startupLines := 8
 	if initialNative {
-		startupLines = 8
+		startupLines = 9
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -82,7 +83,7 @@ func startJudgeDemoProcessWithEnv(t *testing.T, binary, work, output, displayedO
 			text := string(out)
 			_, rest, ok := strings.Cut(text, "🚀 Launching FaultLine Judge Demo at ")
 			url, after, found := strings.Cut(rest, "...\n")
-			if !ok || !found || after != "Press Ctrl+C to stop.\n" ||
+			if !ok || !found || !strings.HasPrefix(after, "Press Ctrl+C to stop.\nBrowser auto-open skipped in CI. Open ") ||
 				!regexp.MustCompile(`^http://127\.0\.0\.1:[1-9][0-9]*$`).MatchString(url) {
 				return "", fmt.Errorf("invalid judge-demo startup output %q", text)
 			}
@@ -144,6 +145,8 @@ func requireJudgeDemoStartup(t *testing.T, p *judgeDemoProcess, displayedOutput 
 		want += "Native execution evidence: " + sidecarOf(p.output) + "\n"
 	}
 	want += "🚀 Launching FaultLine Judge Demo at " + p.url + "...\nPress Ctrl+C to stop.\n"
+	want += "Browser auto-open skipped in CI. Open " + p.url + " manually if needed.\n"
+	p.root = *verification.RootDigest
 	if p.startup != want {
 		t.Fatalf("startup stdout=%q want=%q", p.startup, want)
 	}
@@ -229,13 +232,21 @@ func requireJudgeDemoNativePost(t *testing.T, p *judgeDemoProcess, binary, goVer
 	return observation
 }
 
+// requireJudgeDemoCleanStop requires a graceful exit 0 whose stdout is the
+// startup text plus the stop summary naming the initial verified root.
+func requireJudgeDemoCleanStop(t *testing.T, p *judgeDemoProcess, label string) {
+	t.Helper()
+	result := p.wait(t)
+	want := p.startup + "FaultLine judge-demo stopped. Bundle root: " + p.root + "\n"
+	if result.ExitCode == nil || *result.ExitCode != 0 || result.Signal != nil || result.Stdout != want || result.Stderr != "" {
+		t.Fatalf("%s result: code=%v signal=%v stdout=%q want=%q stderr=%q", label, result.ExitCode, result.Signal, result.Stdout, want, result.Stderr)
+	}
+}
+
 func requireJudgeDemoCleanInterrupt(t *testing.T, p *judgeDemoProcess) {
 	t.Helper()
 	p.interrupt(t)
-	result := p.wait(t)
-	if result.ExitCode == nil || *result.ExitCode != 0 || result.Signal != nil || result.Stdout != p.startup || result.Stderr != "" {
-		t.Fatalf("SIGINT result: code=%v signal=%v stdout=%q stderr=%q", result.ExitCode, result.Signal, result.Stdout, result.Stderr)
-	}
+	requireJudgeDemoCleanStop(t, p, "SIGINT")
 }
 
 func buildJudgeDemoConsoleHelper(t *testing.T, moduleRoot, directory string) string {
@@ -370,6 +381,9 @@ func TestJudgeDemoInteractiveProcess(t *testing.T) {
 				t.Fatalf("second native run reused run ID %s", id)
 			}
 		}
+		if p.root == first.root || p.root == second.root {
+			t.Fatalf("initial root %s equals a rerun root", p.root)
+		}
 		snapshot := judgeDemoRequest(http.MethodGet, p.url+"/api/analysis", "")
 		analysis := readValue(t, filepath.Join(output, "analysis.json"))
 		if snapshot.err != nil || snapshot.status != http.StatusOK || snapshot.body != jsjson.Stringify(analysis) {
@@ -392,7 +406,7 @@ func TestJudgeDemoInteractiveProcess(t *testing.T) {
 		requireJudgeDemoCleanInterrupt(t, p)
 	})
 
-	t.Run("active native rerun interrupt", func(t *testing.T) {
+	activeNative := func(t *testing.T, label string, stop func(*judgeDemoProcess, *testing.T)) {
 		work := newWork(t)
 		output := filepath.Join(work, ".faultline", "bundles", "active")
 		nativeTemp := filepath.Join(work, "native-tmp")
@@ -409,19 +423,31 @@ func TestJudgeDemoInteractiveProcess(t *testing.T) {
 		config := awaitJudgeDemoNativeConfig(t, p, nativeTemp, response)
 		// The real per-child config exists: native execution, not bundle or
 		// sidecar publication, is the phase interrupted here.
-		p.interrupt(t)
+		stop(p, t)
 		active := <-response
 		if active.err == nil && active.status == http.StatusOK {
 			t.Fatalf("cancelled native POST returned success: %+v", active)
 		}
-		result := p.wait(t)
-		if result.ExitCode == nil || *result.ExitCode != 0 || result.Signal != nil || result.Stdout != p.startup || result.Stderr != "" {
-			t.Fatalf("active SIGINT result: code=%v signal=%v stdout=%q stderr=%q", result.ExitCode, result.Signal, result.Stdout, result.Stderr)
+		if runtime.GOOS == "windows" && label == "active SIGTERM" {
+			// TerminateProcess ends the process outright: no graceful stop
+			// summary, and no cleanup or tree guarantee to assert.
+			result := p.wait(t)
+			if result.Signal != nil || result.ExitCode == nil || *result.ExitCode == 0 || result.Stdout != p.startup || result.Stderr != "" {
+				t.Fatalf("Windows active termination: code=%v signal=%v stdout=%q stderr=%q", result.ExitCode, result.Signal, result.Stdout, result.Stderr)
+			}
+			return
 		}
+		requireJudgeDemoCleanStop(t, p, label)
 		if _, err := os.Lstat(config); !os.IsNotExist(err) {
 			t.Fatalf("native child config survived cancellation cleanup: %v", err)
 		}
 		sameTree(t, "cancelled native publication", tree(t, work), before)
+	}
+	t.Run("active native rerun interrupt", func(t *testing.T) {
+		activeNative(t, "active SIGINT", (*judgeDemoProcess).interrupt)
+	})
+	t.Run("active native rerun terminate", func(t *testing.T) {
+		activeNative(t, "active SIGTERM", (*judgeDemoProcess).terminate)
 	})
 
 	t.Run("default terminate", func(t *testing.T) {
@@ -429,13 +455,16 @@ func TestJudgeDemoInteractiveProcess(t *testing.T) {
 		output := filepath.Join(work, ".faultline", "bundles", "terminate")
 		p := start(t, work, output, filepath.Join(".faultline", "bundles", "terminate"), false, "judge-demo", "--port", "0", "--output", output)
 		p.terminate(t)
+		if runtime.GOOS != "windows" {
+			// POSIX SIGTERM is handled gracefully like SIGINT.
+			requireJudgeDemoCleanStop(t, p, "SIGTERM")
+			return
+		}
+		// Windows terminates the process outright (TerminateProcess): no
+		// graceful stop and no stop summary.
 		result := p.wait(t)
-		if runtime.GOOS == "windows" {
-			if result.Signal != nil || result.ExitCode == nil || *result.ExitCode == 0 {
-				t.Fatalf("Windows termination result: code=%v signal=%v", result.ExitCode, result.Signal)
-			}
-		} else if result.ExitCode != nil || result.Signal == nil || *result.Signal != "SIGTERM" {
-			t.Fatalf("termination did not take the default SIGTERM action: code=%v signal=%v", result.ExitCode, result.Signal)
+		if result.Signal != nil || result.ExitCode == nil || *result.ExitCode == 0 {
+			t.Fatalf("Windows termination result: code=%v signal=%v", result.ExitCode, result.Signal)
 		}
 		if result.Stdout != p.startup || result.Stderr != "" {
 			t.Fatalf("termination output: stdout=%q stderr=%q", result.Stdout, result.Stderr)

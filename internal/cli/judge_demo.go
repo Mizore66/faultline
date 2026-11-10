@@ -35,7 +35,8 @@ var (
 	judgeDemoWriteNativeEvidence  = demo.WriteNativeEvidence
 	judgeDemoRemoveNativeEvidence = demo.RemoveNativeEvidence
 	judgeDemoStartIncidentServer  = proofview.StartIncidentServer
-	judgeDemoAwaitInterrupt       = awaitBundleInterrupt
+	judgeDemoOpenBrowser          = openLocalDemoURL
+	judgeDemoAwaitServe           = awaitJudgeDemoServeInterrupt
 )
 
 type judgeDemoPublication struct {
@@ -161,7 +162,7 @@ func judgeDemoCommand(e *env, args []string) error {
 	if !ok {
 		port = "4173"
 	}
-	return judgeDemoAwaitInterrupt(func() (func() error, error) {
+	return judgeDemoAwaitServe(func() (func() error, error) {
 		options := proofview.IncidentServerOptions{Analysis: publication.analysis, RerunEnabled: approved}
 		if approved {
 			options.Rerun = func(ctx context.Context) (jsjson.Value, error) {
@@ -178,6 +179,9 @@ func judgeDemoCommand(e *env, args []string) error {
 		}
 		e.out("🚀 Launching FaultLine Judge Demo at " + server.URL() + "...\n")
 		e.out("Press Ctrl+C to stop.\n")
+		judgeDemoOpenBrowser(e, server.URL())
 		return server.Close, nil
+	}, func() {
+		e.out("FaultLine judge-demo stopped. Bundle root: " + publication.written.RootDigest + "\n")
 	})
 }

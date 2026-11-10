@@ -171,14 +171,43 @@ func TestJudgeDemoValidation(t *testing.T) {
 	}
 }
 
+func TestJudgeDemoLifecycleWiring(t *testing.T) {
+	isolatedEmpty(t)
+	var opened string
+	oldOpen, oldWait := judgeDemoOpenBrowser, judgeDemoAwaitServe
+	judgeDemoOpenBrowser = func(_ *env, url string) { opened = url }
+	judgeDemoAwaitServe = func(start func() (func() error, error), onStop func()) error {
+		closeServer, err := start()
+		if err != nil {
+			return err
+		}
+		if err := closeServer(); err != nil {
+			return err
+		}
+		onStop()
+		return nil
+	}
+	defer func() { judgeDemoOpenBrowser, judgeDemoAwaitServe = oldOpen, oldWait }()
+	var out, errb bytes.Buffer
+	code := Run([]string{"judge-demo", "--port", "0"}, &out, &errb)
+	if code != 0 || errb.Len() != 0 || opened == "" {
+		t.Fatalf("code=%d opened=%q stderr=%q", code, opened, errb.String())
+	}
+	wantSuffix := "FaultLine judge-demo stopped. Bundle root: " + replayRetainedRoot + "\n"
+	if !strings.HasSuffix(out.String(), wantSuffix) {
+		t.Fatalf("stdout=%q, want suffix %q", out.String(), wantSuffix)
+	}
+}
+
 // runJudgeDemoServer drives the real incident server through one command
 // invocation, replacing only the signal wait. The visitor runs after readiness
 // and before the real server Close.
 func runJudgeDemoServer(t *testing.T, args []string, visit func(url string)) (string, string, int) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	original := judgeDemoAwaitInterrupt
-	judgeDemoAwaitInterrupt = func(start func() (func() error, error)) error {
+	original, originalOpen := judgeDemoAwaitServe, judgeDemoOpenBrowser
+	judgeDemoOpenBrowser = func(*env, string) {}
+	judgeDemoAwaitServe = func(start func() (func() error, error), onStop func()) error {
 		closeServer, err := start()
 		if err != nil {
 			return err
@@ -191,9 +220,13 @@ func runJudgeDemoServer(t *testing.T, args []string, visit func(url string)) (st
 			}
 			visit(url)
 		}
-		return closeServer()
+		if err := closeServer(); err != nil {
+			return err
+		}
+		onStop()
+		return nil
 	}
-	defer func() { judgeDemoAwaitInterrupt = original }()
+	defer func() { judgeDemoAwaitServe, judgeDemoOpenBrowser = original, originalOpen }()
 	code := Run(args, &out, &errb)
 	return out.String(), errb.String(), code
 }

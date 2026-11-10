@@ -264,24 +264,29 @@ func TestJudgePreviewDispatchIsolation(t *testing.T) {
 	// The bare judge-demo case now starts an idle read-only server. Drive one
 	// controlled start/close lifecycle so dispatch isolation does not wait for a
 	// process signal, then require the complete startup output and nothing else.
-	originalAwait := judgeDemoAwaitInterrupt
-	judgeDemoAwaitInterrupt = func(start func() (func() error, error)) error {
+	originalAwait, originalOpen := judgeDemoAwaitServe, judgeDemoOpenBrowser
+	judgeDemoOpenBrowser = func(*env, string) {}
+	judgeDemoAwaitServe = func(start func() (func() error, error), onStop func()) error {
 		closeServer, err := start()
 		if err != nil {
 			return err
 		}
-		return closeServer()
+		if err := closeServer(); err != nil {
+			return err
+		}
+		onStop()
+		return nil
 	}
 	var demoOut, demoErr bytes.Buffer
 	demoCode := Run([]string{"judge-demo"}, &demoOut, &demoErr)
-	judgeDemoAwaitInterrupt = originalAwait
+	judgeDemoAwaitServe, judgeDemoOpenBrowser = originalAwait, originalOpen
 	prefix := "FaultLine cached replay investigation prepared.\n" +
 		"Stable sample boundary: not certified from cached replay\n" +
 		"Proof bundle self-consistency: VALID (67 declared files)\n" +
 		"Bundle root: " + replayRetainedRoot + "\n" +
 		"Proof bundle: " + filepath.Join(".faultline", "bundles", "judge-demo") + "\n" +
 		"🚀 Launching FaultLine Judge Demo at "
-	const suffix = "...\nPress Ctrl+C to stop.\n"
+	const suffix = "...\nPress Ctrl+C to stop.\nFaultLine judge-demo stopped. Bundle root: " + replayRetainedRoot + "\n"
 	url, found := strings.CutSuffix(strings.TrimPrefix(demoOut.String(), prefix), suffix)
 	if demoCode != 0 || demoErr.Len() != 0 || !found || !strings.HasPrefix(demoOut.String(), prefix) ||
 		!strings.HasPrefix(url, "http://127.0.0.1:") || strings.ContainsAny(url, "\r\n") {

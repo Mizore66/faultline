@@ -20,7 +20,7 @@ import (
 // builtBinaryEnv is the empty-PATH environment of the built binary. Windows
 // retains only the system and temp entries the host requires.
 func builtBinaryEnv() []string {
-	env := []string{"PATH="}
+	env := []string{"PATH=", "FAULTLINE_NO_BROWSER=1"}
 	if runtime.GOOS == "windows" {
 		for _, key := range []string{"SystemRoot", "SYSTEMROOT", "windir", "TEMP", "TMP"} {
 			if value, ok := os.LookupEnv(key); ok {
