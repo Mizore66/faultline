@@ -118,6 +118,9 @@ func TestNativeCoverageEvents(t *testing.T) {
 		{"proofview-parent-missing", func(e []map[string]any) []map[string]any {
 			return nativeWithoutTest(e, "TestIncidentServerClose")
 		}},
+		{"plain-demo-parent-missing", func(e []map[string]any) []map[string]any {
+			return nativeWithoutTest(e, "TestPlainDemoServerClose")
+		}},
 		{"proofview-drift-without-children", func(e []map[string]any) []map[string]any {
 			return nativeWithoutTest(nativeWithoutTest(e, "TestInteractiveIncidentListenerDrift/listener-start-drift"), "TestInteractiveIncidentListenerDrift/listener-end-drift")
 		}},
@@ -387,7 +390,7 @@ func TestNativeCoverageProfile(t *testing.T) {
 		profile += "github.com/Mizore66/faultline/" + file + ":1.1,300.2 1 1\n"
 	}
 	blocks, err := nativeProfile([]byte(profile))
-	if err != nil || len(blocks) != 7 {
+	if err != nil || len(blocks) != 8 {
 		t.Fatalf("valid native profile: %v", err)
 	}
 	for _, file := range []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"} {
@@ -461,6 +464,7 @@ func TestNativeCoverageOwnedFiles(t *testing.T) {
 		"internal/bundle/demo/native_evidence.go",
 		"internal/proofview/incident.go",
 		"internal/proofview/incident_server.go",
+		"internal/proofview/demo_server.go",
 	}
 	if strings.Join(nativeCoverageFiles, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("native files: %v", nativeCoverageFiles)
@@ -718,7 +722,7 @@ func TestNativeCoverageProfileSubsets(t *testing.T) {
 		proofviewOnly += line(file, 1)
 	}
 	proofview, err := nativeProfileFor([]byte("mode: set\n"+incidentalDemofixture+incidentalExport+proofviewOnly), nativeProofviewFiles)
-	if err != nil || len(proofview) != 2 || proofview[nativeExportFiles[0]] != nil || proofview[nativeDemofixtureFiles[0]] != nil {
+	if err != nil || len(proofview) != 3 || proofview[nativeExportFiles[0]] != nil || proofview[nativeDemofixtureFiles[0]] != nil {
 		t.Fatalf("proofview subset: %v %v", proofview, err)
 	}
 	for _, missing := range nativeProofviewFiles {
@@ -736,7 +740,7 @@ func TestNativeCoverageProfileSubsets(t *testing.T) {
 	if err == nil {
 		merged, err = mergeDisjointNativeProfiles(merged, proofview)
 	}
-	if err != nil || len(merged) != 7 || len(native) != 3 || len(export) != 2 || len(proofview) != 2 {
+	if err != nil || len(merged) != 8 || len(native) != 3 || len(export) != 2 || len(proofview) != 3 {
 		t.Fatalf("disjoint merge: %v %d", err, len(merged))
 	}
 	original := native[nativeDemofixtureFiles[0]][0].count
@@ -759,7 +763,7 @@ func TestNativeEvidenceCommands(t *testing.T) {
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/b.txt",
 			"-run=^(TestJudgeDemoNativeDiagnostics|TestNativeEvidenceDiagnostics)$", "./internal/cli", "./internal/bundle/demo"},
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/c.txt",
-			"-run=^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose)$", "./internal/proofview"},
+			"-run=^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose|TestPlainDemoServerClose)$", "./internal/proofview"},
 	}
 	for i, command := range commands {
 		if strings.Join(command.args, "\x00") != strings.Join(want[i], "\x00") {
