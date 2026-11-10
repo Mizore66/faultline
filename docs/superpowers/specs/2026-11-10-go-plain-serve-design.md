@@ -13,14 +13,14 @@ Included:
 
 - Default/custom `--output` and `--port`, including an ephemeral port.
 - In-memory REPLAY startup without bundle publication.
-- `GET /`, `GET /api/analysis`, and synchronous demo `POST /api/rerun`.
-- Demo bundle writing through `demo.Write` after a successful RERUN analysis.
+- `GET /`, `GET /api/analysis`, and synchronous demo `POST /api/rerun` using a built-in Go fixture evaluator.
+- Demo bundle writing through `demo.Write` after a successful built-in Go RERUN analysis.
 - Exact route-specific output, headers, failure behavior, and SIGINT-only lifecycle.
 - Independent frozen-TypeScript comparisons and real process/filesystem tests.
 
 Not included:
 
-- Native execution, startup approval, native sidecar publication/removal, independent post-write verification, or the secured incident-server credential policy.
+- Node execution, the reviewed native witness, startup approval, native sidecar publication/removal, independent post-write verification, or the secured incident-server credential policy.
 - Automatic browser opening, stop summary, SIGTERM subscription, or a public timer option.
 - Plain `serve` artifact discovery, UI hub, witness review, tutorial/live demos, release, oracle retirement, or TS deletion.
 - Changes to `serve --bundle`, native executor/verifier rules, protected TypeScript, workflows, dependencies, or package manifests.
@@ -34,6 +34,7 @@ Use a separate plain-demo handler on the existing Go proofview transport. `start
 | New `internal/proofview/demo_server.go` | Plain-demo routes, exact legacy headers, serialized RERUN state, current-analysis snapshots, and close delegation. |
 | New `internal/cli/serve.go` | Option selection, output safety, initial REPLAY creation, RERUN publication callback, startup output, and SIGINT waiting. |
 | `internal/bundle/demo/write_output.go` | Export `AssertSafeProofOutput(outputDirectory string) string` around the existing check and default proof root; behavior unchanged. |
+| `internal/demofixture` | Add `CreateRerunAnalysis` and the built-in Go fixture evaluator, preserving the demo protocol without Node or the reviewed native witness. |
 | `internal/proofview/server.go` | Continue supplying the existing transport only; no route or lifecycle rewrite. |
 | `internal/cli/serve_bundle.go` | Unchanged read-only verified-bundle command. |
 
@@ -52,9 +53,9 @@ func (s *PlainDemoServer) URL() string
 func (s *PlainDemoServer) Close() error
 ```
 
-The CLI callback creates demo RERUN analysis, calls `demo.Write` with default options, and returns that analysis only after the write succeeds. The proofview package remains independent of CLI/native publication policy.
+The CLI callback creates demo RERUN analysis through `demofixture.CreateRerunAnalysis`, calls `demo.Write` with default options, and returns that analysis only after the write succeeds. The proofview package remains independent of CLI/native publication policy.
 
-Use Go 1.27 and the standard library only. No production Node execution or new public command beyond plain `serve` is introduced.
+Use Go 1.27 and the standard library only. No production Node execution or new public command beyond plain `serve` is introduced. Built-in Go fixture execution is limited to the sample and is not a general-purpose runner or sandbox.
 
 ## 3. Startup contract
 
@@ -104,19 +105,34 @@ A demo analysis/write failure returns 500 with compact `{"ok":false,"error":<JSO
 
 The previous in-memory analysis remains visible. Filesystem effects already completed by `demo.Write` are asserted as they exist; there is no invented rollback, independent verification, or cross-file atomicity claim. Existing stale native-evidence files are left untouched.
 
-## 5. Concurrency and lifecycle
+## 5. Built-in Go RERUN execution
+
+`CreateRerunAnalysis` ports the frozen analysis construction and its built-in sample execution, including three stability attempts, minimization, prevention, claims, fresh generated time, and run catalog. It does not call `RunNativeAnalysis`, spawn Node, or emit the reviewed native execution sidecar.
+
+Each fixture execution:
+
+- Evaluates only the built-in sample logic in Go, with the witness protocol's PASS/FAIL/ERROR and reason-code behavior.
+- Uses a fresh temporary directory and cleans it; no repository input, external package, provider, credential, or network access is used.
+- Enforces the frozen two-second per-execution bound and uses monotonic durations and fresh wall timestamps.
+- Computes canonical run IDs from the actual state, witness, attempt, start, stdout, and stderr observations; repeated or conflicting IDs are refused.
+- Records a Go runtime in the environment descriptor instead of the Node version. These are actual Go execution observations, not byte-identical Node process evidence.
+
+Frozen-TypeScript comparisons verify the demo protocol and all output/artifact invariants while allowing this declared runtime/execution difference. Each side's actual root is independently verified before comparison; timestamps, durations, IDs, and environment digests are not blindly normalized. No native RERUN approval or native evidence envelope is inferred from the built-in sample.
+
+## 6. Concurrency and lifecycle
 
 A mutex serializes RERUN callbacks like Node's synchronous handler. Concurrent POSTs wait rather than receiving a new 409 response. GETs receive the current analysis under the same state protection; no renderer or JSON value is mutated concurrently.
 
 A successful callback replaces the in-memory analysis before returning the success response. A failed callback leaves it unchanged. Server close rejects no special new route response and does not introduce native single-flight semantics.
 
-The first SIGINT cancels no native work (none exists), closes/drains the shared transport, ignores the close error, and returns success without a stop-summary line. A second SIGINT takes the existing default action. SIGTERM retains default behavior. Windows `TerminateProcess` remains default termination, not graceful SIGTERM evidence.
+The first SIGINT performs no reviewed native operation, waits for any active built-in sample callback, closes/drains the shared transport, ignores the close error, and returns success without a stop-summary line. A second SIGINT takes the existing default action. SIGTERM retains default behavior. Windows `TerminateProcess` remains default termination, not graceful SIGTERM evidence.
 
-## 6. Files and compatibility documentation
+## 7. Files and compatibility documentation
 
 Expected scope:
 
 - Add `internal/proofview/demo_server.go` and focused plain-demo server tests.
+- Add `internal/demofixture/analysis_rerun.go` and `fixture_execute.go` with direct execution/analysis tests; `CreateReplayAnalysis` bytes remain unchanged.
 - Add `internal/cli/serve.go`, `serve_test.go`, and actual-process tests.
 - Modify the CLI dispatch only to select plain `serve`; `serve_bundle.go` and its tests remain unchanged.
 - Modify `internal/bundle/demo/write_output.go` only to export the existing output-safety check.
@@ -125,7 +141,7 @@ Expected scope:
 
 New production diagnostics and statement positions must satisfy the applicable literal/coverage gates without exemptions. Do not alter native evidence ownership or secure native incident behavior to make this command pass.
 
-## 7. Verification
+## 8. Verification
 
 ### 7.1 Options and startup
 
@@ -140,6 +156,7 @@ Cover:
 - Initial pure-renderer page and current analysis API.
 - Successful RERUN analysis replacement and exact demo bundle state.
 - Analysis/write failure with prior analysis retention and actual filesystem state.
+- Built-in Go execution verdicts, reason codes, fresh observations, timeout/cleanup, canonical IDs, stability/minimization/prevention/claims, and unchanged REPLAY bytes.
 - Concurrent POST serialization with no 409 and no response/page mutation before callback success.
 - Repeated RERUNs with fresh demo evidence under the same server and no native sidecar changes.
 
@@ -149,7 +166,7 @@ Use meaningful RED before production changes, then GREEN. Run affected ordinary/
 
 Require independent task/spec-quality reviews and a final whole-branch review. Hosted execution on all six targets and all required PR checks must pass before separate ready/merge authorization. Cross-compilation is compilation evidence only.
 
-## 8. Completion and authorization
+## 9. Completion and authorization
 
 This project is complete only when the plain-demo option, HTTP, RERUN, lifecycle, independent expectation, native process, coverage, review, and hosted acceptance contracts pass. It does not complete `serve --bundle`, UI/discovery, the rest of Slice 5, release readiness, or TS retirement.
 
