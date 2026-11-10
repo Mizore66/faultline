@@ -1380,6 +1380,8 @@ func goldenText(t *testing.T, repo string) string {
 	// Interactive incident diagnostics: committed renderer drift and native
 	// RERUN server bodies, checked by internal/proofview tests.
 	files = append(files, filepath.Join(repo, "difftest", "testdata", "incident-renderer", "interactive-diagnostics.jsonl"))
+	// Plain-demo server diagnostics, checked by internal/proofview tests.
+	files = append(files, filepath.Join(repo, "difftest", "testdata", "incident-renderer", "plain-demo-diagnostics.jsonl"))
 	var goldens strings.Builder
 	for _, f := range files {
 		b, err := os.ReadFile(f)

@@ -1,7 +1,9 @@
 package proofview
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -98,6 +100,27 @@ func TestPlainDemoServerHTTP(t *testing.T) {
 	if got := plainDemoExchange(t, s, plainGet("/")).decoded(); got != RenderIncidentPage(second) {
 		t.Fatal("page not updated")
 	}
+}
+
+// plainDemoDiagnostic returns one hand-committed expectation from
+// plain-demo-diagnostics.jsonl, never generated from the code under test.
+func plainDemoDiagnostic(t *testing.T, id string) string {
+	t.Helper()
+	raw, err := os.ReadFile("../../difftest/testdata/incident-renderer/plain-demo-diagnostics.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		var row struct{ ID, Text string }
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.ID == id {
+			return row.Text
+		}
+	}
+	t.Fatalf("no committed diagnostic %q", id)
+	return ""
 }
 
 // waitFor spins on cond (no sleeps), failing at the deadline.
@@ -199,7 +222,7 @@ func TestPlainDemoServerClose(t *testing.T) {
 	waitFor(t, "closing state", s.isClosing)
 	// The listener stays open until the active callback drains, so a late
 	// POST reaches the handler and is refused without a callback.
-	const closingBody = `{"ok":false,"error":"server is closing"}`
+	closingBody := plainDemoDiagnostic(t, "server-closing")
 	late := plainDemoExchange(t, s, plainPost)
 	if late.status() != "HTTP/1.1 500 Internal Server Error" || late.decoded() != closingBody ||
 		!late.has("Content-Type: application/json; charset=utf-8") || headerNames(late)["cache-control"] || headerNames(late)["x-content-type-options"] {
