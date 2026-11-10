@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 )
@@ -130,10 +131,15 @@ func (s *PlainDemoServer) handleRerun(w http.ResponseWriter, r *http.Request) {
 	s.admitted++
 	s.inflight.Add(1)
 	s.mu.Unlock()
+	responded := false
 	defer func() {
 		// Flush before Close can proceed: the transport treats a finished
-		// zero-body request as idle and would drop an unflushed reply.
-		w.(http.Flusher).Flush()
+		// zero-body request as idle and would drop an unflushed reply. Only
+		// after a response was written: an unwinding panic must not commit a
+		// default 200 header.
+		if responded {
+			w.(http.Flusher).Flush()
+		}
 		s.mu.Lock()
 		s.admitted--
 		s.mu.Unlock()
@@ -145,6 +151,7 @@ func (s *PlainDemoServer) handleRerun(w http.ResponseWriter, r *http.Request) {
 	if s.closing {
 		s.mu.Unlock()
 		s.runMu.Unlock()
+		responded = true
 		s.rerunFailure(w, r, "server is closing")
 		return
 	}
@@ -160,13 +167,18 @@ func (s *PlainDemoServer) handleRerun(w http.ResponseWriter, r *http.Request) {
 			close(done)
 			s.runMu.Unlock()
 		}()
-		analysis, err = s.rerun()
+		// A thrown exception (a jsexc panic from analysis construction) is the
+		// callback's error, not a reason to drop the connection.
+		if thrown := jsexc.Try(func() { analysis, err = s.rerun() }); thrown != nil {
+			err = thrown
+		}
 		if err == nil {
 			s.mu.Lock()
 			s.analysis = analysis
 			s.mu.Unlock()
 		}
 	}()
+	responded = true
 	if err != nil {
 		s.rerunFailure(w, r, err.Error())
 		return

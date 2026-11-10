@@ -3,6 +3,8 @@ package proofview
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
 	"os"
 	"runtime"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
@@ -132,6 +135,43 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timeout waiting for %s", what)
 		}
 		runtime.Gosched()
+	}
+}
+
+func TestPlainDemoServerCallbackPanic(t *testing.T) {
+	first := incidentServerAnalysis(t, "2026-11-09T00:00:00.000Z")
+	s, err := StartPlainDemoServer(PlainDemoServerOptions{Analysis: first, Rerun: func() (jsjson.Value, error) {
+		jsexc.Throw(errors.New(`thrown "quoted"`))
+		return jsjson.Value{}, nil
+	}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	// The standard logger (net/http's panic and error log) writes to the
+	// original stderr file captured at init, so capture its output too.
+	log.SetOutput(w)
+	bad := plainDemoExchange(t, s, plainPost)
+	os.Stderr = orig
+	log.SetOutput(orig)
+	w.Close()
+	leaked, _ := io.ReadAll(r)
+	if len(leaked) != 0 {
+		t.Fatalf("stderr leaked: %q", leaked)
+	}
+	if bad.status() != "HTTP/1.1 500 Internal Server Error" || bad.decoded() != `{"ok":false,"error":"thrown \"quoted\""}` ||
+		!bad.has("Content-Type: application/json; charset=utf-8") || headerNames(bad)["cache-control"] || headerNames(bad)["x-content-type-options"] {
+		t.Fatalf("%s\n%s", bad.head, bad.body)
+	}
+	if got := plainDemoExchange(t, s, plainGet("/api/analysis")).decoded(); got != jsjson.Stringify(first) {
+		t.Fatalf("analysis changed after panic: %s", got)
 	}
 }
 

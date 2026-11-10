@@ -52,6 +52,19 @@ func TestExecuteFixtureState(t *testing.T) {
 	}
 }
 
+func TestFixtureRunIDsDistinctForIdenticalObservations(t *testing.T) {
+	witness := CreateFrozenWitness()
+	started := time.Unix(1784203200, 0)
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		id := fixtureRunID("s1", witness.Get("digest"), 0, started, "out\n", "")
+		if seen[id] {
+			t.Fatalf("duplicate run id %s at execution %d", id, i)
+		}
+		seen[id] = true
+	}
+}
+
 func TestExecuteFixtureStateTimeout(t *testing.T) {
 	states := fixtureStates()
 	witness := CreateFrozenWitness()

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mizore66/faultline/internal/clock"
@@ -36,6 +37,22 @@ func executedEnvironment() jsjson.Value {
 		"runner", jsjson.MakeString("built-in-sample-v1"),
 		"network", jsjson.MakeString("disabled"),
 		"credentials", jsjson.MakeString("redacted"))
+}
+
+// fixtureExecutionOrdinal numbers executions within this process, so two
+// executions with the same state, attempt, start instant and output (a coarse
+// wall clock) still get distinct run IDs.
+var fixtureExecutionOrdinal atomic.Uint64
+
+func fixtureRunID(stateID string, witnessDigest jsjson.Value, executionAttempt int, started time.Time, stdout, stderr string) string {
+	return digest(jsjson.MustObject(
+		"state", jsjson.MakeString(stateID),
+		"witness", witnessDigest,
+		"executionAttempt", jsjson.MakeNumber(float64(executionAttempt)),
+		"started", jsjson.MakeString(strconv.FormatInt(started.UnixNano(), 10)),
+		"ordinal", jsjson.MakeString(strconv.FormatUint(fixtureExecutionOrdinal.Add(1), 10)),
+		"stdout", jsjson.MakeString(stdout),
+		"stderr", jsjson.MakeString(stderr)))
 }
 
 // executeFixtureState runs the built-in evaluator once and returns an EXECUTED
@@ -76,13 +93,7 @@ func executeFixtureStateWith(input, witness jsjson.Value, executionAttempt int, 
 		}
 	}
 
-	id := digest(jsjson.MustObject(
-		"state", jsjson.MakeString(stateID),
-		"witness", witness.Get("digest"),
-		"executionAttempt", jsjson.MakeNumber(float64(executionAttempt)),
-		"started", jsjson.MakeString(strconv.FormatInt(started.UnixNano(), 10)),
-		"stdout", jsjson.MakeString(outcome.stdout),
-		"stderr", jsjson.MakeString(outcome.stderr)))
+	id := fixtureRunID(stateID, witness.Get("digest"), executionAttempt, started, outcome.stdout, outcome.stderr)
 	return jsjson.MustObject(
 		"id", jsjson.MakeString(id),
 		"stateId", jsjson.MakeString(stateID),
