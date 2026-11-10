@@ -824,16 +824,60 @@ func testServeBundleOccupiedPortPrecedence(t *testing.T, corpus *servefixture.Co
 	}
 }
 
-// Catches the actual binary claiming plain serve or the unsupported equals form
-// instead of keeping the exact prior refusal.
+// Catches the actual binary refusing plain serve or the unsupported equals
+// form: hasFlag is exact, so all three select the plain demo server, which
+// must start with exactly the two readiness lines, write no bundle or native
+// sidecar, and exit 0 with empty stderr after SIGINT.
 func testServeBundleFallbacksActual(t *testing.T) {
+	helper := serveBundleConsoleHelper(t)
 	for _, argv := range [][]string{{"serve"}, {"serve", "--bundle=missing"}, {"serve", "--port", "0"}} {
-		root := t.TempDir()
-		stdout, stderr, exit := runServeBundleToExit(t, root, argv)
-		const want = "FaultLine error: not yet ported: serve\nNext: pnpm fl help\n"
-		if stdout != "" || stderr != want || exit != 1 {
-			t.Errorf("%q: exit=%d stdout=%q stderr=%q, want exit 1, empty stdout, stderr %q", argv, exit, stdout, stderr, want)
-		}
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			root := t.TempDir()
+			ctx, cancel := context.WithTimeout(context.Background(), serveBundleStartupTimeout)
+			defer cancel()
+			proc, err := servefixture.StartWithOptions(ctx, flBinary, nil, argv, serveBundleChildEnv(root, "FAULTLINE_NO_BROWSER=1"), root,
+				servefixture.StartOptions{
+					StartupLines: 2, StartupDescription: "plain serve startup lines",
+					ValidateStartup: func(out []byte) (string, error) {
+						first, rest, _ := strings.Cut(string(out), "\n")
+						url, ok := strings.CutPrefix(first, "FaultLine incident page: ")
+						port, portOK := strings.CutPrefix(url, "http://127.0.0.1:")
+						n, convErr := strconv.Atoi(port)
+						if !ok || !portOK || convErr != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port || rest != serveBundleStop {
+							return "", fmt.Errorf("invalid plain serve startup output %q", out)
+						}
+						return url, nil
+					},
+				})
+			if err != nil {
+				t.Fatalf("starting %q: %v", argv, err)
+			}
+			t.Cleanup(func() {
+				if err := proc.Dispose(); err != nil {
+					t.Errorf("teardown of %q: %v", argv, err)
+				}
+			})
+			for _, path := range []string{
+				filepath.Join(root, ".faultline", "bundles", "judge-demo"),
+				filepath.Join(root, ".faultline", "bundles", "judge-demo.native-execution.json"),
+			} {
+				if _, err := os.Lstat(path); err == nil {
+					t.Errorf("startup wrote %s", path)
+				}
+			}
+			if err := proc.Interrupt(stepContext(t), helper); err != nil {
+				t.Fatalf("interrupt: %v", err)
+			}
+			result, err := proc.Wait(stepContext(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.ExitCode == nil || *result.ExitCode != 0 || result.Signal != nil || result.Stderr != "" ||
+				!strings.HasPrefix(result.Stdout, "FaultLine incident page: http://127.0.0.1:") ||
+				!strings.HasSuffix(result.Stdout, "\n"+serveBundleStop) || strings.Count(result.Stdout, "\n") != 2 {
+				t.Errorf("%q: result=%+v, want exit 0, empty stderr and exactly the two startup lines", argv, result)
+			}
+		})
 	}
 }
 
