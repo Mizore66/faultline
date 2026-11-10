@@ -30,22 +30,46 @@ type PlainDemoServer struct {
 	mu         sync.Mutex
 	analysis   jsjson.Value
 	activeDone chan struct{}
+	closing    bool
+	admitted   int            // RERUN handlers admitted before closing and not yet finished
+	inflight   sync.WaitGroup // same set; Close waits so queued replies are written
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // URL is the server's http://127.0.0.1:<port> address.
 func (s *PlainDemoServer) URL() string { return s.server.URL() }
 
-// Close waits for the active RERUN callback (a zero-body request counts as
-// idle to the transport, so its drain does not cover it), then closes the
+// Close rejects new RERUNs (queued and later POSTs get a 500 without running
+// the callback), waits for the active callback (a zero-body request counts
+// as idle to the transport, so its drain does not cover it), then closes the
 // transport.
 func (s *PlainDemoServer) Close() error {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closing = true
+		done := s.activeDone
+		s.mu.Unlock()
+		if done != nil {
+			<-done
+		}
+		s.inflight.Wait()
+		s.closeErr = s.server.Close()
+	})
+	return s.closeErr
+}
+
+func (s *PlainDemoServer) isClosing() bool {
 	s.mu.Lock()
-	done := s.activeDone
-	s.mu.Unlock()
-	if done != nil {
-		<-done
-	}
-	return s.server.Close()
+	defer s.mu.Unlock()
+	return s.closing
+}
+
+func (s *PlainDemoServer) admittedCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.admitted
 }
 
 // StartPlainDemoServer serves the plain demo analysis on 127.0.0.1:port.
@@ -88,10 +112,42 @@ func StartPlainDemoServer(options PlainDemoServerOptions, port float64) (*PlainD
 	return s, nil
 }
 
+func (s *PlainDemoServer) rerunFailure(w http.ResponseWriter, r *http.Request, message string) {
+	h := w.Header()
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	nodeHeaders(h, r)
+	writeNodeBody(w, r, http.StatusInternalServerError,
+		jsstr.ToUTF8(`{"ok":false,"error":`+jsjson.Stringify(jsjson.MakeString(message))+`}`))
+}
+
 func (s *PlainDemoServer) handleRerun(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		s.rerunFailure(w, r, "server is closing")
+		return
+	}
+	s.admitted++
+	s.inflight.Add(1)
+	s.mu.Unlock()
+	defer func() {
+		// Flush before Close can proceed: the transport treats a finished
+		// zero-body request as idle and would drop an unflushed reply.
+		w.(http.Flusher).Flush()
+		s.mu.Lock()
+		s.admitted--
+		s.mu.Unlock()
+		s.inflight.Done()
+	}()
 	s.runMu.Lock()
 	done := make(chan struct{})
 	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		s.runMu.Unlock()
+		s.rerunFailure(w, r, "server is closing")
+		return
+	}
 	s.activeDone = done
 	s.mu.Unlock()
 	var analysis jsjson.Value
@@ -111,14 +167,12 @@ func (s *PlainDemoServer) handleRerun(w http.ResponseWriter, r *http.Request) {
 			s.mu.Unlock()
 		}
 	}()
-	h := w.Header()
-	h.Set("Content-Type", "application/json; charset=utf-8")
 	if err != nil {
-		nodeHeaders(h, r)
-		writeNodeBody(w, r, http.StatusInternalServerError,
-			jsstr.ToUTF8(`{"ok":false,"error":`+jsjson.Stringify(jsjson.MakeString(err.Error()))+`}`))
+		s.rerunFailure(w, r, err.Error())
 		return
 	}
+	h := w.Header()
+	h.Set("Content-Type", "application/json; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	nodeHeaders(h, r)
 	writeNodeBody(w, r, http.StatusOK,
