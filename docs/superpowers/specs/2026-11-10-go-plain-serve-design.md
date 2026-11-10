@@ -115,7 +115,7 @@ Each fixture execution:
 - Uses a fresh temporary directory and cleans it; no repository input, external package, provider, credential, or network access is used.
 - Enforces the frozen two-second per-execution bound and uses monotonic durations and fresh wall timestamps.
 - Computes canonical run IDs from the actual state, witness, attempt, start, stdout, and stderr observations; repeated or conflicting IDs are refused.
-- Records a Go runtime in the environment descriptor instead of the Node version. These are actual Go execution observations, not byte-identical Node process evidence.
+- Records a Go runtime and `built-in-go-sample` command in the execution descriptor instead of the Node version/command. These are actual built-in Go observations, not byte-identical Node process evidence.
 
 Frozen-TypeScript comparisons verify the demo protocol and all output/artifact invariants while allowing this declared runtime/execution difference. Each side's actual root is independently verified before comparison; timestamps, durations, IDs, and environment digests are not blindly normalized. No native RERUN approval or native evidence envelope is inferred from the built-in sample.
 
