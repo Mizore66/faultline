@@ -1,6 +1,13 @@
 package cli
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/Mizore66/faultline/internal/bundle/demo"
+	"github.com/Mizore66/faultline/internal/jsjson"
+)
 
 // Direct Run tests for `fl serve --bundle` argument precedence. Every case
 // names a bundle directory that does not exist: any expected refusal below
@@ -76,7 +83,32 @@ func TestServeBundlePairFailures(t *testing.T) {
 // Catches the dispatcher claiming plain serve or the unsupported equals form
 // (hasFlag is exact), which must keep the prior explicit failure.
 func TestServeBundleOnlyExactFlagSelectsHandler(t *testing.T) {
-	requireServeBundleFailure(t, "not yet ported: serve", "serve")
-	requireServeBundleFailure(t, "not yet ported: serve", "serve", "--bundle=missing")
-	requireServeBundleFailure(t, "not yet ported: serve", "serve", "--port", "0")
+	// Bare serve, the unsupported equals form and a lone --port all select the
+	// plain handler (hasFlag is exact), which would otherwise wait for SIGINT.
+	// Drive each through a controlled idle start/close and require the exact
+	// startup and no writes.
+	for _, args := range [][]string{{"serve"}, {"serve", "--bundle=missing"}, {"serve", "--port", "0"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			installPlainServeFake(t)
+			oWrite := plainServeWriteBundle
+			plainServeWriteBundle = func(string, jsjson.Value, demo.WriteOptions) (demo.Written, error) {
+				t.Error("startup must not write a bundle")
+				return demo.Written{}, nil
+			}
+			t.Cleanup(func() { plainServeWriteBundle = oWrite })
+			stdout, stderr, code := run(args...)
+			if code != 0 || stderr != "" || stdout != plainServeStartup {
+				t.Errorf("%q: exit=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+			}
+			for _, path := range []string{
+				".faultline/bundles/judge-demo",
+				".faultline/bundles/judge-demo.native-execution.json",
+			} {
+				if _, err := os.Lstat(path); err == nil {
+					t.Errorf("startup wrote %s", path)
+				}
+			}
+		})
+	}
 }
