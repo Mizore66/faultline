@@ -109,3 +109,10 @@ func publishStage(output string, files []artifact, hashes, rootDigest string) {
 		bundle.Throw(err)
 	}
 }
+
+// AssertSafeProofOutput validates outputDirectory against the default proof
+// root (.faultline/bundles) and returns the resolved output. It panics with a
+// jsexc throw on refusal, as the unexported check does.
+func AssertSafeProofOutput(outputDirectory string) string {
+	return assertSafeProofOutput(outputDirectory, DefaultProofRoot())
+}

@@ -126,6 +126,8 @@ func dispatch(e *env, args []string) error {
 		return repairCommand(e, rest)
 	case command == "serve" && hasFlag(rest, "--bundle"):
 		return serveBundleCommand(e, rest)
+	case command == "serve":
+		return plainServeCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:
