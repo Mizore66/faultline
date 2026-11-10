@@ -1,7 +1,10 @@
 package demofixture
 
 import (
+	"path/filepath"
+
 	"bytes"
+	"github.com/Mizore66/faultline/internal/bundle/demo"
 	"os"
 	"strings"
 	"testing"
@@ -213,5 +216,30 @@ func TestCreateRerunAnalysis(t *testing.T) {
 	}
 	if jsjson.Stringify(CreateReplayAnalysis()) != replayBefore {
 		t.Fatal("replay changed")
+	}
+}
+
+func TestRerunAnalysisBundleVerifies(t *testing.T) {
+	analysis := CreateRerunAnalysis()
+	root := t.TempDir()
+	dir := filepath.Join(root, "bundle")
+	written, err := demo.Write(dir, analysis, demo.WriteOptions{ProofRoot: &root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := demo.Verify(dir, written.RootDigest, true)
+	if !result.Valid || len(result.Errors) != 0 || result.RootDigest == nil || *result.RootDigest != written.RootDigest {
+		t.Fatalf("verify failed: %+v", result)
+	}
+	w := analysis.Get("witness")
+	body := jsjson.MustObject()
+	for _, k := range w.Obj().Keys() {
+		if k != "digest" {
+			body.Obj().Set(k, w.Get(k))
+		}
+	}
+	d, err := canonical.DigestJSON(body)
+	if err != nil || d != w.Get("digest").Str() {
+		t.Fatalf("witness digest stale: %s %v", d, err)
 	}
 }

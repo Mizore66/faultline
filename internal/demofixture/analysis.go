@@ -55,7 +55,10 @@ func createDemoAnalysis(mode string) jsjson.Value {
 	rerun := mode == "RERUN"
 	witness := CreateFrozenWitness()
 	if rerun {
+		// The digest covers the body without itself, so recompute it after the edit.
+		witness.Obj().Delete("digest")
 		witness.Obj().Set("command", jsjson.MakeString("built-in-go-sample"))
+		witness.Obj().Set("digest", jsjson.MakeString(digest(witness)))
 	}
 	states := fixtureStates()
 	run := func(i int) jsjson.Value {
