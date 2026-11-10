@@ -153,3 +153,65 @@ func TestReplayAnalysisSemantics(t *testing.T) {
 		t.Fatal("inferred claim must cite first-bad run")
 	}
 }
+
+func TestCreateRerunAnalysis(t *testing.T) {
+	replayBefore := jsjson.Stringify(CreateReplayAnalysis())
+	analysis := CreateRerunAnalysis()
+	if analysis.Get("mode").Str() != "RERUN" || analysis.Get("grade", "value").Str() != "A" {
+		t.Fatal("RERUN grade/mode")
+	}
+	if analysis.Get("minimization", "termination").Str() != "BIDIRECTIONALLY_VALIDATED" || !analysis.Get("prevention", "verified").Bool() {
+		t.Fatal("validation not complete")
+	}
+	if analysis.Get("generatedAt").Str() == replayExecutedAt {
+		t.Fatal("stale generatedAt")
+	}
+	if analysis.Get("witness", "command").Str() != "built-in-go-sample" {
+		t.Fatal("descriptor claims Node")
+	}
+	passToFail := 0
+	for _, tr := range analysis.Get("transitions").Items() {
+		if tr.Get("kind").Str() != "PASS_TO_FAIL" {
+			continue
+		}
+		passToFail++
+		if !tr.Get("stable").Bool() || len(tr.Get("boundaryRunIds").Items()) != 6 {
+			t.Fatalf("unstable transition %s", jsjson.Stringify(tr))
+		}
+	}
+	if passToFail == 0 {
+		t.Fatal("no PASS_TO_FAIL transition")
+	}
+	if analysis.Get("warning").Str() != "Executed built-in sample. The runner only materializes the reviewed fixture; it is not a general-purpose sandbox." {
+		t.Fatal("wrong warning")
+	}
+	seen := map[string]bool{}
+	envDigest := digest(executedEnvironment())
+	for _, r := range analysis.Get("runCatalog").Items() {
+		id := r.Get("id").Str()
+		if id == "" || seen[id] || r.Get("executionKind").Str() != "EXECUTED" || r.Get("environmentDigest").Str() != envDigest {
+			t.Fatalf("catalog record %s", jsjson.Stringify(r))
+		}
+		seen[id] = true
+	}
+	claims := analysis.Get("claims").Items()
+	for i, k := range []string{"EXECUTED", "DERIVED", "DERIVED"} {
+		ev := claims[i].Get("evidenceIds").Items()
+		if claims[i].Get("kind").Str() != k || len(ev) == 0 {
+			t.Fatalf("claim %d: %s", i, jsjson.Stringify(claims[i]))
+		}
+		for _, e := range ev {
+			if i > 0 && !seen[e.Str()] {
+				t.Fatalf("claim %d evidence %s not in catalog", i, e.Str())
+			}
+		}
+	}
+	for _, f := range []string{"native", "nativeRuns", "receipts", "executionTrust", "nativeProof"} {
+		if _, ok := analysis.Obj().Get(f); ok {
+			t.Fatalf("native field %s", f)
+		}
+	}
+	if jsjson.Stringify(CreateReplayAnalysis()) != replayBefore {
+		t.Fatal("replay changed")
+	}
+}
