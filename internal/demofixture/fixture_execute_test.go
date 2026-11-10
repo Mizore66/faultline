@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Mizore66/faultline/internal/jsjson"
 )
@@ -12,6 +13,7 @@ func TestExecuteFixtureState(t *testing.T) {
 	states := fixtureStates()
 	witness := CreateFrozenWitness()
 	before := jsjson.Stringify(witness)
+	root := t.TempDir()
 	for _, c := range []struct {
 		index                           int
 		verdict, reason, stdout, stderr string
@@ -31,9 +33,13 @@ func TestExecuteFixtureState(t *testing.T) {
 		if record.Get("id").Str() == "" || record.Get("executedAt").Str() == replayExecutedAt || record.Get("durationMs").Num() < 0 {
 			t.Fatalf("observations %s", jsjson.Stringify(record))
 		}
-		left, _ := filepath.Glob(filepath.Join(os.TempDir(), "faultline-sample", states[c.index].Get("id").Str()+"-*"))
-		if len(left) != 0 {
-			t.Fatalf("temp sample left behind: %v", left)
+		record = executeFixtureStateWith(states[c.index], witness, 0, root, evaluateBuiltInSample, fixtureExecutionTimeout)
+		if record.Get("verdict").Str() != c.verdict {
+			t.Fatalf("injected root record %s", jsjson.Stringify(record))
+		}
+		entries, err := os.ReadDir(filepath.Join(root, "faultline-sample"))
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("per-execution directory left behind: %v %v", entries, err)
 		}
 	}
 	first := executeFixtureState(states[idxLastGood], witness, 0)
@@ -43,5 +49,34 @@ func TestExecuteFixtureState(t *testing.T) {
 	}
 	if jsjson.Stringify(witness) != before || witness.Get("command").Str() != "node witness.mjs" {
 		t.Fatal("witness was modified")
+	}
+}
+
+func TestExecuteFixtureStateTimeout(t *testing.T) {
+	states := fixtureStates()
+	witness := CreateFrozenWitness()
+	root := t.TempDir()
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	start := time.Now()
+	record := executeFixtureStateWith(states[idxLastGood], witness, 0, root,
+		func(map[string]bool) builtInOutcome {
+			defer close(finished)
+			<-release
+			return builtInOutcome{"PASS", "WITNESS_SATISFIED", "late\n", ""}
+		}, fixtureExecutionTimeout)
+	elapsed := time.Since(start)
+	close(release)
+	<-finished
+	if record.Get("verdict").Str() != "ERROR" || record.Get("reasonCode").Str() != "RUNNER_ERROR" ||
+		record.Get("stderr").Str() == "" || record.Get("stdout").Str() != "" {
+		t.Fatalf("timeout record %s", jsjson.Stringify(record))
+	}
+	if elapsed < fixtureExecutionTimeout || elapsed > fixtureExecutionTimeout+time.Second {
+		t.Fatalf("timeout elapsed %s", elapsed)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "faultline-sample"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("directory left behind: %v %v", entries, err)
 	}
 }

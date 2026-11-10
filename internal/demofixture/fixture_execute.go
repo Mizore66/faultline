@@ -41,28 +41,34 @@ func executedEnvironment() jsjson.Value {
 // executeFixtureState runs the built-in evaluator once and returns an EXECUTED
 // record with actual observations. The witness is read, never modified.
 func executeFixtureState(input, witness jsjson.Value, executionAttempt int) jsjson.Value {
+	return executeFixtureStateWith(input, witness, executionAttempt, os.TempDir(), evaluateBuiltInSample, fixtureExecutionTimeout)
+}
+
+// executeFixtureStateWith is the injectable core. The evaluator must be a pure
+// function: Go cannot kill a goroutine, so on timeout the evaluator is only
+// abandoned, not stopped; callers must pass evaluators that eventually return.
+func executeFixtureStateWith(input, witness jsjson.Value, executionAttempt int, tempRoot string,
+	evaluate func(map[string]bool) builtInOutcome, timeout time.Duration) jsjson.Value {
 	timer := clock.StartEvidenceTimer()
 	started := clock.Now()
 	stateID := input.Get("id").Str()
 
 	var outcome builtInOutcome
-	sampleDir := filepath.Join(os.TempDir(), "faultline-sample",
+	sampleDir := filepath.Join(tempRoot, "faultline-sample",
 		fmt.Sprintf("%s-%d-%d-%s", stateID, os.Getpid(), clock.NowMillis(), clock.TempSuffix()))
 	if err := os.MkdirAll(sampleDir, 0o700); err != nil {
 		outcome = builtInOutcome{"ERROR", "RUNNER_ERROR", "", "sample workspace unavailable: " + err.Error() + "\n"}
 	} else {
-		defer func() {
-			_ = os.RemoveAll(sampleDir)
-			_ = os.Remove(filepath.Dir(sampleDir)) // succeeds only when empty
-		}()
+		// Remove only this execution's directory; the shared parent is never removed.
+		defer func() { _ = os.RemoveAll(sampleDir) }()
 		hunks := make(map[string]bool)
 		for _, h := range input.Get("hunks").Items() {
 			hunks[h.Str()] = true
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), fixtureExecutionTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		done := make(chan builtInOutcome, 1)
-		go func() { done <- evaluateBuiltInSample(hunks) }()
+		go func() { done <- evaluate(hunks) }()
 		select {
 		case outcome = <-done:
 		case <-ctx.Done():
