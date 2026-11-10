@@ -31,6 +31,7 @@ var nativeCoverageFiles = []string{
 	"internal/bundle/demo/native_evidence.go",
 	"internal/proofview/incident.go",
 	"internal/proofview/incident_server.go",
+	"internal/proofview/demo_server.go",
 }
 
 // nativeEvidencePackage is one exact package allowed to produce native evidence.
@@ -71,6 +72,7 @@ var (
 		parents: []string{
 			"TestInteractiveIncidentPage", "TestInteractiveIncidentReplaceOnceDrift", "TestInteractiveIncidentListenerDrift",
 			"TestIncidentServerHTTP", "TestIncidentServerSingleFlight", "TestIncidentServerClose",
+			"TestPlainDemoServerClose",
 		},
 		diagnosticParents: []string{"TestInteractiveIncidentListenerDrift"},
 	}
@@ -82,12 +84,14 @@ var (
 		"internal/demofixture/native_witness.go",
 	}
 	nativeExportFiles    = []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"}
-	nativeProofviewFiles = []string{"internal/proofview/incident.go", "internal/proofview/incident_server.go"}
+	nativeProofviewFiles = []string{"internal/proofview/incident.go", "internal/proofview/incident_server.go", "internal/proofview/demo_server.go"}
 
 	// Committed, independently reviewed proofview expectations. They are read
 	// as data, never produced by the code under test.
 	nativeProofviewDiagnostics = "difftest/testdata/incident-renderer/interactive-diagnostics.jsonl"
-	nativeProofviewPages       = []string{
+	// Plain-demo server expectations: one committed row, additive to the above.
+	nativeProofviewPlainDiagnostics = "difftest/testdata/incident-renderer/plain-demo-diagnostics.jsonl"
+	nativeProofviewPages            = []string{
 		"difftest/testdata/incident-renderer/incident.html",
 		"difftest/testdata/incident-renderer/interactive-enabled.html",
 		"difftest/testdata/incident-renderer/interactive-disabled.html",
@@ -308,7 +312,7 @@ func nativeSourceBinding(repo string) (string, error) {
 	}); err != nil {
 		return "", err
 	}
-	inputs := append([]string{"go.mod", "go.sum", "difftest/testdata/native-demo/native-contract.jsonl", nativeProofviewDiagnostics}, nativeProofviewPages...)
+	inputs := append([]string{"go.mod", "go.sum", "difftest/testdata/native-demo/native-contract.jsonl", nativeProofviewDiagnostics, nativeProofviewPlainDiagnostics}, nativeProofviewPages...)
 	for _, path := range inputs {
 		if err := add(filepath.Join(repo, filepath.FromSlash(path))); err != nil {
 			return "", err
@@ -340,6 +344,25 @@ func nativeProofviewExpectedText(repo string) (string, error) {
 	}
 	if rows != 5 {
 		return "", fmt.Errorf("proofview diagnostics need their five committed rows")
+	}
+	plain, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(nativeProofviewPlainDiagnostics)))
+	if err != nil {
+		return "", err
+	}
+	plainRows := 0
+	for _, line := range bytes.Split(bytes.TrimSuffix(plain, []byte{'\n'}), []byte{'\n'}) {
+		var row struct{ ID, Text string }
+		if err := json.Unmarshal(line, &row); err != nil {
+			return "", err
+		}
+		if row.ID == "" || row.Text == "" {
+			return "", fmt.Errorf("plain-demo diagnostics have an empty row")
+		}
+		out.WriteString(strconv.Quote(row.Text) + "\n")
+		plainRows++
+	}
+	if plainRows != 1 {
+		return "", fmt.Errorf("plain-demo diagnostics need their one committed row")
 	}
 	for _, name := range nativeProofviewPages {
 		page, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(name)))
@@ -532,7 +555,7 @@ func nativeEvidenceCommands(repo, nativeProfile, exportProfile, proofviewProfile
 			packages: []nativeEvidencePackage{nativeCLIPackage, nativeDemoPackage},
 		},
 		{
-			args: append(base(proofviewProfile, "^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose)$"),
+			args: append(base(proofviewProfile, "^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose|TestPlainDemoServerClose)$"),
 				"./internal/proofview"),
 			profile:  proofviewProfile,
 			packages: []nativeEvidencePackage{nativeProofviewPackage},

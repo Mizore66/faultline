@@ -1,0 +1,109 @@
+package demofixture
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"sync/atomic"
+	"time"
+
+	"github.com/Mizore66/faultline/internal/clock"
+	"github.com/Mizore66/faultline/internal/jsjson"
+)
+
+const fixtureExecutionTimeout = 2 * time.Second
+
+type builtInOutcome struct{ verdict, reason, stdout, stderr string }
+
+// evaluateBuiltInSample is the pure, reviewed sample model. It never reads
+// input repositories, the network, credentials, or external executables.
+func evaluateBuiltInSample(hunks map[string]bool) builtInOutcome {
+	if hunks[unresolvedHunk] {
+		return builtInOutcome{"ERROR", "FIXTURE_COMPILE_ERROR", "", "partial fixture does not compile\n"}
+	}
+	if hunks[sourceHunk] && hunks[rendererHunk] {
+		return builtInOutcome{"FAIL", "WITNESS_ASSERTION_FAILED", "", "expected settlement USD; received EUR\n"}
+	}
+	return builtInOutcome{"PASS", "WITNESS_SATISFIED", "settlement currency preserved\n", ""}
+}
+
+func executedEnvironment() jsjson.Value {
+	return jsjson.MustObject(
+		"runtime", jsjson.MakeString(runtime.Version()),
+		"packageManager", jsjson.MakeString("none"),
+		"runner", jsjson.MakeString("built-in-sample-v1"),
+		"network", jsjson.MakeString("disabled"),
+		"credentials", jsjson.MakeString("redacted"))
+}
+
+// fixtureExecutionOrdinal numbers executions within this process, so two
+// executions with the same state, attempt, start instant and output (a coarse
+// wall clock) still get distinct run IDs.
+var fixtureExecutionOrdinal atomic.Uint64
+
+func fixtureRunID(stateID string, witnessDigest jsjson.Value, executionAttempt int, started time.Time, stdout, stderr string) string {
+	return digest(jsjson.MustObject(
+		"state", jsjson.MakeString(stateID),
+		"witness", witnessDigest,
+		"executionAttempt", jsjson.MakeNumber(float64(executionAttempt)),
+		"started", jsjson.MakeString(strconv.FormatInt(started.UnixNano(), 10)),
+		"ordinal", jsjson.MakeString(strconv.FormatUint(fixtureExecutionOrdinal.Add(1), 10)),
+		"stdout", jsjson.MakeString(stdout),
+		"stderr", jsjson.MakeString(stderr)))
+}
+
+// executeFixtureState runs the built-in evaluator once and returns an EXECUTED
+// record with actual observations. The witness is read, never modified.
+func executeFixtureState(input, witness jsjson.Value, executionAttempt int) jsjson.Value {
+	return executeFixtureStateWith(input, witness, executionAttempt, os.TempDir(), evaluateBuiltInSample, fixtureExecutionTimeout)
+}
+
+// executeFixtureStateWith is the injectable core. The evaluator must be a pure
+// function: Go cannot kill a goroutine, so on timeout the evaluator is only
+// abandoned, not stopped; callers must pass evaluators that eventually return.
+func executeFixtureStateWith(input, witness jsjson.Value, executionAttempt int, tempRoot string,
+	evaluate func(map[string]bool) builtInOutcome, timeout time.Duration) jsjson.Value {
+	timer := clock.StartEvidenceTimer()
+	started := clock.Now()
+	stateID := input.Get("id").Str()
+
+	var outcome builtInOutcome
+	sampleDir := filepath.Join(tempRoot, "faultline-sample",
+		fmt.Sprintf("%s-%d-%d-%s", stateID, os.Getpid(), clock.NowMillis(), clock.TempSuffix()))
+	if err := os.MkdirAll(sampleDir, 0o700); err != nil {
+		outcome = builtInOutcome{"ERROR", "RUNNER_ERROR", "", "sample workspace unavailable: " + err.Error() + "\n"}
+	} else {
+		// Remove only this execution's directory; the shared parent is never removed.
+		defer func() { _ = os.RemoveAll(sampleDir) }()
+		hunks := make(map[string]bool)
+		for _, h := range input.Get("hunks").Items() {
+			hunks[h.Str()] = true
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		done := make(chan builtInOutcome, 1)
+		go func() { done <- evaluate(hunks) }()
+		select {
+		case outcome = <-done:
+		case <-ctx.Done():
+			outcome = builtInOutcome{"ERROR", "RUNNER_ERROR", "", "built-in sample exceeded 2 second timeout\n"}
+		}
+	}
+
+	id := fixtureRunID(stateID, witness.Get("digest"), executionAttempt, started, outcome.stdout, outcome.stderr)
+	return jsjson.MustObject(
+		"id", jsjson.MakeString(id),
+		"stateId", jsjson.MakeString(stateID),
+		"witnessDigest", witness.Get("digest"),
+		"environmentDigest", jsjson.MakeString(digest(executedEnvironment())),
+		"verdict", jsjson.MakeString(outcome.verdict),
+		"reasonCode", jsjson.MakeString(outcome.reason),
+		"stdout", jsjson.MakeString(outcome.stdout),
+		"stderr", jsjson.MakeString(outcome.stderr),
+		"durationMs", jsjson.MakeNumber(float64(timer.Milliseconds())),
+		"executionKind", jsjson.MakeString("EXECUTED"),
+		"executedAt", jsjson.MakeString(clock.ISO(started)))
+}
