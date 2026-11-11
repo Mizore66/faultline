@@ -70,14 +70,15 @@ func RunWitnessReviewTTY(options WitnessReviewTTYOptions) (approval, frozen jsjs
 	if _, err := io.WriteString(options.Stdout, `Approve & freeze as "`+identity+`"? [y/N] `); err != nil {
 		return jsjson.Value{}, jsjson.Value{}, "", err
 	}
-	// Like readline, a final unterminated line is still delivered at EOF.
+	// readline/promises.question never settles for an unterminated final line
+	// at EOF, so only a newline-terminated line can answer.
 	line, readErr := bufio.NewReader(options.Stdin).ReadString('\n')
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		return jsjson.Value{}, jsjson.Value{}, "", readErr
 	}
-	answer := jsstr.Trim(line)
-	if answer != "" {
-		answer = jscase.Lower(answer)
+	answer := ""
+	if readErr == nil {
+		answer = jscase.Lower(jsstr.Trim(line))
 	}
 	if answer != "y" && answer != "yes" {
 		return fail("DECLINED", "Approval declined; no records were written.")

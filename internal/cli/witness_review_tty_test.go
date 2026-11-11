@@ -90,7 +90,8 @@ func witnessReviewTTYAnswers(t *testing.T) {
 		{"no", "n\n", false},
 		{"empty", "\n", false},
 		{"eof", "", false},
-		{"yes without newline", "yes", true},
+		{"unterminated yes at EOF", "yes", false},
+		{"unterminated y at EOF", " y ", false},
 		{"yep", "yep\n", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
