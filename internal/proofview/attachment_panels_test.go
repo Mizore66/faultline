@@ -58,6 +58,9 @@ func panelsRequireExact(t *testing.T, got, want []byte) {
 // any drift in the shared chrome. The IDs are enumerated here, independently of
 // the corpus order, so a dropped case cannot make the loop vacuous.
 func TestAttachmentPanelsFullPage(t *testing.T) {
+	if runShardedChildren(t, []string{"view-combination-000", "view-combination-001", "view-combination-010", "view-combination-011", "view-combination-100", "view-combination-101", "view-combination-110", "view-combination-111"}, shardCount) {
+		return
+	}
 	for _, bits := range []string{"000", "001", "010", "011", "100", "101", "110", "111"} {
 		id := "view-combination-" + bits
 		t.Run(id, func(t *testing.T) {
@@ -73,6 +76,9 @@ func TestAttachmentPanelsFullPage(t *testing.T) {
 // minimization-uncertified, both prevention classifications and the
 // no-investigation prevention. Catches classification-specific panel text.
 func TestAttachmentPanelsFullPageSingleAttachmentVariants(t *testing.T) {
+	if runShardedChildren(t, []string{"view-root-absent", "view-root-match", "view-min-uncertified", "view-prevention-summary", "view-prevention-verified", "view-prevention-investigation-absent"}, 3) {
+		return
+	}
 	for _, id := range []string{
 		"view-root-absent",
 		"view-root-match",
@@ -119,6 +125,9 @@ var panelsPrivateSentinels = []string{
 // invariant, repair, hard/soft guidance or diagnostic text, and the wrong
 // precedence between prevention and repair guidance.
 func TestAttachmentPanelsPrivateCases(t *testing.T) {
+	if runShardedChildren(t, []string{"view-private-sentinels", "view-private-prevention-priority", "view-private-prevention-only-hero"}, 3) {
+		return
+	}
 	for _, id := range []string{
 		"view-private-sentinels",
 		"view-private-prevention-priority",
@@ -485,6 +494,9 @@ func TestAttachmentPanelsPureHeroSelection(t *testing.T) {
 // Every combination page, not only the private ones, must stay free of the
 // private strings. Catches a leak that appears only for one presence pattern.
 func TestAttachmentPanelsNoCombinationLeaksPrivateText(t *testing.T) {
+	if runShardedChildren(t, []string{"view-combination-000", "view-combination-001", "view-combination-010", "view-combination-011", "view-combination-100", "view-combination-101", "view-combination-110", "view-combination-111"}, shardCount) {
+		return
+	}
 	for _, bits := range []string{"000", "001", "010", "011", "100", "101", "110", "111"} {
 		id := "view-combination-" + bits
 		t.Run(id, func(t *testing.T) {

@@ -128,6 +128,8 @@ func dispatch(e *env, args []string) error {
 		return serveBundleCommand(e, rest)
 	case command == "serve":
 		return plainServeCommand(e, rest)
+	case command == "ui":
+		return uiCommand(e, rest)
 	case topLevelCommands[command]:
 		return fail("not yet ported: %s", command)
 	default:

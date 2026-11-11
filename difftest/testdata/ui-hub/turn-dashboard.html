@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>FaultLine turn dashboard</title>
+<style>body{margin:0;background:#fafaf9;color:#1c1917;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1100px;margin:0 auto;padding:2rem 1.5rem}h1{font-size:2rem;margin:0 0 .5rem}h2{font-size:1.1rem;margin:2rem 0 .75rem}.status{font-family:ui-monospace,Menlo,monospace;font-weight:700}.proof{display:flex;gap:1rem;padding:.5rem 0;border-top:1px solid #e7e5e4}.proof>span:first-child{flex:0 0 12rem;color:#57534e}.proof>span:last-child{overflow-wrap:anywhere}table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;padding:.5rem;border-top:1px solid #e7e5e4;overflow-wrap:anywhere;font-size:.85rem}th{color:#57534e}.empty{color:#57534e}</style></head>
+<body><main>
+<h1>Turn dashboard</h1>
+<p class="status">COMPLETED</p>
+<section>
+<h2>Proof</h2>
+<div class="proof"><span>Result</span><span>PROOF</span></div>
+<div class="proof"><span>Reason</span><span>&lt;reason&gt;</span></div>
+<div class="proof"><span>Evidence grade</span><span>TURN_PATH_EVIDENCE_GRADE_EXPERIMENTAL</span></div>
+<div class="proof"><span>Evidence label</span><span>label</span></div>
+<div class="proof"><span>Environment homogeneity</span><span>HOMOGENEOUS</span></div>
+</section>
+<section>
+<h2>Introduction</h2>
+<div class="proof"><span>Status</span><span>ATTRIBUTED</span></div>
+<div class="proof"><span>Reason</span><span>&lt;intro&gt;</span></div>
+</section>
+<section>
+<h2>Errors</h2>
+<ul>
+<li>example error</li>
+</ul>
+</section>
+<section>
+<h2>Stable states</h2>
+<table><thead><tr><th>Turn</th><th>Ordinal</th><th>Verdict</th><th>Tree digest</th><th>Snapshot digest</th><th>Executions</th><th>Runs</th></tr></thead>
+<tbody>
+<tr><td>turn-1</td><td>1</td><td>PASS</td><td>tree-turn-1</td><td>snapshot-turn-1</td><td>exec-turn-1</td><td>run-turn-1</td></tr>
+<tr><td>turn-2</td><td>2</td><td>FAIL</td><td>tree-turn-2</td><td>snapshot-turn-2</td><td>exec-turn-2</td><td>run-turn-2</td></tr>
+</tbody></table>
+</section>
+<section>
+<h2>Transitions</h2>
+<table><thead><tr><th>Kind</th><th>Before</th><th>After</th></tr></thead>
+<tbody>
+<tr><td>PASS_TO_FAIL</td><td>1</td><td>2</td></tr>
+</tbody></table>
+</section>
+<section>
+<h2>Recording</h2>
+<div class="proof"><span>Repository</span><span>repo</span></div>
+<div class="proof"><span>Ledger digest</span><span>ledger</span></div>
+<div class="proof"><span>Executions per state</span><span>3</span></div>
+<div class="proof"><span>Recorder</span><span>codex-turn-tree-replay</span></div>
+<div class="proof"><span>Native Codex interception</span><span>false</span></div>
+<div class="proof"><span>Runtime mapping</span><span>none</span></div>
+</section>
+</main></body></html>

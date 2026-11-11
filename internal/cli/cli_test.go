@@ -25,7 +25,6 @@ func TestFailures(t *testing.T) {
 		{[]string{"--x"}, "FaultLine error: Unknown command: --x\nNote: Do not place '--' between 'fl' and your subcommand. Use 'pnpm fl <command>'.\nNext: pnpm fl help\n"},
 		{[]string{"--"}, "FaultLine error: Unknown command: --\nNote: Do not place '--' between 'fl' and your subcommand. Use 'pnpm fl <command>'.\nNext: pnpm fl help\n"},
 		{[]string{"doctor", "--security", "--proof-ready"}, "FaultLine error: Usage: fl doctor [--repo <directory>] [--json] [--proof-ready | --security]\nNext: pnpm fl help\n"},
-		{[]string{"ui"}, "FaultLine error: not yet ported: ui\nNext: pnpm fl help\n"},
 	}
 	for _, c := range cases {
 		stdout, stderr, code := run(c.args...)
