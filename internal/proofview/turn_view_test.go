@@ -3,6 +3,7 @@ package proofview
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -85,7 +86,13 @@ func TestRenderTurnVerificationFailure(t *testing.T) {
 }
 
 func TestRenderRawJSONPage(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "x<y>.json")
+	// Windows forbids < and > in file names, so it uses a creatable basename
+	// whose & and ' still need escaping.
+	name, escapedName := "x<y>.json", "x&lt;y&gt;.json"
+	if runtime.GOOS == "windows" {
+		name, escapedName = "x&y'.json", "x&amp;y&#039;.json"
+	}
+	path := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(path, []byte(`{"a":"<script>&'\""}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +100,7 @@ func TestRenderRawJSONPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>x&lt;y&gt;.json</title>
+	want := `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>` + escapedName + `</title>
 <style>body{margin:0;background:#111;color:#e7e5e4;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 pre{margin:0;padding:1.25rem;white-space:pre-wrap;word-break:break-word}</style></head>
 <body><pre>{&quot;a&quot;:&quot;&lt;script&gt;&amp;&#039;\&quot;&quot;}</pre></body></html>`
