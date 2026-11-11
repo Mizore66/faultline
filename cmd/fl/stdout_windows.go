@@ -4,6 +4,8 @@ import (
 	"os"
 	"sync"
 	"syscall"
+
+	"github.com/Mizore66/faultline/internal/term"
 )
 
 const isWindows = true
@@ -21,8 +23,7 @@ func guessHandle(f *os.File) handleType {
 	}
 	switch t {
 	case syscall.FILE_TYPE_CHAR:
-		var mode uint32
-		if syscall.GetConsoleMode(h, &mode) == nil {
+		if term.IsTerminal(f) {
 			return handleTTY
 		}
 		return handleFile

@@ -5,8 +5,6 @@ import (
 	"unsafe"
 )
 
-const ioctlGetTermios = syscall.TCGETS
-
 func waitWritable(fd int) {
 	pfd := struct {
 		fd             int32
