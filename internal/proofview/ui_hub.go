@@ -64,6 +64,19 @@ func looksLikeTurnProofBundle(dir string) bool {
 	return hasBundleFiles(dir) && hubManifestIsTurn(dir)
 }
 
+// fixedRoot joins parts beneath base, requiring every component to be a real
+// directory (no symlinks), so discovery cannot leave .faultline.
+func fixedRoot(base string, parts ...string) (string, bool) {
+	current := base
+	for _, part := range parts {
+		current = filepath.Join(current, part)
+		if !isDirectory(current) {
+			return current, false
+		}
+	}
+	return current, true
+}
+
 // scanBundleRoots lists child directories of root that match the wanted kinds.
 func scanBundleRoots(root string, git, turn bool) []DiscoveredFaultLineArtifact {
 	out := []DiscoveredFaultLineArtifact{}
@@ -102,7 +115,7 @@ func scanJSONFiles(root, kind string, labelFilename bool, skipCache bool) []Disc
 		return out
 	}
 	for _, entry := range entries {
-		if !entry.IsFile || strings.HasPrefix(entry.Name, ".") || !strings.HasSuffix(entry.Name, ".json") {
+		if !entry.IsFile || !strings.HasSuffix(entry.Name, ".json") {
 			continue
 		}
 		if skipCache && strings.Contains(entry.Name, "turn-snapshot-cache") {
@@ -136,8 +149,12 @@ func DiscoverFaultLineArtifacts(repository string) []DiscoveredFaultLineArtifact
 	for _, name := range []string{"bundles", "proofs", "git-proofs", "turn-proofs"} {
 		found = append(found, scanBundleRoots(filepath.Join(base, name), true, true)...)
 	}
-	found = append(found, scanJSONFiles(filepath.Join(base, "incidents", "drafts"), "incident-draft", false, false)...)
-	found = append(found, scanJSONFiles(filepath.Join(base, "recordings"), "ledger", true, true)...)
+	if root, ok := fixedRoot(base, "incidents", "drafts"); ok {
+		found = append(found, scanJSONFiles(root, "incident-draft", false, false)...)
+	}
+	if root, ok := fixedRoot(base, "recordings"); ok {
+		found = append(found, scanJSONFiles(root, "ledger", true, true)...)
+	}
 
 	seen := map[string]bool{}
 	for _, artifact := range found {

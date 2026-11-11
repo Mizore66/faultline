@@ -41,7 +41,6 @@ func TestDiscoverFaultLineArtifactsOrderAndKinds(t *testing.T) {
 	writeHubBundle(t, filepath.Join(fl, "git-proof-bundles", "turnish"), hubTurnManifest)
 	writeHubFile(t, filepath.Join(fl, "recordings", "turn-snapshot-cache.json"), "{}")
 	writeHubFile(t, filepath.Join(fl, "recordings", "note.txt"), "x")
-	writeHubFile(t, filepath.Join(fl, "recordings", ".h.json"), "{}")
 	writeHubFile(t, filepath.Join(root, "outside", "o.json"), "{}")
 	if err := os.Symlink(filepath.Join(root, "outside", "o.json"), filepath.Join(fl, "recordings", "link.json")); err != nil {
 		t.Fatal(err)
@@ -132,5 +131,54 @@ func TestRenderHubIndexEmptyAndEscaped(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("missing %q in %s", want, html)
 		}
+	}
+}
+
+func TestDiscoverFaultLineArtifactsHiddenRegularJSONAccepted(t *testing.T) {
+	root := t.TempDir()
+	fl := filepath.Join(root, ".faultline")
+	writeHubFile(t, filepath.Join(fl, "incidents", "drafts", ".d.json"), "{}")
+	writeHubFile(t, filepath.Join(fl, "incidents", "drafts", "a.json"), "{}")
+	writeHubFile(t, filepath.Join(fl, "recordings", ".h.json"), "{}")
+	writeHubFile(t, filepath.Join(fl, "recordings", "z.json"), "{}")
+	writeHubFile(t, filepath.Join(fl, "incidents", ".hiddendir", "x.json"), "{}")
+	got := DiscoverFaultLineArtifacts(root)
+	want := map[string]bool{"incident-draft/.d": true, "incident-draft/a": true, "ledger/.h": true, "ledger/z": true}
+	if len(got) != 4 {
+		t.Fatalf("artifacts=%v", got)
+	}
+	for _, a := range got {
+		if !want[a.Kind+"/"+a.ID] {
+			t.Fatalf("unexpected %v", a)
+		}
+	}
+	if got[0].Kind != "incident-draft" || got[2].Kind != "ledger" {
+		t.Fatalf("order=%v", got)
+	}
+}
+
+func TestDiscoverFaultLineArtifactsRejectsAncestorSymlinks(t *testing.T) {
+	root := t.TempDir()
+	fl := filepath.Join(root, ".faultline")
+	writeHubFile(t, filepath.Join(root, "external", "drafts", "evil.json"), "{}")
+	if err := os.MkdirAll(fl, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "external"), filepath.Join(fl, "incidents")); err != nil {
+		t.Fatal(err)
+	}
+	writeHubFile(t, filepath.Join(root, "extrec", "r.json"), "{}")
+	if got := DiscoverFaultLineArtifacts(root); len(got) != 0 {
+		t.Fatalf("followed incidents symlink: %v", got)
+	}
+	// Symlinked repository ancestor is legitimate.
+	real := t.TempDir()
+	writeHubFile(t, filepath.Join(real, "repo", ".faultline", "recordings", "r.json"), "{}")
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if got := DiscoverFaultLineArtifacts(filepath.Join(link, "repo")); len(got) != 1 {
+		t.Fatalf("repo ancestor symlink rejected: %v", got)
 	}
 }
