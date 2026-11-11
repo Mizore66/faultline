@@ -114,6 +114,10 @@ type framer struct {
 	suppressed   bool
 	headsInChunk bool
 	heads, idles int // heads handed to net/http, requests it has finished
+	// forms are the captured bodies of heads no handler has taken yet;
+	// curForm is the one being filled.
+	forms        []*formBody
+	curForm      *formBody
 	readDeadline time.Time
 }
 
@@ -193,6 +197,7 @@ func (c *nodeConn) failConnection() (int, error) {
 
 // fail stops the parse: response is written once the earlier responses are.
 func (c *nodeConn) fail(response string) {
+	c.finishForm(true)
 	c.phase, c.failure, c.suppressed = framingFailed, response, c.headsInChunk
 }
 
@@ -225,6 +230,11 @@ func (c *nodeConn) feed(data []byte) {
 			}
 		case framingBody, framingChunkData:
 			n := min(uint64(len(data)-i), c.remaining)
+			if c.phase == framingBody || c.phase == framingChunkData {
+				if c.curForm != nil {
+					c.curForm.add(data[i : i+int(n)])
+				}
+			}
 			i += int(n)
 			c.headsInChunk = false
 			c.remaining -= n
@@ -484,6 +494,7 @@ func (c *nodeConn) endHead() {
 	}
 	c.out = out
 	c.heads++
+	c.startForm()
 	c.headsInChunk = true
 	// parserOnIncoming: resetSocketTimeout clears the keep-alive timeout.
 	c.headersComplete, c.keepAlive = true, false
@@ -503,6 +514,7 @@ func (c *nodeConn) endHead() {
 
 // endMessage is on_message_complete.
 func (c *nodeConn) endMessage() {
+	c.finishForm(false)
 	c.inMessage, c.phase = false, framingStart
 }
 

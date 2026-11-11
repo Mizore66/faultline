@@ -52,6 +52,7 @@ type Server struct {
 	conns   map[*nodeConn]struct{}
 	closing bool
 	drained chan struct{} // closed once closing and no connection is left
+	opts    nodeServerOptions
 }
 
 // URL is the server's http://127.0.0.1:<port> address.
@@ -263,6 +264,7 @@ func (c *nodeConn) destroy() {
 		return
 	}
 	c.destroyed = true
+	c.finishForm(true)
 	if c.timer != nil {
 		c.timer.Stop()
 	}
@@ -294,6 +296,12 @@ func requestPathname(target string) string {
 		}
 		target = rest[i:]
 	}
+	return removeDotSegments(target)
+}
+
+// removeDotSegments is the tail of requestPathname: target uses "/"
+// separators only.
+func removeDotSegments(target string) string {
 	segments := strings.Split(strings.TrimPrefix(target, "/"), "/")
 	var out []string
 	for i, segment := range segments {
@@ -361,6 +369,9 @@ func nodeHandler(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c := r.Context().Value(connKey{}).(*nodeConn)
 		defer func() { c.responseFinished(w.Header().Get("Connection") == "keep-alive") }()
+		if form := c.takeForm(); form != nil {
+			r = r.WithContext(context.WithValue(r.Context(), formKey{}, form))
+		}
 		switch r.Header.Get(expectMarker) {
 		case "continue":
 			w.WriteHeader(http.StatusContinue)
@@ -376,6 +387,21 @@ func nodeHandler(next http.HandlerFunc) http.HandlerFunc {
 // startNodeServer listens on 127.0.0.1:port and serves the routes the
 // factory builds for the bound URL.
 func startNodeServer(port float64, routes func(string) http.HandlerFunc) (*Server, error) {
+	return startNodeServerWithOptions(port, nodeServerOptions{}, routes)
+}
+
+// nodeServerOptions are the opt-in transport extensions. The zero value is
+// the default transport every existing server uses.
+type nodeServerOptions struct {
+	// captureFormBody keeps each request body (up to formBodyLimit bytes)
+	// for nodeFormBody; the default framing discards it.
+	captureFormBody bool
+	// reviewPaths makes nodeRequestPath use the review server's pathname
+	// processing instead of requestPathname.
+	reviewPaths bool
+}
+
+func startNodeServerWithOptions(port float64, options nodeServerOptions, routes func(string) http.HandlerFunc) (*Server, error) {
 	// net.Server.listen validates the port (validatePort, allowZero).
 	if math.IsNaN(port) || port != math.Trunc(port) || port < 0 || port > 0xFFFF {
 		return nil, errors.New("options.port should be >= 0 and < 65536. Received type number (" + jsjson.FormatNumber(port) + ").")
@@ -393,6 +419,7 @@ func startNodeServer(port float64, routes func(string) http.HandlerFunc) (*Serve
 		stop:     make(chan struct{}),
 		conns:    map[*nodeConn]struct{}{},
 		drained:  make(chan struct{}),
+		opts:     options,
 	}
 	// Node passes `OPTIONS *` to the handler like any other request (a 404
 	// here); net/http would answer it with 200 itself. Timeouts are the
