@@ -115,7 +115,7 @@ func TestUIHubServerHTTP(t *testing.T) {
 		{"/artifact/x", "Not found"}, {"/artifact/-1", "Not found"}, {"/artifact/", "Not found"}, {"/nope", "Not found"},
 	} {
 		r := uiHubExchange(t, s, hubGet(c.path))
-		if r.status() != "HTTP/1.1 404 Not Found" || r.decoded() != c.body || !r.has("Content-Type: text/plain; charset=utf-8") || !r.has("Cache-Control: no-store") {
+		if r.status() != "HTTP/1.1 404 Not Found" || r.decoded() != c.body || !r.has("Content-Type: text/plain; charset=utf-8") || r.has("Cache-Control:") {
 			t.Fatalf("%s: %s %q", c.path, r.head, r.decoded())
 		}
 	}

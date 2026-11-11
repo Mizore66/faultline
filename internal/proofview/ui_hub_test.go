@@ -110,7 +110,7 @@ func TestDiscoverFaultLineArtifactsMissingAndDuplicates(t *testing.T) {
 
 func TestRenderHubIndexEmptyAndEscaped(t *testing.T) {
 	empty := RenderHubIndex(`/tmp/<b>&"repo`, []DiscoveredFaultLineArtifact{})
-	for _, want := range []string{"empty-state", "fl quickstart", "/tmp/&lt;b&gt;&amp;&quot;repo"} {
+	for _, want := range []string{`<p class="empty empty-state">No bundles, incidents, or ledgers found under <code>.faultline</code>.<br>Next: <code class="next-command">fl quickstart</code></p>`, "<h1>FaultLine UI</h1>\n<p class=\"lede\">Local hub for <code>/tmp/&lt;b&gt;&amp;&quot;repo</code>.", "\n</main></body></html>"} {
 		if !strings.Contains(empty, want) {
 			t.Fatalf("missing %q in %s", want, empty)
 		}

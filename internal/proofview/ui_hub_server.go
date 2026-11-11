@@ -45,7 +45,10 @@ func StartUIHubServer(repository string, port float64) (*UIHubServer, error) {
 		reply := func(w http.ResponseWriter, r *http.Request, status int, contentType, body string) {
 			h := w.Header()
 			h.Set("Content-Type", contentType)
-			h.Set("Cache-Control", "no-store")
+			if status == http.StatusOK {
+				// Frozen TS sends no-store only on 200 responses.
+				h.Set("Cache-Control", "no-store")
+			}
 			nodeHeaders(h, r)
 			writeNodeBody(w, r, status, jsstr.ToUTF8(body))
 		}

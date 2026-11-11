@@ -151,8 +151,6 @@ func DiscoverFaultLineArtifacts(repository string) []DiscoveredFaultLineArtifact
 	return result
 }
 
-const hubIndexStyle = `body{margin:0;padding:32px;background:#fff;color:#333;font-family:Circular,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:900px;margin:0 auto}h1{font-weight:400;letter-spacing:-.03em}ul{list-style:none;padding:0}li{padding:12px 0;border-top:1px solid #ddd}a{color:#333;text-decoration:none}small{display:block;color:#777;margin-top:4px;word-break:break-all}code{font-family:"SFMono-Regular",Consolas,monospace}.empty-state{border:1px dashed #deded8;border-radius:10px;padding:14px;color:#8a6030;background:#f5f5f2}`
-
 func renderHubRow(index int, artifact DiscoveredFaultLineArtifact) string {
 	href := "/raw/" + strconv.Itoa(index)
 	if artifact.Kind == "git-proof-bundle" || artifact.Kind == "turn-proof-bundle" {
@@ -161,17 +159,37 @@ func renderHubRow(index int, artifact DiscoveredFaultLineArtifact) string {
 	return `<li><a href="` + href + `"><strong>` + EscapeHTML(artifact.Kind) + `</strong> — ` + EscapeHTML(artifact.Label) + `</a><small>` + EscapeHTML(artifact.Path) + `</small></li>`
 }
 
+// hubIndexHead mirrors the document head and style block of the frozen
+// renderHubIndex in src/ui-hub.ts byte for byte.
+const hubIndexHead = "<!doctype html>\n" +
+	"<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" +
+	"<title>FaultLine UI hub</title>\n" +
+	"<style>\n" +
+	"body{font-family:ui-sans-serif,system-ui,sans-serif;margin:0;background:#f6f4ef;color:#1c1917}\n" +
+	"main{max-width:52rem;margin:0 auto;padding:2.5rem 1.25rem 4rem}\n" +
+	"h1{font-size:1.75rem;margin:0 0 .35rem}\n" +
+	".lede{color:#57534e;margin:0 0 1.5rem}\n" +
+	".catalog{list-style:none;padding:0;margin:0;display:grid;gap:.75rem}\n" +
+	".catalog li{background:#fff;border:1px solid #e7e5e4;padding:1rem 1.1rem}\n" +
+	".catalog a{color:#0c0a09;text-decoration:none;display:block}\n" +
+	".catalog small{display:block;margin-top:.35rem;color:#78716c;word-break:break-all}\n" +
+	".empty{background:#fff;border:1px solid #e7e5e4;padding:1rem}\n" +
+	"code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}\n" +
+	"</style></head>\n" +
+	"<body><main>\n" +
+	"<h1>FaultLine UI</h1>\n"
+
 // RenderHubIndex renders the hub index page for the discovered artifacts.
 func RenderHubIndex(repository string, artifacts []DiscoveredFaultLineArtifact) string {
 	var body strings.Builder
 	if len(artifacts) == 0 {
-		body.WriteString(`<p class="empty-state">No local artifacts found. Run <code>` + EscapeHTML(UIHubEmptyNextCommand) + `</code> to create one.</p>`)
+		body.WriteString(`<p class="empty empty-state">No bundles, incidents, or ledgers found under <code>.faultline</code>.<br>Next: <code class="next-command">` + EscapeHTML(UIHubEmptyNextCommand) + `</code></p>`)
 	} else {
-		body.WriteString("<ul>")
+		body.WriteString(`<ul class="catalog">`)
 		for index, artifact := range artifacts {
 			body.WriteString(renderHubRow(index, artifact))
 		}
 		body.WriteString("</ul>")
 	}
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>FaultLine UI hub</title><style>` + hubIndexStyle + `</style></head><body><main><h1>FaultLine UI hub</h1><p><code>` + EscapeHTML(repository) + `</code></p>` + body.String() + `</main></body></html>`
+	return hubIndexHead + `<p class="lede">Local hub for <code>` + EscapeHTML(repository) + `</code>. Open a discovered artifact to reuse the existing read-only page renderer.</p>` + "\n" + body.String() + "\n</main></body></html>"
 }

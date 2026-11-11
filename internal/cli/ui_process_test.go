@@ -95,7 +95,7 @@ func TestUIProcess(t *testing.T) {
 		work := newWork(t, "empty")
 		p := startUI(t, work, "0", "--port", "0")
 		r := judgeDemoRequest("GET", p.url+"/", "")
-		if r.err != nil || r.status != 200 || !strings.Contains(r.body, "No local artifacts found") {
+		if r.err != nil || r.status != 200 || !strings.Contains(r.body, "No bundles, incidents, or ledgers found under") {
 			t.Fatalf("index: %+v", r)
 		}
 		interruptClean(t, p, "0", "Next: fl quickstart\n")
@@ -159,7 +159,7 @@ func TestUIProcess(t *testing.T) {
 	t.Run("invalid ports", func(t *testing.T) {
 		for _, port := range []string{"abc", "-1", "65536", "1.5"} {
 			stdout, stderr, code := failing(t, newWork(t, "invalid"+port), "ui", "--port", port)
-			if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "FaultLine error: --port must be an integer from 0 through 65535.\n") {
+			if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "FaultLine error: "+uiDiagnostic(t, "ui-invalid-port")+"\n") {
 				t.Fatalf("port %q: exit=%d stdout=%q stderr=%q", port, code, stdout, stderr)
 			}
 		}

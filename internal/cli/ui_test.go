@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -95,7 +96,7 @@ func TestUICommand(t *testing.T) {
 		for _, port := range []string{"abc", "-1", "65536", "1.5", "Infinity", "NaN", "1e9"} {
 			c := installUIFake(t, 0, nil)
 			stdout, stderr, code := run("ui", "--port", port)
-			if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "FaultLine error: --port must be an integer from 0 through 65535.\n") || c.starts != 0 || len(c.opened) != 0 {
+			if code != 1 || stdout != "" || !strings.HasPrefix(stderr, "FaultLine error: "+uiDiagnostic(t, "ui-invalid-port")+"\n") || c.starts != 0 || len(c.opened) != 0 {
 				t.Fatalf("port %q: exit=%d stdout=%q stderr=%q starts=%d", port, code, stdout, stderr, c.starts)
 			}
 		}
@@ -124,4 +125,25 @@ func TestUICommand(t *testing.T) {
 			t.Fatalf("discovered %d", n)
 		}
 	})
+}
+
+// uiDiagnostic returns one hand-committed expectation from
+// ui-diagnostics.jsonl, never generated from the code under test.
+func uiDiagnostic(t *testing.T, id string) string {
+	t.Helper()
+	raw, err := os.ReadFile("../../difftest/testdata/ui-hub/ui-diagnostics.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n") {
+		var row struct{ ID, Text string }
+		if err := json.Unmarshal([]byte(line), &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.ID == id {
+			return row.Text
+		}
+	}
+	t.Fatalf("no committed diagnostic %q", id)
+	return ""
 }
