@@ -170,6 +170,15 @@ func TestAttachmentZeroAndDigestOnlyOptionsEqualOldLoader(t *testing.T) {
 // artifact.
 func TestAttachmentViewMatchesTSCapture(t *testing.T) {
 	corpus := serveBundleCorpus(t)
+	var viewIDs []string
+	for _, c := range corpus.Cases {
+		if c.Kind == "view" {
+			viewIDs = append(viewIDs, c.ID)
+		}
+	}
+	if runShardedChildren(t, viewIDs, shardCount) {
+		return
+	}
 	for _, c := range corpus.Cases {
 		if c.Kind != "view" {
 			continue
@@ -203,6 +212,9 @@ func TestAttachmentViewMatchesTSCapture(t *testing.T) {
 // All eight presence combinations, bits meaning minimization/repair/prevention.
 // The expectation is the bit pattern itself, not the loader's own output.
 func TestAttachmentAllEightCombinations(t *testing.T) {
+	if runShardedChildren(t, []string{"view-combination-000", "view-combination-001", "view-combination-010", "view-combination-011", "view-combination-100", "view-combination-101", "view-combination-110", "view-combination-111"}, shardCount) {
+		return
+	}
 	corpus := serveBundleCorpus(t)
 	for bits := 0; bits < 8; bits++ {
 		id := "view-combination-" + string([]byte{'0' + byte(bits>>2&1), '0' + byte(bits>>1&1), '0' + byte(bits&1)})
@@ -233,6 +245,9 @@ func TestAttachmentAllEightCombinations(t *testing.T) {
 // reported as MATCH; the matching digest reports MATCH; a wrong digest refuses.
 // Prevention's own RootDigest is the retained verified root either way.
 func TestAttachmentDigestAsymmetry(t *testing.T) {
+	if runShardedChildren(t, []string{"minimization", "repair", "prevention"}, 3) {
+		return
+	}
 	corpus := serveBundleCorpus(t)
 	load := func(t *testing.T, id string) (View, error) {
 		bundle, root, options := attachmentInputs(t, corpus, serveBundleCase(t, corpus, id))
