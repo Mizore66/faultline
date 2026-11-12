@@ -11,9 +11,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GUARD = os.path.join(HERE, "check-writer-replay-shards.py")
 MANIFESTS = os.path.join(HERE, "..", "..", "difftest", "testdata", "writer-shards")
 RECORDER = "recorder-fake-docker"
-GOLDEN = [332, 332, 314, 317]
-WIN_COMPARED = [111, 113, 112, 108]
-CASES = [282, 281, 255, 257]
+GOLDEN = [336, 332, 316, 318]
+WIN_COMPARED = [115, 113, 114, 109]
+CASES = [286, 281, 257, 258]
 
 
 def manifest(n):
@@ -92,9 +92,9 @@ class ManifestShape(unittest.TestCase):
         for n in range(4):
             m = manifest(n)
             self.assertEqual(len(m["ordinary"]) + len(m["posix"]) - (n == 0), CASES[n])
-        self.assertEqual(sum(CASES), 1075)
-        self.assertEqual(sum(GOLDEN), 1295)
-        self.assertEqual(sum(WIN_COMPARED), 444)
+        self.assertEqual(sum(CASES), 1082)
+        self.assertEqual(sum(GOLDEN), 1302)
+        self.assertEqual(sum(WIN_COMPARED), 451)
 
 
 class ShardGuard(unittest.TestCase):
@@ -202,7 +202,7 @@ class ShardGuard(unittest.TestCase):
 
     def test_printed_corpus_totals_are_not_evidence(self):
         lines = [l for l in log_lines(0) if "LIVE-SUMMARY" not in l]
-        lines.append("    writer_test.go:1521: LIVE-SUMMARY TestWriterReplay: 1075 of 1075 writer cases run (1295 golden invocations), 120 Go bundles verified by TS")
+        lines.append("    writer_test.go:1521: LIVE-SUMMARY TestWriterReplay: 1082 of 1082 writer cases run (1302 golden invocations), 120 Go bundles verified by TS")
         rc, _ = self.check(0, lines)
         self.assertEqual(rc, 1)
 
@@ -311,13 +311,13 @@ class TotalGuard(unittest.TestCase):
     def test_valid_unix(self):
         rc, out = self.total()
         self.assertEqual(rc, 0, out)
-        self.assertIn("1075 template cases", out)
-        self.assertIn("1295", out)
+        self.assertIn("1082 template cases", out)
+        self.assertIn("1302", out)
 
     def test_valid_windows(self):
         rc, out = self.total(windows=True)
         self.assertEqual(rc, 0, out)
-        self.assertIn("444", out)
+        self.assertIn("451", out)
 
     def test_missing_log(self):
         rc, out = self.total(drop=2)

@@ -212,6 +212,78 @@ func TestWitnessReviewServerReplay(t *testing.T) {
 	status, body = do("GET", "/", "")
 	requirePage("draft mismatch", 409, status, body, "witness-review-draft-mismatch")
 
+	// Stored proposals whose overlay bindings are broken, written under the
+	// running server. Each is refused with the exact committed integrity
+	// text on both the page and an approval attempt, and writes no record.
+	// The proposal digest is deliberately left stale, so it is always the
+	// final listed error; the overlay digest follows whenever it is stale.
+	proposalFile := filepath.Join(work, ".faultline", "witnesses", "proposals", "p1.json")
+	original, err := os.ReadFile(proposalFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroDigest := "sha256:" + strings.Repeat("0", 64)
+	edit := func(mutate func(witness map[string]any)) {
+		t.Helper()
+		var doc map[string]any
+		if err := json.Unmarshal(original, &doc); err != nil {
+			t.Fatal(err)
+		}
+		mutate(doc["witness"].(map[string]any))
+		raw, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(proposalFile, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	firstOverlay := func(w map[string]any) map[string]any { return w["overlays"].([]any)[0].(map[string]any) }
+	cloneOverlay := func(w map[string]any, path string) map[string]any {
+		c := map[string]any{}
+		for k, v := range firstOverlay(w) {
+			c[k] = v
+		}
+		c["path"] = path
+		return c
+	}
+	for _, tc := range []struct {
+		id     string
+		mutate func(w map[string]any)
+	}{
+		{"witness-review-integrity-duplicate-overlay", func(w map[string]any) {
+			w["overlays"] = []any{firstOverlay(w), cloneOverlay(w, "WITNESS.mjs")}
+		}},
+		{"witness-review-integrity-overlay-bytes", func(w map[string]any) { firstOverlay(w)["bytesDigest"] = zeroDigest }},
+		{"witness-review-integrity-overlay-order", func(w map[string]any) {
+			w["overlays"] = []any{firstOverlay(w), cloneOverlay(w, "a.mjs")}
+		}},
+		{"witness-review-integrity-overlay-digest", func(w map[string]any) { w["overlayDigest"] = zeroDigest }},
+	} {
+		edit(tc.mutate)
+		want := proofview.EscapeHTML(texts[tc.id])
+		if texts[tc.id] == "" {
+			t.Fatalf("no committed %s diagnostic", tc.id)
+		}
+		status, body = do("GET", "/", "")
+		if status != 409 || !strings.Contains(body, want) {
+			t.Fatalf("%s page: status=%d, committed %q not in %.400q", tc.id, status, texts[tc.id], body)
+		}
+		status, body = do("POST", "/approve-freeze", form(url.Values{"acknowledged": {"exact-witness-reviewed"}}))
+		if status != 409 || !strings.Contains(body, want) {
+			t.Fatalf("%s approve-freeze: status=%d, committed %q not in %.400q", tc.id, status, texts[tc.id], body)
+		}
+		for _, dir := range []string{"approvals", "frozen"} {
+			entries, err := os.ReadDir(filepath.Join(work, ".faultline", "witnesses", dir))
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("%s: %s records after a refused action: %v %v", tc.id, dir, entries, err)
+			}
+		}
+	}
+	if err := os.WriteFile(proposalFile, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := proc.Interrupt(ctx, serveBundleConsoleHelper(t)); err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}

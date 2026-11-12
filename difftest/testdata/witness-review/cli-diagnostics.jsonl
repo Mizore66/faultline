@@ -16,3 +16,7 @@
 {"id":"witness-review-tty-declined","text":"Approval declined; no records were written."}
 {"id":"witness-review-tty-aborted-ctrl-d","text":"Aborted with Ctrl+D"}
 {"id":"witness-review-tty-aborted-ctrl-c","text":"Aborted with Ctrl+C"}
+{"id":"witness-review-integrity-duplicate-overlay","text":"Witness review refused: proposal integrity verification failed: duplicate overlay path: WITNESS.mjs; overlay digest does not match the ordered overlay byte digests; proposal digest does not match the immutable proposal payload"}
+{"id":"witness-review-integrity-overlay-bytes","text":"Witness review refused: proposal integrity verification failed: overlay byte digest does not match: witness.mjs; overlay digest does not match the ordered overlay byte digests; proposal digest does not match the immutable proposal payload"}
+{"id":"witness-review-integrity-overlay-order","text":"Witness review refused: proposal integrity verification failed: overlay records are not in canonical path order; overlay digest does not match the ordered overlay byte digests; proposal digest does not match the immutable proposal payload"}
+{"id":"witness-review-integrity-overlay-digest","text":"Witness review refused: proposal integrity verification failed: overlay digest does not match the ordered overlay byte digests; proposal digest does not match the immutable proposal payload"}
