@@ -262,7 +262,11 @@ func tryGit(repository string, args ...string) (string, bool) {
 	return jsstr.Trim(jsstr.DecodeUTF8(out)), true
 }
 
-func nowMilliseconds() float64 { return float64(clock.Now().UnixMilli()) }
+// nowMilliseconds is the display clock for relative commit ages, the analogue
+// of the frozen TS Date.now(). It is the real wall clock and must never read
+// the seeded record-timestamp sequence (clock.Now), or each page render would
+// shift every later approvedAt/frozenAt by one tick.
+func nowMilliseconds() float64 { return float64(clock.Monotonic().UnixMilli()) }
 
 func humanizeRange(draft *jsjson.Value, nowMs float64) humanizedRange {
 	if draft == nil {
@@ -349,9 +353,13 @@ func buildWitnessReviewView(review jsjson.Value, draft *jsjson.Value, state witn
 	} else if state.Approved != nil {
 		lifecycle = "PROPOSED → APPROVED → awaiting freeze"
 	}
-	nowMs := nowMilliseconds()
+	// A supplied time must not read the clock: under a seeded clock every read
+	// advances the sequence and shifts later recorded timestamps.
+	var nowMs float64
 	if state.NowMs != nil {
 		nowMs = *state.NowMs
+	} else {
+		nowMs = nowMilliseconds()
 	}
 	evidence := [][2]string{
 		{"Proposal digest", proposal.Get("proposalDigest").Str()},
