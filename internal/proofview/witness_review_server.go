@@ -75,21 +75,32 @@ const (
 	ackField      = "exact-witness-reviewed"
 )
 
+// setWireHeader writes a header under the exact lowercase name the frozen
+// server passes to writeHead, which Node puts on the wire as given. Header.Set
+// would canonicalize it. A nil canonical Content-Type entry stops net/http
+// sniffing and adding a second, canonical one.
+func setWireHeader(h http.Header, name, value string) {
+	h[name] = []string{value}
+	if name == "content-type" {
+		h["Content-Type"] = nil
+	}
+}
+
 func writeReviewHTML(w http.ResponseWriter, r *http.Request, status int, html string) {
 	h := w.Header()
-	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Cache-Control", "no-store")
-	h.Set("Content-Security-Policy", reviewHTMLCSP)
-	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("X-Content-Type-Options", "nosniff")
+	setWireHeader(h, "content-type", "text/html; charset=utf-8")
+	setWireHeader(h, "cache-control", "no-store")
+	setWireHeader(h, "content-security-policy", reviewHTMLCSP)
+	setWireHeader(h, "referrer-policy", "no-referrer")
+	setWireHeader(h, "x-content-type-options", "nosniff")
 	nodeHeaders(h, r)
 	writeNodeBody(w, r, status, jsstr.ToUTF8(html))
 }
 
 func writeReviewNotFound(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
-	h.Set("Content-Type", "text/plain; charset=utf-8")
-	h.Set("Cache-Control", "no-store")
+	setWireHeader(h, "content-type", "text/plain; charset=utf-8")
+	setWireHeader(h, "cache-control", "no-store")
 	nodeHeaders(h, r)
 	writeNodeBody(w, r, http.StatusNotFound, "Not found\n")
 }

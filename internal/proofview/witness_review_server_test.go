@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -186,6 +187,48 @@ func requireRefusal(t *testing.T, r reviewReply, status int, message string) {
 	requireHTMLHeaders(t, r)
 	if want := renderWitnessReviewFailurePage(message); r.body != want {
 		t.Fatalf("refusal page differs for %q:\n%s", message, r.body)
+	}
+}
+
+// The frozen server calls writeHead with lowercase header names for every HTML
+// response and for the 404, and Node writes them to the wire exactly as given
+// (only Connection, Date, Transfer-Encoding and Keep-Alive are its own,
+// capitalized). A Go canonicalized name is a wire difference found by the
+// frozen-TypeScript comparison; this pins the exact header-name bytes.
+func TestWitnessReviewServerHeaderNames(t *testing.T) {
+	f := newReviewFixture(t, false, "")
+	host := strings.TrimPrefix(f.server.URL(), "http://")
+	body := f.form("token", "bad")
+	htmlHeaders := []string{
+		"cache-control: no-store", "content-security-policy: " + reviewCSP, "content-type: text/html; charset=utf-8",
+		"referrer-policy: no-referrer", "x-content-type-options: nosniff",
+	}
+	for _, c := range []struct {
+		name, request string
+		want          []string
+	}{
+		{"html page", "GET / HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n", htmlHeaders},
+		{"refusal page", "POST /approve-freeze HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body, htmlHeaders},
+		{"not found", "GET /nope HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n", []string{
+			"cache-control: no-store", "content-type: text/plain; charset=utf-8",
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			head, _, _ := strings.Cut(rawExchange(t, f.server.URL(), c.request), "\r\n\r\n")
+			var got []string
+			for _, line := range strings.Split(head, "\r\n")[1:] {
+				name, _, _ := strings.Cut(line, ":")
+				switch name {
+				case "Connection", "Date", "Transfer-Encoding", "Keep-Alive":
+					continue // Node's own capitalized framing headers
+				}
+				got = append(got, line)
+			}
+			sort.Strings(got)
+			if strings.Join(got, "\n") != strings.Join(c.want, "\n") {
+				t.Fatalf("header lines\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(c.want, "\n"))
+			}
+		})
 	}
 }
 
