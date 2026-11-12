@@ -69,6 +69,10 @@
     "resolve-autonomous-match-twice",
     "resolve-autonomous-parked-is-file",
     "resolve-autonomous-unknown-proposal",
+    "review-invalid-port",
+    "review-json-bad-port",
+    "review-missing-id",
+    "review-unknown-proposal",
     "runtime-mapping-nested-output",
     "runtime-mapping-no-output",
     "runtime-usage-project",
@@ -287,8 +291,8 @@
     "witness-implement-codex-noop",
     "witness-implement-codex-not-on-path"
   ],
-  "golden": 332,
-  "windowsPass": 97,
+  "golden": 336,
+  "windowsPass": 101,
   "windowsSkip": 185,
-  "windowsCompared": 111
+  "windowsCompared": 115
 }

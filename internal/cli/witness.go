@@ -81,7 +81,7 @@ func witnessCommand(e *env, args []string) error {
 	case "implement":
 		return e.witnessImplement(store, args)
 	case "review":
-		return fail("not yet ported: witness %s", action)
+		return witnessReviewCommand(e, args, proposalID, store)
 	case "policy":
 		return e.witnessPolicy(store, args, proposalID)
 	case "resolve-autonomous":

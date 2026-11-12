@@ -16,8 +16,8 @@ macOS/Linux: every manifest id (including the shard 0 recorder) must PASS.
 --windows: ordinary ids must PASS and posix ids (recorder included) must SKIP.
 
 total reads MANIFEST_DIR/shard-N.json and exactly one LOG_DIR/*/writer-replay-shard-N.log
-(one downloaded artifact directory per shard) for all four shards, runs every per-shard check, then requires 1,075 unique
-template cases, the recorder once, and 1,295 (or, --windows, 444) compared
+(one downloaded artifact directory per shard) for all four shards, runs every per-shard check, then requires 1,082 unique
+template cases, the recorder once, and 1,302 (or, --windows, 451) compared
 golden invocations.
 """
 import glob
@@ -28,14 +28,14 @@ import sys
 
 RECORDER = "recorder-fake-docker"
 SHARDS = 4
-TOTAL_CASES = 1075
-TOTAL_COMPARED = {False: 1295, True: 444}
+TOTAL_CASES = 1082
+TOTAL_COMPARED = {False: 1302, True: 451}
 # The design's exact table (spec 3.2); the manifest must agree with it.
 TABLE = [
-    {"cases": 282, "golden": 332, "windowsPass": 97, "windowsSkip": 185, "windowsCompared": 111},
+    {"cases": 286, "golden": 336, "windowsPass": 101, "windowsSkip": 185, "windowsCompared": 115},
     {"cases": 281, "golden": 332, "windowsPass": 105, "windowsSkip": 176, "windowsCompared": 113},
-    {"cases": 255, "golden": 314, "windowsPass": 99, "windowsSkip": 156, "windowsCompared": 112},
-    {"cases": 257, "golden": 317, "windowsPass": 99, "windowsSkip": 158, "windowsCompared": 108},
+    {"cases": 257, "golden": 316, "windowsPass": 101, "windowsSkip": 156, "windowsCompared": 114},
+    {"cases": 258, "golden": 318, "windowsPass": 100, "windowsSkip": 158, "windowsCompared": 109},
 ]
 ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 TERMINAL_RE = re.compile(r"^\s*--- (PASS|FAIL|SKIP): (\S+)(?: \(.*)?$")

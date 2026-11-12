@@ -24,10 +24,10 @@ const RECORDER = "recorder-fake-docker";
 
 // The design's exact table (spec 3.2); generation fails on any drift.
 const EXPECTED = [
-  { cases: 282, golden: 332, windowsPass: 97, windowsSkip: 185, windowsCompared: 111 },
+  { cases: 286, golden: 336, windowsPass: 101, windowsSkip: 185, windowsCompared: 115 },
   { cases: 281, golden: 332, windowsPass: 105, windowsSkip: 176, windowsCompared: 113 },
-  { cases: 255, golden: 314, windowsPass: 99, windowsSkip: 156, windowsCompared: 112 },
-  { cases: 257, golden: 317, windowsPass: 99, windowsSkip: 158, windowsCompared: 108 },
+  { cases: 257, golden: 316, windowsPass: 101, windowsSkip: 156, windowsCompared: 114 },
+  { cases: 258, golden: 318, windowsPass: 100, windowsSkip: 158, windowsCompared: 109 },
 ];
 
 const shardFor = (id) => createHash("sha256").update(id, "utf8").digest()[0] % SHARDS;

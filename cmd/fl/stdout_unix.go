@@ -6,7 +6,8 @@ import (
 	"os"
 	"runtime"
 	"syscall"
-	"unsafe"
+
+	"github.com/Mizore66/faultline/internal/term"
 )
 
 const isWindows = false
@@ -16,7 +17,7 @@ func isWindowsPipeClosed(syscall.Errno) bool { return false }
 // guessHandle is uv_guess_handle (src/unix/core.c).
 func guessHandle(f *os.File) handleType {
 	fd := int(f.Fd())
-	if isatty(fd) {
+	if term.IsTerminal(f) {
 		return handleTTY
 	}
 	var st syscall.Stat_t
@@ -56,12 +57,6 @@ func guessHandle(f *os.File) handleType {
 		}
 	}
 	return handleUnknown
-}
-
-func isatty(fd int) bool {
-	var t syscall.Termios
-	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), ioctlGetTermios, uintptr(unsafe.Pointer(&t)))
-	return e == 0
 }
 
 // readOnly reports whether fd's access mode is O_RDONLY, which makes libuv

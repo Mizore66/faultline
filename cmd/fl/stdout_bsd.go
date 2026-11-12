@@ -8,8 +8,6 @@ import (
 	"unsafe"
 )
 
-const ioctlGetTermios = syscall.TIOCGETA
-
 // waitWritable waits with select(2) until fd is writable.
 func waitWritable(fd int) {
 	var set syscall.FdSet

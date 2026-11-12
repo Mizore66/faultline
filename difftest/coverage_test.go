@@ -161,8 +161,16 @@ var unreachableLiterals = map[string]string{
 	"not yet ported: %s":                            "every unported top-level command (serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
 	"not yet ported: investigate --ci-log/--resume": "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
 	"not yet ported: witness propose --live":        "witness propose --live calls OpenAI in TS (slice 5); TestWitnessProposeSampleAndUnported pins the text",
-	"not yet ported: witness %s":                    "witness implement/review call a model in TS; TestWitnessProposeSampleAndUnported pins the text",
-	"%s must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).": "Go-only flags (KNOWN_DIFFERENCES: Codex thread IDs): TS ignores them, so no golden can hold the refusal; TestInvestigateUsageAndGuards pins it",
+	// Witness review library and defensive refusals with no shipped fl output path.
+	"Witness review is not a valid local review snapshot":                                                 "VerifyWitnessReview validates an exported snapshot without store I/O; no fl command or server route imports a snapshot, so only the internal/witness tests reach it",
+	"Witness review digest does not match its immutable review payload":                                   "VerifyWitnessReview only (see the previous entry); TestVerifyWitnessReview covers it",
+	"Witness review contains an invalid proposed witness:":                                                "VerifyWitnessReview only (see the previous entry); TestVerifyWitnessReview covers it",
+	"Witness review is stale because the stored proposal no longer exactly matches the reviewed snapshot": "assertFreshReview runs right after the same process reads the proposal; only a file rewritten between those two reads reaches it, which TestWitnessReviewServerHTTP does with its between-open-and-action hook",
+	"form body not captured":      "nodeFormBody is only called for servers started with captureFormBody and the review server always sets it, so this guards a programming error",
+	"Reviewer identity is empty.": "the CLI never passes an identity: it reads the Git user.name, which ReadGitUserName replaces with local-reviewer when blank; TestWitnessReviewTTY covers the empty ApprovedBy option",
+	"TTY-native approval requires an interactive terminal. Open the local review URL instead; FaultLine will not auto-approve under piped stdin.": "witnessReviewCommand catches the NON_TTY error and prints NonTtyReviewRefusalMessage instead of this text; TestWitnessReviewTTY covers it and TestWitnessReviewProcess runs the forced fallback",
+	"TTY-native approval requires an interactive stdout. Open the local review URL instead.":                                                      "witnessReviewCommand catches the NON_TTY error and prints NonTtyReviewRefusalMessage instead of this text; TestWitnessReviewTTY covers it",
+	"%s must be a Codex thread identifier (1-160 characters, [A-Za-z0-9._:-], starting with a letter or digit).":                                  "Go-only flags (KNOWN_DIFFERENCES: Codex thread IDs): TS ignores them, so no golden can hold the refusal; TestInvestigateUsageAndGuards pins it",
 	// Witness store invariants and earlier refusals.
 	"Reviewer public key could not be exported as SPKI DER.":               "x509.MarshalPKIXPublicKey of an Ed25519 key never fails; Node's export of a parsed Ed25519 key neither",
 	"Reviewer key must use Ed25519.":                                       "publicKeyFingerprint is called only after the keyring parser or witness sign refused non-Ed25519 keys with their own messages",
@@ -1384,6 +1392,9 @@ func goldenText(t *testing.T, repo string) string {
 	files = append(files, filepath.Join(repo, "difftest", "testdata", "incident-renderer", "plain-demo-diagnostics.jsonl"))
 	// UI hub CLI diagnostics, checked by internal/cli tests.
 	files = append(files, filepath.Join(repo, "difftest", "testdata", "ui-hub", "ui-diagnostics.jsonl"))
+	// Witness review CLI diagnostics, replayed through the covered fl by
+	// TestWitnessReviewDiagnosticsReplay.
+	files = append(files, filepath.Join(repo, "difftest", "testdata", "witness-review", "cli-diagnostics.jsonl"))
 	var goldens strings.Builder
 	for _, f := range files {
 		b, err := os.ReadFile(f)

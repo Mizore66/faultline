@@ -70,6 +70,8 @@
     "repair-verify-no-expect",
     "resolve-autonomous-missing-policy",
     "resolve-autonomous-park-twice",
+    "review-integrity-packet",
+    "review-json",
     "runtime-mapping-conflict",
     "runtime-mapping-no-pairs",
     "sidecar-config-neither",
@@ -259,8 +261,8 @@
     "witness-implement-codex-no-allow",
     "witness-implement-codex-probe-empty"
   ],
-  "golden": 314,
-  "windowsPass": 99,
+  "golden": 316,
+  "windowsPass": 101,
   "windowsSkip": 156,
-  "windowsCompared": 112
+  "windowsCompared": 114
 }
