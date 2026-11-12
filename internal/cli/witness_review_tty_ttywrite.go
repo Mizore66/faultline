@@ -3,6 +3,7 @@ package cli
 import (
 	"time"
 
+	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
@@ -136,10 +137,10 @@ func (r *nodeReadline) plainKey(s string, hasS bool, key nodeKey, completion boo
 	}
 	switch key.name {
 	case "return":
-		r.sawReturnAt = time.Now()
+		r.sawReturnAt = clock.Monotonic()
 		r.finishLine()
 	case "enter":
-		if r.sawReturnAt.IsZero() || time.Since(r.sawReturnAt) > nodeCRLFDelay {
+		if r.sawReturnAt.IsZero() || clock.Monotonic().Sub(r.sawReturnAt) > nodeCRLFDelay {
 			r.finishLine()
 		}
 		r.sawReturnAt = time.Time{}

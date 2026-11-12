@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Mizore66/faultline/internal/jsjson"
+	"github.com/Mizore66/faultline/internal/nodefs"
 	"github.com/Mizore66/faultline/internal/proofview"
 )
 
@@ -154,13 +155,18 @@ func TestWitnessReviewCommand(t *testing.T) {
 			t.Fatalf("exit=%d stderr=%q", code, stderr)
 		}
 		t.Chdir(t.TempDir())
+		cwd, err := nodefs.Cwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantDraft := filepath.Clean(filepath.Join(cwd, "d"))
 		f := installReviewFakes(t, false, false)
 		var out, errb bytes.Buffer
 		store := ttyProposal(t, "p1")
 		if code := Run([]string{"witness", "review", "p1", "--store", store, "--port", "0x10", "--draft-store", "d"}, &out, &errb); code != 0 {
 			t.Fatalf("exit=%d %q", code, errb.String())
 		}
-		if f.port != 16 || !strings.HasSuffix(f.options.DraftStore, "/d") || f.options.ProposalID != "p1" {
+		if f.port != 16 || f.options.DraftStore != wantDraft || f.options.ProposalID != "p1" {
 			t.Fatalf("%+v", f)
 		}
 	})

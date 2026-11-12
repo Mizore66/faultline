@@ -66,6 +66,7 @@
     "resolve-autonomous-bad-proposal-id",
     "resolve-autonomous-no-id",
     "resolve-autonomous-no-policy",
+    "review-integrity-failure",
     "runtime-mapping-bad-digest",
     "runtime-mapping-scan-reuse",
     "runtime-mapping-two-pairs",
@@ -261,8 +262,8 @@
     "witness-implement-codex-missing-bin",
     "witness-implement-codex-ok"
   ],
-  "golden": 317,
-  "windowsPass": 99,
+  "golden": 318,
+  "windowsPass": 100,
   "windowsSkip": 158,
-  "windowsCompared": 108
+  "windowsCompared": 109
 }

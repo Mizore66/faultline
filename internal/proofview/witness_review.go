@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodeproc"
@@ -261,7 +262,7 @@ func tryGit(repository string, args ...string) (string, bool) {
 	return jsstr.Trim(jsstr.DecodeUTF8(out)), true
 }
 
-func nowMilliseconds() float64 { return float64(time.Now().UnixMilli()) }
+func nowMilliseconds() float64 { return float64(clock.Now().UnixMilli()) }
 
 func humanizeRange(draft *jsjson.Value, nowMs float64) humanizedRange {
 	if draft == nil {

@@ -1,13 +1,13 @@
 package proofview
 
 import (
-	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"net/http"
 	"sync"
 
+	"github.com/Mizore66/faultline/internal/clock"
 	"github.com/Mizore66/faultline/internal/incident"
 	"github.com/Mizore66/faultline/internal/jsexc"
 	"github.com/Mizore66/faultline/internal/jsjson"
@@ -53,7 +53,7 @@ func (s *WitnessReviewServer) setBetweenOpenAndAction(f func()) {
 // on 127.0.0.1 with a fresh random form credential.
 func StartWitnessReviewServer(options WitnessReviewServerOptions, port float64) (*WitnessReviewServer, error) {
 	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
+	if err := clock.UnseededRandRead(raw[:]); err != nil {
 		return nil, err
 	}
 	return startWitnessReviewServer(options, hex.EncodeToString(raw[:]), port)
