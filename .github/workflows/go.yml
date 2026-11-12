@@ -173,8 +173,8 @@ jobs:
   # on them. Each shard runs the exact ordinary and posix/ branches of its
   # manifest; check-writer-replay-shards.py then requires a terminal result for
   # every manifest id and the actual compared-invocation count. go-ci-gate
-  # downloads all twenty logs and checks the per-OS totals (1,082 cases,
-  # recorder once, 1,302 compared on Linux/macOS or 451 on Windows). No TS oracle here:
+  # downloads all twenty logs and checks the per-OS totals (1,075 cases,
+  # recorder once, 1,295 compared on Linux/macOS or 444 on Windows). No TS oracle here:
   # the Ubuntu difftest-live-replay job keeps the cross-verification.
   go-writer-replay:
     name: writer replay shard ${{ matrix.shard }} (${{ matrix.os }})
@@ -1185,13 +1185,13 @@ jobs:
         run: |
           set -euo pipefail
           python3 -I .github/scripts/check-writer-replay-shards.py total difftest/testdata/writer-shards "$RUNNER_TEMP/writer-replay/macos-15-intel"
-      - name: Writer replay total (windows-latest, 451 compared)
+      - name: Writer replay total (windows-latest, 444 compared)
         if: needs.scope.outputs.scope == 'code'
         shell: bash
         run: |
           set -euo pipefail
           python3 -I .github/scripts/check-writer-replay-shards.py --windows total difftest/testdata/writer-shards "$RUNNER_TEMP/writer-replay/windows-latest"
-      - name: Writer replay total (windows-11-arm, 451 compared)
+      - name: Writer replay total (windows-11-arm, 444 compared)
         if: needs.scope.outputs.scope == 'code'
         shell: bash
         run: |
