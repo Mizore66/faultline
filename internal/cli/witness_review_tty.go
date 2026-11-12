@@ -10,7 +10,6 @@ import (
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/proofview"
-	"github.com/Mizore66/faultline/internal/term"
 	"github.com/Mizore66/faultline/internal/witness"
 )
 
@@ -99,16 +98,18 @@ func RunWitnessReviewTTY(options WitnessReviewTTYOptions) (approval, frozen jsjs
 	return approval, frozen, identity, nil
 }
 
-// askApproval asks the question. On a real terminal stdin it uses raw mode
-// and the byte-exact Node readline model (nodeReadlineQuestion); otherwise
-// (injected readers, Windows console) it prints the prompt once and reads one
-// line. readline/promises.question never settles for an unterminated final
-// line at EOF, so only a newline-terminated line can answer.
+// askApproval asks the question. On a real terminal stdin it runs the
+// byte-exact port of Node's readline question (raw mode, editing keys,
+// history, redraws); otherwise (an injected reader, or a console without raw
+// mode) it prints the prompt once and reads one line. readline/promises
+// .question never settles for an unterminated final line at EOF, so only a
+// newline-terminated line can answer.
 func askApproval(options WitnessReviewTTYOptions, prompt string) (string, error) {
 	if f, ok := options.Stdin.(*os.File); ok && options.StdinIsTTY {
-		if restore, raw := term.MakeRaw(f); raw {
-			defer restore()
-			line, answered, err := nodeReadlineQuestion(f, options.Stdout, prompt)
+		// Output goes through the supplied writer (the CLI's process.stdout
+		// port); the terminal's width is asked of the stdout terminal itself.
+		line, answered, handled, err := terminalQuestion(f, options.Stdout, widthFile(options.Stdout), prompt)
+		if handled {
 			if err != nil {
 				return "", err
 			}
@@ -129,4 +130,14 @@ func askApproval(options WitnessReviewTTYOptions, prompt string) (string, error)
 		return jscase.Lower(jsstr.Trim(line)), nil
 	}
 	return "", nil
+}
+
+// widthFile is the terminal whose size the question follows: the supplied
+// writer when it is itself a file, otherwise the process's stdout (the CLI
+// passes a wrapper around fd 1).
+func widthFile(w io.Writer) *os.File {
+	if f, ok := w.(*os.File); ok {
+		return f
+	}
+	return os.Stdout
 }

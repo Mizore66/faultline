@@ -176,10 +176,10 @@ func liveExchange(t *testing.T, addr string, request []byte) []byte {
 // HTTP-date has no sub-second part): exactly one Date, a valid HTTP-date, and
 // inside the window. A response without Date is accepted only when it carries
 // no header besides Connection (a bare parser-level refusal); any other
-// response without Date fails. The two sides cannot show equal Date values
-// (sequential processes, and Node's http Date cannot be shimmed), so
-// liveNormalize keeps a `Date: {HTTP-DATE}` marker only after this check
-// passed. That is a documented qualification, open for explicit approval.
+// response without Date fails. This is a presence/validity check only: the
+// Date VALUE is never rewritten, and the two sides' values are then compared
+// exactly (they are produced back to back inside one wall-clock second, see
+// livePair).
 func liveCheckDate(raw []byte, start, end time.Time) error {
 	head, _, ok := strings.Cut(string(raw), "\r\n\r\n")
 	if !ok {
@@ -1038,9 +1038,12 @@ func TestLiveWitnessReview(t *testing.T) {
 	impls := liveReviewImpls(t, node, cli)
 	for _, tc := range witnessReviewLiveCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			// Both sides run at the same time, each in its own fresh work
-			// directory, and release every numbered exchange together, so the
-			// wall-clock Date headers are compared exactly and unnormalized.
+			// Both sides run concurrently as subtests but strictly take turns
+			// on ONE shared fresh work path (each side's private store is swapped
+			// in by rename, see livePair), so no path differs between their
+			// outputs. Every numbered exchange is a rendezvous: TS answers, then
+			// Go answers immediately after, so the wall-clock Date headers are
+			// compared exactly and unnormalized.
 			var records [2]liveRecord
 			pair := newLivePair(t, liveWorkdir(t, t.TempDir()))
 			t.Run("sides", func(t *testing.T) {
