@@ -499,3 +499,19 @@ func TestLiveWitnessReviewDateCheck(t *testing.T) {
 		}
 	}
 }
+
+// A real Date mismatch between the two sides is a failure, never normalized.
+func TestLiveWitnessReviewDateMismatchFails(t *testing.T) {
+	resp := func(date string) string {
+		return liveNormalize(t, "x", []byte("HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\nDate: "+date+"\r\nConnection: close\r\n\r\nx"), "", "")
+	}
+	same := liveRecord{transcript: []string{"step a\n" + resp("Thu, 12 Nov 2026 03:00:00 GMT")}}
+	if d := diffLiveRecords("same", same, same); len(d) != 0 {
+		t.Fatalf("identical Date reported as different: %v", d)
+	}
+	other := liveRecord{transcript: []string{"step a\n" + resp("Thu, 12 Nov 2026 03:00:01 GMT")}}
+	d := diffLiveRecords("rollover", same, other)
+	if len(d) != 1 || !strings.Contains(d[0], "Thu, 12 Nov 2026 03:00:00 GMT") || !strings.Contains(d[0], "Thu, 12 Nov 2026 03:00:01 GMT") {
+		t.Fatalf("a one-second Date difference was not reported verbatim: %v", d)
+	}
+}

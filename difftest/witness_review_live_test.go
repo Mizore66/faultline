@@ -40,15 +40,16 @@ import (
 // Declared normalizations, and only these:
 //   - each side's actual ephemeral port, `127.0.0.1:<port>` -> `127.0.0.1:{PORT}`;
 //   - each side's independently extracted 64-hex form token -> `{TOKEN}`;
-//   - the `Date:` response header VALUE only, which is wall-clock by nature and
-//     cannot be equal across two sequential processes (Node's http Date cannot
-//     be shimmed). This exceeds the brief's two normalizations and is OPEN for
-//     explicit approval. It is checked strictly first (liveCheckDate): exactly
-//     one Date, a valid HTTP-date inside that exchange's client time window,
-//     absent only on a bare parser refusal; then replaced by `{HTTP-DATE}`.
 //
-// Both sides run sequentially in the SAME work directory path, so no path is
-// normalized. Record timestamps are made equal by construction: the TypeScript
+// The `Date:` response header is NOT normalized: it is compared exactly. The
+// two sides run concurrently in lock step (livePair) and release every
+// numbered exchange together, so equal Dates are real; a second rollover
+// between the two answers makes that attempt a real failure and is retained.
+// liveCheckDate additionally requires exactly one Date (absent only on a bare
+// parser refusal) that is a valid HTTP-date in the exchange window.
+//
+// // Both sides use the SAME fresh work path (their states are swapped in by
+// rename, see livePair), so no path is normalized. Record timestamps are made equal by construction: the TypeScript
 // side loads difftest/testdata/witness-review/live-clock.mjs and the Go side
 // runs under FAULTLINE_TEST_SEED, both stamping the first record
 // 2026-07-16T12:00:00.000Z and the next .001Z; the resulting store trees are
@@ -67,7 +68,6 @@ var (
 	liveTokenRE   = regexp.MustCompile(`name="token" value="([0-9a-f]{64})"`)
 	liveDigestRE  = regexp.MustCompile(`name="reviewDigest" value="(sha256:[0-9a-f]{64})"`)
 	liveStartupRE = regexp.MustCompile(`^FaultLine local witness review: (http://127\.0\.0\.1:[1-9][0-9]*)\n`)
-	liveDateRE    = regexp.MustCompile(`(?m)^Date: ([^\r\n]*)\r$`)
 )
 
 // liveImpl is one implementation's launch recipe.
@@ -275,8 +275,6 @@ func liveFrame(raw string) string {
 func liveNormalize(t *testing.T, side string, raw []byte, port, token string) string {
 	t.Helper()
 	text := string(raw)
-	// Date was verified per exchange by liveCheckDate; its value cannot match.
-	text = liveDateRE.ReplaceAllString(text, "Date: {HTTP-DATE}\r")
 	text = liveFrame(text)
 	if port != "" {
 		text = strings.ReplaceAll(text, "127.0.0.1:"+port, "127.0.0.1:{PORT}")
@@ -298,6 +296,9 @@ type liveCtx struct {
 	digest string
 	// repropose replaces the stored proposal using the side under test.
 	repropose func(input string)
+	// pair releases this side's k-th exchange together with the other side's.
+	pair *livePair
+	side int
 }
 
 func (c *liveCtx) form(kv ...string) string {
@@ -381,22 +382,152 @@ type liveRecord struct {
 }
 
 func (c *liveCtx) fetchPage() string {
-	raw := liveExchange(c.t, c.addr, c.get("/"))
+	var raw []byte
+	c.pair.exchange(c.t, c.side, "initial", func() { raw = liveExchange(c.t, c.addr, c.get("/")) })
 	return string(raw)
 }
 
-func runLiveCase(t *testing.T, tc liveCase, im liveImpl, parent string) liveRecord {
+// livePair runs the TS and Go sides of one case against ONE shared work path
+// (so no path ever differs between their outputs) while keeping each side's
+// state private: the work directory's entries are swapped between two private
+// stores by rename whenever the other side becomes active, so only one side
+// ever touches the shared path at a time (every filesystem action of a side
+// runs inside with). Each numbered exchange is a rendezvous: both sides arrive,
+// TS runs its exchange, then Go runs its exchange immediately after, so the
+// wall-clock Date header of the two answers is compared exactly and
+// unnormalized. If the second rolls over between the two answers, that attempt
+// is a real, retained parity failure.
+type livePair struct {
+	work   string
+	stores [2]string
+	mu     sync.Mutex // held while a side is active on the work path
+	cur    int        // side whose state is on the work path; -1 none yet
+	ready  sync.Mutex
+	rv     map[string]chan struct{}
+	done   map[string]chan struct{}
+	gone   chan struct{}
+	once   sync.Once
+}
+
+func newLivePair(t *testing.T, work string) *livePair {
 	t.Helper()
-	root := liveWorkdir(t, parent)
+	p := &livePair{work: work, cur: -1, rv: map[string]chan struct{}{}, done: map[string]chan struct{}{}, gone: make(chan struct{})}
+	for i := range p.stores {
+		p.stores[i] = t.TempDir()
+	}
+	return p
+}
+
+func (p *livePair) leave() { p.once.Do(func() { close(p.gone) }) }
+
+func (p *livePair) activate(t *testing.T, i int) {
+	t.Helper()
+	if p.cur == i {
+		return
+	}
+	move := func(from, to string) {
+		entries, err := os.ReadDir(from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if err := os.Rename(filepath.Join(from, e.Name()), filepath.Join(to, e.Name())); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if p.cur >= 0 {
+		move(p.work, p.stores[p.cur])
+	}
+	move(p.stores[i], p.work)
+	p.cur = i
+}
+
+// with runs fn while side i exclusively owns the work path.
+func (p *livePair) with(t *testing.T, i int, fn func()) {
+	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.activate(t, i)
+	fn()
+}
+
+func (p *livePair) chanFor(m map[string]chan struct{}, key string) (chan struct{}, bool) {
+	p.ready.Lock()
+	defer p.ready.Unlock()
+	ch, ok := m[key]
+	if !ok {
+		ch = make(chan struct{})
+		m[key] = ch
+	}
+	return ch, ok
+}
+
+// exchange is one numbered exchange of side i (0 TS, 1 Go).
+func (p *livePair) exchange(t *testing.T, i int, key string, fn func()) {
+	t.Helper()
+	ch, existed := p.chanFor(p.rv, key)
+	if existed {
+		close(ch)
+	} else {
+		select {
+		case <-ch:
+		case <-p.gone:
+			t.Fatalf("the other side left before exchange %q", key)
+		case <-time.After(60 * time.Second):
+			t.Fatalf("the other side never reached exchange %q", key)
+		}
+	}
+	doneCh, _ := p.chanFor(p.done, key)
+	if i == 0 {
+		defer close(doneCh)
+		// Start the pair just after a whole-second boundary, so both answers
+		// are stamped inside the same wall-clock second (a Date header has
+		// one-second resolution). Nothing about the header is altered.
+		if frac := time.Now().Nanosecond(); frac > 100_000_000 {
+			time.Sleep(time.Second - time.Duration(frac))
+		}
+		p.with(t, 0, fn)
+		return
+	}
+	select {
+	case <-doneCh:
+	case <-p.gone:
+		t.Fatalf("the other side left during exchange %q", key)
+	case <-time.After(60 * time.Second):
+		t.Fatalf("the other side never finished exchange %q", key)
+	}
+	p.with(t, 1, fn)
+}
+
+func runLiveCase(t *testing.T, tc liveCase, im liveImpl, side int, pair *livePair) liveRecord {
+	t.Helper()
+	defer pair.leave()
+	root := pair.work
 	proposal := tc.proposal
 	if proposal == "" {
 		proposal = liveReviewPropose
 	}
-	im.propose(t, root, proposal)
-	if tc.setup != nil {
-		tc.setup(t, im, root)
+	pair.with(t, side, func() {
+		if err := os.WriteFile(filepath.Join(root, "p.json"), []byte(liveReviewPropose), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		im.propose(t, root, proposal)
+		if tc.setup != nil {
+			tc.setup(t, im, root)
+		}
+	})
+	snapshot := func(label, want string) (out map[string]string) {
+		pair.with(t, side, func() { out = snapshotLocked(t, tc, im, root, label, want) })
+		return out
 	}
-	snapshot := func(label, want string) map[string]string {
+	_ = snapshot
+	return runLiveCaseBody(t, tc, im, side, pair, root, snapshot)
+}
+
+// snapshotLocked is the independent store check; the caller owns the work path.
+func snapshotLocked(t *testing.T, tc liveCase, im liveImpl, root, label, want string) map[string]string {
+	{
 		if want == "tampered" {
 			// The stored proposal was edited: the independent verifier must
 			// REJECT it, and no approval or frozen record may exist.
@@ -438,19 +569,26 @@ func runLiveCase(t *testing.T, tc liveCase, im liveImpl, parent string) liveReco
 		}
 		return snap
 	}
+}
+
+func runLiveCaseBody(t *testing.T, tc liveCase, im liveImpl, side int, pair *livePair, root string, snapshot func(label, want string) map[string]string) liveRecord {
 	var rec liveRecord
 	rec.snapshots = append(rec.snapshots, snapshot("after propose", "none"))
 	args := append([]string{"witness", "review", liveReviewID}, tc.args...)
 	ctx, cancel := context.WithTimeout(context.Background(), serveBundleStartupTimeout)
-	proc, err := servefixture.StartWithOptions(ctx, im.exe, im.prefix, args, im.environ(root, tc.env...), root, servefixture.StartOptions{
-		StartupLines: 2, StartupDescription: "witness review startup lines",
-		ValidateStartup: func(out []byte) (string, error) {
-			m := liveStartupRE.FindStringSubmatch(string(out))
-			if m == nil {
-				return "", fmt.Errorf("startup %q", out)
-			}
-			return m[1], nil
-		},
+	var proc *servefixture.Started
+	var err error
+	pair.with(t, side, func() {
+		proc, err = servefixture.StartWithOptions(ctx, im.exe, im.prefix, args, im.environ(root, tc.env...), root, servefixture.StartOptions{
+			StartupLines: 2, StartupDescription: "witness review startup lines",
+			ValidateStartup: func(out []byte) (string, error) {
+				m := liveStartupRE.FindStringSubmatch(string(out))
+				if m == nil {
+					return "", fmt.Errorf("startup %q", out)
+				}
+				return m[1], nil
+			},
+		})
 	})
 	cancel()
 	if err != nil {
@@ -463,7 +601,7 @@ func runLiveCase(t *testing.T, tc liveCase, im liveImpl, parent string) liveReco
 	})
 	addr := strings.TrimPrefix(proc.URL, "http://")
 	c := &liveCtx{t: t, root: root, addr: addr, port: addr[strings.LastIndex(addr, ":")+1:],
-		repropose: func(input string) { im.propose(t, root, input) }}
+		repropose: func(input string) { im.propose(t, root, input) }, pair: pair, side: side}
 	if _, err := strconv.Atoi(c.port); err != nil {
 		t.Fatalf("port %q", c.port)
 	}
@@ -479,24 +617,29 @@ func runLiveCase(t *testing.T, tc liveCase, im liveImpl, parent string) liveReco
 	state := "none"
 	for _, step := range tc.steps {
 		if step.act != nil {
-			step.act(c)
+			pair.with(t, side, func() { step.act(c) })
 		}
-		reqs := step.reqs(c)
+		var reqs [][]byte
+		pair.with(t, side, func() { reqs = step.reqs(c) })
 		responses := make([]string, len(reqs))
 		if step.concurrent {
-			var wg sync.WaitGroup
-			for i, r := range reqs {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					responses[i] = liveNormalize(t, im.name, liveExchange(t, c.addr, r), c.port, c.token)
-				}()
-			}
-			wg.Wait()
+			pair.exchange(t, side, step.label+" batch", func() {
+				var wg sync.WaitGroup
+				for i, r := range reqs {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						responses[i] = liveNormalize(t, im.name, liveExchange(t, c.addr, r), c.port, c.token)
+					}()
+				}
+				wg.Wait()
+			})
 			sort.Strings(responses) // arrival order is not an observable of a race
 		} else {
 			for i, r := range reqs {
-				responses[i] = liveNormalize(t, im.name, liveExchange(t, c.addr, r), c.port, c.token)
+				pair.exchange(t, side, fmt.Sprintf("%s #%d", step.label, i), func() {
+					responses[i] = liveNormalize(t, im.name, liveExchange(t, c.addr, r), c.port, c.token)
+				})
 			}
 		}
 		rec.transcript = append(rec.transcript, "step "+step.label+"\n"+strings.Join(responses, "\n=====\n"))
@@ -546,20 +689,29 @@ func liveConsoleHelper(t *testing.T) string {
 
 func compareLiveRecords(t *testing.T, name string, ts, goRec liveRecord) {
 	t.Helper()
+	for _, d := range diffLiveRecords(name, ts, goRec) {
+		t.Error(d)
+	}
+}
+
+// diffLiveRecords returns one message per difference; none means exact equality.
+func diffLiveRecords(name string, ts, goRec liveRecord) []string {
+	var out []string
 	if len(ts.transcript) != len(goRec.transcript) {
-		t.Fatalf("%s: TS has %d transcript sections, Go %d", name, len(ts.transcript), len(goRec.transcript))
+		return []string{fmt.Sprintf("%s: TS has %d transcript sections, Go %d", name, len(ts.transcript), len(goRec.transcript))}
 	}
 	for i := range ts.transcript {
 		if ts.transcript[i] != goRec.transcript[i] {
-			t.Errorf("%s: Go differs from TS in %q\n--- TS\n%s\n--- Go\n%s\n%s", name, strings.SplitN(ts.transcript[i], "\n", 2)[0],
-				ts.transcript[i], goRec.transcript[i], serveBundleDiff([]byte(goRec.transcript[i]), []byte(ts.transcript[i])))
+			out = append(out, fmt.Sprintf("%s: Go differs from TS in %q\n--- TS\n%s\n--- Go\n%s\n%s", name, strings.SplitN(ts.transcript[i], "\n", 2)[0],
+				ts.transcript[i], goRec.transcript[i], serveBundleDiff([]byte(goRec.transcript[i]), []byte(ts.transcript[i]))))
 		}
 	}
 	for i := range ts.snapshots {
 		if d := diffSnapshots(ts.snapshots[i], goRec.snapshots[i]); d != "" {
-			t.Errorf("%s: store tree after step %d differs between TS and Go:\n%s", name, i, d)
+			out = append(out, fmt.Sprintf("%s: store tree after step %d differs between TS and Go:\n%s", name, i, d))
 		}
 	}
+	return out
 }
 
 // ---- case table ----
@@ -886,10 +1038,21 @@ func TestLiveWitnessReview(t *testing.T) {
 	impls := liveReviewImpls(t, node, cli)
 	for _, tc := range witnessReviewLiveCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			parent := t.TempDir()
+			// Both sides run at the same time, each in its own fresh work
+			// directory, and release every numbered exchange together, so the
+			// wall-clock Date headers are compared exactly and unnormalized.
 			var records [2]liveRecord
-			for i, im := range impls {
-				records[i] = runLiveCase(t, tc, im, parent)
+			pair := newLivePair(t, liveWorkdir(t, t.TempDir()))
+			t.Run("sides", func(t *testing.T) {
+				for i, im := range impls {
+					t.Run(im.name, func(t *testing.T) {
+						t.Parallel()
+						records[i] = runLiveCase(t, tc, im, i, pair)
+					})
+				}
+			})
+			if t.Failed() {
+				return
 			}
 			compareLiveRecords(t, tc.name, records[0], records[1])
 		})
