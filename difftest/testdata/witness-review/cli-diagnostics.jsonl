@@ -14,3 +14,5 @@
 {"id":"witness-review-no-commits","text":"No commits to show."}
 {"id":"witness-review-footer","text":"FaultLine records a human-reviewed witness without executing it. Proof claims require a separately completed Docker-isolated investigation and a verified portable bundle."}
 {"id":"witness-review-tty-declined","text":"Approval declined; no records were written."}
+{"id":"witness-review-tty-aborted-ctrl-d","text":"Aborted with Ctrl+D"}
+{"id":"witness-review-tty-aborted-ctrl-c","text":"Aborted with Ctrl+C"}

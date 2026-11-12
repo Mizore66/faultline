@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"os"
 
 	"github.com/Mizore66/faultline/internal/jscase"
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/proofview"
+	"github.com/Mizore66/faultline/internal/term"
 	"github.com/Mizore66/faultline/internal/witness"
 )
 
@@ -67,18 +69,9 @@ func RunWitnessReviewTTY(options WitnessReviewTTYOptions) (approval, frozen jsjs
 	if identity == "" {
 		return fail("EMPTY_ANSWER", "Reviewer identity is empty.")
 	}
-	if _, err := io.WriteString(options.Stdout, `Approve & freeze as "`+identity+`"? [y/N] `); err != nil {
+	answer, err := askApproval(options, `Approve & freeze as "`+identity+`"? [y/N] `)
+	if err != nil {
 		return jsjson.Value{}, jsjson.Value{}, "", err
-	}
-	// readline/promises.question never settles for an unterminated final line
-	// at EOF, so only a newline-terminated line can answer.
-	line, readErr := bufio.NewReader(options.Stdin).ReadString('\n')
-	if readErr != nil && !errors.Is(readErr, io.EOF) {
-		return jsjson.Value{}, jsjson.Value{}, "", readErr
-	}
-	answer := ""
-	if readErr == nil {
-		answer = jscase.Lower(jsstr.Trim(line))
 	}
 	if answer != "y" && answer != "yes" {
 		return fail("DECLINED", "Approval declined; no records were written.")
@@ -104,4 +97,36 @@ func RunWitnessReviewTTY(options WitnessReviewTTYOptions) (approval, frozen jsjs
 		return jsjson.Value{}, jsjson.Value{}, "", err
 	}
 	return approval, frozen, identity, nil
+}
+
+// askApproval asks the question. On a real terminal stdin it uses raw mode
+// and the byte-exact Node readline model (nodeReadlineQuestion); otherwise
+// (injected readers, Windows console) it prints the prompt once and reads one
+// line. readline/promises.question never settles for an unterminated final
+// line at EOF, so only a newline-terminated line can answer.
+func askApproval(options WitnessReviewTTYOptions, prompt string) (string, error) {
+	if f, ok := options.Stdin.(*os.File); ok && options.StdinIsTTY {
+		if restore, raw := term.MakeRaw(f); raw {
+			defer restore()
+			line, answered, err := nodeReadlineQuestion(f, options.Stdout, prompt)
+			if err != nil {
+				return "", err
+			}
+			if !answered {
+				return "", nil
+			}
+			return jscase.Lower(jsstr.Trim(line)), nil
+		}
+	}
+	if _, err := io.WriteString(options.Stdout, prompt); err != nil {
+		return "", err
+	}
+	line, readErr := bufio.NewReader(options.Stdin).ReadString('\n')
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return "", readErr
+	}
+	if readErr == nil {
+		return jscase.Lower(jsstr.Trim(line)), nil
+	}
+	return "", nil
 }

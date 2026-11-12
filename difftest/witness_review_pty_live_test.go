@@ -129,6 +129,7 @@ func TestLiveWitnessReviewPTY(t *testing.T) {
 		{name: "yes with LF", input: "yes\n", identity: "local-reviewer", approves: true, same: true},
 		{name: "padded upper YES", input: " YES \r", identity: "local-reviewer", approves: true, same: true},
 		{name: "configured git user.name", input: "y\r", env: []string{"GIT_CONFIG_GLOBAL=" + configured}, identity: "PTY Reviewer", approves: true, same: true},
+		{name: "backspace then n", input: "y\x7fn\r", same: true},
 		{name: "n", input: "n\r", same: true},
 		{name: "empty line", input: "\r", same: true},
 		{name: "yep", input: "yep\r", same: true},
@@ -176,56 +177,25 @@ func TestLiveWitnessReviewPTY(t *testing.T) {
 			if !strings.Contains(ts.head, `Approve & freeze as "`+c.identity+`"? [y/N] `) && c.identity != "" {
 				t.Errorf("TS prompt lacks identity %q: %q", c.identity, ts.head[max(0, len(ts.head)-80):])
 			}
-			// Node's readline (terminal mode) redraws the prompt line with
-			// ESC[1G ESC[0J before printing it and, on echo, moves the cursor
-			// to the column after the prompt (ESC[<col>G) and ends the echoed
-			// line with CR CR LF. Go prints the prompt once and lets the line
-			// discipline echo. This is a recorded difference
-			// (difftest/KNOWN_DIFFERENCES.md, witness review), asserted here as
-			// EXACTLY this transform so any other drift still fails; nothing is
-			// normalized away.
-			prompt := fmt.Sprintf("Approve & freeze as %q? [y/N] ", c.identityOrDefault())
-			wantTSHead := strings.TrimSuffix(goRun.head, prompt) + "\x1b[1G\x1b[0J" + prompt
-			if ts.head != wantTSHead {
-				t.Errorf("review text and prompt differ beyond the recorded readline redraw\n%s", serveBundleDiff([]byte(ts.head), []byte(wantTSHead)))
+			// Exact parity: no transform, no accepted alternative.
+			if ts.head != goRun.head {
+				t.Errorf("review text and prompt differ\n%s", serveBundleDiff([]byte(ts.head), []byte(goRun.head)))
 			}
-			if c.same || c.approves {
-				wantTSTail := fmt.Sprintf("\x1b[%dG", len(prompt)+1) + strings.Replace(goRun.tail, "\r\n", "\r\r\n", 1)
-				if ts.tail != wantTSTail {
-					t.Errorf("transcript after the answer differs beyond the recorded readline echo\nTS   %q\nwant %q (from Go %q)", ts.tail, wantTSTail, goRun.tail)
-				}
+			if ts.tail != goRun.tail {
+				t.Errorf("transcript after the answer differs\nTS %q\nGo %q", ts.tail, goRun.tail)
 			}
 			if d := diffSnapshots(snaps[0], snaps[1]); d != "" {
 				t.Errorf("store trees differ:\n%s", d)
 			}
 			tsExit, goExit := fmt.Sprint(ptrInt(ts.exit), ptrStr(ts.signal)), fmt.Sprint(ptrInt(goRun.exit), ptrStr(goRun.signal))
-			if c.same {
-				if tsExit != goExit {
-					t.Errorf("exit differs: TS %s Go %s", tsExit, goExit)
-				}
-				if !c.approves && ts.stderr != goRun.stderr {
-					t.Errorf("stderr differs: TS %q Go %q", ts.stderr, goRun.stderr)
-				}
+			if tsExit != goExit {
+				t.Errorf("exit differs: TS %s Go %s", tsExit, goExit)
+			}
+			if ts.stderr != goRun.stderr {
+				t.Errorf("stderr differs: TS %q Go %q", ts.stderr, goRun.stderr)
 			}
 			t.Logf("TS : exit=%s stderr=%q tail=%q", tsExit, ts.stderr, ts.tail)
 			t.Logf("Go : exit=%s stderr=%q tail=%q", goExit, goRun.stderr, goRun.tail)
-			switch c.name {
-			case "EOF Ctrl+D":
-				// Both decline without writing records and exit 1, but the
-				// diagnostics differ: Node's readline aborts the question.
-				if ts.stderr != "FaultLine error: Aborted with Ctrl+D\nNext: pnpm fl help\n" ||
-					goRun.stderr != "FaultLine error: Approval declined; no records were written.\nNext: pnpm fl help\n" || tsExit != goExit {
-					t.Errorf("EOF characterization changed: TS %q Go %q (exit TS %s Go %s)", ts.stderr, goRun.stderr, tsExit, goExit)
-				}
-			case "Ctrl+C":
-				// Node's raw-mode readline reads ^C as input and aborts (exit
-				// 1); Go leaves ISIG on, so the kernel delivers SIGINT and the
-				// process dies by it. Neither writes a record.
-				if ts.stderr != "FaultLine error: Aborted with Ctrl+C\nNext: pnpm fl help\n" || ts.exit == nil || *ts.exit != 1 ||
-					goRun.signal == nil || *goRun.signal != "interrupt" {
-					t.Errorf("Ctrl+C characterization changed: TS %q exit=%s Go exit=%s", ts.stderr, tsExit, goExit)
-				}
-			}
 		})
 	}
 	// Unterminated final line: Node's readline question never settles at EOF

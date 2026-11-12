@@ -75,6 +75,22 @@ func TestWitnessReviewTTYReplay(t *testing.T) {
 		}
 	})
 
+	for _, c := range []struct{ name, key, answer string }{
+		{"Ctrl+D aborts", "witness-review-tty-aborted-ctrl-d", "\x04"},
+		{"Ctrl+C aborts", "witness-review-tty-aborted-ctrl-c", "\x03"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out, stderr, code := run([]string{"witness", "review", "p1"}, c.answer)
+			want := "FaultLine error: " + texts[c.key] + "\nNext: pnpm fl help\n"
+			if texts[c.key] == "" || code != 1 || stderr != want || !strings.Contains(out, "[y/N] ") {
+				t.Fatalf("exit=%d stderr=%q output=%q, want stderr %q", code, stderr, out, want)
+			}
+			if _, err := os.Stat(filepath.Join(work, ".faultline", "witnesses", "approvals", "p1.json")); err == nil {
+				t.Fatal("an aborted review wrote an approval")
+			}
+		})
+	}
+
 	t.Run("yes approves and freezes", func(t *testing.T) {
 		out, stderr, code := run([]string{"witness", "review", "p1", "--tty"}, "yes\r")
 		if code != 0 || stderr != "" || !strings.Contains(out, "Frozen p1 · approvedBy ") {

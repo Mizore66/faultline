@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Independent verification of witness records for the live review comparison.
@@ -118,7 +119,7 @@ func omitKey(m map[string]any, key string) map[string]any {
 }
 
 func asMap(v any) map[string]any { m, _ := v.(map[string]any); return m }
-func asString(v any) string     { s, _ := v.(string); return s }
+func asString(v any) string      { s, _ := v.(string); return s }
 
 // recordFile reads one record, requiring the write-once format: canonical JSON
 // plus exactly one LF, regular file, mode 0600 (POSIX).
@@ -469,4 +470,32 @@ func TestWitnessReviewRecordVerifier(t *testing.T) {
 			t.Fatal("different stores compared equal")
 		}
 	})
+}
+
+func TestLiveWitnessReviewDateCheck(t *testing.T) {
+	start := time.Date(2026, 11, 12, 3, 0, 0, 900_000_000, time.UTC)
+	end := start.Add(300 * time.Millisecond)
+	ok := func(d string) string {
+		return "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\nDate: " + d + "\r\nConnection: close\r\n\r\nx"
+	}
+	for _, c := range []struct {
+		name, raw string
+		bad       bool
+	}{
+		{"start second", ok("Thu, 12 Nov 2026 03:00:00 GMT"), false},
+		{"end second", ok("Thu, 12 Nov 2026 03:00:01 GMT"), false},
+		{"stale", ok("Thu, 12 Nov 2026 02:59:59 GMT"), true},
+		{"future", ok("Thu, 12 Nov 2026 03:00:02 GMT"), true},
+		{"not a date", ok("yesterday"), true},
+		{"duplicate", "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\nDate: Thu, 12 Nov 2026 03:00:00 GMT\r\nDate: Thu, 12 Nov 2026 03:00:00 GMT\r\n\r\n", true},
+		{"absent on a handler response", "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\nConnection: close\r\n\r\nx", true},
+		{"bare parser refusal has none", "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n", false},
+		{"bare refusal with a stray Date still checked", "HTTP/1.1 400 Bad Request\r\nDate: yesterday\r\nConnection: close\r\n\r\n", true},
+		{"not an HTTP response at all", "", false},
+	} {
+		err := liveCheckDate([]byte(c.raw), start, end)
+		if (err != nil) != c.bad {
+			t.Errorf("%s: error %v, want bad=%v", c.name, err, c.bad)
+		}
+	}
 }

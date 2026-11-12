@@ -40,9 +40,12 @@ import (
 // Declared normalizations, and only these:
 //   - each side's actual ephemeral port, `127.0.0.1:<port>` -> `127.0.0.1:{PORT}`;
 //   - each side's independently extracted 64-hex form token -> `{TOKEN}`;
-//   - the single `Date:` response header, which is wall-clock by nature; it
-//     must be present exactly once and parse as an HTTP-date on each side, and
-//     is then replaced by `{HTTP-DATE}`.
+//   - the `Date:` response header VALUE only, which is wall-clock by nature and
+//     cannot be equal across two sequential processes (Node's http Date cannot
+//     be shimmed). This exceeds the brief's two normalizations and is OPEN for
+//     explicit approval. It is checked strictly first (liveCheckDate): exactly
+//     one Date, a valid HTTP-date inside that exchange's client time window,
+//     absent only on a bare parser refusal; then replaced by `{HTTP-DATE}`.
 //
 // Both sides run sequentially in the SAME work directory path, so no path is
 // normalized. Record timestamps are made equal by construction: the TypeScript
@@ -153,6 +156,7 @@ func liveExchange(t *testing.T, addr string, request []byte) []byte {
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
+	start := time.Now()
 	// The server may answer and close before a large body is consumed; a
 	// failed write then only means the response is already on its way.
 	go func() { _, _ = conn.Write(request) }()
@@ -161,7 +165,56 @@ func liveExchange(t *testing.T, addr string, request []byte) []byte {
 	if err != nil && got.Len() == 0 {
 		t.Fatalf("no response to %q: %v", clipText(request), err)
 	}
+	if derr := liveCheckDate(got.Bytes(), start, time.Now()); derr != nil {
+		t.Fatalf("Date header: %v in %s", derr, clipText(got.Bytes()))
+	}
 	return got.Bytes()
+}
+
+// liveCheckDate verifies the wall-clock Date header of one raw response against
+// the client's own [start, end] window of the exchange (whole seconds, as an
+// HTTP-date has no sub-second part): exactly one Date, a valid HTTP-date, and
+// inside the window. A response without Date is accepted only when it carries
+// no header besides Connection (a bare parser-level refusal); any other
+// response without Date fails. The two sides cannot show equal Date values
+// (sequential processes, and Node's http Date cannot be shimmed), so
+// liveNormalize keeps a `Date: {HTTP-DATE}` marker only after this check
+// passed. That is a documented qualification, open for explicit approval.
+func liveCheckDate(raw []byte, start, end time.Time) error {
+	head, _, ok := strings.Cut(string(raw), "\r\n\r\n")
+	if !ok {
+		head = string(raw)
+	}
+	lines := strings.Split(head, "\r\n")
+	if !strings.HasPrefix(lines[0], "HTTP/") {
+		return nil // not an HTTP response; compared as raw bytes
+	}
+	var dates []string
+	others := 0
+	for _, l := range lines[1:] {
+		if v, found := strings.CutPrefix(l, "Date: "); found {
+			dates = append(dates, v)
+		} else if !strings.HasPrefix(l, "Connection:") {
+			others++
+		}
+	}
+	switch {
+	case len(dates) > 1:
+		return fmt.Errorf("Date sent %d times", len(dates))
+	case len(dates) == 0:
+		if others > 0 {
+			return fmt.Errorf("Date absent from a handler response")
+		}
+		return nil
+	}
+	got, err := http.ParseTime(dates[0])
+	if err != nil {
+		return fmt.Errorf("%q is not an HTTP-date: %v", dates[0], err)
+	}
+	if got.Before(start.UTC().Truncate(time.Second)) || got.After(end.UTC().Truncate(time.Second)) {
+		return fmt.Errorf("%q outside the exchange window %s..%s", dates[0], start.UTC().Format(http.TimeFormat), end.UTC().Format(http.TimeFormat))
+	}
+	return nil
 }
 
 func clipText(b []byte) string {
@@ -222,15 +275,8 @@ func liveFrame(raw string) string {
 func liveNormalize(t *testing.T, side string, raw []byte, port, token string) string {
 	t.Helper()
 	text := string(raw)
-	if matches := liveDateRE.FindAllStringSubmatch(text, -1); len(matches) > 0 {
-		if len(matches) != 1 {
-			t.Fatalf("%s: Date sent %d times in %s", side, len(matches), clipText(raw))
-		}
-		if _, err := http.ParseTime(matches[0][1]); err != nil {
-			t.Fatalf("%s: Date %q is not an HTTP-date: %v", side, matches[0][1], err)
-		}
-		text = liveDateRE.ReplaceAllString(text, "Date: {HTTP-DATE}\r")
-	}
+	// Date was verified per exchange by liveCheckDate; its value cannot match.
+	text = liveDateRE.ReplaceAllString(text, "Date: {HTTP-DATE}\r")
 	text = liveFrame(text)
 	if port != "" {
 		text = strings.ReplaceAll(text, "127.0.0.1:"+port, "127.0.0.1:{PORT}")
@@ -662,7 +708,9 @@ func witnessReviewLiveCases() []liveCase {
 				return c.post("/approve-freeze", c.good("reviewDigest", "sha256:"+strings.Repeat("0", 64)))
 			})),
 			okStep("blank reviewer", "none", one(func(c *liveCtx) []byte { return c.post("/approve-freeze", c.good("approvedBy", "   ")) })),
-			okStep("reviewer 513 chars", "none", one(func(c *liveCtx) []byte { return c.post("/approve-freeze", c.good("approvedBy", strings.Repeat("r", 513))) })),
+			okStep("reviewer 513 chars", "none", one(func(c *liveCtx) []byte {
+				return c.post("/approve-freeze", c.good("approvedBy", strings.Repeat("r", 513)))
+			})),
 			okStep("note 8001 chars", "none", one(func(c *liveCtx) []byte { return c.post("/approve-freeze", c.good("note", strings.Repeat("n", 8001))) })),
 			okStep("freeze before approve", "none", one(func(c *liveCtx) []byte {
 				return c.post("/freeze", c.form("token", c.token, "reviewDigest", c.digest))
@@ -768,7 +816,9 @@ func witnessReviewLiveCases() []liveCase {
 				}},
 		}},
 		{name: "tampered-unblinded-proposal", steps: []liveStep{
-			{label: "add an unblinded member", wantState: "tampered", act: tamperProposal(func(s string) string { return strings.Replace(s, `"proposalId":"p1"`, `"extra":1,"proposalId":"p1"`, 1) }),
+			{label: "add an unblinded member", wantState: "tampered", act: tamperProposal(func(s string) string {
+				return strings.Replace(s, `"proposalId":"p1"`, `"extra":1,"proposalId":"p1"`, 1)
+			}),
 				reqs: func(c *liveCtx) [][]byte { return [][]byte{c.get("/"), c.post("/approve-freeze", c.good())} }},
 		}},
 		{name: "draft-missing-file-and-matching", setup: func(t *testing.T, im liveImpl, root string) {
@@ -776,7 +826,9 @@ func witnessReviewLiveCases() []liveCase {
 				t.Fatal(err)
 			}
 		}, steps: []liveStep{pageOnly("GET with empty draft store"),
-			{label: "write matching draft then GET", act: func(c *liveCtx) { writeLiveDraft(c.t, c.root, true, nil, jsjson.Value{}, filepath.Join(c.root, "absent-repo")) },
+			{label: "write matching draft then GET", act: func(c *liveCtx) {
+				writeLiveDraft(c.t, c.root, true, nil, jsjson.Value{}, filepath.Join(c.root, "absent-repo"))
+			},
 				reqs: func(c *liveCtx) [][]byte {
 					return [][]byte{c.get("/"), c.post("/approve-freeze", c.good())}
 				}, wantState: "frozen"},
