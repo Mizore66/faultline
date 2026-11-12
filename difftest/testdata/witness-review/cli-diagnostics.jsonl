@@ -1,0 +1,16 @@
+{"id":"witness-review-invalid-port","text":"--port must be an integer from 0 through 65535."}
+{"id":"witness-review-usage","text":"Usage: fl witness review <proposal-id> [--json | --tty | --browser | --two-step | --port <number>] [--draft-store <directory>]"}
+{"id":"witness-review-standalone","text":"Standalone proposal — no incident draft range was supplied."}
+{"id":"witness-review-missing-token","text":"This local review action did not include the current review token."}
+{"id":"witness-review-token-length","text":"Input buffers must have the same byte length"}
+{"id":"witness-review-ack-atomic","text":"Human approval requires acknowledgement that the exact command and overlay were reviewed."}
+{"id":"witness-review-ack-approve","text":"Human approval requires acknowledgement that the exact command and overlay bytes were reviewed."}
+{"id":"witness-review-confirmation-mismatch","text":"Explicit review confirmation does not match the review snapshot"}
+{"id":"witness-review-form-too-large","text":"review form is too large"}
+{"id":"witness-review-draft-unbound","text":"Incident draft is not bound to a proposed witness; do not review or freeze it through this workbench."}
+{"id":"witness-review-draft-mismatch","text":"Incident draft does not match the stored witness proposal; do not approve or freeze either record."}
+{"id":"witness-review-integrity-next","text":"Create a fresh, strictly blinded proposal after resolving the integrity problem. FaultLine did not execute, approve, or freeze anything."}
+{"id":"witness-review-git-unavailable","text":"Git metadata unavailable for this draft repository path; showing abbreviated endpoints only."}
+{"id":"witness-review-no-commits","text":"No commits to show."}
+{"id":"witness-review-footer","text":"FaultLine records a human-reviewed witness without executing it. Proof claims require a separately completed Docker-isolated investigation and a verified portable bundle."}
+{"id":"witness-review-tty-declined","text":"Approval declined; no records were written."}
