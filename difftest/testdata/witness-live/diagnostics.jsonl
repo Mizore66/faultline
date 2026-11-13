@@ -1,0 +1,7 @@
+{"id":"witness-live-no-proposal-id","text":"Missing required option: --proposal-id"}
+{"id":"witness-live-no-overlay-root","text":"Missing required option: --overlay-root"}
+{"id":"witness-live-no-key","text":"OPENAI_API_KEY is required for a live GPT-5.6 witness proposal. The judge demo does not require one."}
+{"id":"witness-live-unsafe-overlay","text":"Model proposed an unsafe overlay path: ../x"}
+{"id":"witness-live-root-not-directory","text":"Overlay root must be a real directory: <WS>/overlays"}
+{"id":"witness-live-parent-not-directory","text":"Model overlay cannot traverse a symbolic link or non-directory: a/b.mjs"}
+{"id":"witness-live-leaf-not-file","text":"Model overlay must be a regular non-symlink file: d"}

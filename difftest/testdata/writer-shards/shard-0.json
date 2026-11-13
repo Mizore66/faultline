@@ -289,10 +289,14 @@
     "verify-git-bundle-records-git",
     "verify-receipt-symlink",
     "witness-implement-codex-noop",
-    "witness-implement-codex-not-on-path"
+    "witness-implement-codex-not-on-path",
+    "witness-live-blind-schema",
+    "witness-live-incident-unreadable",
+    "witness-live-root-missing-after-provider",
+    "witness-live-unsafe-overlay"
   ],
-  "golden": 336,
+  "golden": 340,
   "windowsPass": 101,
-  "windowsSkip": 185,
+  "windowsSkip": 189,
   "windowsCompared": 115
 }

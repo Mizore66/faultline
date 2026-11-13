@@ -61,7 +61,7 @@ func defaultWitnessProposal() jsjson.Value {
 // --live GPT call is out of scope.
 func (e *env) witnessProposalSample(args []string) error {
 	if hasFlag(args, "--live") {
-		return fail("not yet ported: witness propose --live")
+		return e.witnessProposeLivePreview(args)
 	}
 	e.printJSON(obj("source", "sample", "proposal", defaultWitnessProposal(), "note", "Pass --live to call GPT-5.6 with a blinded incident packet."))
 	return nil
@@ -249,7 +249,7 @@ func witnessCommand(e *env, args []string) error {
 // witnessPropose ports the "propose" case (src/cli-app.ts:1345).
 func (e *env) witnessPropose(store string, args []string) error {
 	if liveIncident, ok := option(args, "--incident"); hasFlag(args, "--live") && ok && liveIncident != "" {
-		return fail("not yet ported: witness propose --live")
+		return witnessProposeLive(e, args, store)
 	}
 	inputFile, ok := option(args, "--input")
 	if !ok || inputFile == "" {

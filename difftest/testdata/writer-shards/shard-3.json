@@ -260,10 +260,12 @@
     "turns-runtime-mapping-invalid",
     "witness-implement-codex-killed",
     "witness-implement-codex-missing-bin",
-    "witness-implement-codex-ok"
+    "witness-implement-codex-ok",
+    "witness-live-no-proposal-id",
+    "witness-live-root-not-directory"
   ],
-  "golden": 318,
+  "golden": 320,
   "windowsPass": 100,
-  "windowsSkip": 158,
+  "windowsSkip": 160,
   "windowsCompared": 109
 }
