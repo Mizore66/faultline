@@ -21,6 +21,20 @@ func overlayWrite(t *testing.T, path string, data []byte) {
 	}
 }
 
+// absForModel is an absolute path beneath root as a model can propose it. The
+// frozen check refuses any path containing a backslash (path.includes("\\")
+// runs before anything else), so on Windows the accepted absolute form is the
+// slash form of the native path; on POSIX the two are identical.
+func absForModel(root string, parts ...string) string {
+	return filepath.ToSlash(filepath.Join(append([]string{root}, parts...)...))
+}
+
+// inspectedPath is how util.inspect shows a path string in the NUL message:
+// backslashes doubled and NUL as \x00.
+func inspectedPath(p string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(p, `\`, `\\`), "\x00", `\x00`)
+}
+
 func TestReadModelOverlayInput(t *testing.T) {
 	binary := []byte{0x00, 0xff, 0xfe, '\r', '\n', 'x', 0x80, '\n'}
 	setup := func(t *testing.T) string {
@@ -44,7 +58,7 @@ func TestReadModelOverlayInput(t *testing.T) {
 			{"dot", "a/./b", "a/b", binary},
 			{"dotdot", "a/../b", "b", []byte("top\r\n")},
 			{"double slash", "a//b", "a/b", binary},
-			{"absolute beneath root", filepath.Join(root, "b"), "b", []byte("top\r\n")},
+			{"absolute beneath root", absForModel(root, "b"), "b", []byte("top\r\n")},
 		}
 		for _, c := range cases {
 			got, err := ReadModelOverlayInput(root, []string{c.path})
@@ -65,7 +79,7 @@ func TestReadModelOverlayInput(t *testing.T) {
 
 	t.Run("absolute beneath root accepted, outside refused", func(t *testing.T) {
 		root := setup(t)
-		got, err := ReadModelOverlayInput(root, []string{filepath.Join(root, "a", "b")})
+		got, err := ReadModelOverlayInput(root, []string{absForModel(root, "a", "b")})
 		if err != nil || len(got) != 1 || got[0].Path != "a/b" {
 			t.Fatalf("inside: %v %v", got, err)
 		}
@@ -237,13 +251,39 @@ func TestReadModelOverlayInputNulPath(t *testing.T) {
 	root := t.TempDir()
 	overlayWrite(t, filepath.Join(root, "a"), []byte("a"))
 	_, err := ReadModelOverlayInput(root, []string{"a\x00b"})
-	want := "The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received '" + root + "/a\\x00b'"
+	want := "The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received '" + inspectedPath(filepath.Join(root, "a\x00b")) + "'"
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
 	}
 	_, err = ReadModelOverlayInput(root, []string{"d\x00/x"})
-	want = "The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received '" + root + "/d\\x00'"
+	want = "The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received '" + inspectedPath(filepath.Join(root, "d\x00")) + "'"
 	if err == nil || err.Error() != want {
 		t.Fatalf("parent: err = %v, want %q", err, want)
+	}
+}
+
+// An absolute path beneath the root is accepted in slash form on every
+// platform; a native backslash form is refused where it contains a backslash
+// (Windows), exactly as the frozen `path.includes("\\")` does, and an
+// escaping absolute path is refused on both.
+func TestReadModelOverlayInputAbsoluteForms(t *testing.T) {
+	root := t.TempDir()
+	overlayWrite(t, filepath.Join(root, "a", "b"), []byte("x"))
+	got, err := ReadModelOverlayInput(root, []string{absForModel(root, "a", "b")})
+	if err != nil || len(got) != 1 || got[0].Path != "a/b" {
+		t.Fatalf("slash form: %v %v", got, err)
+	}
+	native := filepath.Join(root, "a", "b")
+	got, err = ReadModelOverlayInput(root, []string{native})
+	if strings.Contains(native, `\`) {
+		if err == nil || err.Error() != "Model proposed an unsafe overlay path: "+native {
+			t.Fatalf("native backslash form: %v %v", got, err)
+		}
+	} else if err != nil || len(got) != 1 {
+		t.Fatalf("native form: %v %v", got, err)
+	}
+	out := filepath.ToSlash(filepath.Join(filepath.Dir(root), "elsewhere"))
+	if _, err = ReadModelOverlayInput(root, []string{out}); err == nil || err.Error() != "Model proposed an unsafe overlay path: "+out {
+		t.Fatalf("outside: %v", err)
 	}
 }

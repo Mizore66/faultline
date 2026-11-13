@@ -1166,11 +1166,11 @@ async function runCase(t: WriterTemplate): Promise<string[]> {
       await crossVerify(t.id, inv, roots, r.stdout, args);
       // Windows runs no sh recorder: a case that records argv is POSIX-only.
       if (invocationRecords.length > 0 && !t.posixOnly) throw new Error(`${t.id}: records git/docker argv but is not posixOnly`);
-      lines.push(JSON.stringify({
+      lines.push(JSON.stringify(applyApprovedModelDeviation({
         case: t.id, inv, stdout: maskPlanDigests(reloc.text(r.stdout), plans), stderr: maskPlanDigests(reloc.text(r.stderr), plans), exit: r.exit,
         tree, modes: modesDigest(after), files: changedFiles(before, after),
         argv: sortVersionRecordRuns(invocationRecords.map((record) => normalizeRecord(record, roots, reloc)))
-      }));
+      })));
     }
     return lines;
   } finally {
@@ -1229,6 +1229,24 @@ const results: string[][] = new Array(templates.length);
 // matches and keeps every other case's lines from the committed goldens,
 // whichever golden file holds them (local iteration; CI regenerates
 // everything).
+// The one approved Go deviation for `witness propose --live` (spec
+// 2026-11-13-go-witness-live-design.md): the default request model is gpt-6.1
+// and the output source GPT-6.1, where frozen TS sends gpt-5.6 and prints
+// GPT-5.6. For exactly the cases below, whose committed goldens carry the
+// deviation, the capture applies ONLY those two replacements (the first
+// `"source": "GPT-5.6"` in stdout and `"model":"gpt-5.6"` in each recorded
+// OpenAI request); every other byte and digest is the frozen capture's. The
+// proposal digest does not cover source or model. It is independent of Go
+// output. Any other GPT-5.6 text (the frozen API-key error) is left alone.
+const MODEL_DEVIATION_CASES = new Set(["witness-live-success", "witness-live-success-default-model", "witness-live-second-invocation"]);
+function applyApprovedModelDeviation(row: { case: string; stdout: string; argv: string[] } & Record<string, unknown>): typeof row {
+  if (!MODEL_DEVIATION_CASES.has(row.case)) return row;
+  return {
+    ...row,
+    stdout: row.stdout.replace('"source": "GPT-5.6"', '"source": "GPT-6.1"'),
+    argv: row.argv.map((a) => (a.startsWith("openai\x1f") ? a.replace('"model":"gpt-5.6"', '"model":"gpt-6.1"') : a))
+  };
+}
 const only = process.env.FAULTLINE_WRITERS_ONLY ? new RegExp(process.env.FAULTLINE_WRITERS_ONLY) : undefined;
 const pending: number[] = [];
 if (only) {
