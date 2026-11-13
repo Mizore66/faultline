@@ -115,7 +115,7 @@ The root itself must be a real, non-symlink directory identified by `lstat`. Anc
 For every model-selected path:
 
 - Resolve the target beneath root and require a non-empty relative path.
-- Reject absolute/escaping paths, every backslash, and relative results beginning `..`.
+- Reject absolute targets whose resolution escapes root, every backslash, and relative results beginning `..`. An absolute target that resolves inside root is accepted after relative normalization, matching frozen TypeScript.
 - Preserve internal normalization: `a/./b` becomes `a/b`, and `a/../b` becomes `b`; this is not a syntactic dot-segment ban.
 - Require every parent beneath root to be a real non-symlink directory and the leaf to be a regular non-symlink file.
 - Read raw bytes sequentially and return canonical base64 with normalized `/` path separators.
