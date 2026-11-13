@@ -1,4 +1,4 @@
-package repair
+package openai
 
 import "errors"
 
