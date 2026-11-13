@@ -14,7 +14,7 @@ import (
 	"github.com/Mizore66/faultline/internal/jsjson"
 )
 
-const liveSecret = "sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+var liveSecret = "sk-" + strings.Repeat("x", 32)
 
 const liveProviderSchema = `{"type":"object","additionalProperties":false,"required":["behavior","command","overlayFiles","expectedExitCode","timeoutSeconds","safetyNotes"],"properties":{"behavior":{"type":"string"},"command":{"type":"string"},"overlayFiles":{"type":"array","items":{"type":"string"},"maxItems":5},"expectedExitCode":{"type":"integer","minimum":0,"maximum":255},"timeoutSeconds":{"type":"integer","minimum":1,"maximum":120},"safetyNotes":{"type":"array","items":{"type":"string"},"maxItems":8}}}`
 
