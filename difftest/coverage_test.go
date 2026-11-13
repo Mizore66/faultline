@@ -351,6 +351,17 @@ var unreachableLiterals = map[string]string{
 	"Repair brief root is not a real directory:":                             "the filesystem root is always a real directory (safedir.EnsureRealDirectoryTree throws rootMessage only for the root itself; every other component gets the traverse message)",
 	"Refusing to publish an invalid repair brief package:":                   "a stage just written verifies unless the filesystem fails between the writes and the verify; an unreadable stage under umask 0477 also fails its removal, and that error is thrown instead (as for the prevention writer)",
 	"Repair brief output appeared during assembly and will not be replaced:": "race only: the output was refused when it existed before staging",
+	// internal/openai transport.go and inflate.go (moved from internal/repair
+	// live.go in Task 1; TestLiveProposeRepairBrief compares the outcome,
+	// fetch failed, against Node on a non-HTTP scheme, a redirect loop and
+	// credentials in Location).
+	"URL scheme must be a HTTP(S) scheme":                "the cause of fetch failed, replaced by errFetchFailed: never in the output",
+	"redirect count exceeded":                            "the cause of fetch failed, replaced by errFetchFailed: never in the output",
+	"cross origin not allowed for request mode \"cors\"": "the cause of fetch failed, replaced by errFetchFailed: never in the output",
+	"invalid deflate data":                               "inflate's error only makes readResponse report terminated (transport.go), so the text is never printed; TestLiveResponseDecoders compares whether Node's zlib errors on each stream",
+	// Node 22 decodes a br response; Go does not and reports terminated
+	// (difftest/KNOWN_DIFFERENCES.md), so no case compares a br body.
+	"brotli is not supported": "a documented known difference: Node decodes br, and the Go text is never printed (the body read fails as terminated)",
 	// Slice 4c, internal/repair worktree.go (TestLiveRepairWorktree).
 	"must be a child of the managed repair root.":  "the four paths are fixed names joined to the managed root, so they are always its children",
 	"Repair managed root is not a real directory:": "race only: the managed root was created by mkdir just before",
@@ -1194,7 +1205,7 @@ var gatedDirs = []string{
 	// Slice 4b: every file is live-gated (TestLiveTurnStates, TestLiveInvestigateTurns).
 	"internal/turninv",
 	// Slice 4c.
-	"internal/codexloop", "internal/repair", "internal/attest", "internal/provenance", "internal/jsdate",
+	"internal/codexloop", "internal/repair", "internal/openai", "internal/attest", "internal/provenance", "internal/jsdate",
 }
 
 // gatedLiterals is errorLiterals over every gatedDirs package.
@@ -1305,10 +1316,14 @@ var liveGatedFiles = map[string]string{
 	"internal/repair/store.go":          "TestLiveRepairBriefStore",
 	"internal/repair/live.go":           "TestLiveProposeRepairBrief",
 	"internal/repair/response.go":       "TestLiveExtractOpenAiResponseText",
-	"internal/repair/worktree.go":       "TestLiveRepairWorktree",
-	"internal/codexloop/repair.go":      "TestLiveRepairWithCodex",
-	"internal/codexloop/verifier.go":    "TestLiveRepairWithCodex",
-	"internal/codexloop/runner.go":      "TestLiveImplementCodexRunner",
+	// Task 1 moved the fetch-compatible transport and response extractor out
+	// of internal/repair; the same live tests still judge them.
+	"internal/openai/transport.go":   "TestLiveProposeRepairBrief",
+	"internal/openai/response.go":    "TestLiveExtractOpenAiResponseText",
+	"internal/repair/worktree.go":    "TestLiveRepairWorktree",
+	"internal/codexloop/repair.go":   "TestLiveRepairWithCodex",
+	"internal/codexloop/verifier.go": "TestLiveRepairWithCodex",
+	"internal/codexloop/runner.go":   "TestLiveImplementCodexRunner",
 	// cpSync is Linux-only (libstdc++), so TestLiveCpSyncTree gates it only
 	// on a Linux run; nodefs is not a gatedDirs package.
 	"internal/nodefs/cp.go": "TestLiveCpSyncTree",

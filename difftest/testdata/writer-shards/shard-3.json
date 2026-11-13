@@ -262,10 +262,12 @@
     "witness-implement-codex-missing-bin",
     "witness-implement-codex-ok",
     "witness-live-no-proposal-id",
-    "witness-live-root-not-directory"
+    "witness-live-root-not-directory",
+    "witness-live-second-invocation",
+    "witness-live-success"
   ],
-  "golden": 320,
+  "golden": 323,
   "windowsPass": 100,
-  "windowsSkip": 160,
+  "windowsSkip": 162,
   "windowsCompared": 109
 }

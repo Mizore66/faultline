@@ -77,9 +77,9 @@ func TestWitnessLiveProcess(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(30 * time.Second):
-			_ = cmd.Process.Kill()
+			killErr := cmd.Process.Kill()
 			<-done
-			t.Fatalf("%v did not exit: stdout=%q", args, out.String())
+			t.Fatalf("%v did not exit within 30s (kill error: %v): stdout=%q stderr=%q", args, killErr, out.String(), errb.String())
 		}
 		return out.String(), errb.String(), cmd.ProcessState.ExitCode()
 	}

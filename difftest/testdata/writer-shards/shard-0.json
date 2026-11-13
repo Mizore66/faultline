@@ -293,10 +293,11 @@
     "witness-live-blind-schema",
     "witness-live-incident-unreadable",
     "witness-live-root-missing-after-provider",
+    "witness-live-success-default-model",
     "witness-live-unsafe-overlay"
   ],
-  "golden": 340,
+  "golden": 341,
   "windowsPass": 101,
-  "windowsSkip": 189,
+  "windowsSkip": 190,
   "windowsCompared": 115
 }
