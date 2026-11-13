@@ -244,10 +244,10 @@ func writerShardProblems(source []writerSourceCase, ms []writerShardManifest) []
 
 // writerShardTable is spec 3.2, written out independently of the generator.
 var writerShardTable = [writerShardCount]struct{ cases, golden, pass, skip, compared int }{
-	{286, 336, 101, 185, 115},
-	{281, 332, 105, 176, 113},
-	{257, 316, 101, 156, 114},
-	{258, 318, 100, 158, 109},
+	{291, 341, 101, 190, 115},
+	{284, 335, 105, 179, 113},
+	{260, 319, 101, 159, 114},
+	{262, 323, 100, 162, 109},
 }
 
 func loadAllWriterShardManifests(t *testing.T, repo string) []writerShardManifest {
@@ -270,8 +270,8 @@ func TestWriterShardHashStable(t *testing.T) {
 func TestWriterShardSourceToShard(t *testing.T) {
 	repo := repoRoot(t)
 	source := loadWriterSourceCases(t, repo)
-	if len(source) != 1082 {
-		t.Fatalf("source has %d writer cases, want 1082", len(source))
+	if len(source) != 1097 {
+		t.Fatalf("source has %d writer cases, want 1097", len(source))
 	}
 	ms := loadAllWriterShardManifests(t, repo)
 	if p := writerShardProblems(source, ms); len(p) > 0 {
@@ -413,8 +413,8 @@ func TestWriterShardFilters(t *testing.T) {
 			}
 		}
 	}
-	if len(names) != 1083 {
-		t.Fatalf("%d names, want 1083", len(names))
+	if len(names) != 1098 {
+		t.Fatalf("%d names, want 1098", len(names))
 	}
 	for _, n := range names {
 		if counts[n] != 1 {

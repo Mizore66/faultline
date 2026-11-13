@@ -544,6 +544,7 @@ func TestLiveExtractOpenAiResponseText(t *testing.T) {
 		t.Errorf("reached %d outcomes, want the 10 errors and a text: %v", len(reached), reached)
 	}
 	requireReached(t, "internal/repair/response.go", recordedOutputs(t))
+	requireReached(t, "internal/openai/response.go", recordedOutputs(t))
 }
 
 func TestLiveRepairBriefJSONSchema(t *testing.T) {
@@ -913,6 +914,7 @@ func TestLiveProposeRepairBrief(t *testing.T) {
 		t.Error("never produced a brief")
 	}
 	requireReached(t, "internal/repair/live.go", recordedOutputs(t))
+	requireReached(t, "internal/openai/transport.go", recordedOutputs(t))
 }
 
 // repairStreams are compressed inputs: every zlib level and strategy, as

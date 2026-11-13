@@ -1,15 +1,15 @@
 //go:build faultline_test
 
-package repair
+package openai
 
 import "os"
 
-// responsesURL is src/repair-brief.ts:208's endpoint, or the test server
+// ResponsesURL is src/repair-brief.ts:208's endpoint, or the test server
 // named by FAULTLINE_TEST_OPENAI_URL when that is set (the Go side of
 // difftest/gen/fetch-shim.mjs). Only faultline_test builds hold this name.
-func responsesURL() string {
+func ResponsesURL() string {
 	if u := os.Getenv("FAULTLINE_TEST_OPENAI_URL"); u != "" {
 		return u
 	}
-	return openAIResponsesURL
+	return responsesEndpoint
 }

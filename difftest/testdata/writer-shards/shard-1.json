@@ -283,10 +283,13 @@
     "turns-sha256",
     "witness-implement-codex-on-path",
     "witness-implement-codex-probe-crlf",
-    "witness-implement-codex-probe-fail"
+    "witness-implement-codex-probe-fail",
+    "witness-live-no-key",
+    "witness-live-no-overlay-root",
+    "witness-live-overlay-leaf-directory"
   ],
-  "golden": 332,
+  "golden": 335,
   "windowsPass": 105,
-  "windowsSkip": 176,
+  "windowsSkip": 179,
   "windowsCompared": 113
 }

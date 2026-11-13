@@ -259,10 +259,13 @@
     "turns-runtime-mapping-missing",
     "witness-implement-codex-exit-nonzero",
     "witness-implement-codex-no-allow",
-    "witness-implement-codex-probe-empty"
+    "witness-implement-codex-probe-empty",
+    "witness-live-overlay-missing-leaf",
+    "witness-live-overlay-parent-file",
+    "witness-live-provider-500"
   ],
-  "golden": 316,
+  "golden": 319,
   "windowsPass": 101,
-  "windowsSkip": 156,
+  "windowsSkip": 159,
   "windowsCompared": 114
 }
