@@ -11,9 +11,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 GUARD = os.path.join(HERE, "check-writer-replay-shards.py")
 MANIFESTS = os.path.join(HERE, "..", "..", "difftest", "testdata", "writer-shards")
 RECORDER = "recorder-fake-docker"
-GOLDEN = [336, 332, 316, 318]
+GOLDEN = [341, 335, 319, 323]
 WIN_COMPARED = [115, 113, 114, 109]
-CASES = [286, 281, 257, 258]
+CASES = [291, 284, 260, 262]
 
 
 def manifest(n):
@@ -92,8 +92,8 @@ class ManifestShape(unittest.TestCase):
         for n in range(4):
             m = manifest(n)
             self.assertEqual(len(m["ordinary"]) + len(m["posix"]) - (n == 0), CASES[n])
-        self.assertEqual(sum(CASES), 1082)
-        self.assertEqual(sum(GOLDEN), 1302)
+        self.assertEqual(sum(CASES), 1097)
+        self.assertEqual(sum(GOLDEN), 1318)
         self.assertEqual(sum(WIN_COMPARED), 451)
 
 
@@ -202,7 +202,7 @@ class ShardGuard(unittest.TestCase):
 
     def test_printed_corpus_totals_are_not_evidence(self):
         lines = [l for l in log_lines(0) if "LIVE-SUMMARY" not in l]
-        lines.append("    writer_test.go:1521: LIVE-SUMMARY TestWriterReplay: 1082 of 1082 writer cases run (1302 golden invocations), 120 Go bundles verified by TS")
+        lines.append("    writer_test.go:1521: LIVE-SUMMARY TestWriterReplay: 1097 of 1097 writer cases run (1318 golden invocations), 120 Go bundles verified by TS")
         rc, _ = self.check(0, lines)
         self.assertEqual(rc, 1)
 
@@ -311,8 +311,8 @@ class TotalGuard(unittest.TestCase):
     def test_valid_unix(self):
         rc, out = self.total()
         self.assertEqual(rc, 0, out)
-        self.assertIn("1082 template cases", out)
-        self.assertIn("1302", out)
+        self.assertIn("1097 template cases", out)
+        self.assertIn("1318", out)
 
     def test_valid_windows(self):
         rc, out = self.total(windows=True)
