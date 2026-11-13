@@ -60,7 +60,6 @@ type wloCase struct {
 	args         []string // options after "witness propose --live"; nil means the standard options
 	noKey        bool
 	reply        wloReply // "@@WS@@" in body is the side's own workspace path
-	defaultModel bool     // frozen sends gpt-5.6 and prints GPT-5.6; Go gpt-6.1 and GPT-6.1
 	second       [][]string
 }
 
@@ -113,13 +112,13 @@ func wloCases() []wloCase {
 	rawBadSchema := func(name, text string) wloCase { return wloCase{name: name, reply: wloRaw(text)} }
 	return []wloCase{
 		{name: "success raw custom model", files: map[string]string{"overlays/a.txt": "alpha\r\nbeta\n"}, args: append(slices.Clone(wloStdArgs), "--model", "gpt-test"), reply: wloRaw(wloProposal(`["a.txt"]`))},
-		{name: "success fast path default model", files: map[string]string{"overlays/a.txt": "a", "overlays/z/w.bin": "\x00\xff\x01"}, reply: wloFast(wloProposal(`["z/w.bin","./a.txt"]`)), defaultModel: true},
-		{name: "success raw and fast path agree", files: a, reply: wloBoth(wloProposal(`["a.txt"]`)), defaultModel: true},
-		{name: "success no overlays", reply: wloRaw(wloProposal(`[]`)), defaultModel: true},
+		{name: "success fast path default model", files: map[string]string{"overlays/a.txt": "a", "overlays/z/w.bin": "\x00\xff\x01"}, reply: wloFast(wloProposal(`["z/w.bin","./a.txt"]`))},
+		{name: "success raw and fast path agree", files: a, reply: wloBoth(wloProposal(`["a.txt"]`))},
+		{name: "success no overlays", reply: wloRaw(wloProposal(`[]`))},
 		{name: "success empty model", args: append(slices.Clone(wloStdArgs), "--model", ""), reply: wloRaw(wloProposal(`[]`))},
-		{name: "success five overlays", files: map[string]string{"overlays/1": "1", "overlays/2": "2", "overlays/3": "3", "overlays/4": "4", "overlays/5": "5"}, reply: wloRaw(wloProposal(`["5","4","3","2","1"]`)), defaultModel: true},
-		{name: "success redacted incident", incident: `{"symptom":"leak sk-proj-abcdefghijklmnop12345678 and token=abcdef0123456789","ciLog":"Authorization: Bearer abcdefghijklmnop1234 é😀","repositoryLanguage":"JavaScript","repositorySummary":"payments"}`, reply: wloRaw(wloProposal(`[]`)), defaultModel: true},
-		{name: "success proposal extra fields", reply: wloRaw(`{"behavior":"b","command":"c","overlayFiles":[],"expectedExitCode":0,"timeoutSeconds":5,"safetyNotes":[],"extra":1}`), defaultModel: true},
+		{name: "success five overlays", files: map[string]string{"overlays/1": "1", "overlays/2": "2", "overlays/3": "3", "overlays/4": "4", "overlays/5": "5"}, reply: wloRaw(wloProposal(`["5","4","3","2","1"]`))},
+		{name: "success redacted incident", incident: `{"symptom":"leak sk-proj-abcdefghijklmnop12345678 and token=abcdef0123456789","ciLog":"Authorization: Bearer abcdefghijklmnop1234 é😀","repositoryLanguage":"JavaScript","repositorySummary":"payments"}`, reply: wloRaw(wloProposal(`[]`))},
+		{name: "success proposal extra fields", reply: wloRaw(`{"behavior":"b","command":"c","overlayFiles":[],"expectedExitCode":0,"timeoutSeconds":5,"safetyNotes":[],"extra":1}`)},
 		{name: "storage limit overlay 1050000", files: map[string]string{"overlays/big": big(1_050_000)}, reply: wloRaw(wloProposal(`["big"]`))},
 		{name: "storage limit overlay 1050001", files: map[string]string{"overlays/big": big(1_050_001)}, reply: wloRaw(wloProposal(`["big"]`))},
 		{name: "storage limit overlay 1200000", files: map[string]string{"overlays/big": big(1_200_000)}, reply: wloRaw(wloProposal(`["big"]`))},
@@ -205,10 +204,13 @@ func wloCases() []wloCase {
 		std("path case alias both present", `["a.txt","A.txt"]`, map[string]string{"overlays/a.txt": "a"}),
 		std("path second overlay fails", `["a.txt","missing"]`, a),
 		std("path first overlay fails", `["missing","a.txt"]`, a),
+		std("path both fail first reported", `["gone-1","gone-2"]`, a),
+		std("path unsafe after missing", `["gone-1","../x"]`, a),
+		std("path unsafe before missing", `["../x","gone-1"]`, a),
 		std("path sorting", `["b","a","c/d"]`, map[string]string{"overlays/a": "a", "overlays/b": "b", "overlays/c/d": "d"}),
 		std("path sorting case mix", `["B","a","_","Z"]`, map[string]string{"overlays/B": "b", "overlays/a": "a", "overlays/_": "_", "overlays/Z": "z"}),
 
-		{name: "second invocation refusal", files: a, reply: wloRaw(wloProposal(`["a.txt"]`)), second: [][]string{slices.Clone(wloStdArgs)}, defaultModel: true},
+		{name: "second invocation refusal", files: a, reply: wloRaw(wloProposal(`["a.txt"]`)), second: [][]string{slices.Clone(wloStdArgs)}},
 		{name: "second invocation other id", files: a, reply: wloRaw(wloProposal(`["a.txt"]`)), second: [][]string{{"--incident", "incident.json", "--proposal-id", "live-2", "--overlay-root", "overlays"}}},
 		{name: "second invocation after failure", files: a, reply: wloRaw(wloProposal(`["a.txt","missing"]`)), second: [][]string{slices.Clone(wloStdArgs)}},
 	}
@@ -351,6 +353,11 @@ func sortedWloKeys(m map[string]string) []string {
 func wloEnv(home, tmp, url string, noKey bool) []string {
 	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "USERPROFILE=" + home, "TMPDIR=" + tmp, "TEMP=" + tmp, "TMP=" + tmp,
 		"LC_ALL=C.UTF-8", "LANGUAGE=", "FAULTLINE_TEST_SEED=witness-live-oracle", "FAULTLINE_NO_BROWSER=1", "FAULTLINE_TEST_OPENAI_URL=" + url}
+	for _, name := range []string{"SystemRoot", "SYSTEMROOT", "PATHEXT", "ComSpec"} {
+		if v, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+v)
+		}
+	}
 	if !noKey {
 		env = append(env, "OPENAI_API_KEY=fl-test-key")
 	}
@@ -392,7 +399,7 @@ func newWloSide(t *testing.T, kind, node string, c wloCase) *wloSide {
 	root, ws, home, tmp := wloRoots(t)
 	buildWloWorkspace(t, ws, c)
 	reply := c.reply
-	reply.body = strings.ReplaceAll(reply.body, "@@WS@@", ws)
+	reply.body = strings.ReplaceAll(reply.body, "@@WS@@", strings.ReplaceAll(strings.ReplaceAll(ws, `\`, `/`), `"`, `\"`))
 	p := startWloProvider(t, reply)
 	repo := repoRoot(t)
 	env := wloEnv(home, tmp, p.url, c.noKey)
@@ -413,7 +420,11 @@ var wloPortRE = regexp.MustCompile(`127\.0\.0\.1:[0-9]+`)
 // norm replaces only this side's independently generated temp root and its
 // actual ephemeral loopback port.
 func (s *wloSide) norm(text string) string {
-	text = strings.ReplaceAll(text, s.root, "<ROOT>")
+	// The root appears raw, JSON-escaped (doubled backslashes) and, on
+	// Windows, in slash form; each is this side's own generated root.
+	for _, form := range []string{s.root, strings.ReplaceAll(s.root, `\`, `\\`), filepath.ToSlash(s.root)} {
+		text = strings.ReplaceAll(text, form, "<ROOT>")
+	}
 	return wloPortRE.ReplaceAllString(text, "127.0.0.1:<PORT>")
 }
 
@@ -433,9 +444,6 @@ func (s *wloSide) tree(t *testing.T) map[string]string {
 
 func TestLiveWitnessProposalOracle(t *testing.T) {
 	oracle.Skip(t)
-	if runtime.GOOS == "windows" {
-		t.Skip("frozen oracle comparison is POSIX only")
-	}
 	node := oracleNode(t)
 	for _, c := range wloCases() {
 		t.Run(strings.ReplaceAll(c.name, " ", "_"), func(t *testing.T) {
