@@ -53,6 +53,7 @@ func TestWitnessLiveReplay(t *testing.T) {
 		{id: "witness-live-no-overlay-root", args: append(append([]string{}, live...), "--proposal-id", "live-1")},
 		{id: "witness-live-no-key", args: withIDRoot, noKey: true},
 		{id: "witness-live-unsafe-overlay", args: withIDRoot, overlays: `["../x"]`, files: map[string]string{"overlays/keep.txt": "k"}, requests: 1},
+		{id: "witness-live-nul-overlay", args: withIDRoot, overlays: `["a\u0000b"]`, files: map[string]string{"overlays/keep.txt": "k"}, requests: 1},
 		{id: "witness-live-root-not-directory", args: withIDRoot, files: map[string]string{"overlays": "file"}, requests: 1},
 		{id: "witness-live-parent-not-directory", args: withIDRoot, overlays: `["a/b.mjs"]`, files: map[string]string{"overlays/a": "file"}, requests: 1},
 		{id: "witness-live-leaf-not-file", args: withIDRoot, overlays: `["d"]`, files: map[string]string{"overlays/d/x.txt": "x"}, requests: 1},
@@ -69,6 +70,16 @@ func TestWitnessLiveReplay(t *testing.T) {
 			}))
 			defer srv.Close()
 			ws := t.TempDir()
+			if tc.id == "witness-live-nul-overlay" {
+				// The message cuts the inspected path at 128 units, so this
+				// case needs a short workspace path on every platform.
+				short, err := os.MkdirTemp("", "w")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.RemoveAll(short) })
+				ws = short
+			}
 			files := map[string]string{"incident.json": incident}
 			for k, v := range tc.files {
 				files[k] = v

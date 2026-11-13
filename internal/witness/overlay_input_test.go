@@ -230,3 +230,20 @@ func TestReadModelOverlayInput(t *testing.T) {
 		}
 	})
 }
+
+// lstatSync refuses a NUL byte in its path with ERR_INVALID_ARG_VALUE before
+// any system call (found by the frozen witness-live oracle, "path nul").
+func TestReadModelOverlayInputNulPath(t *testing.T) {
+	root := t.TempDir()
+	overlayWrite(t, filepath.Join(root, "a"), []byte("a"))
+	_, err := ReadModelOverlayInput(root, []string{"a\x00b"})
+	want := "The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received '" + root + "/a\\x00b'"
+	if err == nil || err.Error() != want {
+		t.Fatalf("err = %v, want %q", err, want)
+	}
+	_, err = ReadModelOverlayInput(root, []string{"d\x00/x"})
+	want = "The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received '" + root + "/d\\x00'"
+	if err == nil || err.Error() != want {
+		t.Fatalf("parent: err = %v, want %q", err, want)
+	}
+}

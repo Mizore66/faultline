@@ -5,3 +5,4 @@
 {"id":"witness-live-root-not-directory","text":"Overlay root must be a real directory: <WS>/overlays"}
 {"id":"witness-live-parent-not-directory","text":"Model overlay cannot traverse a symbolic link or non-directory: a/b.mjs"}
 {"id":"witness-live-leaf-not-file","text":"Model overlay must be a regular non-symlink file: d"}
+{"id":"witness-live-nul-overlay","text":"The argument 'path' must be a string, Uint8Array, or URL without null bytes. Received '<WS>/overlays/a\\x00b'"}

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Mizore66/faultline/internal/nodefs"
+	"github.com/Mizore66/faultline/internal/nodeproc"
 )
 
 // ModelOverlay is one model-selected overlay file as read from the staging
@@ -20,7 +21,16 @@ type overlayOps struct {
 	read  func(string) ([]byte, error)
 }
 
-var nodeOverlayOps = overlayOps{lstat: nodefs.Lstat, read: nodefs.ReadBytes}
+var nodeOverlayOps = overlayOps{lstat: nodeLstat, read: nodefs.ReadBytes}
+
+// nodeLstat is lstatSync, whose path validation refuses a NUL byte with
+// ERR_INVALID_ARG_VALUE before any system call.
+func nodeLstat(path string) (fs.FileInfo, error) {
+	if strings.IndexByte(path, 0) >= 0 {
+		return nil, nodeproc.InvalidArgValue("The argument 'path'", path, "must be a string, Uint8Array, or URL without null bytes")
+	}
+	return nodefs.Lstat(path)
+}
 
 // ReadModelOverlayInput is src/overlay-input.ts readModelOverlayInput: it
 // reads each selected path sequentially through real directories beneath
