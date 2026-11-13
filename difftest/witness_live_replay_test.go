@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -102,13 +103,9 @@ func TestWitnessLiveReplay(t *testing.T) {
 			if tc.noKey {
 				key = ""
 			}
-			resolved, err := filepath.EvalSymlinks(ws)
-			if err != nil {
-				t.Fatal(err)
-			}
-			stdout, stderr, code := runFl(t, ws, map[string]string{"FAULTLINE_TEST_OPENAI_URL": srv.URL + "/v1/responses", "OPENAI_API_KEY": key}, tc.args...)
-			want := "FaultLine error: " + strings.ReplaceAll(texts[tc.id], "<WS>", filepath.ToSlash(resolved)) + "\nNext: pnpm fl help\n"
-			if code != 1 || stdout != "" || filepath.ToSlash(stderr) != filepath.ToSlash(want) || requests != tc.requests {
+			dir, want := witnessLiveReplayWorkspace(t, ws, texts[tc.id])
+			stdout, stderr, code := runFl(t, dir, map[string]string{"FAULTLINE_TEST_OPENAI_URL": srv.URL + "/v1/responses", "OPENAI_API_KEY": key}, tc.args...)
+			if code != 1 || stdout != "" || stderr != want || requests != tc.requests {
 				t.Fatalf("code=%d stdout=%q stderr=%q requests=%d, want stderr %q requests %d", code, stdout, stderr, requests, want, tc.requests)
 			}
 			if _, err := os.Stat(filepath.Join(ws, ".faultline")); err == nil {
@@ -116,4 +113,48 @@ func TestWitnessLiveReplay(t *testing.T) {
 			}
 		})
 	}
+}
+
+func witnessLiveReplayWorkspace(t *testing.T, ws, diagnostic string) (dir, want string) {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Windows cwd preserves the launch spelling (including 8.3 aliases),
+	// while POSIX cwd is physical. Launch from the same resolved path that
+	// supplies the dynamic diagnostic tokens on both platforms.
+	return resolved, witnessLiveReplayExpectedStderr(diagnostic, resolved, runtime.GOOS == "windows")
+}
+
+func witnessLiveReplayExpectedStderr(diagnostic, ws string, windows bool) string {
+	separator := "/"
+	if windows {
+		separator = `\`
+	}
+	root := ws + separator + "overlays"
+	// Only these owned path tokens vary; the committed diagnostic wording,
+	// relative paths and all actual stderr bytes remain untouched.
+	const inspectedToken = `'<WS>/overlays/a\x00b'`
+	if strings.Contains(diagnostic, inspectedToken) {
+		path := root + separator + "a\x00b"
+		// The short NUL fixture stays below util.inspect's 128-unit cap.
+		// Match only its path literal's quoting/escaping, independently of
+		// the production formatter (see nodeproc/async_test.go's frozen cases).
+		quote := "'"
+		if strings.Contains(path, "'") {
+			if !strings.Contains(path, `"`) {
+				quote = `"`
+			} else if !strings.Contains(path, "`") && !strings.Contains(path, "${") {
+				quote = "`"
+			}
+		}
+		escaped := strings.NewReplacer(`\`, `\\`, "\x00", `\x00`).Replace(path)
+		if quote == "'" {
+			escaped = strings.ReplaceAll(escaped, "'", `\'`)
+		}
+		diagnostic = strings.ReplaceAll(diagnostic, inspectedToken, quote+escaped+quote)
+	}
+	diagnostic = strings.ReplaceAll(diagnostic, "<WS>/overlays", root)
+	return "FaultLine error: " + diagnostic + "\nNext: pnpm fl help\n"
 }
