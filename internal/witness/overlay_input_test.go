@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -64,6 +63,19 @@ func TestReadModelOverlayInput(t *testing.T) {
 		}
 	})
 
+	t.Run("absolute beneath root accepted, outside refused", func(t *testing.T) {
+		root := setup(t)
+		got, err := ReadModelOverlayInput(root, []string{filepath.Join(root, "a", "b")})
+		if err != nil || len(got) != 1 || got[0].Path != "a/b" {
+			t.Fatalf("inside: %v %v", got, err)
+		}
+		out := filepath.Join(filepath.Dir(root), "elsewhere")
+		_, err = ReadModelOverlayInput(root, []string{out})
+		if err == nil || err.Error() != "Model proposed an unsafe overlay path: "+out {
+			t.Fatalf("outside: %v", err)
+		}
+	})
+
 	t.Run("empty selection", func(t *testing.T) {
 		got, err := ReadModelOverlayInput(setup(t), nil)
 		if err != nil || len(got) != 0 {
@@ -76,9 +88,7 @@ func TestReadModelOverlayInput(t *testing.T) {
 		real := filepath.Join(base, "real")
 		overlayWrite(t, filepath.Join(real, "sub", "f"), []byte("x"))
 		link := filepath.Join(base, "link")
-		if err := os.Symlink(real, link); err != nil {
-			t.Skip("symlink unavailable")
-		}
+		overlayDirLink(t, real, link)
 		got, err := ReadModelOverlayInput(filepath.Join(link, "sub"), []string{"f"})
 		if err != nil || len(got) != 1 || got[0].Path != "f" {
 			t.Fatalf("got %v %v", got, err)
@@ -87,7 +97,8 @@ func TestReadModelOverlayInput(t *testing.T) {
 
 	t.Run("unsafe paths", func(t *testing.T) {
 		root := setup(t)
-		for _, p := range []string{"", ".", "a/..", "/etc/passwd", "../x", "a/../../x", "..", "..dots", `a\b`, `a\..\b`} {
+		outside := filepath.Join(filepath.Dir(root), "outside-"+filepath.Base(root), "f")
+		for _, p := range []string{outside, "", ".", "a/..", "../x", "a/../../x", "..", "..dots", `a\b`, `a\..\b`} {
 			_, err := ReadModelOverlayInput(root, []string{p})
 			if err == nil || err.Error() != "Model proposed an unsafe overlay path: "+p {
 				t.Fatalf("%q: err = %v", p, err)
@@ -107,19 +118,15 @@ func TestReadModelOverlayInput(t *testing.T) {
 		if err == nil || err.Error() != "Overlay root must be a real directory: "+r {
 			t.Fatalf("file root: %v", err)
 		}
-		if runtime.GOOS != "windows" {
-			real := filepath.Join(base, "realdir")
-			if err := os.Mkdir(real, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			link := filepath.Join(base, "rootlink")
-			if err := os.Symlink(real, link); err != nil {
-				t.Fatal(err)
-			}
-			_, err = ReadModelOverlayInput(link, []string{"a"})
-			if err == nil || err.Error() != "Overlay root must be a real directory: "+link {
-				t.Fatalf("symlink root: %v", err)
-			}
+		real := filepath.Join(base, "realdir")
+		if err := os.Mkdir(real, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(base, "rootlink")
+		overlayDirLink(t, real, link)
+		_, err = ReadModelOverlayInput(link, []string{"a"})
+		if err == nil || err.Error() != "Overlay root must be a real directory: "+link {
+			t.Fatalf("symlink root: %v", err)
 		}
 	})
 
@@ -137,14 +144,11 @@ func TestReadModelOverlayInput(t *testing.T) {
 		check("b/x", trav)      // regular file parent
 		check("dir", leaf)      // directory leaf
 		check("a/../dir", leaf) // normalized directory leaf
-		if runtime.GOOS != "windows" {
-			if err := os.Symlink(filepath.Join(root, "a"), filepath.Join(root, "dlink")); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink(filepath.Join(root, "b"), filepath.Join(root, "flink")); err != nil {
-				t.Fatal(err)
-			}
-			check("dlink/b", trav)
+		overlayDirLink(t, filepath.Join(root, "a"), filepath.Join(root, "dlink"))
+		check("dlink/b", trav)
+		check("dlink", leaf) // directory link as leaf
+		if overlayHasFileLinks {
+			overlayFileLink(t, filepath.Join(root, "b"), filepath.Join(root, "flink"))
 			check("flink", leaf)
 		}
 		_, err := ReadModelOverlayInput(root, []string{"nope"})
@@ -171,10 +175,18 @@ func TestReadModelOverlayInput(t *testing.T) {
 		if err != nil || len(got) != 2 || got[0].Path != "x/Y" || got[1].Path != "x/y2" {
 			t.Fatalf("got %v %v", got, err)
 		}
-		if runtime.GOOS != "linux" { // case-insensitive default filesystems
+		// Probe the real filesystem: does "A/B" name the same file as "a/b"?
+		_, probe := os.Lstat(filepath.Join(root, "A", "B"))
+		if probe == nil { // case-insensitive: both alias spellings come back
 			got, err = ReadModelOverlayInput(root, []string{"a/b", "A/B"})
-			if err != nil || len(got) != 2 || got[0].Path != "a/b" || got[1].Path != "A/B" {
+			if err != nil || len(got) != 2 || got[0].Path != "a/b" || got[1].Path != "A/B" || got[0].BytesBase64 != got[1].BytesBase64 {
 				t.Fatalf("alias: %v %v", got, err)
+			}
+		} else { // case-sensitive: distinct-case files are separate reads
+			overlayWrite(t, filepath.Join(root, "A", "B"), []byte("upper"))
+			got, err = ReadModelOverlayInput(root, []string{"a/b", "A/B"})
+			if err != nil || len(got) != 2 || got[0].Path != "a/b" || got[1].Path != "A/B" || got[0].BytesBase64 == got[1].BytesBase64 {
+				t.Fatalf("distinct case: %v %v", got, err)
 			}
 		}
 	})
