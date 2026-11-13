@@ -195,7 +195,8 @@ Use independent byte expectations for nested binary/CRLF content. Table-drive ex
 | --- | --- |
 | `a/./b` | normalized `a/b` and exact bytes |
 | `a/../b` | normalized `b` and exact bytes |
-| empty/absolute/escaping/backslash path | refusal |
+| empty/backslash path; absolute path escaping the root | refusal |
+| absolute path resolving inside the root | accepted, normalized to the relative path |
 | missing/file/symlink root | refusal |
 | parent regular file or symlink | refusal |
 | leaf missing/directory/symlink | refusal |

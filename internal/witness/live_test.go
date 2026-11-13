@@ -253,7 +253,17 @@ func TestLiveWitnessResponse(t *testing.T) {
 			}
 		})
 	}
-	t.Run("empty arrays allowed", func(t *testing.T) {
+	t.Run("empty overlay array allowed", func(t *testing.T) {
+		newLiveRecorder(t, outputBody(`{"behavior":"b","command":"c","overlayFiles":[],"expectedExitCode":255,"timeoutSeconds":120,"safetyNotes":[]}`))
+		got, err := ProposeWitnessWithGpt(livePacket(t, "x"), LiveWitnessOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := len(got.Obj().Field("proposal").Obj().Field("overlayFiles").Items()); n != 0 {
+			t.Fatalf("overlay files = %d, want none", n)
+		}
+	})
+	t.Run("empty string overlay entry allowed", func(t *testing.T) {
 		newLiveRecorder(t, outputBody(`{"behavior":"b","command":"c","overlayFiles":[""],"expectedExitCode":255,"timeoutSeconds":120,"safetyNotes":[]}`))
 		if _, err := ProposeWitnessWithGpt(livePacket(t, "x"), LiveWitnessOptions{}); err != nil {
 			t.Fatal(err)
