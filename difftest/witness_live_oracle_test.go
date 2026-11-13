@@ -350,12 +350,18 @@ func sortedWloKeys(m map[string]string) []string {
 	return keys
 }
 
-func wloEnv(home, tmp, url string, noKey bool) []string {
+func wloEnv(kind, home, tmp, url string, noKey bool) []string {
 	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "USERPROFILE=" + home, "TMPDIR=" + tmp, "TEMP=" + tmp, "TMP=" + tmp,
 		"LC_ALL=C.UTF-8", "LANGUAGE=", "FAULTLINE_TEST_SEED=witness-live-oracle", "FAULTLINE_NO_BROWSER=1", "FAULTLINE_TEST_OPENAI_URL=" + url}
 	for _, name := range []string{"SystemRoot", "SYSTEMROOT", "PATHEXT", "ComSpec"} {
 		if v, ok := os.LookupEnv(name); ok {
 			env = append(env, name+"="+v)
+		}
+	}
+	// Preserve TestMain's coverage counters without changing the frozen Node environment.
+	if kind == "go" {
+		if dir := os.Getenv("GOCOVERDIR"); dir != "" {
+			env = append(env, "GOCOVERDIR="+dir)
 		}
 	}
 	if !noKey {
@@ -402,7 +408,7 @@ func newWloSide(t *testing.T, kind, node string, c wloCase) *wloSide {
 	reply.body = strings.ReplaceAll(reply.body, "@@WS@@", strings.ReplaceAll(strings.ReplaceAll(ws, `\`, `/`), `"`, `\"`))
 	p := startWloProvider(t, reply)
 	repo := repoRoot(t)
-	env := wloEnv(home, tmp, p.url, c.noKey)
+	env := wloEnv(kind, home, tmp, p.url, c.noKey)
 	return &wloSide{root: root, ws: ws, provider: p, cmd: func(args []string) *exec.Cmd {
 		var cmd *exec.Cmd
 		if kind == "ts" {
@@ -515,7 +521,7 @@ func TestLiveWitnessProposalApprovedDeviation(t *testing.T) {
 	p := startWloProvider(t, wloRaw(wloProposal(`[]`)))
 	run := func(noKey bool, extra ...string) (string, string, int) {
 		cmd := exec.Command(flBinary, append([]string{"witness", "propose", "--live"}, extra...)...)
-		cmd.Dir, cmd.Env = ws, wloEnv(home, tmp, p.url, noKey)
+		cmd.Dir, cmd.Env = ws, wloEnv("go", home, tmp, p.url, noKey)
 		return wloExec(cmd)
 	}
 	stdout, stderr, code := run(false, wloStdArgs...)
