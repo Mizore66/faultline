@@ -32,6 +32,9 @@ var nativeCoverageFiles = []string{
 	"internal/proofview/incident.go",
 	"internal/proofview/incident_server.go",
 	"internal/proofview/demo_server.go",
+	"internal/guided/intake.go",
+	"internal/guided/guided.go",
+	"internal/guided/freeze.go",
 }
 
 // nativeEvidencePackage is one exact package allowed to produce native evidence.
@@ -76,7 +79,15 @@ var (
 		},
 		diagnosticParents: []string{"TestInteractiveIncidentListenerDrift"},
 	}
-	nativeAllPackages = []nativeEvidencePackage{nativeDemofixturePackage, nativeCLIPackage, nativeDemoPackage, nativeProofviewPackage}
+	// Guided investigate: every error literal of the three owned files is
+	// executed by a child of the one diagnostic parent, each emitting one record.
+	nativeGuidedPackage = nativeEvidencePackage{
+		importPath:        "github.com/Mizore66/faultline/internal/guided",
+		sourceDirectory:   "internal/guided",
+		parents:           []string{"TestGuidedNativeDiagnostics"},
+		diagnosticParents: []string{"TestGuidedNativeDiagnostics"},
+	}
+	nativeAllPackages = []nativeEvidencePackage{nativeDemofixturePackage, nativeCLIPackage, nativeDemoPackage, nativeProofviewPackage, nativeGuidedPackage}
 
 	nativeDemofixtureFiles = []string{
 		"internal/demofixture/native_analysis.go",
@@ -85,6 +96,7 @@ var (
 	}
 	nativeExportFiles    = []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"}
 	nativeProofviewFiles = []string{"internal/proofview/incident.go", "internal/proofview/incident_server.go", "internal/proofview/demo_server.go"}
+	nativeGuidedFiles    = []string{"internal/guided/intake.go", "internal/guided/guided.go", "internal/guided/freeze.go"}
 
 	// Committed, independently reviewed proofview expectations. They are read
 	// as data, never produced by the code under test.
@@ -174,10 +186,10 @@ func nativeLibraryEvidence(repo string) (nativeEvidence, error) {
 		return nativeEvidence{}, err
 	}
 	defer os.RemoveAll(dir)
-	// One deadline covers all three sequential subprocesses.
+	// One deadline covers all four sequential subprocesses.
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 	defer cancel()
-	commands := nativeEvidenceCommands(repo, filepath.Join(dir, "native-profile.txt"), filepath.Join(dir, "export-profile.txt"), filepath.Join(dir, "proofview-profile.txt"))
+	commands := nativeEvidenceCommands(repo, filepath.Join(dir, "native-profile.txt"), filepath.Join(dir, "export-profile.txt"), filepath.Join(dir, "proofview-profile.txt"), filepath.Join(dir, "guided-profile.txt"))
 	var streams [][]byte
 	for _, command := range commands {
 		cmd := exec.CommandContext(ctx, "go", command.args...)
@@ -209,7 +221,11 @@ func nativeLibraryEvidence(repo string) (nativeEvidence, error) {
 	if err != nil {
 		return nativeEvidence{}, err
 	}
-	for _, more := range []map[string]string{exportOutputs, proofviewOutputs} {
+	guidedOutputs, err := nativeOutputsFor(streams[3], nil, commands[3].packages)
+	if err != nil {
+		return nativeEvidence{}, err
+	}
+	for _, more := range []map[string]string{exportOutputs, proofviewOutputs, guidedOutputs} {
 		for pkg, text := range more {
 			if _, dup := outputs[pkg]; dup {
 				return nativeEvidence{}, fmt.Errorf("native streams both own %s", pkg)
@@ -245,12 +261,23 @@ func nativeLibraryEvidence(repo string) (nativeEvidence, error) {
 	if err != nil {
 		return nativeEvidence{}, err
 	}
+	guidedProfileData, err := os.ReadFile(commands[3].profile)
+	if err != nil {
+		return nativeEvidence{}, err
+	}
+	guidedBlocks, err := nativeProfileFor(guidedProfileData, nativeGuidedFiles)
+	if err != nil {
+		return nativeEvidence{}, err
+	}
 	// The subsets are disjoint: demofixture counters incidentally emitted by the
 	// CLI's imports were discarded, never allowed to replace the original evidence.
 	if blocks, err = mergeDisjointNativeProfiles(blocks, exportBlocks); err != nil {
 		return nativeEvidence{}, err
 	}
 	if blocks, err = mergeDisjointNativeProfiles(blocks, proofviewBlocks); err != nil {
+		return nativeEvidence{}, err
+	}
+	if blocks, err = mergeDisjointNativeProfiles(blocks, guidedBlocks); err != nil {
 		return nativeEvidence{}, err
 	}
 	var nativeSites []errorSite
@@ -391,15 +418,89 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 		running        map[string]bool
 		passed         map[string]bool
 		diagnostic     map[string][]string
+		// pending holds each test's output not yet ended by a line feed: go test
+		// -json chunks Output at arbitrary byte positions, so a logical line (and
+		// the marker, and its JSON string) may span several events. Buffers are
+		// per (package, test) and never mix contexts.
+		pending map[string]string
 	}
 	packages := map[string]*state{}
 	spec := map[string]nativeEvidencePackage{}
 	for _, pkg := range allowed {
-		packages[pkg.importPath] = &state{running: map[string]bool{}, passed: map[string]bool{}, diagnostic: map[string][]string{}}
+		packages[pkg.importPath] = &state{running: map[string]bool{}, passed: map[string]bool{}, diagnostic: map[string][]string{}, pending: map[string]string{}}
 		spec[pkg.importPath] = pkg
 	}
 	if len(packages) == 0 || !bytes.HasSuffix(data, []byte{'\n'}) {
 		return nil, fmt.Errorf("native events or contract cases are incomplete")
+	}
+	// handleLine judges one complete output line of a test.
+	// Attribution assumption: go test -json runs the tests of one package
+	// sequentially (no t.Parallel in the owned parents), so output events carry
+	// the Test of the test that printed them; a line is never attributed across
+	// (package, test) contexts. The package context (Test == "") is buffered too.
+	handleLine := func(st *state, pkg nativeEvidencePackage, test, line string) error {
+		_, text, found := strings.Cut(line, "NATIVE-DIAGNOSTIC ")
+		if !found {
+			if strings.Contains(line, "NATIVE-DIAGNOSTIC") {
+				return fmt.Errorf("native diagnostic marker without its separator in %q", test)
+			}
+			return nil
+		}
+		if test == "" {
+			return fmt.Errorf("native diagnostic has no emitting case")
+		}
+		top, child, isChild := strings.Cut(test, "/")
+		// Every package emits exactly one record from each checked child; a
+		// parent, or an unrelated child of another parent, never emits.
+		if !st.running[test] || !slices.Contains(pkg.diagnosticParents, top) || !isChild || child == "" || len(st.diagnostic[test]) != 0 {
+			return fmt.Errorf("native diagnostic has invalid or duplicate emitter %s", test)
+		}
+		var message string
+		if err := json.Unmarshal([]byte(strings.TrimSpace(text)), &message); err != nil || message == "" {
+			return fmt.Errorf("native diagnostic is not a nonempty JSON string")
+		}
+		st.diagnostic[test] = append(st.diagnostic[test], message)
+		return nil
+	}
+	// finishTest rejects an unterminated diagnostic left in a test's buffer.
+	finishTest := func(st *state, test string) error {
+		rest := st.pending[test]
+		if strings.Contains(rest, "NATIVE-DIAGNOSTIC") {
+			return fmt.Errorf("native diagnostic line for %s is unfinished or truncated", test)
+		}
+		// A remainder that ends partway through the marker (at least "NATIVE",
+		// so ordinary text ending in one letter is not mistaken) was truncated.
+		const marker = "NATIVE-DIAGNOSTIC "
+		for n := len("NATIVE"); n < len(marker); n++ {
+			if strings.HasSuffix(rest, marker[:n]) {
+				return fmt.Errorf("native diagnostic marker for %s is truncated", test)
+			}
+		}
+		delete(st.pending, test)
+		return nil
+	}
+	const maxPendingLine = 1 << 20
+	// feed appends one output event to a context's buffer and judges every
+	// complete line; each completed line and the pending remainder are capped.
+	feed := func(st *state, pkg nativeEvidencePackage, test, output string) error {
+		st.pending[test] += output
+		for {
+			line, rest, complete := strings.Cut(st.pending[test], "\n")
+			if !complete {
+				break
+			}
+			if len(line) > maxPendingLine {
+				return fmt.Errorf("native output line for %q exceeds %d bytes", test, maxPendingLine)
+			}
+			st.pending[test] = rest
+			if err := handleLine(st, pkg, test, line); err != nil {
+				return err
+			}
+		}
+		if len(st.pending[test]) > maxPendingLine {
+			return fmt.Errorf("native output line for %q exceeds %d bytes", test, maxPendingLine)
+		}
+		return nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	for {
@@ -429,10 +530,15 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 				if !st.started {
 					return nil, fmt.Errorf("native package passed without starting")
 				}
+				for test := range st.pending {
+					if err := finishTest(st, test); err != nil {
+						return nil, err
+					}
+				}
 				st.ended = true
 			case "output":
-				if strings.Contains(event.Output, "NATIVE-DIAGNOSTIC") {
-					return nil, fmt.Errorf("native diagnostic has no emitting case")
+				if err := feed(st, pkg, "", event.Output); err != nil {
+					return nil, err
 				}
 			default:
 				return nil, fmt.Errorf("unexpected native package action %q", event.Action)
@@ -453,21 +559,14 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 			if !st.running[event.Test] {
 				return nil, fmt.Errorf("native test %s passed without running", event.Test)
 			}
+			if err := finishTest(st, event.Test); err != nil {
+				return nil, err
+			}
 			delete(st.running, event.Test)
 			st.passed[event.Test] = true
 		case "output":
-			if _, text, found := strings.Cut(event.Output, "NATIVE-DIAGNOSTIC "); found {
-				// Every package emits exactly one record from each checked child; a
-				// parent, or an unrelated child of another parent, never emits.
-				_, child, isChild := strings.Cut(event.Test, "/")
-				if !st.running[event.Test] || !slices.Contains(pkg.diagnosticParents, top) || !isChild || child == "" || len(st.diagnostic[event.Test]) != 0 {
-					return nil, fmt.Errorf("native diagnostic has invalid or duplicate emitter %s", event.Test)
-				}
-				var message string
-				if err := json.Unmarshal([]byte(strings.TrimSpace(text)), &message); err != nil || message == "" {
-					return nil, fmt.Errorf("native diagnostic is not a nonempty JSON string")
-				}
-				st.diagnostic[event.Test] = append(st.diagnostic[event.Test], message)
+			if err := feed(st, pkg, event.Test, event.Output); err != nil {
+				return nil, err
 			}
 		case "pause", "cont":
 			if !st.running[event.Test] {
@@ -535,9 +634,9 @@ type nativeEvidenceCommand struct {
 	packages []nativeEvidencePackage
 }
 
-// nativeEvidenceCommands builds, without running anything, the three sequential
+// nativeEvidenceCommands builds, without running anything, the four sequential
 // invocations. Only the demofixture binary receives -native-contract.
-func nativeEvidenceCommands(repo, nativeProfile, exportProfile, proofviewProfile string) []nativeEvidenceCommand {
+func nativeEvidenceCommands(repo, nativeProfile, exportProfile, proofviewProfile, guidedProfile string) []nativeEvidenceCommand {
 	base := func(profile, run string) []string {
 		return []string{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=" + profile, "-run=" + run}
 	}
@@ -559,6 +658,14 @@ func nativeEvidenceCommands(repo, nativeProfile, exportProfile, proofviewProfile
 				"./internal/proofview"),
 			profile:  proofviewProfile,
 			packages: []nativeEvidencePackage{nativeProofviewPackage},
+		},
+		{
+			// The fourth command is the only one with an explicit -p1 resource
+			// bound; the first three stay byte-identical.
+			args: append(base(guidedProfile, "^TestGuidedNativeDiagnostics$"),
+				"-p=1", "./internal/guided"),
+			profile:  guidedProfile,
+			packages: []nativeEvidencePackage{nativeGuidedPackage},
 		},
 	}
 }

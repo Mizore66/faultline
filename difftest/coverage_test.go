@@ -158,8 +158,7 @@ var unreachableLiterals = map[string]string{
 	// error struct literals, which errorSites did not collect before.
 	// CLI paths frozen TS runs for real (Go throws `not yet ported`): no
 	// golden can compare them; internal/cli's unit tests pin the texts.
-	"not yet ported: %s":                            "every unported top-level command (serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
-	"not yet ported: investigate --ci-log/--resume": "guided investigate runs in TS (it calls a model); TestInvestigateUsageAndGuards pins the text",
+	"not yet ported: %s": "every unported top-level command (serve, ui, demo, tutorial and the rest in slice 5) runs for real in TS; internal/cli TestFailures pins the text",
 	// Witness review library and defensive refusals with no shipped fl output path.
 	"Witness review is not a valid local review snapshot":                                                 "VerifyWitnessReview validates an exported snapshot without store I/O; no fl command or server route imports a snapshot, so only the internal/witness tests reach it",
 	"Witness review digest does not match its immutable review payload":                                   "VerifyWitnessReview only (see the previous entry); TestVerifyWitnessReview covers it",
@@ -1199,6 +1198,9 @@ var gatedDirs = []string{
 	"internal/gitinv", "internal/sandbox", "internal/minimize", "internal/proofview", "internal/cli", "internal/projinit",
 	"internal/safegit", "internal/hostcmd", "internal/runtimeimage", "internal/doctor", "internal/allowlist", "internal/turnsnap",
 	"internal/incident", "internal/ledger", "internal/sidecar", "internal/snapgc",
+	// Guided investigate: CLI diagnostics are replayed through the covered fl
+	// (TestGuidedWrapperGuardsReplay); library-only paths use the native collector.
+	"internal/guided",
 	// Slice 5b.1: the cached fixture (position-gated through the permanent
 	// demo-artifacts replay and the writer/renderer goldens).
 	"internal/demofixture",
@@ -1400,6 +1402,9 @@ func goldenText(t *testing.T, repo string) string {
 	// Witness review CLI diagnostics, replayed through the covered fl by
 	// TestWitnessReviewDiagnosticsReplay.
 	files = append(files, filepath.Join(repo, "difftest", "testdata", "witness-review", "cli-diagnostics.jsonl"))
+	// Guided investigate wrapper-guard diagnostics, replayed through the covered
+	// fl by TestGuidedWrapperGuardsReplay (frozen src/cli-app.ts texts).
+	files = append(files, filepath.Join(repo, "difftest", "testdata", "guided-investigate", "diagnostics", "wrapper-guards.jsonl"))
 	var goldens strings.Builder
 	for _, f := range files {
 		b, err := os.ReadFile(f)

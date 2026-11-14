@@ -1,0 +1,113 @@
+{
+  "schema": "faultline.guided-investigate-capture.v1",
+  "caseId": "continuation-fakebox-clean-resume",
+  "group": "continuation",
+  "replay": "PENDING_LOCALIZATION_GRAPH",
+  "fixture": {
+    "commits": [
+      "b48d9d2ed9f254c586ec97923fb8552575c7103d",
+      "eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+    ],
+    "inputTreeSha256": "8923070d08c07ace83b3740ebd0d3d46fb8ade6ab144ca5bfa8c65ca04502bad"
+  },
+  "templates": [],
+  "steps": [
+    {
+      "name": "freeze then fakebox localization",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "{SLOT}/in/ci.log",
+        "--repo",
+        "{SLOT}/repo",
+        "--id",
+        "cr-1",
+        "--image",
+        "node@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "--command",
+        "node check.mjs",
+        "--port",
+        "0"
+      ],
+      "exit": 0,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (ci-log)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine local witness review: http://127.0.0.1:{PORT}\nApprove, then Freeze (separate clicks). This command continues automatically after freeze. Press Ctrl+C to cancel and resume later with --resume <id>.\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\nFaultLine guided investigate: PROOF_EXPORT\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "35324587552a91febf645aa51b51556444d0a45dfd66b5b590397e2b8b6d17c9",
+      "actions": [
+        {
+          "do": "ready"
+        },
+        {
+          "do": "get",
+          "path": "/",
+          "status": 200
+        },
+        {
+          "do": "post",
+          "path": "/approve-freeze",
+          "status": 200
+        }
+      ],
+      "toolCounts": {
+        "docker": 8,
+        "git": 101,
+        "node": 1
+      },
+      "treeSha256": ""
+    },
+    {
+      "name": "resume again with the same image",
+      "args": [
+        "investigate",
+        "--resume",
+        "cr-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--image",
+        "node@sha256:0000000000000000000000000000000000000000000000000000000000000001"
+      ],
+      "exit": 0,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume cr-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\nFaultLine guided investigate: PROOF_EXPORT\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "460137a277a82c16bc1651d2be5856684ee7c3d316f2593d63bf33e60c563743",
+      "actions": [],
+      "toolCounts": {
+        "docker": 8,
+        "git": 91,
+        "node": 1
+      },
+      "treeSha256": ""
+    },
+    {
+      "name": "resume with a different image hits the deterministic bundle name",
+      "args": [
+        "investigate",
+        "--resume",
+        "cr-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--image",
+        "node@sha256:0000000000000000000000000000000000000000000000000000000000000002"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume cr-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\nFaultLine error: Git proof bundle output already exists and will not be replaced: {SLOT}/repo/.faultline/git-proof-bundles/incident-cr-1-eebd738dc93a-1784203200012\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "3b276309fee0de5aee480210409d3043767ab0e04b43a8e07b078dc261f117f3",
+      "actions": [],
+      "toolCounts": {
+        "docker": 8,
+        "git": 53,
+        "node": 1
+      },
+      "treeSha256": ""
+    }
+  ],
+  "finalTree": [],
+  "finalTreeSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+}

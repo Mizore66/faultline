@@ -18,3 +18,8 @@ difftest/testdata/fakebrowser/** text eol=lf
 .github/scripts/windows-writer-skips.txt merge=union
 difftest/testdata/fakecodex/** text eol=lf
 difftest/testdata/fakegh/** text eol=lf
+# Guided projection generator/loader are hashed into the committed manifests; keep LF bytes on every OS.
+difftest/gen/gen-guided-*.mjs text eol=lf
+difftest/gen/guided-projection-loader.mjs text eol=lf
+# Pinned by hash in the guided oracle baseline; an ordinary Windows checkout (core.autocrlf=true) must keep LF.
+difftest/gen/seed.mjs text eol=lf

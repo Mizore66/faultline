@@ -1,0 +1,59 @@
+{
+  "schema": "faultline.guided-investigate-capture.v1",
+  "caseId": "continuation-configured-image",
+  "group": "continuation",
+  "replay": "PENDING_LOCALIZATION_GRAPH",
+  "fixture": {
+    "commits": [
+      "b48d9d2ed9f254c586ec97923fb8552575c7103d",
+      "eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+    ],
+    "inputTreeSha256": "132786dff3a740cd6f05049c1d17087907c88fc980113385ca7f9a06812de2ac"
+  },
+  "templates": [],
+  "steps": [
+    {
+      "name": "configured image is used",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "{SLOT}/in/ci.log",
+        "--repo",
+        "{SLOT}/repo",
+        "--id",
+        "cfg-1",
+        "--port",
+        "0"
+      ],
+      "exit": 0,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (ci-log)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine local witness review: http://127.0.0.1:{PORT}\nApprove, then Freeze (separate clicks). This command continues automatically after freeze. Press Ctrl+C to cancel and resume later with --resume <id>.\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\nFaultLine guided investigate: PROOF_EXPORT\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "35324587552a91febf645aa51b51556444d0a45dfd66b5b590397e2b8b6d17c9",
+      "actions": [
+        {
+          "do": "ready"
+        },
+        {
+          "do": "get",
+          "path": "/",
+          "status": 200
+        },
+        {
+          "do": "post",
+          "path": "/approve-freeze",
+          "status": 200
+        }
+      ],
+      "toolCounts": {
+        "docker": 8,
+        "git": 101,
+        "node": 1
+      },
+      "treeSha256": ""
+    }
+  ],
+  "finalTree": [],
+  "finalTreeSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+}

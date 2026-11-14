@@ -1,0 +1,96 @@
+{
+  "schema": "faultline.guided-investigate-oracle.v1",
+  "source": {
+    "commit": "ce99a793af0b020bf1b9cf21114f8d7897b37207",
+    "srcTree": "47b50ed83511d5e7c27e42e587f03d3c9d637bb7",
+    "frozenManifestVersion": "0.1.3",
+    "manifestVersion": "0.1.4",
+    "cliVersion": "FaultLine 0.1.4"
+  },
+  "node": {
+    "version": "v22.22.2"
+  },
+  "generator": {
+    "path": "difftest/gen/gen-guided-investigate.mjs",
+    "mode": "capture"
+  },
+  "inputs": {
+    "cases.json": "0602f262ad773a86c900c3c50e91e43005c8b32f365fc8534b2072747b8f7160",
+    "clock.mjs": "fbec39db655adf05e1770597cdce6ebdc1f57b0ac4c28356e68d14ea1ea3c586",
+    "fakebox/main.go": "2c116468940f536a1f7b3fbb6ce1612b4ff1bbd1183b4c34e26393a796418669",
+    "gen-guided.mjs": "df79e45de10edcbde3180291958246cf013f227066beee6b80215ce371c213a6",
+    "seed.mjs": "1fe0de0965968dc8398e03f203fd327c4fe8ac31ad625fd5930a8445fe750002",
+    "package.json.cli": "0.1.4"
+  },
+  "seed": "guided-investigate-oracle-v1",
+  "slot": {
+    "sha256": "0a4e204ee3b6d244e20e7edddd65d015392859cfedf7bea7efdee6005a2c6a3f",
+    "platform": "darwin"
+  },
+  "caseIds": [
+    "route-git-conflict",
+    "mode-and-range-refusals",
+    "resume-empty-and-equals-spelling",
+    "preflight-blocked-old-node",
+    "preflight-blocked-no-node",
+    "intake-input-refusals",
+    "intake-runtime-docker-absent",
+    "intake-head-unreadable",
+    "intake-partial-draft-store-blocked",
+    "intake-witness-store-blocked",
+    "intake-symptom-selection",
+    "intake-utf16-and-whitespace",
+    "intake-command-and-range",
+    "intake-curated-runtime",
+    "review-cancel-then-resume-atomic",
+    "review-two-step",
+    "review-token-and-form-refusals",
+    "review-frozen-fast-path",
+    "review-expected-digest",
+    "review-resume-repository-mismatch",
+    "review-custom-stores",
+    "continuation-runtime-conflicts",
+    "continuation-fakebox-dirty-resume",
+    "continuation-fakebox-clean-resume",
+    "continuation-late-refusals",
+    "continuation-docker-daemon-down",
+    "continuation-configured-image",
+    "signals-sigterm-default-death",
+    "signals-sigint-resume"
+  ],
+  "counts": {
+    "cases": 29,
+    "steps": 75
+  },
+  "captures": {
+    "route-git-conflict": "9961ca0677984303e3543198129f9e5adfcc6be73a0c4baad3d38f75c1ec7116",
+    "mode-and-range-refusals": "3a40e8d90f3f0a6646de32676e90a9112a37d132f34c40b610088a15dc3414c8",
+    "resume-empty-and-equals-spelling": "fcc48c9deeea997e8160316b95a1db01b6bf0e8075d5fb947837dfd372036f6c",
+    "preflight-blocked-old-node": "c6c2e6d650e9956fe9046fdab593a6061e65606242cfa107506704af244bc85a",
+    "preflight-blocked-no-node": "b6183d73d8ff98e3aff6bfda0bc1c9c853f2a41256ad1c72c835089ba5747376",
+    "intake-input-refusals": "4bb42dedf1cdb757514b745402a24d90f3e2edee48511ff934f3bd45bcc886ef",
+    "intake-runtime-docker-absent": "66a8d4210971e0016270ce558b274328b71408631cbe110b9a04a0041b771dbc",
+    "intake-head-unreadable": "52475ceaac39a096e0015c4b6fd168f1265a4b4b037a11a929bb504961a484b3",
+    "intake-partial-draft-store-blocked": "9b7982109013d896948eb39d9c2e999245443ee5e56cea8cb6382a6fbc3ff7ff",
+    "intake-witness-store-blocked": "c823037653428ac66520aac8dc5be57832e665639f3c883dd53b921eda64d0be",
+    "intake-symptom-selection": "8f6efa875ca03c84097a1849e69def87bdff1cc558c5ff9b20d10d1395afe043",
+    "intake-utf16-and-whitespace": "8ce8695bb04adac16231b8e5a34b8e059e7c016924b31fbcde9f5c8264e388fc",
+    "intake-command-and-range": "9cc2d4eafe8bab3ac6165c2c12b14578577f1791b1ba3ca0edf456d60e22f394",
+    "intake-curated-runtime": "4518146bae22738e4d63ae8b5c972c0abea771e14a5f1f082ce808177bac4ec3",
+    "review-cancel-then-resume-atomic": "d072a8c5acf549d1f3abf7a1107c0b6e3bdb10e1811aee7b2968a52029372d3c",
+    "review-two-step": "3d77c8b94bb80398221e15f45980a3e261a3dc187442cac9439960ada54dbf52",
+    "review-token-and-form-refusals": "54cd51e275ddfb92c0a55e06a00eb897a79050c85530f7970910f5cd3008f499",
+    "review-frozen-fast-path": "be1d051b8228ce7290027c1eeb6ab922c796fd51f56add9fb95ba1af6f952a54",
+    "review-expected-digest": "98ee091d8ee1e339bab4c0f914e27f88951f3cfb3f6380ec354c0ccc47efdc55",
+    "review-resume-repository-mismatch": "34d587b36fee091919ed24746ff50527edc10f3492efbd531fda2f7a718e441e",
+    "review-custom-stores": "654dd2ff43aed22bf9fa96a0e3506f5e024270a71caca5d3c6998454193b1ad9",
+    "continuation-runtime-conflicts": "69909f08f5b291cb9311d7a541c77646455fb62eb47b70debc087fbb7846bd59",
+    "continuation-fakebox-dirty-resume": "03549597745079588fe6090b4041edcaf2819cd618f28074e90995fdb028e485",
+    "continuation-fakebox-clean-resume": "b74e412d5a92783ef63ea61eeef87d810218691ec2c23fb665563e4726fc9f8c",
+    "continuation-late-refusals": "5ed9f93f4ca7170510b56ea23fd22492628af8d4eadfcf1ee74a84c3300c9456",
+    "continuation-docker-daemon-down": "1aefb2c57355e98980e93b5ca49677b1598d0fcdd5f6186e355e55f9e96fda46",
+    "continuation-configured-image": "a30f447f116f8c2715e9a1b602e1813cb44e0ce4cb52123084d8e9a69f2a6e39",
+    "signals-sigterm-default-death": "dd0ad7df11646f76bee91f42d8fdd5e66442fd5193c654dcfea3feea90f95ef9",
+    "signals-sigint-resume": "799009a54d3d5d85206b518bb60c49f879c46063c948551605a7998c1e97ee35"
+  }
+}

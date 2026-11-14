@@ -1,0 +1,67 @@
+{
+  "id": "retained-check-failure-joins-errors",
+  "outcome": {
+    "kind": "error",
+    "message": "Guided investigate failed to bind a retained freeze digest: e1; e2"
+  },
+  "events": [
+    {
+      "kind": "phase",
+      "args": [
+        "PREFLIGHT"
+      ]
+    },
+    {
+      "kind": "doctor",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "repository",
+              "$ROOT/repo"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "INTAKE",
+        "resume d1"
+      ]
+    },
+    {
+      "kind": "readDraft",
+      "args": [
+        "$ROOT/repo/.faultline/incidents",
+        "d1"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "WITNESS_REVIEW"
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        {
+          "$t": "undefined"
+        }
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    }
+  ]
+}

@@ -110,6 +110,7 @@ type reviewState struct {
 	review jsjson.Value
 	draft  *jsjson.Value
 	page   witnessReviewPageState
+	view   witnessReviewView
 }
 
 func isMissingRecord(err error) bool {
@@ -176,6 +177,9 @@ func (s *WitnessReviewServer) readState() reviewState {
 	} else {
 		throwUnlessMissing(err)
 	}
+	// tryReadState humanizes (read-only git) after the record reads; the
+	// notice does not affect the view.
+	state.view = buildWitnessReviewView(state.review, state.draft, state.page)
 	return state
 }
 
@@ -184,7 +188,7 @@ func (s *WitnessReviewServer) render(state reviewState, notice string) string {
 	if notice != "" {
 		page.Notice = &notice
 	}
-	return renderWitnessReviewPage(state.review, state.draft, s.token, s.options.TwoStep, page)
+	return renderWitnessReviewPageWithView(state.review, state.view, s.token, s.options.TwoStep, page)
 }
 
 // try runs a handler section whose throws become the 409 refusal page.

@@ -1,0 +1,29 @@
+{
+  "id": "node-blocked",
+  "outcome": {
+    "kind": "result",
+    "json": "{\n  \"status\": \"PREFLIGHT_BLOCKED\",\n  \"doctor\": {\n    \"schema\": \"doctor-fixture\",\n    \"diagnostics\": [\n      {\n        \"id\": \"git\",\n        \"status\": \"READY\"\n      },\n      {\n        \"id\": \"node\",\n        \"status\": \"MISSING\"\n      }\n    ],\n    \"dockerInvestigationPreflight\": \"UNAVAILABLE\"\n  },\n  \"proofReady\": false,\n  \"draft\": null,\n  \"draftPath\": null,\n  \"reviewUrl\": null,\n  \"retainedFrozenDigest\": null,\n  \"continuation\": null,\n  \"nextCommands\": [\n    \"Install Node.js 22+\",\n    \"fl doctor --repo .\"\n  ],\n  \"note\": \"Local CLI preflight failed; fix Node before continuing the guided investigate flow.\"\n}"
+  },
+  "events": [
+    {
+      "kind": "phase",
+      "args": [
+        "PREFLIGHT"
+      ]
+    },
+    {
+      "kind": "doctor",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "repository",
+              "$ROOT/repo"
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

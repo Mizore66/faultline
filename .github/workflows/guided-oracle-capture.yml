@@ -1,0 +1,353 @@
+name: Guided oracle native capture
+
+# Narrow capture and qualification workflow for the guided `fl investigate --ci-log/--resume` oracle on actual
+# native Windows (AMD64 and ARM64). It runs ONLY on pushes to the isolated capture branch that touch the
+# capture inputs (and by manual dispatch once the file is on the default branch); it is not a PR/main workflow
+# and changes no existing check. It captures the frozen TypeScript CLI (commit ce99a793) twice at two different
+# roots, validates the captures, replays them with the built Go fl alone (no Node or pnpm on the replay
+# children's PATH), and uploads the corpus and receipts. Nothing is written back to the repository.
+#
+# Layout: ONE owned base directory on ONE native volume holds both live slots (with their .tools/.home/.tmp
+# siblings), both scratch roots (where finished case slots are renamed whole) and both output corpora. The
+# whole base is uploaded on every run, so a failed case's live workspace is retained.
+#
+# Artifact trust: <...>-corpus-candidate-* holds captured data that may be incomplete or unvalidated;
+# <...>-corpus-validated-* is uploaded only when capture, compare, schema validation, the Go-only replay and the
+# CLI process tests all succeeded. receipts/status.json says which, with the source commit and native platform.
+
+on:
+  push:
+    branches: [go-guided-native-capture-20261114]
+    paths:
+      - ".github/workflows/guided-oracle-capture.yml"
+      - ".gitattributes"
+      - "difftest/gen/gen-guided-investigate*.mjs"
+      - "difftest/gen/seed.mjs"
+      - "difftest/guided_*_test.go"
+      - "difftest/servefixture/**"
+      - "difftest/testdata/guided-investigate/**"
+      - "internal/cli/**"
+      - "internal/guided/**"
+      - "internal/proofview/**"
+      - "internal/bundle/**"
+      - "internal/witness/**"
+      - "internal/incident/**"
+      - "internal/gitinv/**"
+      - "cmd/fl/**"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guided-oracle-capture-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    name: native capture (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-amd64
+            os: windows-latest
+            goarch: amd64
+            nodearch: x64
+          - name: windows-arm64
+            os: windows-11-arm
+            goarch: arm64
+            nodearch: arm64
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # No git configuration is changed: every hashed input has an explicit per-path eol rule in
+      # .gitattributes, so an ordinary Windows checkout (core.autocrlf=true) already yields the pinned LF bytes.
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.4"
+      # The exact pnpm version is pinned in package.json (packageManager).
+      - uses: pnpm/action-setup@b0f76dfb45f55f8421693e4803ac7bb65143bd34 # v6
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Prepare the owned capture base and receipts
+        id: base
+        run: |
+          set -euo pipefail
+          base="$(cygpath -w "$RUNNER_TEMP")\\gcap"
+          mkdir -p "$(cygpath -u "$base")/receipts"
+          echo "CAP_BASE=$base" >> "$GITHUB_ENV"
+          echo "RC=$(cygpath -u "$base")/receipts" >> "$GITHUB_ENV"
+
+      - name: Verify native platform, runtimes and source pins
+        id: pins
+        run: |
+          set -euo pipefail
+          node --version | tee "$RC/node-version.txt"
+          test "$(node --version)" = "v22.22.2"
+          node -p "process.platform + '/' + process.arch" | tee "$RC/node-platform.txt"
+          test "$(node -p 'process.platform')" = "win32"
+          test "$(node -p 'process.arch')" = "${{ matrix.nodearch }}"
+          go version | tee "$RC/go-version.txt"
+          case "$(go version)" in *"go1.27.4 windows/${{ matrix.goarch }}") ;; *) echo "unexpected go: $(go version)"; exit 1;; esac
+          test "$(go env GOOS)" = "windows"
+          test "$(go env GOARCH)" = "${{ matrix.goarch }}"
+          go env GOOS GOARCH | tee "$RC/go-platform.txt"
+          git --version | tee "$RC/git-version.txt"
+          # The runtime source is byte-identical to the frozen commit; the manifest versions are distinct.
+          test "$(git rev-parse ce99a793af0b020bf1b9cf21114f8d7897b37207:src)" = "47b50ed83511d5e7c27e42e587f03d3c9d637bb7"
+          git diff --quiet ce99a793af0b020bf1b9cf21114f8d7897b37207 -- src
+          git rev-parse HEAD | tee "$RC/head.txt"
+          node dist/cli.js --version | tee "$RC/cli-version.txt"
+          test "$(node dist/cli.js --version)" = "FaultLine 0.1.4"
+          # Hashed inputs must have kept their LF bytes in this checkout.
+          node -e 'const fs=require("fs");for(const f of ["difftest/gen/seed.mjs","difftest/gen/gen-guided-investigate.mjs","difftest/testdata/guided-investigate/oracle/clock.mjs","difftest/testdata/guided-investigate/oracle/cases.json","difftest/testdata/guided-investigate/oracle/fakebox/main.go"]){if(fs.readFileSync(f).includes(13))throw new Error("CR byte in "+f)}'
+
+      - name: Generator controls (real collectGraph/selfCheck, layout guard, runner companion)
+        id: selftest
+        run: |
+          set -euo pipefail
+          node --test difftest/gen/gen-guided-investigate.selftest.mjs 2>&1 | tee "$RC/selftest.log"
+          grep -qx '# pass 15' "$RC/selftest.log"
+          grep -qx '# fail 0' "$RC/selftest.log"
+
+      - name: Build and test the capture runner (native)
+        id: helpers
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tools"
+          go build -o "$RUNNER_TEMP/tools/console-helper.exe" ./difftest/servefixture/console-helper
+          go build -o "$RUNNER_TEMP/tools/guided-step-runner.exe" ./difftest/servefixture/guided-step-runner
+          status=0
+          go test -count=1 -v -timeout 10m ./difftest/servefixture/guided-step-runner > "$RC/runner-test.log" 2>&1 || status=$?
+          echo "$status" > "$RC/runner-test.exit"
+          cat "$RC/runner-test.log"
+          test "$status" = 0
+          tr -d '\r' < "$RC/runner-test.log" > "$RC/runner-test.norm.log"
+          printf '%s\n' TestRunStdinEOFStopsAndReapsChild TestRunDeadlineReapsChild TestRunWriteFailureReapsChild TestRunStartupFailureReportsStreams TestRunNormalExitRelaysRawStatus TestMainBadUsageExitsTwo > "$RC/runner-test.list"
+          .github/scripts/check-skips.sh "$RC/runner-test.norm.log" '^$' "$RC/runner-test.list"
+
+      - name: Capture the frozen Node CLI at two roots
+        id: capture
+        env:
+          GOMAXPROCS: "2"
+        run: |
+          set -euo pipefail
+          tools="$(cygpath -w "$RUNNER_TEMP")\\tools"
+          export GUIDED_STEP_RUNNER="$tools\\guided-step-runner.exe"
+          export GUIDED_CONSOLE_HELPER="$tools\\console-helper.exe"
+          # Everything lives under CAP_BASE (one volume): live slots with their .tools/.home/.tmp siblings,
+          # scratch roots (finished case slots are renamed whole into <scratch>/work) and outputs. The two
+          # roots differ in depth and name length, and the second contains spaces.
+          rootA="$CAP_BASE\\a\\x\\slot"
+          rootB="$CAP_BASE\\second root with spaces\\y\\z\\w\\slot-with-a-longer-name"
+          mkdir -p "$(cygpath -u "$CAP_BASE")/a/x" "$(cygpath -u "$CAP_BASE")/second root with spaces/y/z/w"
+          node difftest/gen/gen-guided-investigate.mjs --native-capture \
+            --slot "$rootA" --scratch "$CAP_BASE\\scratch-a" --out "$CAP_BASE\\out-a" 2>&1 | tee "$RC/capture-a.log"
+          node difftest/gen/gen-guided-investigate.mjs --native-capture \
+            --slot "$rootB" --scratch "$CAP_BASE\\scratch-b" --out "$CAP_BASE\\out-b" 2>&1 | tee "$RC/capture-b.log"
+
+      - name: Compare the two native captures and validate the corpus
+        id: compare
+        run: |
+          set -euo pipefail
+          node difftest/gen/gen-guided-investigate.mjs --compare-native --a "$CAP_BASE\\out-a" --b "$CAP_BASE\\out-b" 2>&1 | tee "$RC/compare.log"
+          # The path is read from the environment inside Node: no MSYS-style path crosses the process boundary.
+          node -e '
+            const fs = require("fs"); const path = require("path");
+            const d = path.join(process.env.CAP_BASE, "out-a");
+            const b = JSON.parse(fs.readFileSync(path.join(d, "baseline.json"), "utf8"));
+            if (b.counts.cases !== 29 || b.counts.steps !== 75 || !b.platform || b.platform.goos !== "windows") throw new Error("unexpected baseline " + JSON.stringify(b.counts));
+            const names = fs.readdirSync(path.join(d, "captures"));
+            let full = 0;
+            for (const n of names) if (JSON.parse(fs.readFileSync(path.join(d, "captures", n), "utf8")).replay === "FULL") full++;
+            if (names.length !== 29 || full !== 29) throw new Error("not 29 FULL captures: " + names.length + "/" + full);
+            console.log("29 FULL captures, 75 steps, platform " + JSON.stringify(b.platform));
+          ' 2>&1 | tee "$RC/validate.log"
+
+      # Go-only replay of the fresh native capture. Neither Node nor pnpm may be reachable from the replay.
+      - name: Build the Go test binaries
+        id: build
+        run: |
+          set -euo pipefail
+          go vet -tags faultline_test ./difftest ./difftest/servefixture/... ./internal/cli
+          go test -tags faultline_test -c -o "$RUNNER_TEMP/difftest.test.exe" ./difftest
+          go test -tags faultline_test -c -o "$RUNNER_TEMP/cli.test.exe" ./internal/cli
+
+      - name: Go-only replay without Node or pnpm on PATH
+        id: replay
+        shell: pwsh
+        env:
+          FAULTLINE_GUIDED_CORPUS_DIR: ${{ runner.temp }}\gcap\out-a
+          FAULTLINE_GUIDED_EVIDENCE: ${{ runner.temp }}\gcap\replay-evidence
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rc = Join-Path $env:RUNNER_TEMP 'gcap\receipts'
+          $runtimeNames = 'node','pnpm','npm','npx','corepack'
+          $exts = '.exe','.cmd','.bat','.com','.ps1',''
+          $kept = New-Object System.Collections.Generic.List[string]
+          foreach ($e in ($env:PATH -split ';')) {
+            if ([string]::IsNullOrWhiteSpace($e)) { continue }
+            $hit = $false
+            foreach ($n in $runtimeNames) { foreach ($x in $exts) {
+              try { if (Test-Path -LiteralPath (Join-Path $e ($n + $x)) -PathType Leaf) { $hit = $true } }
+              catch { throw "malformed or unreadable PATH entry '$e': $($_.Exception.Message)" }
+            } }
+            if (-not $hit) { $kept.Add($e) }
+          }
+          $env:PATH = $kept -join ';'
+          foreach ($n in 'node','pnpm') {
+            if (Get-Command $n -ErrorAction SilentlyContinue) { throw "$n is still reachable on PATH" }
+            if (& where.exe $n 2>$null) { throw "$n is still found by where.exe" }
+          }
+          foreach ($n in 'go','git') { if (-not (Get-Command $n -ErrorAction SilentlyContinue)) { throw "$n is required and is not on the filtered PATH" } }
+          'node and pnpm absent; go and git present' | Set-Content (Join-Path $rc 'path-filter.txt')
+          Set-Location difftest
+          $tests = '^(TestGuidedPermanentReplayFull|TestGuidedReplayComparatorRejectsSilentDigestTampering|TestLiveGuidedInvestigateCorpus|TestGuidedTemplateGraphResolution|TestGuidedFailureRetentionAndIsolation|TestGuidedIndexViewIgnoresStatCache)$'
+          $log = Join-Path $rc 'go-replay.log'
+          & (Join-Path $env:RUNNER_TEMP 'difftest.test.exe') '-test.run' $tests '-test.count=1' '-test.v' '-test.timeout' '30m' *> $log
+          $code = $LASTEXITCODE
+          Set-Content -Path (Join-Path $rc 'go-replay.exit') -Value $code
+          Get-Content -LiteralPath $log
+          if ($code -ne 0) { throw "go replay failed: $code" }
+
+      - name: Require every named replay test and all 29 cases
+        id: replaycheck
+        run: |
+          set -euo pipefail
+          tr -d '\r' < "$RC/go-replay.log" > "$RC/go-replay.norm.log"
+          printf '%s\n' TestGuidedPermanentReplayFull TestGuidedReplayComparatorRejectsSilentDigestTampering TestLiveGuidedInvestigateCorpus TestGuidedTemplateGraphResolution TestGuidedFailureRetentionAndIsolation TestGuidedIndexViewIgnoresStatCache > "$RC/go-replay.list"
+          .github/scripts/check-skips.sh "$RC/go-replay.norm.log" '^$' "$RC/go-replay.list"
+          grep -qx 'PASS' "$RC/go-replay.norm.log"
+          # All 29 case ids from the corpus must each report a PASS subtest; none may fail or skip.
+          ids="$(node -e 'const b=JSON.parse(require("fs").readFileSync(require("path").join(process.env.CAP_BASE,"out-a","baseline.json"),"utf8"));console.log(b.caseIds.join("\n"))')"
+          test "$(echo "$ids" | wc -l)" = 29
+          for id in $ids; do
+            grep -qE -- "^ +--- PASS: TestGuidedPermanentReplayFull/$id " "$RC/go-replay.norm.log" || { echo "::error title=case did not pass::$id"; exit 1; }
+          done
+          ! grep -E -- '--- (FAIL|SKIP):' "$RC/go-replay.norm.log"
+
+      - name: Focused Windows guided CLI process and interrupt tests
+        id: cli
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $rc = Join-Path $env:RUNNER_TEMP 'gcap\receipts'
+          Set-Location internal/cli
+          $log = Join-Path $rc 'go-cli-process.log'
+          & (Join-Path $env:RUNNER_TEMP 'cli.test.exe') '-test.run' '^(TestGuidedInterruptHelper|TestGuidedInterruptFirstConsumedSecondTerminal|TestGuidedInterruptCleanupIdempotentJoinsGoroutine|TestGuidedInvestigateProcess)$' '-test.count=1' '-test.v' '-test.timeout' '20m' *> $log
+          $code = $LASTEXITCODE
+          Set-Content -Path (Join-Path $rc 'go-cli-process.exit') -Value $code
+          Get-Content -LiteralPath $log
+          if ($code -ne 0) { throw "guided CLI tests failed: $code" }
+
+      - name: Require every named CLI test
+        id: clicheck
+        run: |
+          set -euo pipefail
+          tr -d '\r' < "$RC/go-cli-process.log" > "$RC/go-cli-process.norm.log"
+          printf '%s\n' TestGuidedInterruptHelper TestGuidedInterruptFirstConsumedSecondTerminal TestGuidedInterruptCleanupIdempotentJoinsGoroutine TestGuidedInvestigateProcess > "$RC/go-cli-process.list"
+          .github/scripts/check-skips.sh "$RC/go-cli-process.norm.log" '^$' "$RC/go-cli-process.list"
+          grep -qx 'PASS' "$RC/go-cli-process.norm.log"
+
+      # Dynamic run receipt: explicit machine-readable outcomes. Runs after any failure.
+      - name: Write the run receipt and status
+        if: always()
+        env:
+          O_PINS: ${{ steps.pins.outcome }}
+          O_SELFTEST: ${{ steps.selftest.outcome }}
+          O_HELPERS: ${{ steps.helpers.outcome }}
+          O_CAPTURE: ${{ steps.capture.outcome }}
+          O_COMPARE: ${{ steps.compare.outcome }}
+          O_BUILD: ${{ steps.build.outcome }}
+          O_REPLAY: ${{ steps.replay.outcome }}
+          O_REPLAYCHECK: ${{ steps.replaycheck.outcome }}
+          O_CLI: ${{ steps.cli.outcome }}
+          O_CLICHECK: ${{ steps.clicheck.outcome }}
+        run: |
+          set -u
+          mkdir -p "$RC"
+          node -e '
+            const fs = require("fs"); const path = require("path");
+            const o = {};
+            for (const k of ["PINS","SELFTEST","HELPERS","CAPTURE","COMPARE","BUILD","REPLAY","REPLAYCHECK","CLI","CLICHECK"]) o[k.toLowerCase()] = process.env["O_" + k] || "missing";
+            const validated = Object.values(o).every((v) => v === "success");
+            const st = {
+              schema: "faultline.guided-native-capture-status.v1",
+              validated,
+              label: validated ? "VALIDATED" : "CANDIDATE_UNVALIDATED",
+              outcomes: o,
+              sourceCommit: process.env.GITHUB_SHA,
+              workflow: { run_id: process.env.GITHUB_RUN_ID, run_attempt: process.env.GITHUB_RUN_ATTEMPT },
+              runner: { os: process.env.RUNNER_OS, arch: process.env.RUNNER_ARCH, name: "${{ matrix.name }}", image: (process.env.ImageOS || "") + "/" + (process.env.ImageVersion || "") },
+              expectedPlatform: { goos: "windows", goarch: "${{ matrix.goarch }}", nodeArch: "${{ matrix.nodearch }}" },
+            };
+            fs.writeFileSync(path.join(process.env.CAP_BASE, "receipts", "status.json"), JSON.stringify(st, null, 2) + "\n");
+            fs.writeFileSync(path.join(process.env.CAP_BASE, "receipts", "validated.flag"), validated ? "true\n" : "false\n");
+            console.log(JSON.stringify(st));
+          '
+
+      # Separate and visible: a hashing failure fails this step, but the always() steps around it still run.
+      - name: Corpus checksum list (does not list itself)
+        if: always()
+        run: |
+          set -euo pipefail
+          test -d "$(cygpath -u "$CAP_BASE")/out-a"
+          cd "$(cygpath -u "$CAP_BASE")/out-a"
+          find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$RC/corpus-sha256sums.txt"
+          test -s "$RC/corpus-sha256sums.txt"
+
+      - name: Upload the validated native corpus
+        if: always() && steps.base.outcome == 'success' && steps.compare.outcome == 'success' && steps.replay.outcome == 'success' && steps.replaycheck.outcome == 'success' && steps.cli.outcome == 'success' && steps.clicheck.outcome == 'success' && steps.selftest.outcome == 'success' && steps.pins.outcome == 'success' && steps.capture.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: guided-oracle-corpus-validated-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\gcap\out-a
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload the candidate (possibly partial or unvalidated) corpus
+        if: always() && !(steps.compare.outcome == 'success' && steps.replay.outcome == 'success' && steps.replaycheck.outcome == 'success' && steps.cli.outcome == 'success' && steps.clicheck.outcome == 'success' && steps.selftest.outcome == 'success' && steps.pins.outcome == 'success' && steps.capture.outcome == 'success')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: guided-oracle-corpus-candidate-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}\gcap\out-a
+            ${{ runner.temp }}\gcap\out-b
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Upload receipts and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: guided-oracle-receipts-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\gcap\receipts
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90
+      # The entire owned base: both live slots (including a failed case's slot, .tools, .home, .tmp), both
+      # scratch roots with their work/ evidence, both outputs and the replay evidence. It contains no real HOME,
+      # no checkout .git, no node_modules and no secrets; the fixture .git directories are owned and carry no
+      # credentials.
+      - name: Upload the entire owned capture base (diagnostics)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: guided-oracle-raw-${{ matrix.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\gcap
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 90

@@ -63,12 +63,16 @@ type Started struct {
 	own      ownership // platform ownership (process group on Unix)
 }
 
-// StartOptions describes the complete stdout prefix that marks a process
-// ready. Validation must reject any extra bytes beyond that prefix.
+// StartOptions describes the complete prefix of the selected readiness stream
+// (stdout unless ReadyStream says otherwise) that marks a process ready. Validation must reject any extra bytes beyond that prefix.
 type StartOptions struct {
 	StartupLines       int
 	StartupDescription string
 	ValidateStartup    func([]byte) (string, error)
+	// ReadyStream selects the stream whose bytes are counted and validated
+	// for readiness: "" or "stdout" (the default) or "stderr". Only that
+	// stream is inspected for readiness; both are always captured.
+	ReadyStream string
 }
 
 // Start launches executable with prefix+argv, reads exactly two complete LF
@@ -89,6 +93,9 @@ func StartWithOptions(ctx context.Context, executable string, prefix, argv, env 
 	if options.StartupLines < 1 || options.StartupDescription == "" || options.ValidateStartup == nil {
 		return nil, errors.New("invalid serve fixture startup options")
 	}
+	if options.ReadyStream != "" && options.ReadyStream != "stdout" && options.ReadyStream != "stderr" {
+		return nil, fmt.Errorf("invalid serve fixture ReadyStream %q", options.ReadyStream)
+	}
 	args := append(append([]string{}, prefix...), argv...)
 	cmd := exec.Command(executable, args...)
 	cmd.Dir = cwd
@@ -108,6 +115,10 @@ func StartWithOptions(ctx context.Context, executable string, prefix, argv, env 
 		p.waitErr = cmd.Wait()
 		close(p.done)
 	}()
+	ready := p.stdout
+	if options.ReadyStream == "stderr" {
+		ready = p.stderr
+	}
 	fail := func(reason error) (*Started, error) {
 		p.kill()
 		<-p.done
@@ -116,7 +127,7 @@ func StartWithOptions(ctx context.Context, executable string, prefix, argv, env 
 		return nil, fmt.Errorf("%w\nstdout: %q\nstderr: %q\nexit: %s", reason, out, errOut, p.describeExit())
 	}
 	for {
-		out, changed := p.stdout.snapshot()
+		out, changed := ready.snapshot()
 		if bytes.Count(out, []byte("\n")) >= options.StartupLines {
 			url, err := options.ValidateStartup(out)
 			if err != nil {
@@ -129,7 +140,7 @@ func StartWithOptions(ctx context.Context, executable string, prefix, argv, env 
 		case <-changed:
 		case <-p.done:
 			// The final writes happen before Wait returns; look once more.
-			if out, _ = p.stdout.snapshot(); bytes.Count(out, []byte("\n")) >= options.StartupLines {
+			if out, _ = ready.snapshot(); bytes.Count(out, []byte("\n")) >= options.StartupLines {
 				continue
 			}
 			return fail(errors.New("fl exited before printing its " + options.StartupDescription))

@@ -1,0 +1,194 @@
+{
+  "id": "runtime-draft-image-precedes-alias",
+  "outcome": {
+    "kind": "result",
+    "json": "{\n  \"status\": \"GUIDED_PROOF_BUNDLE_READY\",\n  \"doctor\": {\n    \"schema\": \"doctor-fixture\",\n    \"diagnostics\": [\n      {\n        \"id\": \"git\",\n        \"status\": \"READY\"\n      },\n      {\n        \"id\": \"node\",\n        \"status\": \"READY\"\n      }\n    ],\n    \"dockerInvestigationPreflight\": \"READY\"\n  },\n  \"proofReady\": true,\n  \"draft\": {\n    \"draftId\": \"d1\",\n    \"repository\": \"$ROOT/repo\",\n    \"command\": \"echo é☃ 😀\",\n    \"opaque\": {\n      \"2\": \"two\",\n      \"10\": \"ten\",\n      \"z\": [\n        3,\n        1,\n        {\n          \"b\": 1,\n          \"a\": 2\n        }\n      ],\n      \"a\": null,\n      \"über\": \"☃\"\n    },\n    \"runtime\": {\n      \"requested\": \"node\",\n      \"image\": \"registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n    }\n  },\n  \"draftPath\": \"$ROOT/repo/.faultline/incidents/d1.json\",\n  \"reviewUrl\": null,\n  \"retainedFrozenDigest\": \"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"continuation\": {\n    \"status\": \"PROOF_BUNDLE_READY\",\n    \"next\": [\n      \"n\"\n    ],\n    \"unknownMember\": {\n      \"5\": 5,\n      \"é\": [\n        1,\n        2\n      ],\n      \"k\": \"v\"\n    }\n  },\n  \"nextCommands\": [\n    \"n\"\n  ],\n  \"note\": \"Guided investigate completed intake → human freeze → runtime selection → localization → proof export as one resumable command. FaultLine did not auto-approve or auto-freeze.\"\n}"
+  },
+  "events": [
+    {
+      "kind": "phase",
+      "args": [
+        "PREFLIGHT"
+      ]
+    },
+    {
+      "kind": "doctor",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "repository",
+              "$ROOT/repo"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "INTAKE",
+        "resume d1"
+      ]
+    },
+    {
+      "kind": "readDraft",
+      "args": [
+        "$ROOT/repo/.faultline/incidents",
+        "d1"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "WITNESS_REVIEW"
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        {
+          "$t": "undefined"
+        }
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "RUNTIME_SELECTION"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "LOCALIZATION"
+      ]
+    },
+    {
+      "kind": "continue",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "draft",
+              {
+                "$t": "object",
+                "members": [
+                  [
+                    "draftId",
+                    "d1"
+                  ],
+                  [
+                    "repository",
+                    "$ROOT/repo"
+                  ],
+                  [
+                    "command",
+                    "echo é☃ 😀"
+                  ],
+                  [
+                    "opaque",
+                    {
+                      "$t": "object",
+                      "members": [
+                        [
+                          "2",
+                          "two"
+                        ],
+                        [
+                          "10",
+                          "ten"
+                        ],
+                        [
+                          "z",
+                          {
+                            "$t": "array",
+                            "items": [
+                              3,
+                              1,
+                              {
+                                "$t": "object",
+                                "members": [
+                                  [
+                                    "b",
+                                    1
+                                  ],
+                                  [
+                                    "a",
+                                    2
+                                  ]
+                                ]
+                              }
+                            ]
+                          }
+                        ],
+                        [
+                          "a",
+                          null
+                        ],
+                        [
+                          "über",
+                          "☃"
+                        ]
+                      ]
+                    }
+                  ],
+                  [
+                    "runtime",
+                    {
+                      "$t": "object",
+                      "members": [
+                        [
+                          "requested",
+                          "node"
+                        ],
+                        [
+                          "image",
+                          "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        ]
+                      ]
+                    }
+                  ]
+                ]
+              }
+            ],
+            [
+              "repository",
+              "$ROOT/repo"
+            ],
+            [
+              "witnessStore",
+              "$ROOT/repo/.faultline/witnesses"
+            ],
+            [
+              "expectedFrozenDigest",
+              "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ],
+            [
+              "image",
+              "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "PROOF_EXPORT"
+      ]
+    }
+  ]
+}

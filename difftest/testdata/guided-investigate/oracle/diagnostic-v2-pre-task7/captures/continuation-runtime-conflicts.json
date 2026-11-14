@@ -1,0 +1,111 @@
+{
+  "schema": "faultline.guided-investigate-capture.v1",
+  "caseId": "continuation-runtime-conflicts",
+  "group": "continuation",
+  "replay": "PENDING_LOCALIZATION_GRAPH",
+  "fixture": {
+    "commits": [
+      "b48d9d2ed9f254c586ec97923fb8552575c7103d",
+      "eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+    ],
+    "inputTreeSha256": "b75f64144ed572a8d5b189dee00d7b237aa0c626ee5fd369300f217a52a9a402"
+  },
+  "templates": [],
+  "steps": [
+    {
+      "name": "freeze with recorded runtime",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "{SLOT}/in/ci.log",
+        "--repo",
+        "{SLOT}/repo",
+        "--id",
+        "cf-1",
+        "--runtime",
+        "node",
+        "--port",
+        "0"
+      ],
+      "exit": 0,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (ci-log)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine local witness review: http://127.0.0.1:{PORT}\nApprove, then Freeze (separate clicks). This command continues automatically after freeze. Press Ctrl+C to cancel and resume later with --resume <id>.\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\nFaultLine guided investigate: PROOF_EXPORT\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "35324587552a91febf645aa51b51556444d0a45dfd66b5b590397e2b8b6d17c9",
+      "actions": [
+        {
+          "do": "ready"
+        },
+        {
+          "do": "get",
+          "path": "/",
+          "status": 200
+        },
+        {
+          "do": "post",
+          "path": "/approve-freeze",
+          "status": 200
+        }
+      ],
+      "toolCounts": {
+        "docker": 9,
+        "git": 101,
+        "node": 1
+      },
+      "treeSha256": ""
+    },
+    {
+      "name": "image conflicts with the draft runtime",
+      "args": [
+        "investigate",
+        "--resume",
+        "cf-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--image",
+        "node@sha256:0000000000000000000000000000000000000000000000000000000000000002"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume cf-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine error: --image must match the digest-pinned runtime recorded in the immutable incident draft.\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "2804c3862b4b8f4be98f1c84556798dab3d6137e7793c8db569c7c426d8868eb",
+      "actions": [],
+      "toolCounts": {
+        "docker": 2,
+        "git": 3,
+        "node": 1
+      },
+      "treeSha256": ""
+    },
+    {
+      "name": "runtime alias on resume is not a conflict",
+      "args": [
+        "investigate",
+        "--resume",
+        "cf-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--runtime",
+        "python"
+      ],
+      "exit": 0,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume cf-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\nFaultLine guided investigate: PROOF_EXPORT\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "d1ba4b023401573e2b839e1faeaa0268de5dcb249700dca569c9a86fe0408d28",
+      "actions": [],
+      "toolCounts": {
+        "docker": 8,
+        "git": 91,
+        "node": 1
+      },
+      "treeSha256": ""
+    }
+  ],
+  "finalTree": [],
+  "finalTreeSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+}

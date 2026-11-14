@@ -1,0 +1,189 @@
+{
+  "id": "existing-freeze-expect-digest-wins-nonproof-runner",
+  "outcome": {
+    "kind": "result",
+    "json": "{\n  \"status\": \"GUIDED_INVESTIGATION_NOT_PROOF\",\n  \"doctor\": {\n    \"schema\": \"doctor-fixture\",\n    \"diagnostics\": [\n      {\n        \"id\": \"git\",\n        \"status\": \"READY\"\n      },\n      {\n        \"id\": \"node\",\n        \"status\": \"READY\"\n      }\n    ],\n    \"dockerInvestigationPreflight\": \"NOT_READY\"\n  },\n  \"proofReady\": false,\n  \"draft\": {\n    \"draftId\": \"d1\",\n    \"repository\": \"$ROOT/repo\",\n    \"command\": \"echo é☃ 😀\",\n    \"opaque\": {\n      \"2\": \"two\",\n      \"10\": \"ten\",\n      \"z\": [\n        3,\n        1,\n        {\n          \"b\": 1,\n          \"a\": 2\n        }\n      ],\n      \"a\": null,\n      \"über\": \"☃\"\n    }\n  },\n  \"draftPath\": \"$ROOT/repo/.faultline/incidents/d1.json\",\n  \"reviewUrl\": null,\n  \"retainedFrozenDigest\": \"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\n  \"continuation\": {\n    \"status\": \"INVESTIGATION_NOT_PROOF\",\n    \"next\": [\n      \"n1\"\n    ],\n    \"unknownMember\": {\n      \"5\": 5,\n      \"é\": [\n        1,\n        2\n      ],\n      \"k\": \"v\"\n    }\n  },\n  \"nextCommands\": [\n    \"n1\",\n    \"fl investigate --resume d1 --repo $ROOT/repo --expect-digest sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --image registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n  ],\n  \"note\": \"Guided investigate reached localization but did not establish a portable proof package. Fix the environment or witness, then resume with a new reviewed draft rather than altering the frozen record.\"\n}"
+  },
+  "events": [
+    {
+      "kind": "phase",
+      "args": [
+        "PREFLIGHT"
+      ]
+    },
+    {
+      "kind": "doctor",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "repository",
+              "$ROOT/repo"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "INTAKE",
+        "resume d1"
+      ]
+    },
+    {
+      "kind": "readDraft",
+      "args": [
+        "$ROOT/repo/.faultline/incidents",
+        "d1"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "WITNESS_REVIEW"
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "RUNTIME_SELECTION"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "LOCALIZATION"
+      ]
+    },
+    {
+      "kind": "continue",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "draft",
+              {
+                "$t": "object",
+                "members": [
+                  [
+                    "draftId",
+                    "d1"
+                  ],
+                  [
+                    "repository",
+                    "$ROOT/repo"
+                  ],
+                  [
+                    "command",
+                    "echo é☃ 😀"
+                  ],
+                  [
+                    "opaque",
+                    {
+                      "$t": "object",
+                      "members": [
+                        [
+                          "2",
+                          "two"
+                        ],
+                        [
+                          "10",
+                          "ten"
+                        ],
+                        [
+                          "z",
+                          {
+                            "$t": "array",
+                            "items": [
+                              3,
+                              1,
+                              {
+                                "$t": "object",
+                                "members": [
+                                  [
+                                    "b",
+                                    1
+                                  ],
+                                  [
+                                    "a",
+                                    2
+                                  ]
+                                ]
+                              }
+                            ]
+                          }
+                        ],
+                        [
+                          "a",
+                          null
+                        ],
+                        [
+                          "über",
+                          "☃"
+                        ]
+                      ]
+                    }
+                  ]
+                ]
+              }
+            ],
+            [
+              "repository",
+              "$ROOT/repo"
+            ],
+            [
+              "witnessStore",
+              "$ROOT/repo/.faultline/witnesses"
+            ],
+            [
+              "expectedFrozenDigest",
+              "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ],
+            [
+              "image",
+              "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ],
+            [
+              "runner",
+              {
+                "$t": "fn",
+                "id": "runner"
+              }
+            ],
+            [
+              "ledgerFile",
+              ""
+            ],
+            [
+              "maxStates",
+              0
+            ],
+            [
+              "outputDirectory",
+              "out"
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

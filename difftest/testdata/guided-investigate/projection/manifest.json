@@ -1,0 +1,226 @@
+{
+  "schema": "faultline.guided-projection.v1",
+  "provenance": "Expected outputs are solely Node-derived: the unchanged compiled frozen dist/guided-investigate.js executed with scripted dependency stubs. This is a scripted-dependency orchestration projection, not end-to-end and not native Docker proof evidence.",
+  "frozenCommit": "ce99a793af0b020bf1b9cf21114f8d7897b37207",
+  "node": "22.22.2",
+  "frozenSource": {
+    "path": "src/guided-investigate.ts",
+    "sha256": "8117310db75752f5e7faf160adf0be53c9832070b8c6a38a83b0572fd5a1783c"
+  },
+  "compiledModule": {
+    "path": "dist/guided-investigate.js",
+    "sha256": "b50a8060c8d85b3539c05ed8dfa5d44c4d3ce7d01d6af8ff6418c647b2fbfb7a"
+  },
+  "realDependencies": {
+    "dist/doctor.js": "b3c03fe38ebba86a74fab01579402d5b3573ccf8da0e42ae61b5f66fecf4e6c0",
+    "dist/incident-store.js": "777062b0aea9f1cccc92556f4ae14f50e1be61e91c6549fcd129c5af4d0003a3"
+  },
+  "generator": {
+    "path": "difftest/gen/gen-guided-projection.mjs",
+    "sha256": "1a2b6f320753f254cad958b092355ac373b4172ee110d9976dfbeee7ac2fd1ff"
+  },
+  "loader": {
+    "path": "difftest/gen/guided-projection-loader.mjs",
+    "sha256": "583bc627bc54510e9d0802c13c7473c9a09cd6be845601416197e516913de6d6"
+  },
+  "importAllowlist": {
+    "node:child_process": [
+      "spawnSync"
+    ],
+    "node:fs": [
+      "readFileSync"
+    ],
+    "node:path": [
+      "join",
+      "resolve"
+    ],
+    "./doctor.js": [
+      "doctorCliExitCode",
+      "runFaultLineDoctor"
+    ],
+    "./incident-continue.js": [
+      "runFrozenIncidentContinuation"
+    ],
+    "./incident.js": [
+      "createIncidentDraft"
+    ],
+    "./incident-store.js": [
+      "defaultIncidentDraftStore",
+      "readIncidentDraft",
+      "writeIncidentDraft"
+    ],
+    "./runtime.js": [
+      "resolveCuratedRuntime"
+    ],
+    "./witness-review-server.js": [
+      "startWitnessReviewServer"
+    ],
+    "./witness-lock.js": [
+      "proposeWitness",
+      "verifyFrozenWitness"
+    ]
+  },
+  "pathRoles": [
+    "$ROOT",
+    "$FOREIGN"
+  ],
+  "casesFileSha256": "55d8975eada401d3242646a2f6081ed379d21d26e30db564d3d64e9b70ba1769",
+  "cases": [
+    {
+      "id": "node-blocked",
+      "inputSha256": "26611e2708bb2a1d83c67c26a4c3abbe7a0f735df76a66c43169e76f4238f984",
+      "output": "captures/node-blocked.json",
+      "outputSha256": "50fda3277e6743a878e19b921b4678d7ff85637616cfda6d8bc78f9081a87a92"
+    },
+    {
+      "id": "missing-input-error",
+      "inputSha256": "5d40812b1ec0dd22e4d0db1be79037b897b7801df2487bce404177dff28f13a7",
+      "output": "captures/missing-input-error.json",
+      "outputSha256": "5cdc41d7638820104c944e95d4d9d5328b0f8b5935e37fa959ecc34c3aa5e03a"
+    },
+    {
+      "id": "resume-read-draft-throws",
+      "inputSha256": "f01a858a452a8187af2b454db0421cbd25bd268965844b123358752fe03f7e15",
+      "output": "captures/resume-read-draft-throws.json",
+      "outputSha256": "c935dcef7670d39818b6b642733092aa644a63aab1a82084c99f6edd2d278109"
+    },
+    {
+      "id": "resume-repository-mismatch",
+      "inputSha256": "c998a9869e85c3019919261669f34756a3ce5a423d8f57ab84b0e2fe3d151402",
+      "output": "captures/resume-repository-mismatch.json",
+      "outputSha256": "3cbc754553a7922082ad72370aed604a728bd201a90b5c2097abd3959cbf4f31"
+    },
+    {
+      "id": "resume-existing-freeze-proof-unicode-opaque",
+      "inputSha256": "37359afc684c39e29018bd5b97e9e9136ef9a74372e28b8819b97ea6f7fba235",
+      "output": "captures/resume-existing-freeze-proof-unicode-opaque.json",
+      "outputSha256": "f1281b335f5dab8a736abce96f8a34c3791329e82a80417b64137b4bcdc456c9"
+    },
+    {
+      "id": "existing-freeze-expect-digest-wins-nonproof-runner",
+      "inputSha256": "83ea735bef0568463fa0e8df043ad1ba2e5a487ffedbbff89eb3d3aa972da400",
+      "output": "captures/existing-freeze-expect-digest-wins-nonproof-runner.json",
+      "outputSha256": "8f50650d5d4be3861c304c5645a1eae611636bc5184a4692daafdb6058293cff"
+    },
+    {
+      "id": "empty-expect-digest-is-defined",
+      "inputSha256": "a9100a0065ee02bea63bbc0698106771fbc0c989a88b46ae6705c18addc64788",
+      "output": "captures/empty-expect-digest-is-defined.json",
+      "outputSha256": "273e89c6f8b91d4939d47b62f308a71b970937236c6e8eaee30902b8b45b039b"
+    },
+    {
+      "id": "waiter-fresh-freeze-proof-forwarding",
+      "inputSha256": "58cd2a7d5f7a3ca37f0266c9e2ec304df9ca9e791e1f7c79065c8d60f01f7215",
+      "output": "captures/waiter-fresh-freeze-proof-forwarding.json",
+      "outputSha256": "ab960b7446cf91d6e95f4f9cd235962578678fc29b873ae2ecb06683baa6688c"
+    },
+    {
+      "id": "waiter-minimal-options-absent",
+      "inputSha256": "f87737f2df1eb5d339e90b0b6dbb640e195e684e469a31209b1bbc6acc072b89",
+      "output": "captures/waiter-minimal-options-absent.json",
+      "outputSha256": "3ac195d075dbac394de5daa7dd79e116e9b2f4ae638c9e3f3f1cb1f869f46dd2"
+    },
+    {
+      "id": "expected-mismatch-before-match-check",
+      "inputSha256": "3ec4132c53dc68be79f67a42c547736a5124796ca6e85f8651dd43c19a671d70",
+      "output": "captures/expected-mismatch-before-match-check.json",
+      "outputSha256": "8231b4f76e05a177d7b118cf2882f3e5ee530483882f54aa4c8439eda56aca65"
+    },
+    {
+      "id": "waiter-throws",
+      "inputSha256": "51add60c116e8c7320eb4d328321bf4aa2a534f162f57d89f46e016f74a16320",
+      "output": "captures/waiter-throws.json",
+      "outputSha256": "f3edf3194b0b14251ee26d80498763ea8d1893397fb3b4eb17a204b120252ad8"
+    },
+    {
+      "id": "canceled-signal-existing-freeze-no-waiter",
+      "inputSha256": "c3cf7795b4915782290a583348d7682fb5c15690f9365b496c88339d5e3959b5",
+      "output": "captures/canceled-signal-existing-freeze-no-waiter.json",
+      "outputSha256": "05e06701f5676d46572a2a017cf953d7e134bcec981c79a90775b829e556447e"
+    },
+    {
+      "id": "canceled-signal-forwarded-to-waiter",
+      "inputSha256": "05816eb1952bbaeaa0f504c54a00d67029c29235d95e8d85b7c2396f76a36cad",
+      "output": "captures/canceled-signal-forwarded-to-waiter.json",
+      "outputSha256": "8dfe57564e81b2c82369bc736e4937da5d7f86e93684773d51c329b8fc612e14"
+    },
+    {
+      "id": "invalid-frozen-witness-joined",
+      "inputSha256": "30602fcf11265e054a680cf1bcd0f7b46863b86c0c8d404299b1d57955f87e06",
+      "output": "captures/invalid-frozen-witness-joined.json",
+      "outputSha256": "c582d546dc09eacc0f9fb6b60878f04532e7247fef2a0c17b7c4d08c3b3cbb15"
+    },
+    {
+      "id": "valid-but-null-digest-not-missing",
+      "inputSha256": "a24fef263eec1293612bc8dde04d7f8ad5a918d2c71e07d206b0781660114a25",
+      "output": "captures/valid-but-null-digest-not-missing.json",
+      "outputSha256": "dc2ef87d7c13672037011e8f00617e7ce3d073ab1eb55766d518268e846bf813"
+    },
+    {
+      "id": "retained-check-failure-joins-errors",
+      "inputSha256": "4f33ef2e1ce8946320e49d4ce48b282909378da5519d8345332c7d065cd6518d",
+      "output": "captures/retained-check-failure-joins-errors.json",
+      "outputSha256": "5ee38f8cc7c00ebe2254eb267048e5efb79b062452ad33bb147b5ba7d576e00c"
+    },
+    {
+      "id": "retained-check-failure-status-fallback",
+      "inputSha256": "37135767c88671e0112d9e973630a666e09172063209e0d0d38513b467fa3e18",
+      "output": "captures/retained-check-failure-status-fallback.json",
+      "outputSha256": "04ceb0f22eb4d904aa955556eb565b4b1bf6de85645f4325e6a4ced8d1a85a69"
+    },
+    {
+      "id": "runtime-draft-image-conflicts-with-image-option",
+      "inputSha256": "9a49799017c62c92db333958bf02f3097c2261d4a6773f85b97347a84f2610e9",
+      "output": "captures/runtime-draft-image-conflicts-with-image-option.json",
+      "outputSha256": "8a2a71d58ba1ac5c35e66014ca5f0e3401ed9c03433417c19efd4aa2c4d3f68a"
+    },
+    {
+      "id": "runtime-draft-image-precedes-alias",
+      "inputSha256": "09c2e33e3662f5f4a3b42cc75c63f8a09348e1d93769933fc99f8b4e1e022a5a",
+      "output": "captures/runtime-draft-image-precedes-alias.json",
+      "outputSha256": "c86b858353359f91a42303ec854b30661fa9faa7e76a40a2553efe6a040f4c0a"
+    },
+    {
+      "id": "runtime-image-option-precedes-alias",
+      "inputSha256": "d51a9ae593a72c9516fd741bc831567334974a5b3013ad10edec5338a4e0e11b",
+      "output": "captures/runtime-image-option-precedes-alias.json",
+      "outputSha256": "5e9a3d81122bab59fd14b42be692bdf6d578b1396de07f7b700fec510701eee7"
+    },
+    {
+      "id": "runtime-alias-resolved",
+      "inputSha256": "87588751f90872f54765c749f5f462c6090bb874487c0d7e62f510f0babfafae",
+      "output": "captures/runtime-alias-resolved.json",
+      "outputSha256": "52cf5ba97cde647a5b2e6f088831f1d1c248c69884803ebf017c9414cf9f26e3"
+    },
+    {
+      "id": "runtime-alias-resolve-throws",
+      "inputSha256": "d1c8c535f037e8b5cb90dde1e56c7bf68b3082883c04cf851de4d5dc404353b3",
+      "output": "captures/runtime-alias-resolve-throws.json",
+      "outputSha256": "439b8ce93b904150e07c9c304b64bdfe5a824b8a1290c678ca5e418e34ef4bfd"
+    },
+    {
+      "id": "runtime-missing-error",
+      "inputSha256": "934d26ae6c02a5268946fe0cecfd92a7d21dfafaa2ca6a1dcc1dc09bf3689979",
+      "output": "captures/runtime-missing-error.json",
+      "outputSha256": "b5ff5fcb6f901e668807a173a96178ab7133733f7279a2141706e00ea7c6ca57"
+    },
+    {
+      "id": "docker-not-ready-without-runner-late",
+      "inputSha256": "a25ebee1cc38d9b2d7667f9f2e45f41391f0e658d15a99790625213bae1d5423",
+      "output": "captures/docker-not-ready-without-runner-late.json",
+      "outputSha256": "cccc6d2ef1464752bea71a1860a5c96d95ee66f60187fdd665a8bf4035c8c563"
+    },
+    {
+      "id": "runner-injected-with-docker-not-ready",
+      "inputSha256": "53388b781533e4c58f54137a06ac99b1aa938afd9e3cbefcdb7648dd49157e80",
+      "output": "captures/runner-injected-with-docker-not-ready.json",
+      "outputSha256": "3d2bde5723e34268a076bd8e4b9ebeab51089c2bedc1ba56eb8f3c8434fe75b9"
+    },
+    {
+      "id": "continuation-throws",
+      "inputSha256": "a386da3a31433e27820c600f5acefc9968aea9e680286d757d9ffe6a4c49ef68",
+      "output": "captures/continuation-throws.json",
+      "outputSha256": "5754fa038da3112c7413c3983b4352b46cef07a2358bab59039f6ef8fcf6385d"
+    }
+  ]
+}
