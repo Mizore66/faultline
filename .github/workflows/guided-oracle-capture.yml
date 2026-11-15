@@ -220,7 +220,7 @@ jobs:
           foreach ($n in 'go','git') { if (-not (Get-Command $n -ErrorAction SilentlyContinue)) { throw "$n is required and is not on the filtered PATH" } }
           'node and pnpm absent; go and git present' | Set-Content (Join-Path $rc 'path-filter.txt')
           Set-Location difftest
-          $tests = '^(TestGuidedPermanentReplayFull|TestGuidedReplayComparatorRejectsSilentDigestTampering|TestLiveGuidedInvestigateCorpus|TestGuidedTemplateGraphResolution|TestGuidedFailureRetentionAndIsolation|TestGuidedIndexViewIgnoresStatCache|TestGuidedStoredFormWindowsRootSpellings|TestGuidedOwnedNamespaceNeverReuses|TestGuidedDoctorBoundCountsUTF16|TestGuidedSharedEvidenceTwoParents|TestGuidedSnapshotModeObservation|TestGuidedForeignPlatformMutation)$'
+          $tests = '^(TestGuidedPermanentReplayFull|TestGuidedReplayComparatorRejectsSilentDigestTampering|TestLiveGuidedInvestigateCorpus|TestGuidedTemplateGraphResolution|TestGuidedFailureRetentionAndIsolation|TestGuidedIndexViewIgnoresStatCache|TestGuidedStoredFormWindowsRootSpellings|TestGuidedOwnedNamespaceNeverReuses|TestGuidedDoctorBoundCountsUTF16|TestGuidedSharedEvidenceTwoParents|TestGuidedSnapshotModeObservation|TestGuidedForeignPlatformMutation|TestGuidedCaseSlotFitsWindowsMaxPath|TestGuidedCaseSlotCollisionGuard)$'
           $log = Join-Path $rc 'go-replay.log'
           & (Join-Path $env:RUNNER_TEMP 'difftest.test.exe') '-test.run' $tests '-test.count=1' '-test.v' '-test.timeout' '30m' *> $log
           $code = $LASTEXITCODE
@@ -228,7 +228,7 @@ jobs:
           Get-Content -LiteralPath $log
           if ($code -ne 0) { throw "go replay failed: $code" }
 
-          # Second, default-path run of the same 12 tests: the committed oracle/native/windows-<arch> corpus from
+          # Second, default-path run of the same 14 tests: the committed oracle/native/windows-<arch> corpus from
           # this checkout and the real system temp root (os.MkdirTemp defaults). Both overrides are removed and
           # TEMP/TMP are left exactly as the runner set them.
           Remove-Item Env:FAULTLINE_GUIDED_CORPUS_DIR
@@ -272,13 +272,15 @@ jobs:
           Get-Content -LiteralPath $defLog
           if ($retFail.Count -gt 0) { throw "default-root retention failed: $($retFail -join '; ')" }
           if ($defCode -ne 0) { throw "go default-path replay failed: $defCode" }
+          # robocopy success codes 1-7 leave LASTEXITCODE nonzero and the runner would exit with it; every failure above threw.
+          exit 0
 
       - name: Require every named replay test and all 29 cases
         id: replaycheck
         run: |
           set -euo pipefail
           tr -d '\r' < "$RC/go-replay.log" > "$RC/go-replay.norm.log"
-          printf '%s\n' TestGuidedPermanentReplayFull TestGuidedReplayComparatorRejectsSilentDigestTampering TestLiveGuidedInvestigateCorpus TestGuidedTemplateGraphResolution TestGuidedFailureRetentionAndIsolation TestGuidedIndexViewIgnoresStatCache TestGuidedStoredFormWindowsRootSpellings TestGuidedOwnedNamespaceNeverReuses TestGuidedDoctorBoundCountsUTF16 TestGuidedSharedEvidenceTwoParents TestGuidedSnapshotModeObservation TestGuidedForeignPlatformMutation > "$RC/go-replay.list"
+          printf '%s\n' TestGuidedPermanentReplayFull TestGuidedReplayComparatorRejectsSilentDigestTampering TestLiveGuidedInvestigateCorpus TestGuidedTemplateGraphResolution TestGuidedFailureRetentionAndIsolation TestGuidedIndexViewIgnoresStatCache TestGuidedStoredFormWindowsRootSpellings TestGuidedOwnedNamespaceNeverReuses TestGuidedDoctorBoundCountsUTF16 TestGuidedSharedEvidenceTwoParents TestGuidedSnapshotModeObservation TestGuidedForeignPlatformMutation TestGuidedCaseSlotFitsWindowsMaxPath TestGuidedCaseSlotCollisionGuard > "$RC/go-replay.list"
           .github/scripts/check-skips.sh "$RC/go-replay.norm.log" '^$' "$RC/go-replay.list"
           grep -qx 'PASS' "$RC/go-replay.norm.log"
           # All 29 case ids from the corpus must each report a PASS subtest; none may fail or skip.

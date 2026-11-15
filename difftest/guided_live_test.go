@@ -632,8 +632,31 @@ func (p *guidedPlan) indexView(t *testing.T, rel string) string {
 }
 
 // guidedCaseSlot is the workspace path of one case: unique per case, the
-// same for the TS and the Go side of that case.
-func guidedCaseSlot(work, caseID string) string { return filepath.Join(work, "slot-"+caseID) }
+// same for the TS and the Go side of that case. The directory name is a compact
+// fixed-width digest of the case ID (the readable ID stays in test names and
+// evidence directories) so the deepest Git bundle lock under the repository stays
+// below the Windows MAX_PATH even on a long default TEMP root. guidedSlotCollisionError
+// rejects any corpus where two IDs would share a name.
+func guidedCaseSlot(work, caseID string) string {
+	return filepath.Join(work, guidedSlotName(caseID))
+}
+
+func guidedSlotName(caseID string) string {
+	return "s-" + guidedSha256([]byte(caseID))[:12]
+}
+
+// guidedSlotCollisionError fails when two distinct case IDs map to one slot name under name.
+func guidedSlotCollisionError(cases []guidedCase, name func(string) string) error {
+	seen := map[string]string{}
+	for _, c := range cases {
+		n := name(c.ID)
+		if prev, ok := seen[n]; ok && prev != c.ID {
+			return fmt.Errorf("case slot name %s collides for cases %q and %q", n, prev, c.ID)
+		}
+		seen[n] = c.ID
+	}
+	return nil
+}
 
 // guidedRetainFailed moves whatever of a side's slot, .home and .tmp still
 // exists into evidence/<side>-failed[.N]<suffix> (the per-side tools directory stays in place as evidence). It never overwrites
@@ -763,7 +786,7 @@ func guidedOwnedWork(t *testing.T, evidenceRoot, tag string) (work, evidence str
 // repository observation is the repository path itself.
 const guidedDoctorRepoBound = 160
 
-// guidedCheckDoctorBound fails clearly when a case's repository path (<work>/slot-<id>/repo, measured in
+// guidedCheckDoctorBound fails clearly when a case's repository path (<work>/<compact slot>/repo, measured in
 // UTF-16 units exactly like the frozen JavaScript string) would be cut by that limit. A supported fixture
 // must fit; user input is never silently shortened and no mode is waived.
 func guidedCheckDoctorBound(t *testing.T, work string, cases []guidedCase) {
@@ -775,6 +798,9 @@ func guidedCheckDoctorBound(t *testing.T, work string, cases []guidedCase) {
 
 // guidedDoctorBoundError is the check itself, separate so a control can drive the same code.
 func guidedDoctorBoundError(work string, cases []guidedCase) error {
+	if err := guidedSlotCollisionError(cases, guidedSlotName); err != nil {
+		return err
+	}
 	for _, c := range cases {
 		repo := filepath.Join(guidedCaseSlot(work, c.ID), "repo")
 		if n := jsstr.UTF16Len(repo); n > guidedDoctorRepoBound {

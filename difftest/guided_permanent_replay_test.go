@@ -277,7 +277,7 @@ func TestGuidedOwnedNamespaceNeverReuses(t *testing.T) {
 // JavaScript string (not bytes) against the frozen doctor's 160-unit line, for the real case slots.
 func TestGuidedDoctorBoundCountsUTF16(t *testing.T) {
 	cases := []guidedCase{{ID: "c"}}
-	suffix := filepath.Join("slot-c", "repo")
+	suffix := filepath.Join(filepath.Base(guidedCaseSlot("", "c")), "repo")
 	base := strings.Repeat("a", guidedDoctorRepoBound-len(suffix)-1) // exactly 160 units with the separator
 	if err := guidedDoctorBoundError(base, cases); err != nil {
 		t.Fatalf("a repository path exactly at the bound must be accepted: %v", err)
@@ -337,5 +337,59 @@ func TestGuidedSharedEvidenceTwoParents(t *testing.T) {
 			t.Fatalf("path %s was used twice", s)
 		}
 		seen[s] = true
+	}
+}
+
+// guidedWindowsMaxPath is the Windows Git MAX_PATH limit (260 UTF-16 units including the terminator is 259
+// usable); a path of 260 or more units fails with "Filename too long" unless long paths are enabled, which
+// this harness deliberately does not change.
+const guidedWindowsMaxPath = 260
+
+// Observed Windows AMD64 default-TEMP work root (run 43723910579, windows-amd64-job.log) and the real deepest
+// Git bundle lock the product creates under a case repository: src/git-proof-bundle.ts writes
+// .faultline/git-proof-bundles/<.incident-...>.staging-<uuid>/source/descendant.bundle (src/proof-bundle.ts:342
+// names the staging directory) and Git creates descendant.bundle.lock next to it, the exact failing path in the
+// log's "Unable to create ...descendant.bundle.lock': Filename too long".
+const (
+	guidedObservedWindowsWork = `C:\Users\RUNNER~1\AppData\Local\Temp\guided-replay-evidence-3409744074\r\w`
+	guidedObservedBundleLock  = `\repo\.faultline\git-proof-bundles\.incident-cfg-1-eebd738dc93a-1784203200016.staging-902ab844-1634-4340-9bfb-c736b8a6167a\source\descendant.bundle.lock`
+)
+
+// TestGuidedCaseSlotFitsWindowsMaxPath proves every real case's owned slot keeps the deepest bundle lock under
+// MAX_PATH on the observed Windows default work root, measured in UTF-16 units like the frozen JavaScript string.
+func TestGuidedCaseSlotFitsWindowsMaxPath(t *testing.T) {
+	root, dir := guidedCorpusDir(t)
+	corpus, err := loadGuidedCorpus(root, dir)
+	if err != nil {
+		t.Fatalf("corpus rejected: %v", err)
+	}
+	if len(corpus.Cases.Cases) != 29 {
+		t.Fatalf("expected the 29 real cases, got %d", len(corpus.Cases.Cases))
+	}
+	for _, c := range corpus.Cases.Cases {
+		p := guidedObservedWindowsWork + `\` + filepath.Base(guidedCaseSlot("", c.ID)) + guidedObservedBundleLock
+		if n := jsstr.UTF16Len(p); n >= guidedWindowsMaxPath {
+			t.Errorf("case %s: bundle lock path is %d UTF-16 units (>= %d): %s", c.ID, n, guidedWindowsMaxPath, p)
+		}
+	}
+}
+
+// TestGuidedCaseSlotCollisionGuard proves the real 29 IDs get unique compact slots, that a controlled collision
+// is rejected rather than assumed impossible, and that the slot is deterministic and distinct per ID.
+func TestGuidedCaseSlotCollisionGuard(t *testing.T) {
+	root, dir := guidedCorpusDir(t)
+	corpus, err := loadGuidedCorpus(root, dir)
+	if err != nil {
+		t.Fatalf("corpus rejected: %v", err)
+	}
+	if err := guidedSlotCollisionError(corpus.Cases.Cases, guidedSlotName); err != nil {
+		t.Fatal(err)
+	}
+	if guidedCaseSlot("w", "a") != guidedCaseSlot("w", "a") || guidedCaseSlot("w", "a") == guidedCaseSlot("w", "b") {
+		t.Fatal("slot must be deterministic and distinct per ID")
+	}
+	clash := func(string) string { return "same" }
+	if err := guidedSlotCollisionError([]guidedCase{{ID: "a"}, {ID: "b"}}, clash); err == nil || !strings.Contains(err.Error(), "collides") {
+		t.Fatalf("a controlled collision must be rejected, got %v", err)
 	}
 }
