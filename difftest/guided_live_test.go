@@ -28,6 +28,7 @@ import (
 	"github.com/Mizore66/faultline/difftest/oracle"
 	"github.com/Mizore66/faultline/difftest/servefixture"
 	"github.com/Mizore66/faultline/internal/jsstr"
+	"github.com/Mizore66/faultline/internal/nodefs"
 )
 
 // Frozen-TypeScript oracle for guided `fl investigate --ci-log / --resume`
@@ -925,12 +926,15 @@ func (p *guidedPlan) snapshot(t *testing.T) []guidedFileEntry {
 				r = rel + "/" + name
 			}
 			full := filepath.Join(p.slot, filepath.FromSlash(r))
-			info, err := os.Lstat(full)
+			// The frozen generator observes lstatSync(path).mode & 0o777, i.e. libuv's mode. On Windows that is
+			// not os.Lstat's synthetic 0777 directory: libuv reports 0666 (0444 when READONLY) for files and
+			// directories alike. nodefs.Lstat is the reviewed libuv-compatible lstat (see assignStat in
+			// internal/nodefs/lstat_windows.go), so the observed mode matches the capture exactly on every
+			// platform; it is compared exactly and never skipped, blanked or normalised.
+			info, err := nodefs.Lstat(full)
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Mode is compared on every platform. The capture holds darwin permission bits; Windows reports
-			// synthetic bits, so a Windows run is unverified and may fail here (it is not skipped or blanked).
 			mode := strconv.FormatUint(uint64(info.Mode().Perm()), 8)
 			switch {
 			case info.Mode()&os.ModeSymlink != 0:

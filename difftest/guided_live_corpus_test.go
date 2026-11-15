@@ -646,6 +646,19 @@ func copyGuidedCorpus(t *testing.T, src string) string {
 	return dst
 }
 
+// guidedForeignPlatformBaseline is the foreign-platform negative mutation: it sets the baseline's sole top-level
+// "platform" metadata to a foreign host, replacing a field already present (a native corpus) and adding it when
+// absent (the POSIX corpus). Inserting a second "platform" key would let encoding/json's last-key rule keep the
+// genuine one and silently turn the control into a no-op.
+func guidedForeignPlatformBaseline(baseline []byte) ([]byte, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(baseline, &top); err != nil {
+		return nil, err
+	}
+	top["platform"] = json.RawMessage(`{"goos": "plan9", "goarch": "mips", "nodePlatform": "plan9", "nodeArch": "mips", "pathSeparator": "/"}`)
+	return json.MarshalIndent(top, "", "  ")
+}
+
 // guidedCorpusDir selects the corpus under test. FAULTLINE_GUIDED_CORPUS_DIR (absolute) names a fresh native
 // capture directory for CI to replay before import; the loader still requires the exact pins and the exact
 // host platform. Without it POSIX uses the committed Node-free corpus, and Windows uses the committed
@@ -729,8 +742,11 @@ func TestLiveGuidedInvestigateCorpus(t *testing.T) {
 	})
 	mutate("foreign platform block", func(d string) {
 		editFile(d, "baseline.json", func(s string) string {
-			return strings.Replace(s, `"inputs": {`, `"platform": {"goos": "plan9", "goarch": "mips", "nodePlatform": "plan9", "nodeArch": "mips", "pathSeparator": "/"},
-  "inputs": {`, 1)
+			out, err := guidedForeignPlatformBaseline([]byte(s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(out)
 		})
 	})
 	mutate("cases.json differs from the pinned repository file", func(d string) {
@@ -1126,4 +1142,121 @@ func TestGuidedStoredFormWindowsRootSpellings(t *testing.T) {
 			t.Errorf("%q must stay literal, got %q", other, out)
 		}
 	}
+}
+
+// guidedTopLevelKeyCount counts the occurrences of a top-level key in a JSON object, duplicates included.
+func guidedTopLevelKeyCount(t *testing.T, data []byte, key string) int {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		t.Fatalf("not a JSON object: %v %v", tok, err)
+	}
+	n := 0
+	for dec.More() {
+		k, err := dec.Token()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if k == key {
+			n++
+		}
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return n
+}
+
+// TestGuidedForeignPlatformMutation drives the real foreign-platform negative control on both baselines that
+// exist: one without platform metadata (the POSIX corpus) and one already annotated with this host's valid
+// platform (a native corpus). The mutation must leave exactly one platform object, the foreign one, and the
+// loader must reject it for that identity (not for some unrelated reason).
+func TestGuidedForeignPlatformMutation(t *testing.T) {
+	root, dir := guidedCorpusDir(t)
+	raw, err := os.ReadFile(filepath.Join(dir, "baseline.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatal(err)
+	}
+	_, hostAnnotated := top["platform"]
+	withHost := raw
+	if !hostAnnotated {
+		sep, nodePlatform, nodeArch := "/", map[string]string{"linux": "linux", "darwin": "darwin"}[runtime.GOOS], map[string]string{"amd64": "x64", "arm64": "arm64"}[runtime.GOARCH]
+		if runtime.GOOS == "windows" {
+			sep, nodePlatform = `\`, "win32"
+		}
+		host, err := json.Marshal(map[string]string{"goos": runtime.GOOS, "goarch": runtime.GOARCH, "nodePlatform": nodePlatform, "nodeArch": nodeArch, "pathSeparator": sep})
+		if err != nil {
+			t.Fatal(err)
+		}
+		top["platform"] = host
+		if withHost, err = json.MarshalIndent(top, "", "  "); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		baseline []byte
+	}{{"absent platform", stripGuidedPlatform(t, raw)}, {"host-annotated platform", withHost}} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := copyGuidedCorpus(t, dir)
+			path := filepath.Join(tmp, "baseline.json")
+			if err := os.WriteFile(path, tc.baseline, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			wantPlatform := 0
+			if tc.name == "host-annotated platform" {
+				wantPlatform = 1
+				if _, err := loadGuidedCorpus(root, tmp); err != nil {
+					t.Fatalf("host-annotated baseline is not accepted before mutation: %v", err)
+				}
+			} else if runtime.GOOS != "windows" {
+				if _, err := loadGuidedCorpus(root, tmp); err != nil {
+					t.Fatalf("platform-free baseline is not accepted before mutation: %v", err)
+				}
+			}
+			if n := guidedTopLevelKeyCount(t, tc.baseline, "platform"); n != wantPlatform {
+				t.Fatalf("precondition: %d platform keys, want %d", n, wantPlatform)
+			}
+			mutated, err := guidedForeignPlatformBaseline(tc.baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := guidedTopLevelKeyCount(t, mutated, "platform"); n != 1 {
+				t.Fatalf("mutated baseline has %d platform keys, want exactly 1", n)
+			}
+			if !bytes.Contains(mutated, []byte(`"goos": "plan9"`)) || bytes.Count(mutated, []byte(`"goos"`)) != 1 {
+				t.Fatal("mutated baseline does not carry exactly one foreign platform object")
+			}
+			if err := os.WriteFile(path, mutated, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err = loadGuidedCorpus(root, tmp)
+			if err == nil {
+				t.Fatal("foreign-platform corpus was accepted")
+			}
+			if !strings.Contains(err.Error(), "corpus platform") || !strings.Contains(err.Error(), "plan9") {
+				t.Fatalf("rejected for an unrelated reason, not the foreign platform: %v", err)
+			}
+		})
+	}
+}
+
+// stripGuidedPlatform returns the baseline without any top-level platform metadata.
+func stripGuidedPlatform(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatal(err)
+	}
+	delete(top, "platform")
+	out, err := json.MarshalIndent(top, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

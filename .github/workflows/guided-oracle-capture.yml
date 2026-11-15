@@ -219,7 +219,7 @@ jobs:
           foreach ($n in 'go','git') { if (-not (Get-Command $n -ErrorAction SilentlyContinue)) { throw "$n is required and is not on the filtered PATH" } }
           'node and pnpm absent; go and git present' | Set-Content (Join-Path $rc 'path-filter.txt')
           Set-Location difftest
-          $tests = '^(TestGuidedPermanentReplayFull|TestGuidedReplayComparatorRejectsSilentDigestTampering|TestLiveGuidedInvestigateCorpus|TestGuidedTemplateGraphResolution|TestGuidedFailureRetentionAndIsolation|TestGuidedIndexViewIgnoresStatCache|TestGuidedStoredFormWindowsRootSpellings|TestGuidedOwnedNamespaceNeverReuses|TestGuidedDoctorBoundCountsUTF16|TestGuidedSharedEvidenceTwoParents)$'
+          $tests = '^(TestGuidedPermanentReplayFull|TestGuidedReplayComparatorRejectsSilentDigestTampering|TestLiveGuidedInvestigateCorpus|TestGuidedTemplateGraphResolution|TestGuidedFailureRetentionAndIsolation|TestGuidedIndexViewIgnoresStatCache|TestGuidedStoredFormWindowsRootSpellings|TestGuidedOwnedNamespaceNeverReuses|TestGuidedDoctorBoundCountsUTF16|TestGuidedSharedEvidenceTwoParents|TestGuidedSnapshotModeObservation|TestGuidedForeignPlatformMutation)$'
           $log = Join-Path $rc 'go-replay.log'
           & (Join-Path $env:RUNNER_TEMP 'difftest.test.exe') '-test.run' $tests '-test.count=1' '-test.v' '-test.timeout' '30m' *> $log
           $code = $LASTEXITCODE
@@ -232,7 +232,7 @@ jobs:
         run: |
           set -euo pipefail
           tr -d '\r' < "$RC/go-replay.log" > "$RC/go-replay.norm.log"
-          printf '%s\n' TestGuidedPermanentReplayFull TestGuidedReplayComparatorRejectsSilentDigestTampering TestLiveGuidedInvestigateCorpus TestGuidedTemplateGraphResolution TestGuidedFailureRetentionAndIsolation TestGuidedIndexViewIgnoresStatCache TestGuidedStoredFormWindowsRootSpellings TestGuidedOwnedNamespaceNeverReuses TestGuidedDoctorBoundCountsUTF16 TestGuidedSharedEvidenceTwoParents > "$RC/go-replay.list"
+          printf '%s\n' TestGuidedPermanentReplayFull TestGuidedReplayComparatorRejectsSilentDigestTampering TestLiveGuidedInvestigateCorpus TestGuidedTemplateGraphResolution TestGuidedFailureRetentionAndIsolation TestGuidedIndexViewIgnoresStatCache TestGuidedStoredFormWindowsRootSpellings TestGuidedOwnedNamespaceNeverReuses TestGuidedDoctorBoundCountsUTF16 TestGuidedSharedEvidenceTwoParents TestGuidedSnapshotModeObservation TestGuidedForeignPlatformMutation > "$RC/go-replay.list"
           .github/scripts/check-skips.sh "$RC/go-replay.norm.log" '^$' "$RC/go-replay.list"
           grep -qx 'PASS' "$RC/go-replay.norm.log"
           # All 29 case ids from the corpus must each report a PASS subtest; none may fail or skip.
