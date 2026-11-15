@@ -2,7 +2,7 @@
 
 - Date: 2026-11-15.
 - Base: `3cc648f9b0947ceb87cec4ef1799926f61dbbd51`, with both native Windows capture/default-path jobs accepted in run [43726508255](https://github.com/Mizore66/faultline/actions/runs/43726508255).
-- Status: bounded qualification design selected under the standing autonomous design permission. The user separately authorized one Linux/Docker qualification workflow on an isolated branch and draft-PR publication only after that proof passes. No implementation/native proof result is claimed by this document.
+- Status (2026-11-16): the design was implemented and the proof PASSED. Real Linux Docker run [43740441666](https://github.com/Mizore66/faultline/actions/runs/43740441666) at `80019e222e46fa6efd5b91ebdb8333da217ee589` succeeded, and an independent data audit ACCEPTED artifact 14172137333 (archive SHA256 `58bfdb0a5f2c066e777198203666aae2cb43bd0df5a0c5b806534fb092033db2`, 186 list hashes valid) as a scoped fixture qualification: 6 `NATIVE_DOCKER`/`DOCKER_ISOLATED` runs (3 PASS, 3 FAIL), 1 transition, `COMMIT_PROOF`, a 14-file bundle with root `sha256:493a2bf697531a564e3128e5927c0b9becd29e4ed3927807588cca8b29b6ed60`. Earlier run 43739802457 failed in setup before the test with 0 artifacts (log and metadata preserved, not a pass). One fixture on linux/amd64 only; full exact-head Go/Verify, six-platform CI, packaging, release and TS retirement remain open. A draft PR is the next step (not yet created); no ready or merge authority. Original 2026-11-15 status (bounded design selected; no proof result claimed) is historical.
 - Parent authority: guided design `2026-11-13-go-guided-investigate-design.md`, Section 7's still-open real native Docker proof requirement.
 
 ## Scope

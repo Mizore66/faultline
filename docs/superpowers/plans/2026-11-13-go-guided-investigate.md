@@ -226,7 +226,7 @@ Execution choice is inherited from the user's established subagent-driven/fan-ou
 
 ## Local qualification and status appendix (2026-11-14 snapshot; historical)
 
-Current Task 8 status (2026-11-15; supersedes this snapshot's "no remote CI result" and "prepared/under review" wording below): the Windows capture and committed-default qualification succeeded on AMD64 and ARM64 (runs 43719746283 and 43726508255 at `3cc648f`); earlier failed runs remain history. Native Linux/Docker proof, full PR CI and release gates stay open. Details: [known differences](../../../difftest/KNOWN_DIFFERENCES.md).
+Current Task 8 status (2026-11-16; supersedes this snapshot's "no remote CI result" and "prepared/under review" wording below): the Windows capture and committed-default qualification succeeded on AMD64 and ARM64 (runs 43719746283 and 43726508255 at `3cc648f`); earlier failed runs remain history. Real Linux/Docker fixture proof later passed (run 43740441666 at `80019e2`, audit-accepted); full exact-head PR CI, packaging and release gates stay open. Details: [known differences](../../../difftest/KNOWN_DIFFERENCES.md).
 
 Status: Tasks 1-5 implemented locally with scoped qualification; Task 6 local closure is recorded. Public status: candidate for native qualification on isolated capture branch `go-guided-native-capture-20261114` (base `6b64f6c`), not merged and not fully accepted; no remote CI result exists yet. The authorized scope is isolated-branch commits/push and a narrow Windows capture CI only, not merge, release or TS deletion. Stale unmerged-status wording for PRs #226-#231 was corrected using verified merges and hosted run references. The final completed independent whole-branch review found no Critical or Important defect and judged both spec compliance and quality implementation-ready, not fully accepted. Task 6 checkboxes record bounded local execution and retained delivery only; all unrun native/hosted/permanent-graph requirements remain open.
 
@@ -274,7 +274,7 @@ After Task 7, address native-proof/portability qualification using available own
 
 ### Task 8: Authorized isolated native Windows capture CI (Task 7 portability fix)
 
-State (2026-11-15): Task 8 Windows capture qualification is complete WITH SCOPE (Windows fakebox parity on AMD64 and ARM64; runs 43719746283 and 43726508255); the checkboxes below remain as the original 2026-11-14 plan and are not ticked. This does not complete Task 5 or 5g: native Linux/Docker proof (next, approved), full CI and release gates stay open.
+State (2026-11-15): Task 8 Windows capture qualification is complete WITH SCOPE (Windows fakebox parity on AMD64 and ARM64; runs 43719746283 and 43726508255); the checkboxes below remain as the original 2026-11-14 plan and are not ticked. This does not complete Task 5 or 5g: the scoped Linux/Docker proof has since passed (run 43740441666), but full exact-head CI, packaging and release gates stay open (draft PR next).
 
 The user explicitly approved committing/pushing an isolated capture branch and adding narrowly scoped native Windows capture/qualification CI. Current capture branch is `go-guided-native-capture-20261114`; HEAD/base remains6b64f6c until reviewed commits. This specific exception permits new `.github/workflows/guided-oracle-capture.yml`, not edits to existing Go/Verify workflows, skip/shard guards, frozen TS/manifests/lock, merge/release/deletion or unrelated5h publication.
 

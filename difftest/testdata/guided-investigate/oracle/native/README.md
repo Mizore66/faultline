@@ -24,3 +24,5 @@ Do not edit these files by hand or derive expected values with Go. To refresh: r
 ## Current default qualification (2026-11-15)
 
 Actual committed-default qualification [run 43726508255](https://github.com/Mizore66/faultline/actions/runs/43726508255) at `3cc648f9b0947ceb87cec4ef1799926f61dbbd51` succeeded on both native Windows architectures. Per architecture, the fresh-capture override replay and the committed-default replay (corpus/evidence overrides unset, real `TEMP`/`TMP` unchanged) each passed 14 named Go replay/control tests with all 29 cases / 75 steps passing exactly once and 0 FAIL/SKIP; the fresh 31-file data equals the committed files above. The earlier 12-test count in the e049 provenance is historical and not rewritten. Still Windows fakebox parity, not native Docker proof; see `difftest/KNOWN_DIFFERENCES.md`.
+
+Linux/Docker (2026-11-16): a separate real Docker fixture proof, run 43740441666 at `80019e222e46fa6efd5b91ebdb8333da217ee589`, also passed and was audit-accepted; it does not change these Windows corpora. See `difftest/KNOWN_DIFFERENCES.md`.
