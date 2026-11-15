@@ -174,9 +174,22 @@ type nodeConn struct {
 	lastActivity    time.Time
 	timer           *time.Timer
 	destroyed       bool
+	// active is net/http handling a request (StateActive until StateIdle);
+	// responded is the first response byte having been handed to the socket.
+	// Both are guarded by mu and independent of inMessage, which only
+	// tracks the request framing; see idle.
+	active, responded bool
 }
 
 func (c *nodeConn) Write(b []byte) (int, error) {
+	if len(b) > 0 && !(len(b) >= 13 && string(b[:13]) == "HTTP/1.1 100 ") {
+		// Marked before the write: a response blocked on a slow reader has
+		// begun, and counts as idle (see idle). `100 Continue` does not
+		// begin the response.
+		c.mu.Lock()
+		c.responded = true
+		c.mu.Unlock()
+	}
 	n, err := c.Conn.Write(b)
 	if n > 0 {
 		c.mu.Lock()
@@ -186,16 +199,56 @@ func (c *nodeConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// idle is closeIdleConnections' test. Its other condition, a response
-// that is not finished (_httpMessage && !finished), never holds when Node
-// looks: the request listener ends its response synchronously, so by the
-// time a signal or timer runs every response has been ended, sent or not.
-// A connection whose slow reader holds queued responses is destroyed like
-// any idle one, so a response still being written does not count here.
+// deactivated is net/http having finished the response (StateIdle, after
+// idled counted it).
+func (c *nodeConn) deactivated() {
+	c.mu.Lock()
+	c.active = false
+	c.mu.Unlock()
+}
+
+// activated is net/http having read a request head (StateActive): its
+// handler runs and no response byte has been written yet.
+func (c *nodeConn) activated() {
+	c.mu.Lock()
+	c.active, c.responded = true, false
+	c.mu.Unlock()
+}
+
+// closeIfDrained is called after idled when a response finished while
+// the server is closing: closeIdleConnections ran earlier and spared this
+// connection, so it is closed now rather than at the keep-alive timeout.
+// It takes s.mu and c.mu one after the other, never nested, so it cannot
+// invert Close's s.mu then c.mu order. A head already handed to net/http
+// whose response is not written (pipelining) keeps the connection.
+func (c *nodeConn) closeIfDrained() {
+	c.s.mu.Lock()
+	closing := c.s.closing
+	c.s.mu.Unlock()
+	if !closing {
+		return
+	}
+	c.mu.Lock()
+	drained := !c.inMessage && c.idles >= c.heads
+	c.mu.Unlock()
+	if drained {
+		c.destroy()
+	}
+}
+
+// idle is closeIdleConnections' test: no message in progress and no
+// unfinished response (_httpMessage && !finished). A listener that answers
+// synchronously never has an unfinished response when Node looks, but a
+// handler that is still working does: a head was handed to net/http whose
+// response is not yet being written (not yet picked up, or active with
+// nothing written), and the connection is spared until it is delivered. A response whose
+// bytes have begun to be written, even to a slow reader that holds queued
+// responses, is destroyed like any idle connection.
 func (c *nodeConn) idle() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return !c.inMessage
+	unfinished := c.heads > c.idles && !(c.active && c.responded)
+	return !c.inMessage && !unfinished
 }
 
 // expired is ConnectionsList::Expired's test for a connection.
@@ -438,8 +491,12 @@ func startNodeServerWithOptions(port float64, options nodeServerOptions, routes 
 		ConnState: func(conn net.Conn, state http.ConnState) {
 			c := conn.(*nodeConn)
 			switch state {
+			case http.StateActive:
+				c.activated()
 			case http.StateIdle:
 				c.idled()
+				c.deactivated()
+				c.closeIfDrained()
 			case http.StateClosed, http.StateHijacked:
 				c.destroy()
 			}

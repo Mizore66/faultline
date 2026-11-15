@@ -189,6 +189,7 @@ jobs:
           go vet -tags faultline_test ./difftest ./difftest/servefixture/... ./internal/cli
           go test -tags faultline_test -c -o "$RUNNER_TEMP/difftest.test.exe" ./difftest
           go test -tags faultline_test -c -o "$RUNNER_TEMP/cli.test.exe" ./internal/cli
+          go test -c -o "$RUNNER_TEMP/proofview.test.exe" ./internal/proofview
 
       - name: Go-only replay without Node or pnpm on PATH
         id: replay
@@ -249,12 +250,21 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $rc = Join-Path $env:RUNNER_TEMP 'gcap\receipts'
-          Set-Location internal/cli
+          # Shared HTTP server regression: an active response survives Close and its connection then closes promptly.
+          $pvTests = '^(TestNodeServerCloseWaitsForActiveResponse|TestNodeServerCloseKeepAliveResponseClosesPromptly|TestNodeServerCloseDestroysIdleKeepAliveConnection)$'
+          $pvLog = Join-Path $rc 'go-proofview-close.log'
+          Set-Location internal/proofview
+          & (Join-Path $env:RUNNER_TEMP 'proofview.test.exe') '-test.run' $pvTests '-test.count=1' '-test.v' '-test.timeout' '5m' *> $pvLog
+          $pvCode = $LASTEXITCODE
+          Set-Content -Path (Join-Path $rc 'go-proofview-close.exit') -Value $pvCode
+          Get-Content -LiteralPath $pvLog
+          Set-Location ../cli
           $log = Join-Path $rc 'go-cli-process.log'
           & (Join-Path $env:RUNNER_TEMP 'cli.test.exe') '-test.run' '^(TestGuidedInterruptHelper|TestGuidedInterruptFirstConsumedSecondTerminal|TestGuidedInterruptCleanupIdempotentJoinsGoroutine|TestGuidedInvestigateProcess)$' '-test.count=1' '-test.v' '-test.timeout' '20m' *> $log
           $code = $LASTEXITCODE
           Set-Content -Path (Join-Path $rc 'go-cli-process.exit') -Value $code
           Get-Content -LiteralPath $log
+          if ($pvCode -ne 0) { throw "proofview close regression failed: $pvCode" }
           if ($code -ne 0) { throw "guided CLI tests failed: $code" }
 
       - name: Require every named CLI test
@@ -265,6 +275,11 @@ jobs:
           printf '%s\n' TestGuidedInterruptHelper TestGuidedInterruptFirstConsumedSecondTerminal TestGuidedInterruptCleanupIdempotentJoinsGoroutine TestGuidedInvestigateProcess > "$RC/go-cli-process.list"
           .github/scripts/check-skips.sh "$RC/go-cli-process.norm.log" '^$' "$RC/go-cli-process.list"
           grep -qx 'PASS' "$RC/go-cli-process.norm.log"
+          tr -d '\r' < "$RC/go-proofview-close.log" > "$RC/go-proofview-close.norm.log"
+          printf '%s\n' TestNodeServerCloseWaitsForActiveResponse TestNodeServerCloseKeepAliveResponseClosesPromptly TestNodeServerCloseDestroysIdleKeepAliveConnection > "$RC/go-proofview-close.list"
+          .github/scripts/check-skips.sh "$RC/go-proofview-close.norm.log" '^$' "$RC/go-proofview-close.list"
+          grep -qx 'PASS' "$RC/go-proofview-close.norm.log"
+          test "$(tr -d '[:space:]' < "$RC/go-proofview-close.exit")" = 0
 
       # Dynamic run receipt: explicit machine-readable outcomes. Runs after any failure.
       - name: Write the run receipt and status
