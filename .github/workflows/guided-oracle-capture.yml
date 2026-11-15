@@ -228,6 +228,51 @@ jobs:
           Get-Content -LiteralPath $log
           if ($code -ne 0) { throw "go replay failed: $code" }
 
+          # Second, default-path run of the same 12 tests: the committed oracle/native/windows-<arch> corpus from
+          # this checkout and the real system temp root (os.MkdirTemp defaults). Both overrides are removed and
+          # TEMP/TMP are left exactly as the runner set them.
+          Remove-Item Env:FAULTLINE_GUIDED_CORPUS_DIR
+          Remove-Item Env:FAULTLINE_GUIDED_EVIDENCE
+          if (Test-Path Env:FAULTLINE_GUIDED_CORPUS_DIR) { throw 'FAULTLINE_GUIDED_CORPUS_DIR is still set' }
+          if (Test-Path Env:FAULTLINE_GUIDED_EVIDENCE) { throw 'FAULTLINE_GUIDED_EVIDENCE is still set' }
+          $sysTemp = [IO.Path]::GetTempPath()
+          $prefixes = 'guided-replay-evidence-*','guided-tamper-evidence-*'
+          @("system temp root: $sysTemp", 'FAULTLINE_GUIDED_CORPUS_DIR: absent', 'FAULTLINE_GUIDED_EVIDENCE: absent', "TEMP: $env:TEMP", "TMP: $env:TMP") | Set-Content (Join-Path $rc 'default-env.txt')
+          $retained = Join-Path $env:RUNNER_TEMP 'gcap\default-retained'
+          $defLog = Join-Path $rc 'go-replay-default.log'
+          $before = @(Get-ChildItem -LiteralPath $sysTemp -Directory -Force | Where-Object { $n = $_.Name; ($prefixes | Where-Object { $n -like $_ }) } | ForEach-Object { $_.Name })
+          $defCode = $null
+          $retFail = New-Object System.Collections.Generic.List[string]
+          try {
+            & (Join-Path $env:RUNNER_TEMP 'difftest.test.exe') '-test.run' $tests '-test.count=1' '-test.v' '-test.timeout' '30m' *> $defLog
+            $defCode = $LASTEXITCODE
+            Set-Content -Path (Join-Path $rc 'go-replay-default.exit') -Value $defCode
+          } finally {
+            # Runs after success, failure or timeout: copy only the NEW owned roots whole; originals stay in place.
+            try {
+              $after = @(Get-ChildItem -LiteralPath $sysTemp -Directory -Force | Where-Object { $n = $_.Name; ($prefixes | Where-Object { $n -like $_ }) } | ForEach-Object { $_.Name })
+              $new = @($after | Where-Object { $before -notcontains $_ })
+              $map = New-Object System.Collections.Generic.List[object]
+              if ($new.Count -ne 2) { $retFail.Add("expected 2 new owned roots, found $($new.Count): $($new -join ', ')") }
+              if ($new.Count -gt 0) { New-Item -ItemType Directory -Path $retained | Out-Null }
+              foreach ($name in $new) {
+                $src = Join-Path $sysTemp $name
+                $dest = Join-Path $retained $name
+                $rlog = Join-Path $rc ("default-robocopy-$name.log")
+                if (Test-Path -LiteralPath $dest) { $retFail.Add("refusing to overwrite $dest"); continue }
+                & robocopy $src $dest /E /COPY:DAT /R:0 /W:0 /NP "/LOG:$rlog" | Out-Null
+                $rcode = $LASTEXITCODE
+                if ($rcode -ge 8) { $retFail.Add("robocopy $name failed: $rcode") }
+                $map.Add([ordered]@{ original = $src; copy = $dest; robocopyExit = $rcode })
+              }
+              $map | ConvertTo-Json -AsArray | Set-Content (Join-Path $rc 'default-rootmap.json')
+            } catch { $retFail.Add("retention error: $($_.Exception.Message)") }
+            if ($retFail.Count -gt 0) { $retFail | Set-Content (Join-Path $rc 'default-retention-errors.txt') }
+          }
+          Get-Content -LiteralPath $defLog
+          if ($retFail.Count -gt 0) { throw "default-root retention failed: $($retFail -join '; ')" }
+          if ($defCode -ne 0) { throw "go default-path replay failed: $defCode" }
+
       - name: Require every named replay test and all 29 cases
         id: replaycheck
         run: |
@@ -243,6 +288,26 @@ jobs:
             grep -qE -- "^ +--- PASS: TestGuidedPermanentReplayFull/$id " "$RC/go-replay.norm.log" || { echo "::error title=case did not pass::$id"; exit 1; }
           done
           ! grep -E -- '--- (FAIL|SKIP):' "$RC/go-replay.norm.log"
+          # Default path: committed native corpus and system-temp roots. The case ids come from the checked-out
+          # committed baseline, not from the fresh capture.
+          test ! -e "$RC/default-retention-errors.txt"
+          tr -d '\r' < "$RC/go-replay-default.log" > "$RC/go-replay-default.norm.log"
+          .github/scripts/check-skips.sh "$RC/go-replay-default.norm.log" '^$' "$RC/go-replay.list"
+          grep -qx 'PASS' "$RC/go-replay-default.norm.log"
+          grep -q 'corpus: 29 cases, 75 steps' "$RC/go-replay-default.norm.log"
+          test "$(tr -d '[:space:]' < "$RC/go-replay-default.exit")" = 0
+          grep -qx 'FAULTLINE_GUIDED_CORPUS_DIR: absent' "$RC/default-env.txt"
+          grep -qx 'FAULTLINE_GUIDED_EVIDENCE: absent' "$RC/default-env.txt"
+          dids="$(node -e 'const b=JSON.parse(require("fs").readFileSync("difftest/testdata/guided-investigate/oracle/native/windows-${{ matrix.goarch }}/baseline.json","utf8"));console.log(b.caseIds.join("\n"))')"
+          test "$(echo "$dids" | wc -l)" = 29
+          for id in $dids; do
+            grep -qE -- "^ +--- PASS: TestGuidedPermanentReplayFull/$id " "$RC/go-replay-default.norm.log" || { echo "::error title=default case did not pass::$id"; exit 1; }
+          done
+          ! grep -E -- '--- (FAIL|SKIP):' "$RC/go-replay-default.norm.log"
+          test -s "$RC/default-rootmap.json"
+          retained="$(cygpath -u "$CAP_BASE")/default-retained"
+          test "$(ls -d "$retained"/guided-replay-evidence-* | wc -l)" = 1
+          test "$(ls -d "$retained"/guided-tamper-evidence-* | wc -l)" = 1
 
       - name: Focused Windows guided CLI process and interrupt tests
         id: cli
