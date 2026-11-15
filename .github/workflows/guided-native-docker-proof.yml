@@ -55,15 +55,9 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version: "1.27.4"
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 22.22.2
-
       - name: Prepare owned evidence and receipt directories
         id: base
+        # Runs before any tool setup so receipts, checksums and the upload exist even if setup-go/setup-node fail.
         run: |
           set -euo pipefail
           base="$RUNNER_TEMP/gnp"
@@ -76,6 +70,15 @@ jobs:
           git rev-parse HEAD | tee "$base/receipts/source-head.txt"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           printf 'run=%s attempt=%s event=%s ref=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$GITHUB_SHA" | tee "$base/receipts/run.txt"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.4"
+      # Plain Node: the repository's packageManager field must not trigger setup-node's package-manager cache (hosted attempt 1).
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.22.2
+          package-manager-cache: false
 
       - name: Preflight Docker, Git, Node, Go and the exact image
         id: preflight
