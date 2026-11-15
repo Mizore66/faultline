@@ -17,6 +17,7 @@ import (
 	"github.com/Mizore66/faultline/internal/jsjson"
 	"github.com/Mizore66/faultline/internal/jsstr"
 	"github.com/Mizore66/faultline/internal/nodeproc"
+	"github.com/Mizore66/faultline/internal/safedir"
 )
 
 func taskIntakeUnits(s string, n int) string { return jsstr.FromUTF16(jsstr.ToUTF16(s)[:n]) }
@@ -475,8 +476,17 @@ func TestGuidedIntakeRealGitBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want, _ := filepath.EvalSymlinks(filepath.Join(ds, "drafts", "real-1.json")); res.DraftPath != want {
+	// The store's contract is safedir.ResolveTrustedSystemPath (Node path.resolve
+	// plus darwin alias rewriting); EvalSymlinks would expand Windows 8.3 names.
+	want, err := safedir.ResolveTrustedSystemPath(filepath.Join(ds, "drafts", "real-1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.DraftPath != want || filepath.Base(res.DraftPath) != "real-1.json" {
 		t.Fatalf("%q want %q", res.DraftPath, want)
+	}
+	if _, err := os.Stat(res.DraftPath); err != nil {
+		t.Fatalf("returned draft path is not the written file: %v", err)
 	}
 	rng := res.Draft.Get("range")
 	if rng.Get("ancestor").Str() != shas[0] || rng.Get("descendant").Str() != shas[1] || rng.Get("source").Str() != "LOCAL_HEAD_PARENT" {

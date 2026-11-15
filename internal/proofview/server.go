@@ -149,7 +149,15 @@ func (l nodeListener) Accept() (net.Conn, error) {
 	c := &nodeConn{Conn: conn, s: l.s, inMessage: true, messageStart: now, lastActivity: now}
 	c.cond = sync.NewCond(&c.mu)
 	c.buf = make([]byte, 64<<10)
+	// Registration and Close's decision share s.mu: a socket accepted before
+	// Close but registered after it would outlive the drained signal and
+	// close it a second time. Such a socket is rejected, outside the lock.
 	l.s.mu.Lock()
+	if l.s.closing {
+		l.s.mu.Unlock()
+		conn.Close()
+		return nil, net.ErrClosed
+	}
 	l.s.conns[c] = struct{}{}
 	l.s.mu.Unlock()
 	return c, nil

@@ -25,6 +25,19 @@ const (
 	grDraftID = "guided-1"
 )
 
+// Production resolves repository and store inputs with path.resolve semantics,
+// so exact expectations use the host-native resolved form of the raw fixture
+// inputs. The fake draft's repository and draftPath fields stay literal.
+var (
+	grRepoResolved = nodefs.Resolve(grRepo)
+	grDSResolved   = nodefs.Resolve("/ds")
+	grWSResolved   = nodefs.Resolve("/ws")
+)
+
+// grJSONInner is the JSON string-escaped body (no quotes) of s, for splicing a
+// native path into an expected JSON literal.
+func grJSONInner(s string) string { q := jsjson.Quote(s); return q[1 : len(q)-1] }
+
 func grParse(t *testing.T, s string) jsjson.Value {
 	t.Helper()
 	v, err := jsjson.Parse(s)
@@ -208,8 +221,8 @@ func TestGuidedRunFreshNonproofExactOutputAndOrder(t *testing.T) {
 	}
 	// Repository and default stores are resolved before intake.
 	io := f.intakeOpts[0]
-	if io.Repository != grRepo || io.CILogPath != "ci.log" ||
-		io.WitnessStore != nodefs.Join(grRepo, ".faultline", "witnesses") || io.DraftStore != nodefs.Join(grRepo, ".faultline", "incidents") {
+	if io.Repository != grRepoResolved || io.CILogPath != "ci.log" ||
+		io.WitnessStore != nodefs.Join(grRepoResolved, ".faultline", "witnesses") || io.DraftStore != nodefs.Join(grRepoResolved, ".faultline", "incidents") {
 		t.Fatalf("intake %+v", io)
 	}
 	w := f.waitOpts[0]
@@ -222,7 +235,7 @@ func TestGuidedRunFreshNonproofExactOutputAndOrder(t *testing.T) {
 		t.Fatalf("verify args %v", f.verifyArgs)
 	}
 	c := f.contOpts[0]
-	if c.Repository != grRepo || c.Store != io.WitnessStore || c.ExpectedFrozenDigest != grDigest || *c.Image != grImage ||
+	if c.Repository != grRepoResolved || c.Store != io.WitnessStore || c.ExpectedFrozenDigest != grDigest || *c.Image != grImage ||
 		c.LedgerFile != o.LedgerFile || *c.LedgerFile != "" || c.Output != o.Output || *c.Output != "" || c.MaxStates != &max ||
 		c.Runner == nil || !c.Injected || c.Draft.Get("draftId").Str() != grDraftID {
 		t.Fatalf("continue %+v", c)
@@ -257,7 +270,7 @@ func TestGuidedRunFreshNonproofExactOutputAndOrder(t *testing.T) {
   "nextCommands": [
     "a",
     "b",
-    "fl investigate --resume guided-1 --repo /work/repo --expect-digest ` + grDigest + ` --image ` + grImage + `"
+    "fl investigate --resume guided-1 --repo ` + grJSONInner(grRepoResolved) + ` --expect-digest ` + grDigest + ` --image ` + grImage + `"
   ],
   "note": "Guided investigate reached localization but did not establish a portable proof package. Fix the environment or witness, then resume with a new reviewed draft rather than altering the frozen record."
 }`
@@ -321,7 +334,7 @@ func TestGuidedRunResume(t *testing.T) {
 	if len(f.intakeOpts) != 0 {
 		t.Fatal("resume must not run intake")
 	}
-	wantCalls := []string{"phase:PREFLIGHT", "doctor", "phase:INTAKE (resume guided-1)", "readDraft:/ds:guided-1", "phase:WITNESS_REVIEW",
+	wantCalls := []string{"phase:PREFLIGHT", "doctor", "phase:INTAKE (resume guided-1)", "readDraft:" + grDSResolved + ":guided-1", "phase:WITNESS_REVIEW",
 		"verify", "verify", "phase:RUNTIME_SELECTION", "phase:LOCALIZATION", "continue"}
 	if !reflect.DeepEqual(f.calls, wantCalls) {
 		t.Fatalf("calls=%q", f.calls)
@@ -329,8 +342,50 @@ func TestGuidedRunResume(t *testing.T) {
 	if got.Get("draftPath").Str() != f.draftPath {
 		t.Fatal("draft path")
 	}
-	if f.verifyArgs[0] != ([3]string{"/ws|guided-1", grDigest, "provided"}) {
+	if f.verifyArgs[0] != ([3]string{grWSResolved + "|guided-1", grDigest, "provided"}) {
 		t.Fatalf("%v", f.verifyArgs)
+	}
+}
+
+// Sensitivity: relative inputs differ from their resolved form on every host,
+// so forwarding the raw option values (skipping resolution) fails here.
+func TestGuidedRunResolvesRelativeInputsBeforeForwarding(t *testing.T) {
+	repo, dsRel, wsRel := "rel-repo", "rel-ds", "rel-ws"
+	repoAbs, dsAbs, wsAbs := nodefs.Resolve(repo), nodefs.Resolve(dsRel), nodefs.Resolve(wsRel)
+	if !nodefs.IsAbsolute(repoAbs) || repoAbs == repo || dsAbs == dsRel || wsAbs == wsRel {
+		t.Fatalf("fixture not sensitive: %q %q %q", repoAbs, dsAbs, wsAbs)
+	}
+	f := newGrFake(t)
+	f.draft = grParse(t, `{"draftId":"`+grDraftID+`","repository":"`+repo+`","note":"d"}`)
+	o, d := f.options()
+	o.Repository = repo
+	o.Image = grStr(grImage)
+	got, err := run(o, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io := f.intakeOpts[0]
+	if io.Repository != repoAbs || io.WitnessStore != nodefs.Join(repoAbs, ".faultline", "witnesses") ||
+		io.DraftStore != nodefs.Join(repoAbs, ".faultline", "incidents") || f.contOpts[0].Repository != repoAbs {
+		t.Fatalf("fresh not resolved: %+v cont=%q", io, f.contOpts[0].Repository)
+	}
+	wantResume := "fl investigate --resume " + grDraftID + " --repo " + repoAbs + " --expect-digest " + grDigest + " --image " + grImage
+	if items := got.Get("nextCommands").Items(); len(items) != 3 || items[2].Str() != wantResume {
+		t.Fatalf("resume command: %s want %q", jsjson.Stringify(got.Get("nextCommands")), wantResume)
+	}
+
+	r := newGrFake(t)
+	r.draft = grParse(t, `{"draftId":"`+grDraftID+`","repository":"`+repo+`"}`)
+	ro, rd := r.options()
+	ro.Repository = repo
+	ro.CILogPath, ro.ResumeID = nil, grStr(grDraftID)
+	ro.DraftStore, ro.WitnessStore = grStr(dsRel), grStr(wsRel)
+	ro.Image, ro.ExpectDigest = grStr(grImage), grStr(grDigest)
+	if _, err := run(ro, rd); err != nil {
+		t.Fatal(err)
+	}
+	if r.calls[3] != "readDraft:"+dsAbs+":"+grDraftID || r.verifyArgs[0][0] != wsAbs+"|"+grDraftID {
+		t.Fatalf("resume not resolved: %q %v", r.calls, r.verifyArgs)
 	}
 }
 

@@ -314,6 +314,40 @@ func seedBinding(t *testing.T, store, id, digest string, ledger *string) string 
 	return text
 }
 
+// bindingWantBytes is the exact canonical binding text; the ledger path is
+// encoded with the Node-compatible JSON string encoder, never raw-interpolated.
+func bindingWantBytes(digest, id, ledger, updated string) string {
+	return `{"expectDigest":` + jsjson.Quote(digest) + `,"incidentId":` + jsjson.Quote(id) + `,"ledgerPath":` + jsjson.Quote(ledger) +
+		`,"schemaVersion":"faultline.incident-session-binding.v1","updatedAt":` + jsjson.Quote(updated) + `}` + "\n"
+}
+
+// Sensitivity: a Windows-style ledger path written by the production binding
+// writer must match the encoded form and must not match raw interpolation.
+func TestGuidedBindingExpectedBytesEncodeWindowsStylePath(t *testing.T) {
+	store := filepath.Join(guidedRepo(t), "ds")
+	ledger := `C:\a\faultline\led.json`
+	updated := "2026-01-02T03:04:05.000Z"
+	if _, err := witness.WriteSessionBinding(store, witness.BindingInput{IncidentID: "inc-w", ExpectDigest: ptrTo(guidedTestDigest),
+		LedgerPath: &ledger, UpdatedAt: &updated}); err != nil {
+		t.Fatal(err)
+	}
+	text, ok := readBinding(t, store, "inc-w")
+	if !ok {
+		t.Fatal("binding missing")
+	}
+	raw := `{"expectDigest":"` + guidedTestDigest + `","incidentId":"inc-w","ledgerPath":"` + ledger +
+		`","schemaVersion":"faultline.incident-session-binding.v1","updatedAt":"` + updated + `"}` + "\n"
+	if want := bindingWantBytes(guidedTestDigest, "inc-w", ledger, updated); text != want {
+		t.Fatalf("got %q want %q", text, want)
+	}
+	if text == raw {
+		t.Fatalf("raw interpolation must not match: %q", text)
+	}
+	if !strings.Contains(text, `C:\\a\\faultline\\led.json`) {
+		t.Fatalf("backslashes not escaped: %q", text)
+	}
+}
+
 func TestGuidedInvestigateBindingAfterBlockedResult(t *testing.T) {
 	repo := guidedRepo(t)
 	store := filepath.Join(repo, "ds")
@@ -335,8 +369,7 @@ func TestGuidedInvestigateBindingAfterBlockedResult(t *testing.T) {
 		t.Fatalf("binding %q %v", text, err)
 	}
 	updated := parsed.Get("updatedAt").Str()
-	want := `{"expectDigest":"` + guidedTestDigest + `","incidentId":"inc-1","ledgerPath":"` + nodefs.Resolve("led.json") +
-		`","schemaVersion":"faultline.incident-session-binding.v1","updatedAt":"` + updated + `"}` + "\n"
+	want := bindingWantBytes(guidedTestDigest, "inc-1", nodefs.Resolve("led.json"), updated)
 	if text != want || updated == "2026-01-02T03:04:05.000Z" {
 		t.Fatalf("binding bytes\n got %q\nwant %q", text, want)
 	}

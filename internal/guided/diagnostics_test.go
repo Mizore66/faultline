@@ -237,7 +237,7 @@ func TestGuidedNativeDiagnostics(t *testing.T) {
 			"Guided investigate reached localization but did not establish a portable proof package. Fix the environment or witness, then resume with a new reviewed draft rather than altering the frozen record.",
 			// src/guided-investigate.ts:455-458: continuation.next, then the resume
 			// command from the draft id, resolved repository, retained digest, image.
-			[]string{"a", "b", "fl investigate --resume " + grDraftID + " --repo " + grRepo + " --expect-digest " + grDigest + " --image " + grImage},
+			[]string{"a", "b", "fl investigate --resume " + grDraftID + " --repo " + grRepoResolved + " --expect-digest " + grDigest + " --image " + grImage},
 			map[string]jsjson.Value{"doctor": f.doctor, "draft": f.draft, "continuation": f.cont})
 	})
 	t.Run("projection_proof", func(t *testing.T) {
