@@ -27,6 +27,7 @@ import (
 
 	"github.com/Mizore66/faultline/difftest/oracle"
 	"github.com/Mizore66/faultline/difftest/servefixture"
+	"github.com/Mizore66/faultline/internal/jsstr"
 )
 
 // Frozen-TypeScript oracle for guided `fl investigate --ci-log / --resume`
@@ -225,7 +226,11 @@ func guidedFileBytes(t *testing.T, raw json.RawMessage) []byte {
 	return out
 }
 
-func (p *guidedPlan) toolsDir() string { return p.slot + ".tools" }
+// toolsDir is the owned toolchain directory of the side currently running. It is unique per side and is never
+// renamed: a directory holding executables can fail a rename on Windows (EPERM, seen in the first native
+// run), and the TS and Go sides must not collide on one name. It holds the fakebox links and per-tool logs and
+// stays in place as retained evidence; no captured value contains its path.
+func (p *guidedPlan) toolsDir() string { return p.slot + ".tools-" + p.side }
 func (p *guidedPlan) homeDir() string  { return p.slot + ".home" }
 func (p *guidedPlan) tmpDir() string   { return p.slot + ".tmp" }
 
@@ -629,8 +634,8 @@ func (p *guidedPlan) indexView(t *testing.T, rel string) string {
 // same for the TS and the Go side of that case.
 func guidedCaseSlot(work, caseID string) string { return filepath.Join(work, "slot-"+caseID) }
 
-// guidedRetainFailed moves whatever of a side's slot, .tools, .home and .tmp
-// still exists into evidence/<side>-failed[.N]<suffix>. It never overwrites
+// guidedRetainFailed moves whatever of a side's slot, .home and .tmp still
+// exists into evidence/<side>-failed[.N]<suffix> (the per-side tools directory stays in place as evidence). It never overwrites
 // and never deletes; a failed move is logged and the data stays in place.
 func guidedRetainFailed(t *testing.T, slot, evidence, side string) {
 	t.Helper()
@@ -641,7 +646,7 @@ func guidedRetainFailed(t *testing.T, slot, evidence, side string) {
 	n := 0
 	for {
 		clash := false
-		for _, suffix := range []string{"", ".tools", ".home", ".tmp"} {
+		for _, suffix := range []string{"", ".home", ".tmp"} {
 			if _, err := os.Lstat(filepath.Join(evidence, guidedFailedName(side, n)+suffix)); err == nil {
 				clash = true
 			}
@@ -651,7 +656,7 @@ func guidedRetainFailed(t *testing.T, slot, evidence, side string) {
 		}
 		n++
 	}
-	for _, suffix := range []string{"", ".tools", ".home", ".tmp"} {
+	for _, suffix := range []string{"", ".home", ".tmp"} {
 		if _, err := os.Lstat(slot + suffix); err != nil {
 			continue
 		}
@@ -713,12 +718,77 @@ func guidedCheckExpect(t *testing.T, kind string, c guidedCase, st guidedStep, s
 	}
 }
 
+// guidedOwnedWork gives one top-level test (or one invocation of it) its own short namespace under the
+// evidence root: <evidenceRoot>/<tag>[N]/w holds the live slots (with their .home, .tmp and per-side .tools-*
+// siblings) and <evidenceRoot>/<tag>[N]/e receives the retained evidence. Tags are one letter (r replay, t
+// tamper, g strict groups). The directory is created with a plain Mkdir, so a name that exists is skipped to
+// the next number and nothing is ever reused, overwritten or deleted. This keeps tests that share
+// FAULTLINE_GUIDED_EVIDENCE (and repeated -test.count runs) from colliding on slot names, retained
+// per-side tool directories or retained-evidence destinations, and keeps every fixture path short.
+func guidedOwnedWork(t *testing.T, evidenceRoot, tag string) (work, evidence string) {
+	t.Helper()
+	if err := os.MkdirAll(evidenceRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for n := 1; ; n++ {
+		name := tag
+		if n > 1 {
+			name = fmt.Sprintf("%s%d", tag, n)
+		}
+		ns := filepath.Join(evidenceRoot, name)
+		err := os.Mkdir(ns, 0o755)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("creating the owned namespace %s: %v", ns, err)
+		}
+		work, evidence = filepath.Join(ns, "w"), filepath.Join(ns, "e")
+		for _, d := range []string{work, evidence} {
+			if err := os.Mkdir(d, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		resolved, err := filepath.EvalSymlinks(work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resolved, evidence
+	}
+}
+
+// guidedDoctorRepoBound is the frozen doctor's output line limit: src/doctor.ts:184-186 and
+// internal/doctor outputLine keep the first 160 UTF-16 units of a command's output line, and the doctor's
+// repository observation is the repository path itself.
+const guidedDoctorRepoBound = 160
+
+// guidedCheckDoctorBound fails clearly when a case's repository path (<work>/slot-<id>/repo, measured in
+// UTF-16 units exactly like the frozen JavaScript string) would be cut by that limit. A supported fixture
+// must fit; user input is never silently shortened and no mode is waived.
+func guidedCheckDoctorBound(t *testing.T, work string, cases []guidedCase) {
+	t.Helper()
+	if err := guidedDoctorBoundError(work, cases); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// guidedDoctorBoundError is the check itself, separate so a control can drive the same code.
+func guidedDoctorBoundError(work string, cases []guidedCase) error {
+	for _, c := range cases {
+		repo := filepath.Join(guidedCaseSlot(work, c.ID), "repo")
+		if n := jsstr.UTF16Len(repo); n > guidedDoctorRepoBound {
+			return fmt.Errorf("case %s: the repository path is %d UTF-16 units (limit %d, the frozen doctor's 160-unit output line); use a shorter FAULTLINE_GUIDED_EVIDENCE or TMPDIR: %s", c.ID, n, guidedDoctorRepoBound, repo)
+		}
+	}
+	return nil
+}
+
 func guidedRetain(t *testing.T, p *guidedPlan, evidence, side string) {
 	t.Helper()
 	if err := os.MkdirAll(evidence, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, part := range []struct{ suffix string }{{""}, {".tools"}, {".home"}, {".tmp"}} {
+	for _, part := range []struct{ suffix string }{{""}, {".home"}, {".tmp"}} {
 		dst := filepath.Join(evidence, side+part.suffix)
 		if err := os.Rename(p.slot+part.suffix, dst); err != nil {
 			t.Fatalf("retaining %s: %v", side+part.suffix, err)
@@ -930,10 +1000,19 @@ func guidedExpectedRefs(slot string, templates []guidedTemplate) ([]guidedRef, e
 // expected slot-derived value becomes its named reference. It is the exact
 // inverse of what the generator applied and masks nothing else.
 func guidedStoredForm(text, slot string, json bool, refs []guidedRef) string {
+	// The generator's three owned-root spellings and nothing else: native ({SLOT}), JSON-string-escaped
+	// ({SLOTJ}) and forward-slash ({SLOTF}). On POSIX all three coincide, so only {SLOT} is ever produced.
+	esc, forward := guidedJSONEscaped(slot), strings.ReplaceAll(slot, `\`, "/")
 	if json {
-		text = strings.ReplaceAll(text, guidedJSONEscaped(slot), "{SLOTJ}")
+		text = strings.ReplaceAll(text, esc, "{SLOTJ}")
 	} else {
 		text = strings.ReplaceAll(text, slot, "{SLOT}")
+		if esc != slot {
+			text = strings.ReplaceAll(text, esc, "{SLOTJ}")
+		}
+		if forward != slot {
+			text = strings.ReplaceAll(text, forward, "{SLOTF}")
+		}
 	}
 	for _, r := range refs {
 		text = strings.ReplaceAll(text, r.Literal, r.Token)
@@ -1122,14 +1201,8 @@ func runGuidedGroup(t *testing.T, group string) {
 			t.Fatal(err)
 		}
 	}
-	work := filepath.Join(evidenceRoot, "work")
-	if err := os.MkdirAll(work, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	work, err = filepath.EvalSymlinks(work)
-	if err != nil {
-		t.Fatal(err)
-	}
+	work, evidence := guidedOwnedWork(t, evidenceRoot, "g")
+	guidedCheckDoctorBound(t, work, corpus.Cases.Cases)
 	helper := liveConsoleHelper(t)
 	plan := &guidedPlan{root: work, fakebox: guidedBuildFakebox(t), realGit: realGit, node: node, repo: root}
 	ran := 0
@@ -1143,13 +1216,13 @@ func runGuidedGroup(t *testing.T, group string) {
 			plan.slot = guidedCaseSlot(work, c.ID)
 			// Registered before any process cleanup (cleanups run last-in first), so a
 			// failed side is retained only after its children were disposed.
-			t.Cleanup(func() { guidedRetainFailed(t, plan.slot, filepath.Join(evidenceRoot, c.ID), plan.side) })
+			t.Cleanup(func() { guidedRetainFailed(t, plan.slot, filepath.Join(evidence, c.ID), plan.side) })
 			plan.side = "ts"
 			ts := guidedRun(t, plan, "ts", &corpus.Cases, c, helper, capture.Fixture.Commits)
-			guidedRetain(t, plan, filepath.Join(evidenceRoot, c.ID), "ts")
+			guidedRetain(t, plan, filepath.Join(evidence, c.ID), "ts")
 			plan.side = "go"
 			gs := guidedRun(t, plan, "go", &corpus.Cases, c, helper, capture.Fixture.Commits)
-			guidedRetain(t, plan, filepath.Join(evidenceRoot, c.ID), "go")
+			guidedRetain(t, plan, filepath.Join(evidence, c.ID), "go")
 			guidedCompare(t, c, ts, gs)
 			guidedCheckCapture(t, plan, "ts", capture, ts)
 			guidedCheckCapture(t, plan, "go", capture, gs)

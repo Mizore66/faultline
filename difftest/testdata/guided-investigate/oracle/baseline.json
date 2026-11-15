@@ -18,7 +18,7 @@
     "cases.json": "0602f262ad773a86c900c3c50e91e43005c8b32f365fc8534b2072747b8f7160",
     "clock.mjs": "fbec39db655adf05e1770597cdce6ebdc1f57b0ac4c28356e68d14ea1ea3c586",
     "fakebox/main.go": "2c116468940f536a1f7b3fbb6ce1612b4ff1bbd1183b4c34e26393a796418669",
-    "gen-guided.mjs": "8fa1aa20c149544a7421f32034bc027bd7f76094ff7423b73c2bec8c4df1bbe3",
+    "gen-guided.mjs": "1e9b93aaee680927a0e464980221ba6685ff9344c74ce762cd51cc2248eb82db",
     "seed.mjs": "1fe0de0965968dc8398e03f203fd327c4fe8ac31ad625fd5930a8445fe750002",
     "package.json.cli": "0.1.4"
   },

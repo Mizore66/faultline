@@ -1,0 +1,247 @@
+{
+  "schema": "faultline.guided-investigate-capture.v1",
+  "caseId": "continuation-docker-daemon-down",
+  "group": "continuation",
+  "replay": "FULL",
+  "fixture": {
+    "commits": [
+      "b48d9d2ed9f254c586ec97923fb8552575c7103d",
+      "eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+    ],
+    "inputTreeSha256": "45372775530ed6c2829c8ac2cff8de7c4aa24f6526a283f9cdf67d9e3223f5cb"
+  },
+  "templates": [
+    {
+      "id": "draft:repo/.faultline/incidents/drafts/down-1.json",
+      "path": "repo/.faultline/incidents/drafts/down-1.json",
+      "preimage": "{\"command\":\"node -e \\\"console.log('Replace this command with the failing CI predicate after human review'); process.exit(1)\\\"\",\"commandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"createdAt\":\"2026-07-16T12:00:00.000Z\",\"draftId\":\"down-1\",\"range\":{\"ancestor\":\"b48d9d2ed9f254c586ec97923fb8552575c7103d\",\"descendant\":\"eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0\",\"source\":\"LOCAL_HEAD_PARENT\"},\"repository\":\"{SLOTJ}/repo\",\"review\":{\"autoFreeze\":false,\"freezeState\":\"NOT_FROZEN\",\"proposal\":{\"commandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"incidentPacketDigest\":\"sha256:df621c256c8544b24e90d4eb97fb47e438daf441b6ccd7886306f1cab7636311\",\"proposalDigest\":\"sha256:bfe51f90537cf74cbabb8a571b5f6a1985fabc80ede7f5651cbc2b36d54c97e4\",\"proposalId\":\"down-1\"},\"required\":true,\"state\":\"PENDING_HUMAN_REVIEW\",\"witnessState\":\"PROPOSED\"},\"schemaVersion\":\"faultline.incident-draft.v1\",\"status\":\"DRAFT_REQUIRES_HUMAN_REVIEW\"}"
+    }
+  ],
+  "steps": [
+    {
+      "name": "daemon unreachable after the freeze",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "{SLOT}/in/ci.log",
+        "--repo",
+        "{SLOT}/repo",
+        "--id",
+        "down-1",
+        "--image",
+        "node@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "--port",
+        "0"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (ci-log)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine local witness review: http://127.0.0.1:{PORT}\nApprove, then Freeze (separate clicks). This command continues automatically after freeze. Press Ctrl+C to cancel and resume later with --resume <id>.\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine error: Guided investigate requires a READY Docker investigation preflight. Run `fl doctor --repo .` and start Docker before continuing.\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "0fad9208e07774eb7e0cfcd445f995867f54942017c2b81a6df7ebe06df587de",
+      "actions": [
+        {
+          "do": "ready"
+        },
+        {
+          "do": "get",
+          "path": "/",
+          "status": 200
+        },
+        {
+          "do": "post",
+          "path": "/approve-freeze",
+          "status": 200
+        }
+      ],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-C\u001f{SLOT}/repo\u001fshow\u001f-s\u001f--format=%H%n%P\u001fHEAD",
+          "-C\u001f{SLOT}/repo\u001frev-list\u001f--count\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001fdiff-tree\u001f--no-commit-id\u001f--name-only\u001f-r\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001flog\u001f--format=%H%x09%an%x09%aI%x09%s\u001f--no-decorate\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001frev-list\u001f--count\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001fdiff-tree\u001f--no-commit-id\u001f--name-only\u001f-r\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001flog\u001f--format=%H%x09%an%x09%aI%x09%s\u001f--no-decorate\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001frev-list\u001f--count\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001fdiff-tree\u001f--no-commit-id\u001f--name-only\u001f-r\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001flog\u001f--format=%H%x09%an%x09%aI%x09%s\u001f--no-decorate\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+        ],
+        "node": [
+          "--version"
+        ]
+      },
+      "treeSha256": "9762f9df0eb72ba2cfd428046364054fe49901402a2b298d5baa2a72caa5d58c"
+    }
+  ],
+  "finalTree": [
+    {
+      "path": "in",
+      "kind": "dir",
+      "mode": "755",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "in/ci.log",
+      "kind": "file",
+      "mode": "644",
+      "size": 13,
+      "sha256": "ddb3778a6ec8bde46d6c6bc1ec25bc08c9e894747e545d3e31235db120f2c444",
+      "target": "",
+      "content": "FAIL: daemon\n",
+      "base64": ""
+    },
+    {
+      "path": "repo",
+      "kind": "dir",
+      "mode": "755",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/incidents",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/incidents/drafts",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/incidents/drafts/down-1.json",
+      "kind": "file",
+      "mode": "600",
+      "size": 1057,
+      "sha256": "357d74650312689da1325f06c1eba6aec97aed2fc052eb03a4b1d7c073434399",
+      "target": "",
+      "content": "{\"command\":\"node -e \\\"console.log('Replace this command with the failing CI predicate after human review'); process.exit(1)\\\"\",\"commandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"createdAt\":\"2026-07-16T12:00:00.000Z\",\"draftDigest\":\"{DIGEST:draft:repo/.faultline/incidents/drafts/down-1.json}\",\"draftId\":\"down-1\",\"range\":{\"ancestor\":\"b48d9d2ed9f254c586ec97923fb8552575c7103d\",\"descendant\":\"eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0\",\"source\":\"LOCAL_HEAD_PARENT\"},\"repository\":\"{SLOTJ}/repo\",\"review\":{\"autoFreeze\":false,\"freezeState\":\"NOT_FROZEN\",\"proposal\":{\"commandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"incidentPacketDigest\":\"sha256:df621c256c8544b24e90d4eb97fb47e438daf441b6ccd7886306f1cab7636311\",\"proposalDigest\":\"sha256:bfe51f90537cf74cbabb8a571b5f6a1985fabc80ede7f5651cbc2b36d54c97e4\",\"proposalId\":\"down-1\"},\"required\":true,\"state\":\"PENDING_HUMAN_REVIEW\",\"witnessState\":\"PROPOSED\"},\"schemaVersion\":\"faultline.incident-draft.v1\",\"status\":\"DRAFT_REQUIRES_HUMAN_REVIEW\"}\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/approvals",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/approvals/down-1.json",
+      "kind": "file",
+      "mode": "600",
+      "size": 641,
+      "sha256": "3f8c3dd25fb5fb0612e990b977fe87c6214d4467362e76c4858b37d9b668be63",
+      "target": "",
+      "content": "{\"approvalDigest\":\"sha256:7d0a0633ec10a35907bb29047f92dacbf504d232c192b8ce279cac9e74dd62c7\",\"approvedAt\":\"2026-07-16T12:00:00.002Z\",\"approvedBy\":\"Oracle Reviewer\",\"incidentPacketDigest\":\"sha256:df621c256c8544b24e90d4eb97fb47e438daf441b6ccd7886306f1cab7636311\",\"proposalDigest\":\"sha256:bfe51f90537cf74cbabb8a571b5f6a1985fabc80ede7f5651cbc2b36d54c97e4\",\"proposalId\":\"down-1\",\"reviewedCommandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"reviewedOverlayDigest\":\"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"reviewerType\":\"HUMAN\",\"schemaVersion\":\"faultline.witness-approval.v1\"}\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/frozen",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/frozen/down-1.json",
+      "kind": "file",
+      "mode": "600",
+      "size": 2083,
+      "sha256": "66292fbae3e27230a7d4ca3f2f7b1d6cb1c80faea2f6053359d678cf3ef6bb58",
+      "target": "",
+      "content": "{\"approval\":{\"approvalDigest\":\"sha256:7d0a0633ec10a35907bb29047f92dacbf504d232c192b8ce279cac9e74dd62c7\",\"approvedAt\":\"2026-07-16T12:00:00.002Z\",\"approvedBy\":\"Oracle Reviewer\",\"incidentPacketDigest\":\"sha256:df621c256c8544b24e90d4eb97fb47e438daf441b6ccd7886306f1cab7636311\",\"proposalDigest\":\"sha256:bfe51f90537cf74cbabb8a571b5f6a1985fabc80ede7f5651cbc2b36d54c97e4\",\"proposalId\":\"down-1\",\"reviewedCommandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"reviewedOverlayDigest\":\"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"reviewerType\":\"HUMAN\",\"schemaVersion\":\"faultline.witness-approval.v1\"},\"frozenAt\":\"2026-07-16T12:00:00.003Z\",\"frozenDigest\":\"sha256:52ae1224266dbadd838a1d7ad885efc4ecdf2e03b928814e48d166cc39a4ac56\",\"proposal\":{\"incidentPacket\":{\"ciLog\":\"FAIL: daemon\\n\",\"repositoryLanguage\":\"Unknown\",\"repositorySummary\":\"Guided CI-log intake for local range b48d9d2ed9f254c586ec97923fb8552575c7103d → eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0. Review-only until human approval and freeze; nothing executed at intake.\",\"symptom\":\"FAIL: daemon\"},\"incidentPacketDigest\":\"sha256:df621c256c8544b24e90d4eb97fb47e438daf441b6ccd7886306f1cab7636311\",\"proposalDigest\":\"sha256:bfe51f90537cf74cbabb8a571b5f6a1985fabc80ede7f5651cbc2b36d54c97e4\",\"proposalId\":\"down-1\",\"proposalOrigin\":\"HUMAN\",\"proposedAt\":\"2026-07-16T12:00:00.001Z\",\"schemaVersion\":\"faultline.witness-proposal.v1\",\"witness\":{\"behavior\":\"The human-supplied command must exit successfully at the selected immutable Git states.\",\"command\":\"node -e \\\"console.log('Replace this command with the failing CI predicate after human review'); process.exit(1)\\\"\",\"commandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"overlayDigest\":\"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"overlays\":[],\"policy\":{\"credentials\":\"redacted\",\"network\":\"disabled\",\"timeoutSeconds\":300}}},\"schemaVersion\":\"faultline.frozen-witness.v1\",\"witnessDigest\":\"sha256:3315f47f6d4d9870f89d04196c95c873fa48477324a4a8a2fbb440d69192babf\"}\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/proposals",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/proposals/down-1.json",
+      "kind": "file",
+      "mode": "600",
+      "size": 1155,
+      "sha256": "aebb7e51001fb04ccc5a67d44fa675726cf0fa6c841f1122268c48187b053641",
+      "target": "",
+      "content": "{\"incidentPacket\":{\"ciLog\":\"FAIL: daemon\\n\",\"repositoryLanguage\":\"Unknown\",\"repositorySummary\":\"Guided CI-log intake for local range b48d9d2ed9f254c586ec97923fb8552575c7103d → eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0. Review-only until human approval and freeze; nothing executed at intake.\",\"symptom\":\"FAIL: daemon\"},\"incidentPacketDigest\":\"sha256:df621c256c8544b24e90d4eb97fb47e438daf441b6ccd7886306f1cab7636311\",\"proposalDigest\":\"sha256:bfe51f90537cf74cbabb8a571b5f6a1985fabc80ede7f5651cbc2b36d54c97e4\",\"proposalId\":\"down-1\",\"proposalOrigin\":\"HUMAN\",\"proposedAt\":\"2026-07-16T12:00:00.001Z\",\"schemaVersion\":\"faultline.witness-proposal.v1\",\"witness\":{\"behavior\":\"The human-supplied command must exit successfully at the selected immutable Git states.\",\"command\":\"node -e \\\"console.log('Replace this command with the failing CI predicate after human review'); process.exit(1)\\\"\",\"commandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"overlayDigest\":\"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"overlays\":[],\"policy\":{\"credentials\":\"redacted\",\"network\":\"disabled\",\"timeoutSeconds\":300}}}\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/README.md",
+      "kind": "file",
+      "mode": "644",
+      "size": 14,
+      "sha256": "81253e9217f239713c3a381a9ad4a81af64cc4062be75dc2ba0e53021ca2db7d",
+      "target": "",
+      "content": "guided oracle\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/state.txt",
+      "kind": "file",
+      "mode": "644",
+      "size": 4,
+      "sha256": "1d7a363ce12430881ec56c9cf1409c49c491043618e598c356e2959040872f5a",
+      "target": "",
+      "content": "bad\n",
+      "base64": ""
+    }
+  ],
+  "finalTreeSha256": "9762f9df0eb72ba2cfd428046364054fe49901402a2b298d5baa2a72caa5d58c"
+}

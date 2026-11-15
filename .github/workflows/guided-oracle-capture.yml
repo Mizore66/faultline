@@ -7,9 +7,10 @@ name: Guided oracle native capture
 # roots, validates the captures, replays them with the built Go fl alone (no Node or pnpm on the replay
 # children's PATH), and uploads the corpus and receipts. Nothing is written back to the repository.
 #
-# Layout: ONE owned base directory on ONE native volume holds both live slots (with their .tools/.home/.tmp
-# siblings), both scratch roots (where finished case slots are renamed whole) and both output corpora. The
-# whole base is uploaded on every run, so a failed case's live workspace is retained.
+# Layout: ONE owned base directory on ONE native volume holds both live slots (each with its .home/.tmp
+# siblings; per-case/side .tools executables stay in place inside the base), both scratch roots (where
+# finished case slots are renamed whole) and both output corpora. The whole base is uploaded on every run,
+# so a failed case's live workspace is retained.
 #
 # Artifact trust: <...>-corpus-candidate-* holds captured data that may be incomplete or unvalidated;
 # <...>-corpus-validated-* is uploaded only when capture, compare, schema validation, the Go-only replay and the
@@ -122,7 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           node --test difftest/gen/gen-guided-investigate.selftest.mjs 2>&1 | tee "$RC/selftest.log"
-          grep -qx '# pass 15' "$RC/selftest.log"
+          grep -qx '# pass 18' "$RC/selftest.log"
           grep -qx '# fail 0' "$RC/selftest.log"
 
       - name: Build and test the capture runner (native)
@@ -150,9 +151,10 @@ jobs:
           tools="$(cygpath -w "$RUNNER_TEMP")\\tools"
           export GUIDED_STEP_RUNNER="$tools\\guided-step-runner.exe"
           export GUIDED_CONSOLE_HELPER="$tools\\console-helper.exe"
-          # Everything lives under CAP_BASE (one volume): live slots with their .tools/.home/.tmp siblings,
-          # scratch roots (finished case slots are renamed whole into <scratch>/work) and outputs. The two
-          # roots differ in depth and name length, and the second contains spaces.
+          # Everything lives under CAP_BASE (one volume): live slots with their .home/.tmp siblings and their
+          # per-case/side .tools executables left in place, scratch roots (finished case slots are renamed whole
+          # into <scratch>/work) and outputs. The two roots differ in depth and name length, and the second
+          # contains spaces.
           rootA="$CAP_BASE\\a\\x\\slot"
           rootB="$CAP_BASE\\second root with spaces\\y\\z\\w\\slot-with-a-longer-name"
           mkdir -p "$(cygpath -u "$CAP_BASE")/a/x" "$(cygpath -u "$CAP_BASE")/second root with spaces/y/z/w"
@@ -217,7 +219,7 @@ jobs:
           foreach ($n in 'go','git') { if (-not (Get-Command $n -ErrorAction SilentlyContinue)) { throw "$n is required and is not on the filtered PATH" } }
           'node and pnpm absent; go and git present' | Set-Content (Join-Path $rc 'path-filter.txt')
           Set-Location difftest
-          $tests = '^(TestGuidedPermanentReplayFull|TestGuidedReplayComparatorRejectsSilentDigestTampering|TestLiveGuidedInvestigateCorpus|TestGuidedTemplateGraphResolution|TestGuidedFailureRetentionAndIsolation|TestGuidedIndexViewIgnoresStatCache)$'
+          $tests = '^(TestGuidedPermanentReplayFull|TestGuidedReplayComparatorRejectsSilentDigestTampering|TestLiveGuidedInvestigateCorpus|TestGuidedTemplateGraphResolution|TestGuidedFailureRetentionAndIsolation|TestGuidedIndexViewIgnoresStatCache|TestGuidedStoredFormWindowsRootSpellings|TestGuidedOwnedNamespaceNeverReuses|TestGuidedDoctorBoundCountsUTF16|TestGuidedSharedEvidenceTwoParents)$'
           $log = Join-Path $rc 'go-replay.log'
           & (Join-Path $env:RUNNER_TEMP 'difftest.test.exe') '-test.run' $tests '-test.count=1' '-test.v' '-test.timeout' '30m' *> $log
           $code = $LASTEXITCODE
@@ -230,7 +232,7 @@ jobs:
         run: |
           set -euo pipefail
           tr -d '\r' < "$RC/go-replay.log" > "$RC/go-replay.norm.log"
-          printf '%s\n' TestGuidedPermanentReplayFull TestGuidedReplayComparatorRejectsSilentDigestTampering TestLiveGuidedInvestigateCorpus TestGuidedTemplateGraphResolution TestGuidedFailureRetentionAndIsolation TestGuidedIndexViewIgnoresStatCache > "$RC/go-replay.list"
+          printf '%s\n' TestGuidedPermanentReplayFull TestGuidedReplayComparatorRejectsSilentDigestTampering TestLiveGuidedInvestigateCorpus TestGuidedTemplateGraphResolution TestGuidedFailureRetentionAndIsolation TestGuidedIndexViewIgnoresStatCache TestGuidedStoredFormWindowsRootSpellings TestGuidedOwnedNamespaceNeverReuses TestGuidedDoctorBoundCountsUTF16 TestGuidedSharedEvidenceTwoParents > "$RC/go-replay.list"
           .github/scripts/check-skips.sh "$RC/go-replay.norm.log" '^$' "$RC/go-replay.list"
           grep -qx 'PASS' "$RC/go-replay.norm.log"
           # All 29 case ids from the corpus must each report a PASS subtest; none may fail or skip.
@@ -338,8 +340,8 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 90
-      # The entire owned base: both live slots (including a failed case's slot, .tools, .home, .tmp), both
-      # scratch roots with their work/ evidence, both outputs and the replay evidence. It contains no real HOME,
+      # The entire owned base: both live slots (including a failed case's slot and its in-place .tools, .home,
+      # .tmp), both scratch roots with their work/ evidence, both outputs and the replay evidence. It contains no real HOME,
       # no checkout .git, no node_modules and no secrets; the fixture .git directories are owned and carry no
       # credentials.
       - name: Upload the entire owned capture base (diagnostics)

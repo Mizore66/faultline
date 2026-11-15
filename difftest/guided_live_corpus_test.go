@@ -880,7 +880,7 @@ func TestGuidedFailureRetentionAndIsolation(t *testing.T) {
 	}
 	for round := 0; round < 2; round++ {
 		slot := guidedCaseSlot(work, "case-a")
-		for _, suffix := range []string{"", ".tools", ".home", ".tmp"} {
+		for _, suffix := range []string{"", ".home", ".tmp"} {
 			if err := os.MkdirAll(slot+suffix, 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -889,13 +889,13 @@ func TestGuidedFailureRetentionAndIsolation(t *testing.T) {
 			}
 		}
 		guidedRetainFailed(t, slot, evidence, "ts")
-		for _, suffix := range []string{"", ".tools", ".home", ".tmp"} {
+		for _, suffix := range []string{"", ".home", ".tmp"} {
 			if _, err := os.Lstat(slot + suffix); err == nil {
 				t.Fatalf("round %d: %s still in place after retention", round, slot+suffix)
 			}
 		}
 	}
-	for name, want := range map[string]string{"ts-failed": "0", "ts-failed.1": "1", "ts-failed.tools": "0.tools", "ts-failed.1.tmp": "1.tmp"} {
+	for name, want := range map[string]string{"ts-failed": "0", "ts-failed.1": "1", "ts-failed.home": "0.home", "ts-failed.1.tmp": "1.tmp"} {
 		b, err := os.ReadFile(filepath.Join(evidence, name, "f"))
 		if err != nil || string(b) != want {
 			t.Fatalf("%s: %q %v, want %q", name, b, err, want)
@@ -1091,5 +1091,39 @@ func TestGuidedHashedInputsKeepLFUnderAutocrlf(t *testing.T) {
 	bad := materialize(t, strings.Join(without, "\n"))
 	if !bytes.Contains(bad["difftest/gen/seed.mjs"], []byte("\r\n")) {
 		t.Fatal("control: seed.mjs stayed LF without its rule, so this test would not detect a missing rule")
+	}
+}
+
+// TestGuidedStoredFormWindowsRootSpellings drives the real guidedStoredForm with the three spellings of a
+// Windows owned root that the first native run actually produced (native backslash path, the JSON-string
+// spelling inside printed JSON, and git's forward-slash path), for the two differently shaped roots. Both
+// must give the same stored text; any other spelling must stay literal. Pure string logic, so it runs on
+// every platform; it is not a native result.
+func TestGuidedStoredFormWindowsRootSpellings(t *testing.T) {
+	roots := []string{
+		`C:\a\_temp\gcap\a\x\slot`,
+		`C:\a\_temp\gcap\second root with spaces\y\z\w\slot-with-a-longer-name`,
+	}
+	var got [][]string
+	for _, slot := range roots {
+		esc := guidedJSONEscaped(slot)
+		fwd := strings.ReplaceAll(slot, `\`, "/")
+		got = append(got, []string{
+			guidedStoredForm(`"repository": "`+esc+`\\repo"`, slot, false, nil),
+			guidedStoredForm("-C\x1f"+fwd+"/repo\x1f--git-dir="+fwd+"/.git", slot, false, nil),
+			guidedStoredForm(slot+`\repo`, slot, false, nil),
+			guidedStoredForm(`{"p":"`+esc+`"}`, slot, true, nil),
+		})
+	}
+	want := []string{`"repository": "{SLOTJ}\\repo"`, "-C\x1f{SLOTF}/repo\x1f--git-dir={SLOTF}/.git", `{SLOT}\repo`, `{"p":"{SLOTJ}"}`}
+	for i, g := range got {
+		if !slices.Equal(g, want) {
+			t.Errorf("root %d stored as %q, want %q", i, g, want)
+		}
+	}
+	for _, other := range []string{`c:\a\_temp\gcap\a\x\slot\repo`, `C:\a\_temp\GCAP~1\a\x\SLOT~1\repo`} {
+		if out := guidedStoredForm(other, roots[0], false, nil); strings.Contains(out, "{SLOT") {
+			t.Errorf("%q must stay literal, got %q", other, out)
+		}
 	}
 }

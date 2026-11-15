@@ -172,3 +172,48 @@ test("runner companion that already exited: no uncaught EPIPE, the real diagnost
   await new Promise((r) => setTimeout(r, 50));
   assert.throws(() => proc.signal("SIGINT"), /not accepting SIGINT/);
 });
+
+// ---- Run-1 controls: typed owned-root path forms (actual spellings seen on native Windows) ---------------
+const { makeNormalizer, rootForms, assertNoRootForms } = await import(pathToFileURL(join(here, "gen-guided-investigate.mjs")).href);
+const WA = "C:\\a\\_temp\\gcap\\a\\x\\slot";
+const WB = "C:\\a\\_temp\\gcap\\second root with spaces\\y\\z\\w\\slot-with-a-longer-name";
+
+test("root forms: the three spellings of two different Windows roots normalize to the same stored text", () => {
+  const stored = (slot) => {
+    const f = rootForms(slot);
+    const n = makeNormalizer(slot);
+    const stdout = `"repository": "${f.json}\\repo"`.replace(`${f.json}\\repo`, `${f.json}\\\\repo`);
+    const git = `-C\x1f${f.forward}/repo\x1f--git-dir=${f.forward}/.git`;
+    const plain = `${slot}\\repo`;
+    return [n(stdout, false), n(git, false), n(plain, false), n(`{"p":"${f.json}"}`, true)];
+  };
+  assert.deepEqual(stored(WA), [
+    '"repository": "{SLOTJ}\\\\repo"', "-C\x1f{SLOTF}/repo\x1f--git-dir={SLOTF}/.git", "{SLOT}\\repo", '{"p":"{SLOTJ}"}',
+  ]);
+  assert.deepEqual(stored(WB), stored(WA));
+});
+
+test("root forms: POSIX roots produce only {SLOT}", () => {
+  const n = makeNormalizer("/tmp/a/slot");
+  assert.equal(n("/tmp/a/slot/repo and /tmp/a/slot", false), "{SLOT}/repo and {SLOT}");
+});
+
+test("root forms: any other spelling of the root is NOT mapped and fails closed", () => {
+  const n = makeNormalizer(WA);
+  // Only real NON-canonical spellings: a lower-case drive, 8.3 short names and a mixed-separator form. None is one of
+  // the three owned spellings (native, JSON-escaped, forward-slash), so each must pass through unchanged.
+  const owned = new Set([WA, rootForms(WA).json, rootForms(WA).forward]);
+  const others = [
+    "c:\\a\\_temp\\gcap\\a\\x\\slot\\repo",
+    "C:\\a\\_temp\\GCAP~1\\a\\x\\SLOT~1\\repo",
+    "C:\\a\\_temp\\gcap\\a\\x/slot\\repo",
+  ];
+  for (const other of others) {
+    assert.ok(!owned.has(other) && !other.includes(WA), `${other} must be a non-canonical spelling`);
+    assert.equal(n(other, false), other, `${other} must stay literal`);
+  }
+  // a case-different spelling that survives into a capture is caught by the guard
+  assert.throws(() => assertNoRootForms({ steps: [{ stdout: "x c:\\a\\_temp\\gcap\\a\\x\\slot y" }] }, WA), /owned root survives/);
+  assert.throws(() => assertNoRootForms({ steps: [{ args: ["C:/a/_temp/gcap/a/x/slot/repo"] }] }, WA), /owned root survives/);
+  assertNoRootForms({ steps: [{ stdout: "{SLOTJ}", args: ["{SLOTF}/repo"], note: "other root C:\\elsewhere" }], base64: "C:\\a\\_temp\\gcap\\a\\x\\slot" }, WA);
+});

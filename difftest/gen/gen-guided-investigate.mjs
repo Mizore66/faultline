@@ -24,7 +24,8 @@
 // Every case runs at ONE owned absolute workspace slot (ABS_SLOT, which must not exist). Draft.repository
 // is hashed, so TS and Go must see the same input path to produce the same digests; after each case the
 // slot is renamed into <scratch>/work/<caseId> (full retained evidence) so the next case can reuse the
-// path. ABS_SLOT + ".tools", ".home" and ".tmp" are the owned toolchain, HOME and TMPDIR of that case.
+// path. ABS_SLOT + ".home" and ".tmp" are the owned HOME and TMPDIR of that case (renamed with it); the
+// toolchain is ABS_SLOT + ".tools-<caseId>", unique per case and left in place as retained evidence.
 //
 // Expected output is whatever the frozen TypeScript produces. A case "expect" block only guards that the
 // scenario reached the intended path; a failed guard aborts the capture and is reported exactly.
@@ -142,9 +143,15 @@ function findGit() {
   return r.stdout.split(/\r?\n/)[0].trim();
 }
 
-function ownedEnv(slot, extra = {}) {
+// The owned toolchain directory of one case. It is unique per case and, unlike the slot, .home and .tmp, it is
+// never renamed: it holds the executable fakebox links (and the per-tool logs), and on Windows a directory
+// holding executables can fail a rename (EPERM, observed in the first native run at the 18th case). It stays
+// where it was created, inside the owned base, as retained evidence. It appears in no captured value.
+const toolsDirOf = (slot, caseId) => `${slot}.tools-${caseId}`;
+
+function ownedEnv(slot, toolsDir, extra = {}) {
   const env = {
-    PATH: slot + ".tools",
+    PATH: toolsDir,
     HOME: slot + ".home",
     USERPROFILE: slot + ".home",
     TMPDIR: slot + ".tmp",
@@ -202,8 +209,7 @@ function helperSha(path) {
   return helperHashes.get(path);
 }
 
-function buildTools(fakebox, slot, realGit, tools) {
-  const dir = slot + ".tools";
+function buildTools(fakebox, dir, realGit, tools) {
   mkdirSync(dir, { recursive: true });
   const ext = win ? ".exe" : "";
   const names = ["git"];
@@ -289,15 +295,48 @@ const compactTree = (described) => described.map(({ path, kind, mode, size, sha2
 //                  derived from a Node-captured preimage template (see collectGraph). A value is replaced
 //                  only when it is the validated digest of a known object; no other digest is ever replaced.
 // ---------------------------------------------------------------------------------------------
-function makeNormalizer(slot) {
-  const slotJ = JSON.stringify(slot).slice(1, -1);
+// The ONLY path reification: the owned slot in its three spellings. Native ({SLOT}) is the slot as given; JSON
+// ({SLOTJ}) is the slot inside a JSON string, which is how a JSON document printed to stdout spells a Windows
+// path (backslashes doubled); forward ({SLOTF}) is the slot with "/" separators, which git prints on Windows.
+// On POSIX the three coincide and only {SLOT} is ever produced. Nothing else is mapped: no other drive spelling,
+// case, 8.3 name or relative form, so a third spelling of the root stays literal and fails the two-root compare.
+export function rootForms(slot) {
+  const json = JSON.stringify(slot).slice(1, -1);
+  const forward = slot.replaceAll("\\", "/");
+  return { native: slot, json, forward };
+}
+
+export function makeNormalizer(slot) {
+  const f = rootForms(slot);
   return (text, json, port, refs) => {
-    let out = text.split(json ? slotJ : slot).join(json ? "{SLOTJ}" : "{SLOT}");
-    assert.ok(!out.includes(slot), "owned slot text survived normalization");
+    let out;
+    if (json) {
+      out = text.split(f.json).join("{SLOTJ}");
+    } else {
+      out = text.split(f.native).join("{SLOT}");
+      if (f.json !== f.native) out = out.split(f.json).join("{SLOTJ}");
+      if (f.forward !== f.native) out = out.split(f.forward).join("{SLOTF}");
+    }
+    assert.ok(!out.includes(f.native), "owned slot text survived normalization");
     if (port !== undefined) out = out.replaceAll(`127.0.0.1:${port}`, "127.0.0.1:{PORT}");
     for (const [literal, token] of refs ?? []) out = out.replaceAll(literal, token);
     return out;
   };
+}
+
+// Fail closed: no stored string may still contain the owned root in ANY of its spellings, compared
+// case-insensitively (a Windows path differing only in case is still the root). This is a check, not a mapping.
+export function assertNoRootForms(value, slot, where = "capture") {
+  const f = rootForms(slot);
+  const needles = [...new Set([f.native, f.json, f.forward])].map((x) => x.toLowerCase());
+  const walk = (v, path) => {
+    if (typeof v === "string") {
+      const low = v.toLowerCase();
+      for (const n of needles) assert.ok(!low.includes(n), `${where}: the owned root survives in ${path}: ${JSON.stringify(v.slice(Math.max(0, low.indexOf(n) - 20), low.indexOf(n) + n.length + 20))}`);
+    } else if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
+    else if (v && typeof v === "object") for (const [k, x] of Object.entries(v)) if (k !== "base64") walk(x, `${path}.${k}`);
+  };
+  walk(value, "$");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -471,10 +510,10 @@ function checkExpect(caseId, step, r) {
   for (const s of e.stderrContains ?? []) assert.ok(r.stderr.includes(s), `${where}: stderr lacks ${JSON.stringify(s)}: ${r.stderr.slice(0, 600)}`);
 }
 
-function readToolLogs(slot, offsets) {
+function readToolLogs(toolsDir, offsets) {
   const records = {};
   for (const tool of ["docker", "git", "node"]) {
-    const p = join(slot + ".tools", tool + ".log");
+    const p = join(toolsDir, tool + ".log");
     const text = existsSync(p) ? readFileSync(p, "utf8") : "";
     const fresh = text.slice(offsets[tool] ?? 0);
     offsets[tool] = text.length;
@@ -642,8 +681,9 @@ function expand(value, ctx, json = false) {
 }
 
 async function captureCase({ c, cases, slot, realGit, fakebox, scratch }) {
-  for (const suffix of ["", ".tools", ".home", ".tmp"]) {
-    assert.ok(!existsSync(slot + suffix), `slot ${slot + suffix} must not exist before ${c.id}`);
+  const toolsDir = toolsDirOf(slot, c.id);
+  for (const p of [slot, toolsDir, slot + ".home", slot + ".tmp"]) {
+    assert.ok(!existsSync(p), `${p} must not exist before ${c.id}`);
   }
   mkdirSync(slot);
   mkdirSync(slot + ".home");
@@ -651,7 +691,7 @@ async function captureCase({ c, cases, slot, realGit, fakebox, scratch }) {
   mkdirSync(join(slot, "in"));
   const shas = buildRepo(realGit, join(slot, "repo"), cases.fixtures[c.fixture]);
   for (const extra of c.extraRepos ?? []) buildRepo(realGit, join(slot, extra), cases.fixtures[c.fixture]);
-  buildTools(fakebox, slot, realGit, c.tools ?? {});
+  buildTools(fakebox, toolsDir, realGit, c.tools ?? {});
   const ctx = { slot, shas, images: cases.images };
   for (const [name, spec] of Object.entries(c.files ?? {})) {
     const p = join(slot, "in", name);
@@ -673,11 +713,11 @@ async function captureCase({ c, cases, slot, realGit, fakebox, scratch }) {
   for (const step of c.steps) {
     const args = step.args.map((a) => expand(a, ctx));
     const cwd = step.cwd ? expand(step.cwd, ctx) : join(slot, "in");
-    const env = ownedEnv(slot, { ...(c.env ?? {}), ...(step.env ?? {}) });
+    const env = ownedEnv(slot, toolsDir, { ...(c.env ?? {}), ...(step.env ?? {}) });
     const r = await runStep({ slot, step, args, cwd, env, caseId: c.id, cases, scratch });
     if (process.env.GUIDED_ORACLE_TRACE === "1") process.stderr.write(`TRACE ${c.id}/${step.name}: exit=${r.exit} signal=${r.signal}\nSTDOUT ${JSON.stringify(r.stdout.slice(0, 1500))}\nSTDERR ${JSON.stringify(r.stderr.slice(-800))}\n`);
     checkExpect(c.id, step, r);
-    raw.push({ step, args, r, tools: readToolLogs(slot, offsets), entries: snapshotTree(slot) });
+    raw.push({ step, args, r, tools: readToolLogs(toolsDir, offsets), entries: snapshotTree(slot) });
   }
   // Pass 2: the validated digest graph of every slot-derived object seen at any step.
   const graph = collectGraph(c.id, slot, raw.map((x) => x.entries));
@@ -721,13 +761,13 @@ async function captureCase({ c, cases, slot, realGit, fakebox, scratch }) {
     finalTree,
     finalTreeSha256: sha256(JSON.stringify(compactTree(finalTree))),
   };
-  assert.ok(!JSON.stringify(capture).includes(slot), "slot text survived in the capture");
+  assertNoRootForms(capture, slot, c.id);
   // Retain the complete evidence of this round before the slot is reused.
   assert.equal(sha256(readFileSync(fakebox)), helperSha(fakebox), "the shared fakebox helper changed during the case");
   const work = join(scratch, "work", c.id);
   mkdirSync(dirname(work), { recursive: true });
   renameSync(slot, work);
-  for (const suffix of [".tools", ".home", ".tmp"]) renameSync(slot + suffix, join(scratch, "work", `${c.id}${suffix}`));
+  for (const suffix of [".home", ".tmp"]) renameSync(slot + suffix, join(scratch, "work", `${c.id}${suffix}`));
   return capture;
 }
 
@@ -797,7 +837,7 @@ function committedCorpus() {
   return { baseline, captures };
 }
 
-// A case slot (and its .tools/.home/.tmp siblings) is renamed whole into <scratch>/work/<id>, and a directory
+// A case slot (and its .home/.tmp siblings) is renamed whole into <scratch>/work/<id>, and a directory
 // rename cannot cross volumes. The layout is therefore checked once, before the first case, with the real
 // path semantics of the flavor. Windows drive and UNC identity is case-insensitive; this is a layout guard
 // only, never a normalization of captured data. There is no copy/delete fallback.
@@ -870,10 +910,15 @@ async function main() {
     assert.ok(o.a && o.b, "--a and --b are required");
     const x = readCorpusDir(o.a);
     const y = readCorpusDir(o.b);
-    assert.equal(x.baseline, y.baseline, "native baselines differ between the two roots");
+    const firstDiff = (u, v) => {
+      let i = 0;
+      while (i < u.length && i < v.length && u[i] === v[i]) i++;
+      return `first difference at byte ${i}: ${JSON.stringify(u.slice(Math.max(0, i - 60), i + 40))} vs ${JSON.stringify(v.slice(Math.max(0, i - 60), i + 40))}`;
+    };
+    assert.ok(x.baseline === y.baseline, `native baselines differ between the two roots (${firstDiff(x.baseline, y.baseline)})`);
     assert.equal(x.cases, y.cases, "native cases.json differs between the two roots");
     assert.deepEqual(Object.keys(x.captures).sort(), Object.keys(y.captures).sort(), "native capture sets differ");
-    for (const id of Object.keys(x.captures)) assert.equal(x.captures[id], y.captures[id], `native capture ${id} differs between the two roots`);
+    for (const id of Object.keys(x.captures)) assert.ok(x.captures[id] === y.captures[id], `native capture ${id} differs between the two roots (${firstDiff(x.captures[id], y.captures[id])})`);
     process.stdout.write(`native captures identical (${Object.keys(x.captures).length} cases)\n`);
     return;
   }
