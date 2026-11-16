@@ -36,6 +36,7 @@ var nativeCoverageFiles = []string{
 	"internal/guided/guided.go",
 	"internal/guided/freeze.go",
 	"internal/proofview/socket_overlapped.go",
+	"internal/proofview/socket_remainder.go",
 }
 
 // nativeEvidencePackage is one exact package allowed to produce native evidence.
@@ -80,10 +81,10 @@ var (
 		parents: []string{
 			"TestInteractiveIncidentPage", "TestInteractiveIncidentReplaceOnceDrift", "TestInteractiveIncidentListenerDrift",
 			"TestIncidentServerHTTP", "TestIncidentServerSingleFlight", "TestIncidentServerClose",
-			"TestPlainDemoServerClose", nativeSocketOverlappedParent,
+			"TestPlainDemoServerClose", nativeSocketOverlappedParent, nativeUnixRemainderParent,
 		},
-		diagnosticParents: []string{"TestInteractiveIncidentListenerDrift", nativeSocketOverlappedParent},
-		isolatedParents:   []string{nativeSocketOverlappedParent},
+		diagnosticParents: []string{"TestInteractiveIncidentListenerDrift", nativeSocketOverlappedParent, nativeUnixRemainderParent},
+		isolatedParents:   []string{nativeSocketOverlappedParent, nativeUnixRemainderParent},
 	}
 	// Guided investigate: every error literal of the three owned files is
 	// executed by a child of the one diagnostic parent, each emitting one record.
@@ -101,7 +102,7 @@ var (
 		"internal/demofixture/native_witness.go",
 	}
 	nativeExportFiles    = []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"}
-	nativeProofviewFiles = []string{"internal/proofview/incident.go", "internal/proofview/incident_server.go", "internal/proofview/demo_server.go", nativeSocketOverlappedFile}
+	nativeProofviewFiles = []string{"internal/proofview/incident.go", "internal/proofview/incident_server.go", "internal/proofview/demo_server.go", nativeSocketOverlappedFile, nativeUnixRemainderFile}
 	nativeGuidedFiles    = []string{"internal/guided/intake.go", "internal/guided/guided.go", "internal/guided/freeze.go"}
 
 	// Committed, independently reviewed proofview expectations. They are read
@@ -123,12 +124,15 @@ var (
 const (
 	nativeSocketOverlappedFile   = "internal/proofview/socket_overlapped.go"
 	nativeSocketOverlappedParent = "TestSocketOverlappedNativeDiagnostics"
+	nativeUnixRemainderFile      = "internal/proofview/socket_remainder.go"
+	nativeUnixRemainderParent    = "TestUnixRemainderNativeDiagnostics"
 )
 
 // nativeFreshTextKeys maps a file to the outputs key holding only the records
 // of its own diagnostic parent.
 var nativeFreshTextKeys = map[string]string{
 	nativeSocketOverlappedFile: "github.com/Mizore66/faultline/internal/proofview#" + nativeSocketOverlappedParent,
+	nativeUnixRemainderFile:    "github.com/Mizore66/faultline/internal/proofview#" + nativeUnixRemainderParent,
 }
 
 // nativeTextKey is the outputs key whose text may satisfy file.
@@ -688,7 +692,7 @@ func nativeEvidenceCommands(repo, nativeProfile, exportProfile, proofviewProfile
 			packages: []nativeEvidencePackage{nativeCLIPackage, nativeDemoPackage},
 		},
 		{
-			args: append(base(proofviewProfile, "^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose|TestPlainDemoServerClose|TestSocketOverlappedNativeDiagnostics)$"),
+			args: append(base(proofviewProfile, "^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose|TestPlainDemoServerClose|TestSocketOverlappedNativeDiagnostics|TestUnixRemainderNativeDiagnostics)$"),
 				"./internal/proofview"),
 			profile:  proofviewProfile,
 			packages: []nativeEvidencePackage{nativeProofviewPackage},

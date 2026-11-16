@@ -380,6 +380,9 @@ func TestNativeCoverageEvents(t *testing.T) {
 // real parent has 41 dynamic children and none is pinned by name here.
 var nativeSocketChildren = []string{"domain-no-parts", "submit-nil-rawconn", "rawconn-callback-twice"}
 
+// Synthetic fixture children, not a manifest of the real producer.
+var nativeUnixRemainderChildren = []string{"synthetic-busy", "synthetic-invalid-native"}
+
 const (
 	nativeDemofixturePkg = "github.com/Mizore66/faultline/internal/demofixture"
 	nativeCLIPkg         = "github.com/Mizore66/faultline/internal/cli"
@@ -459,6 +462,14 @@ func nativeCoverageEvents() []map[string]any {
 				name := parent + "/" + child
 				add(nativeProofviewPkg, "run", name)
 				diagnostic(nativeProofviewPkg, name, `"windows socket write: `+child+`"`)
+				add(nativeProofviewPkg, "pass", name)
+			}
+		}
+		if parent == nativeUnixRemainderParent {
+			for _, child := range nativeUnixRemainderChildren {
+				name := parent + "/" + child
+				add(nativeProofviewPkg, "run", name)
+				diagnostic(nativeProofviewPkg, name, strconv.Quote("unix remainder synthetic: "+child))
 				add(nativeProofviewPkg, "pass", name)
 			}
 		}
@@ -554,7 +565,7 @@ func TestNativeCoverageProfile(t *testing.T) {
 		profile += "github.com/Mizore66/faultline/" + file + ":1.1,300.2 1 1\n"
 	}
 	blocks, err := nativeProfile([]byte(profile))
-	if err != nil || len(blocks) != 12 {
+	if err != nil || len(blocks) != 13 {
 		t.Fatalf("valid native profile: %v", err)
 	}
 	for _, file := range []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"} {
@@ -633,6 +644,7 @@ func TestNativeCoverageOwnedFiles(t *testing.T) {
 		"internal/guided/guided.go",
 		"internal/guided/freeze.go",
 		"internal/proofview/socket_overlapped.go",
+		"internal/proofview/socket_remainder.go",
 	}
 	if strings.Join(nativeCoverageFiles, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("native files: %v", nativeCoverageFiles)
@@ -646,7 +658,8 @@ func TestNativeCoverageOwnedFiles(t *testing.T) {
 		}
 	}
 	for _, file := range []string{"internal/guided/projection.go", "internal/guided/guided_test.go", "internal/guided/freeze.go.bak", "internal/cli/judge_preview.go", "internal/cli/judge_demo_test.go", "internal/bundle/demo/write.go", "internal/bundle/demo/native_evidence.go.bak",
-		"internal/proofview/socket_overlapped_windows.go", "internal/proofview/socket_overlapped_unix.go", "internal/proofview/socket_writer.go", "internal/proofview/socket_overlapped.go.bak"} {
+		"internal/proofview/socket_overlapped_windows.go", "internal/proofview/socket_overlapped_unix.go", "internal/proofview/socket_writer.go", "internal/proofview/socket_overlapped.go.bak",
+		"internal/proofview/socket_remainder_unix.go", "internal/proofview/socket_remainder_test.go", "internal/proofview/socket_remainder.go.bak"} {
 		pos := filepath.Join(repo, filepath.FromSlash(file)) + ":10:2"
 		if got := nativeLiteralOutputs(repo, pos, "CLI golden", native); got != "CLI golden" {
 			t.Fatalf("native output satisfied neighbour %s", file)
@@ -777,7 +790,7 @@ func nativeOutputsFrom(file, text string) map[string]string {
 // nativeAllOutputs is the same text produced by every owning package.
 func nativeAllOutputs(text string) map[string]string {
 	return map[string]string{nativeDemofixturePkg: text, nativeCLIPkg: text, nativeDemoPkg: text, nativeProofviewPkg: text, nativeGuidedPkg: text,
-		nativeFreshTextKeys[nativeSocketOverlappedFile]: text}
+		nativeFreshTextKeys[nativeSocketOverlappedFile]: text, nativeFreshTextKeys[nativeUnixRemainderFile]: text}
 }
 
 // Diagnostic text is owned by the package that produced it, in both the literal
@@ -893,7 +906,7 @@ func TestNativeCoverageProfileSubsets(t *testing.T) {
 		proofviewOnly += line(file, 1)
 	}
 	proofview, err := nativeProfileFor([]byte("mode: set\n"+incidentalDemofixture+incidentalExport+proofviewOnly), nativeProofviewFiles)
-	if err != nil || len(proofview) != 4 || proofview[nativeExportFiles[0]] != nil || proofview[nativeDemofixtureFiles[0]] != nil {
+	if err != nil || len(proofview) != 5 || proofview[nativeExportFiles[0]] != nil || proofview[nativeDemofixtureFiles[0]] != nil {
 		t.Fatalf("proofview subset: %v %v", proofview, err)
 	}
 	for _, missing := range nativeProofviewFiles {
@@ -933,7 +946,7 @@ func TestNativeCoverageProfileSubsets(t *testing.T) {
 	if err == nil {
 		merged, err = mergeDisjointNativeProfiles(merged, guided)
 	}
-	if err != nil || len(merged) != 12 || len(native) != 3 || len(export) != 2 || len(proofview) != 4 {
+	if err != nil || len(merged) != 13 || len(native) != 3 || len(export) != 2 || len(proofview) != 5 {
 		t.Fatalf("disjoint merge: %v %d", err, len(merged))
 	}
 	original := native[nativeDemofixtureFiles[0]][0].count
@@ -956,7 +969,7 @@ func TestNativeEvidenceCommands(t *testing.T) {
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/b.txt",
 			"-run=^(TestJudgeDemoNativeDiagnostics|TestNativeEvidenceDiagnostics)$", "./internal/cli", "./internal/bundle/demo"},
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/c.txt",
-			"-run=^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose|TestPlainDemoServerClose|TestSocketOverlappedNativeDiagnostics)$", "./internal/proofview"},
+			"-run=^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose|TestPlainDemoServerClose|TestSocketOverlappedNativeDiagnostics|TestUnixRemainderNativeDiagnostics)$", "./internal/proofview"},
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/d.txt",
 			"-run=^TestGuidedNativeDiagnostics$", "-p=1", "./internal/guided"},
 	}
@@ -1006,6 +1019,234 @@ func TestNativeKnownDifferencesNoWaiver(t *testing.T) {
 	if strings.Contains(text, "nativeExport"+"Waivers") || !strings.Contains(text, "produced diagnostic text and a positive counter") {
 		t.Fatal("KNOWN_DIFFERENCES.md misstates native export coverage")
 	}
+}
+
+// ---- Portable Unix remainder core: additive, isolated fresh evidence ----
+
+func TestNativeUnixRemainderEvents(t *testing.T) {
+	child := nativeUnixRemainderParent + "/" + nativeUnixRemainderChildren[0]
+	// Arbitrary output chunks must still form exactly one checked JSON record.
+	var fragmented []map[string]any
+	for _, event := range nativeCoverageEvents() {
+		if event["Test"] == child && event["Action"] == "output" {
+			for _, part := range strings.Split(event["Output"].(string), "") {
+				chunk := maps.Clone(event)
+				chunk["Output"] = part
+				fragmented = append(fragmented, chunk)
+			}
+		} else {
+			fragmented = append(fragmented, event)
+		}
+	}
+	if _, err := nativeOutputs(nativeEventJSON(t, fragmented), []string{"ordinary"}); err != nil {
+		t.Fatalf("fragmented Unix diagnostic rejected: %v", err)
+	}
+	for _, mutation := range []string{"missing-parent", "no-children", "no-record", "duplicate", "skip", "fail", "no-pass", "no-run", "parent-emitter", "wrong-package", "malformed", "truncated", "truncated-marker"} {
+		t.Run(mutation, func(t *testing.T) {
+			events := nativeCoverageEvents()
+			switch mutation {
+			case "missing-parent":
+				events = nativeWithoutTest(events, nativeUnixRemainderParent)
+			case "no-children":
+				for _, name := range nativeUnixRemainderChildren {
+					events = nativeWithoutTest(events, nativeUnixRemainderParent+"/"+name)
+				}
+			default:
+				var changed []map[string]any
+				for _, event := range events {
+					if event["Test"] == child {
+						if mutation == "no-record" && event["Action"] == "output" || mutation == "no-pass" && event["Action"] == "pass" || mutation == "no-run" && event["Action"] == "run" {
+							continue
+						}
+						if event["Action"] == "pass" && (mutation == "skip" || mutation == "fail") {
+							event["Action"] = mutation
+						}
+						if event["Action"] == "output" {
+							switch mutation {
+							case "duplicate":
+								changed = append(changed, maps.Clone(event))
+							case "parent-emitter":
+								event["Test"] = nativeUnixRemainderParent
+							case "wrong-package":
+								event["Package"] = nativeGuidedPkg
+							case "malformed":
+								event["Output"] = "NATIVE-DIAGNOSTIC not-json\n"
+							case "truncated":
+								event["Output"] = "NATIVE-DIAGNOSTIC \"unfinished"
+							case "truncated-marker":
+								event["Output"] = "NATIVE-DIAGN"
+							}
+						}
+					}
+					changed = append(changed, event)
+				}
+				events = changed
+			}
+			if _, err := nativeOutputs(nativeEventJSON(t, events), []string{"ordinary"}); err == nil {
+				t.Fatal("invalid Unix diagnostic events accepted")
+			}
+		})
+	}
+}
+
+func TestNativeUnixRemainderEvidence(t *testing.T) {
+	repo := t.TempDir()
+	blocks := func() map[string][]coverBlock {
+		out := map[string][]coverBlock{}
+		for _, file := range nativeCoverageFiles {
+			out[file] = []coverBlock{{1, 300, 1}}
+		}
+		return out
+	}
+	const collision = "isolated diagnostic collision requires its own producer"
+	consumers := []string{nativeUnixRemainderFile, nativeSocketOverlappedFile, "internal/proofview/incident_server.go"}
+	for _, producer := range []struct{ parent, child, file string }{
+		{nativeUnixRemainderParent, nativeUnixRemainderChildren[0], nativeUnixRemainderFile},
+		{nativeSocketOverlappedParent, nativeSocketChildren[0], nativeSocketOverlappedFile},
+		{"TestInteractiveIncidentListenerDrift", "listener-start-drift", "internal/proofview/incident_server.go"},
+	} {
+		events := nativeCoverageEvents()
+		for _, event := range events {
+			if event["Test"] == producer.parent+"/"+producer.child && event["Action"] == "output" {
+				event["Output"] = "NATIVE-DIAGNOSTIC " + strconv.Quote(collision) + "\n"
+			}
+		}
+		decoded, err := nativeOutputs(nativeEventJSON(t, events), []string{"ordinary"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, consumer := range consumers {
+			sites := []errorSite{{text: collision, file: filepath.Join(repo, filepath.FromSlash(consumer)), line: 10}}
+			evidence := nativeEvidence{outputs: decoded, blocks: blocks()}
+			err := validateNativeEvidence(repo, sites, evidence, nil)
+			got := nativeLiteralOutputs(repo, sites[0].file+":10:2", "golden", evidence)
+			if (err == nil) != (producer.file == consumer) || strings.Contains(got, collision) != (producer.file == consumer) {
+				t.Fatalf("producer %s consumer %s: text %q error %v", producer.file, consumer, got, err)
+			}
+		}
+	}
+	// Whole-child absence is accepted at the event layer; unique text is not
+	// optional at full validation. No real child names/counts are pinned.
+	child := nativeUnixRemainderParent + "/" + nativeUnixRemainderChildren[0]
+	text := "unix remainder synthetic: " + nativeUnixRemainderChildren[0]
+	sites := []errorSite{{text: text, file: filepath.Join(repo, filepath.FromSlash(nativeUnixRemainderFile)), line: 10}}
+	complete, err := nativeOutputs(nativeEventJSON(t, nativeCoverageEvents()), []string{"ordinary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateNativeEvidence(repo, sites, nativeEvidence{outputs: complete, blocks: blocks()}, nil); err != nil {
+		t.Fatal(err)
+	}
+	absent, err := nativeOutputs(nativeEventJSON(t, nativeWithoutTest(nativeCoverageEvents(), child)), []string{"ordinary"})
+	if err != nil {
+		t.Fatalf("entirely absent unpinned child rejected by event decoder: %v", err)
+	}
+	if err := validateNativeEvidence(repo, sites, nativeEvidence{outputs: absent, blocks: blocks()}, nil); err == nil {
+		t.Fatal("missing unique child text accepted")
+	}
+	for _, mutation := range []string{"missing-blocks", "empty-blocks", "zero", "other-position", "missing-text"} {
+		t.Run(mutation, func(t *testing.T) {
+			e := nativeEvidence{outputs: maps.Clone(complete), blocks: blocks()}
+			switch mutation {
+			case "missing-blocks":
+				delete(e.blocks, nativeUnixRemainderFile)
+			case "empty-blocks":
+				e.blocks[nativeUnixRemainderFile] = nil
+			case "zero":
+				e.blocks[nativeUnixRemainderFile] = []coverBlock{{1, 300, 0}}
+			case "other-position":
+				e.blocks[nativeUnixRemainderFile] = []coverBlock{{20, 20, 1}}
+			case "missing-text":
+				delete(e.outputs, nativeTextKey(nativeUnixRemainderFile))
+			}
+			if err := validateNativeEvidence(repo, sites, e, nil); err == nil {
+				t.Fatal("incomplete Unix evidence accepted")
+			}
+		})
+	}
+}
+
+// Discover actual source sites using the unchanged analyzer. This must fail
+// closed when a proposed Error() spelling is invisible to that analyzer.
+func TestNativeUnixRemainderRealSourceStructure(t *testing.T) {
+	repo := repoRoot(t)
+	sites, err := errorSites(filepath.Join(repo, "internal", "proofview"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, site := range sites {
+		rel, err := filepath.Rel(repo, site.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(rel, "internal/proofview/socket_remainder") && rel != nativeUnixRemainderFile {
+			t.Fatalf("Unix ABI adapter owns message site %s:%d: %q", rel, site.line, site.text)
+		}
+		if rel != nativeUnixRemainderFile {
+			continue
+		}
+		found++
+		if _, ok := unreachableLiterals[site.text]; ok {
+			t.Fatal("Unix core literal waived")
+		}
+		if _, ok := unreachableSites[siteKey{rel, site.text}]; ok {
+			t.Fatal("Unix core position waived")
+		}
+		if _, ok := liveOnlyUnreachable[site.text]; ok {
+			t.Fatal("Unix core live-only waived")
+		}
+	}
+	// Seven sentinel cases plus the unknown return are the reviewed source
+	// inventory. This pins production positions, not dynamic child names: losing
+	// even one inferred producer must not silently weaken the coverage gate.
+	if found != 8 {
+		t.Fatalf("Unix portable core has %d discovered message sites, want the eight reviewed producers", found)
+	}
+	if !slices.Contains(nativeCoverageFiles, nativeUnixRemainderFile) || !slices.Contains(nativeProofviewFiles, nativeUnixRemainderFile) || liveGatedFiles[nativeUnixRemainderFile] != "" {
+		t.Fatal("Unix portable core must be natively owned without a live exclusion")
+	}
+	adapter := "internal/proofview/socket_remainder_unix.go"
+	if nativeOwner(adapter) != "" || liveGatedFiles[adapter] != "" {
+		t.Fatal("Unix adapter gained ownership or live exclusion")
+	}
+	core, err := parser.ParseFile(token.NewFileSet(), filepath.Join(repo, filepath.FromSlash(nativeUnixRemainderFile)), nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// syscall.RawConn is portable; Iovec/writev/native syscall plumbing is not.
+	nativeImports := map[string]bool{}
+	for _, imp := range core.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if path == "unsafe" || strings.HasSuffix(path, "/unix") || strings.HasSuffix(path, "/windows") {
+			t.Fatalf("Unix core imports ABI package %s", path)
+		}
+		if path == "syscall" {
+			name := "syscall"
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			nativeImports[name] = true
+		}
+	}
+	ast.Inspect(core, func(node ast.Node) bool {
+		if selector, ok := node.(*ast.SelectorExpr); ok && selector.Sel.Name == "Writev" {
+			if pkg, ok := selector.X.(*ast.Ident); ok && nativeImports[pkg.Name] {
+				t.Fatal("Unix core directly references native Writev")
+			}
+		}
+		if id, ok := node.(*ast.Ident); ok {
+			switch id.Name {
+			case "Iovec", "Msghdr", "Cmsghdr", "FdSet", "Kevent_t", "EpollEvent", "SYS_WRITEV", "SYS_WRITE", "Syscall", "Syscall6", "RawSyscall", "RawSyscall6":
+				t.Fatalf("Unix core references ABI identifier %s", id.Name)
+			}
+		}
+		return true
+	})
 }
 
 // ---- Portable overlapped-socket core (internal/proofview/socket_overlapped.go) ----
@@ -1140,7 +1381,7 @@ func TestNativeSocketOverlappedTextIsolation(t *testing.T) {
 		t.Fatalf("core key %q owner %q", coreKey, nativeOwner(nativeSocketOverlappedFile))
 	}
 	for _, file := range nativeProofviewFiles {
-		if file != nativeSocketOverlappedFile && nativeTextKey(file) != nativeProofviewPkg {
+		if file != nativeSocketOverlappedFile && file != nativeUnixRemainderFile && nativeTextKey(file) != nativeProofviewPkg {
 			t.Fatalf("legacy owner changed for %s: %q", file, nativeTextKey(file))
 		}
 	}
