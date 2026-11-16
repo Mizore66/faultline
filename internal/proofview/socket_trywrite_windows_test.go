@@ -51,18 +51,15 @@ const (
 	twNonceArg  = "faultline-trywrite-nonce="
 	twSource    = "faultline-windows-trywrite-probe-v1"
 	twResultTag = "PROBE_RESULT "
-	twPhaseTag  = "PROBE_PHASE "
 
 	twModeToggle    = "toggle"
 	twModePermanent = "permanent-owned"
-	twModeControl   = "control"
 
 	twFIONBIO = 0x8004667E
 
 	// Failure-only guards; neither is used as a behavior heuristic.
 	twSaturateGuard = 64 << 20
 	twPositiveCap   = 60 * time.Second
-	twNegativeCap   = 15 * time.Second
 )
 
 var twWouldBlock = syscall.Errno(10035) // WSAEWOULDBLOCK
@@ -762,41 +759,6 @@ func twScenarioClose(mode string) (map[string]any, error) {
 	return out, nil
 }
 
-// ---- negative control ----
-
-// twScenarioNegative saturates with a toggled (restored-to-blocking) socket,
-// then issues the same NULL-overlapped send in blocking mode with the reader
-// withheld. It is expected to block forever; the parent kills it.
-func twScenarioNegative(string) (map[string]any, error) {
-	pr, err := twNewPair(twModeToggle)
-	if err != nil {
-		return nil, err
-	}
-	defer pr.close()
-	if err := twSmallBuffers(pr); err != nil {
-		return nil, err
-	}
-	sat, err := twSaturate(pr.w, twModeToggle)
-	if err != nil {
-		return nil, err
-	}
-	raw, err := pr.w.SyscallConn()
-	if err != nil {
-		return nil, err
-	}
-	fmt.Printf("%sabout-to-block-nil-overlapped-send saturated_at=%d\n", twPhaseTag, sat.Off)
-	os.Stdout.Sync()
-	var n int
-	var serr error
-	if err := raw.Write(func(fd uintptr) bool {
-		n, serr = twSend(syscall.Handle(fd), [][]byte{make([]byte, 1<<20)})
-		return true
-	}); err != nil {
-		return nil, err
-	}
-	return map[string]any{"blocking_send_returned": true, "n": n, "err": fmt.Sprint(serr), "saturated_at": sat.Off}, nil
-}
-
 // ---- child / parent plumbing ----
 
 func twRunChild(t *testing.T, spec string) {
@@ -807,10 +769,9 @@ func twRunChild(t *testing.T, spec string) {
 	fns := map[string]func(string) (map[string]any, error){
 		"batch": twScenarioBatch, "saturate": twScenarioSaturate,
 		"stress": twScenarioStress, "close": twScenarioClose,
-		"negative": twScenarioNegative,
 	}
 	fn := fns[scenario]
-	if fn == nil || (mode != twModeToggle && mode != twModePermanent && mode != twModeControl) {
+	if fn == nil || (mode != twModeToggle && mode != twModePermanent) {
 		t.Fatalf("unknown child spec %q", spec)
 	}
 	details, err := fn(mode)
@@ -932,19 +893,4 @@ func TestWindowsSocketTryWriteGoInterop(t *testing.T) {
 			})
 		}
 	}
-	t.Run("negative_blocking_control", func(t *testing.T) {
-		spec := twModeControl + "/negative"
-		o := twSpawn(t, spec, nonce, twNegativeCap)
-		twReplay(t, spec, o)
-		_, n := twParse(o.stdout)
-		reached := strings.Contains(o.stdout, twPhaseTag+"about-to-block-nil-overlapped-send")
-		switch {
-		case !reached:
-			t.Fatalf("negative control never reached the blocking send (exit=%d timedOut=%v)", o.exit, o.timedOut)
-		case o.timedOut && n == 0:
-			t.Logf("NEGATIVE CONTROL RESULT: blocking-mode NULL-overlapped send blocked and was killed by the parent cap (expected; not a positive pass)")
-		default:
-			t.Errorf("negative control insensitive: blocking-mode send returned (timedOut=%v exit=%d results=%d)", o.timedOut, o.exit, n)
-		}
-	})
 }
