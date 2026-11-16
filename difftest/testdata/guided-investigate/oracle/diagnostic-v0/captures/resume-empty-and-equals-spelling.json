@@ -1,0 +1,134 @@
+{
+  "schema": "faultline.guided-investigate-capture.v1",
+  "caseId": "resume-empty-and-equals-spelling",
+  "group": "refusals",
+  "fixture": {
+    "commits": [
+      "b48d9d2ed9f254c586ec97923fb8552575c7103d",
+      "eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+    ],
+    "inputTreeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+  },
+  "steps": [
+    {
+      "name": "resume empty id",
+      "args": [
+        "investigate",
+        "--resume",
+        "",
+        "--repo",
+        "{SLOT}/repo"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine error: [\n  {\n    \"validation\": \"regex\",\n    \"code\": \"invalid_string\",\n    \"message\": \"draftId must be a safe identifier\",\n    \"path\": []\n  }\n]\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e2e1a40d1fb2333faea1d0ca462d93b96ca0dc5589a34550c6db07b355479200",
+      "actions": [],
+      "tools": {
+        "docker": [],
+        "git": [],
+        "node": []
+      },
+      "treeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+    },
+    {
+      "name": "resume equals",
+      "args": [
+        "investigate",
+        "--resume=x",
+        "--repo",
+        "{SLOT}/repo"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine error: Usage: fl investigate --ci-log <file> --repo <directory> [...] | fl investigate --resume <id> --repo <directory> [...] | fl investigate turns --repo ... (--ledger ... | --latest) --proposal ... --expect-digest ... --image ... [--runtime-mapping <mapping.json>] [--output <dir>] | fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--runtime-mapping <mapping.json>] [--ledger <ledger.json>] [--output <managed-bundle-directory>]\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "b920a45bc1c957b3a4c58e3ad689fb0bcfcd2b7ed1313d5d9fe4f848f725773c",
+      "actions": [],
+      "tools": {
+        "docker": [],
+        "git": [],
+        "node": []
+      },
+      "treeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+    },
+    {
+      "name": "ci-log equals",
+      "args": [
+        "investigate",
+        "--ci-log={SLOT}/in/ci.log",
+        "--repo",
+        "{SLOT}/repo"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine error: Usage: fl investigate --ci-log <file> --repo <directory> [...] | fl investigate --resume <id> --repo <directory> [...] | fl investigate turns --repo ... (--ledger ... | --latest) --proposal ... --expect-digest ... --image ... [--runtime-mapping <mapping.json>] [--output <dir>] | fl investigate git --repo <directory> --from <commit> --to <commit> --proposal <id> --expect-digest <sha256:...> --image <digest-pinned-image> [--runtime-mapping <mapping.json>] [--ledger <ledger.json>] [--output <managed-bundle-directory>]\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "b920a45bc1c957b3a4c58e3ad689fb0bcfcd2b7ed1313d5d9fe4f848f725773c",
+      "actions": [],
+      "tools": {
+        "docker": [],
+        "git": [],
+        "node": []
+      },
+      "treeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+    }
+  ],
+  "finalTree": [
+    {
+      "path": "in",
+      "kind": "dir",
+      "mode": "755",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "in/ci.log",
+      "kind": "file",
+      "mode": "644",
+      "size": 5,
+      "sha256": "4f8e9e45f8a9e1843b81eaf3bdf52a6b778d415d23bf985774a9d34a43f69bd5",
+      "target": "",
+      "content": "FAIL\n",
+      "base64": ""
+    },
+    {
+      "path": "repo",
+      "kind": "dir",
+      "mode": "755",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/README.md",
+      "kind": "file",
+      "mode": "644",
+      "size": 14,
+      "sha256": "81253e9217f239713c3a381a9ad4a81af64cc4062be75dc2ba0e53021ca2db7d",
+      "target": "",
+      "content": "guided oracle\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/state.txt",
+      "kind": "file",
+      "mode": "644",
+      "size": 4,
+      "sha256": "1d7a363ce12430881ec56c9cf1409c49c491043618e598c356e2959040872f5a",
+      "target": "",
+      "content": "bad\n",
+      "base64": ""
+    }
+  ],
+  "finalTreeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+}

@@ -1,0 +1,29 @@
+{
+  "id": "missing-input-error",
+  "outcome": {
+    "kind": "error",
+    "message": "Guided investigate requires --ci-log <file> or --resume <incident-id>."
+  },
+  "events": [
+    {
+      "kind": "phase",
+      "args": [
+        "PREFLIGHT"
+      ]
+    },
+    {
+      "kind": "doctor",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "repository",
+              "$ROOT/repo"
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

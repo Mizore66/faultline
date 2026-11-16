@@ -1,0 +1,79 @@
+{
+  "id": "expected-mismatch-before-match-check",
+  "outcome": {
+    "kind": "error",
+    "message": "--expect-digest does not match the frozen witness observed by the guided flow."
+  },
+  "events": [
+    {
+      "kind": "phase",
+      "args": [
+        "PREFLIGHT"
+      ]
+    },
+    {
+      "kind": "doctor",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "repository",
+              "$ROOT/repo"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "INTAKE",
+        "resume d1"
+      ]
+    },
+    {
+      "kind": "readDraft",
+      "args": [
+        "$ROOT/repo/.faultline/incidents",
+        "d1"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "WITNESS_REVIEW"
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "kind": "waitForFreeze",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "proposalId",
+              "d1"
+            ],
+            [
+              "witnessStore",
+              "$ROOT/repo/.faultline/witnesses"
+            ],
+            [
+              "draftStore",
+              "$ROOT/repo/.faultline/incidents"
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

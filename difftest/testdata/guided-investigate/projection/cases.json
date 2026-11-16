@@ -1,0 +1,2112 @@
+{
+  "schema": "faultline.guided-projection.v1",
+  "cases": [
+    {
+      "id": "node-blocked",
+      "options": {
+        "repository": "$ROOT/repo",
+        "ciLogPath": "/ci.log"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "MISSING"
+                }
+              ],
+              "dockerInvestigationPreflight": "UNAVAILABLE"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "missing-input-error",
+      "options": {
+        "repository": "$ROOT/repo"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "resume-read-draft-throws",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "throw": "draft d1 not found"
+          }
+        ]
+      }
+    },
+    {
+      "id": "resume-repository-mismatch",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$FOREIGN/other",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "resume-existing-freeze-proof-unicode-opaque",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "onReviewReady": {
+          "$fn": "onReviewReady"
+        },
+        "signal": {
+          "$signal": "sig",
+          "aborted": false
+        }
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "continue": [
+          {
+            "return": {
+              "status": "PROOF_BUNDLE_READY",
+              "next": [
+                "fl serve --bundle x",
+                "fl verify ☃"
+              ],
+              "unknownMember": {
+                "5": 5,
+                "é": [
+                  1,
+                  2
+                ],
+                "k": "v"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "existing-freeze-expect-digest-wins-nonproof-runner",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "expectDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runner": {
+          "$fn": "runner"
+        },
+        "ledgerFile": "",
+        "maxStates": 0,
+        "outputDirectory": "out"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "NOT_READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MISMATCH"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "continue": [
+          {
+            "return": {
+              "status": "INVESTIGATION_NOT_PROOF",
+              "next": [
+                "n1"
+              ],
+              "unknownMember": {
+                "5": 5,
+                "é": [
+                  1,
+                  2
+                ],
+                "k": "v"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "empty-expect-digest-is-defined",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "expectDigest": "",
+        "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MISMATCH"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "continue": [
+          {
+            "return": {
+              "status": "INVESTIGATION_NOT_PROOF",
+              "next": [],
+              "unknownMember": {
+                "5": 5,
+                "é": [
+                  1,
+                  2
+                ],
+                "k": "v"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "waiter-fresh-freeze-proof-forwarding",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "reviewPort": 0,
+        "onReviewReady": {
+          "$fn": "onReviewReady"
+        },
+        "signal": {
+          "$signal": "sig",
+          "aborted": false
+        },
+        "waitForFreeze": {
+          "$fn": "waitForFreeze"
+        },
+        "witnessStore": "$ROOT/ws",
+        "draftStore": "$ROOT/ds"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": false,
+              "errors": [
+                "Witness record is Missing for d1"
+              ],
+              "proposalDigest": null,
+              "frozenDigest": null,
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "waitForFreeze": [
+          {
+            "return": {
+              "frozenDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "reviewUrl": "http://127.0.0.1:4010/review",
+              "alreadyFrozen": false
+            }
+          }
+        ],
+        "continue": [
+          {
+            "return": {
+              "status": "PROOF_BUNDLE_READY",
+              "next": [
+                "fl serve"
+              ],
+              "unknownMember": {
+                "5": 5,
+                "é": [
+                  1,
+                  2
+                ],
+                "k": "v"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "waiter-minimal-options-absent",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "waitForFreeze": {
+          "$fn": "waitForFreeze"
+        }
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": false,
+              "errors": [
+                "witness has not been frozen"
+              ],
+              "proposalDigest": null,
+              "frozenDigest": null,
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "waitForFreeze": [
+          {
+            "return": {
+              "frozenDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "reviewUrl": null,
+              "alreadyFrozen": false
+            }
+          }
+        ],
+        "continue": [
+          {
+            "return": {
+              "status": "INVESTIGATION_NOT_PROOF",
+              "next": [
+                "x"
+              ],
+              "unknownMember": {
+                "5": 5,
+                "é": [
+                  1,
+                  2
+                ],
+                "k": "v"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "expected-mismatch-before-match-check",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "expectDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "waitForFreeze": {
+          "$fn": "waitForFreeze"
+        }
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": false,
+              "errors": [
+                "Witness record is Missing for d1"
+              ],
+              "proposalDigest": null,
+              "frozenDigest": null,
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          }
+        ],
+        "waitForFreeze": [
+          {
+            "return": {
+              "frozenDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "reviewUrl": null,
+              "alreadyFrozen": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "waiter-throws",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "waitForFreeze": {
+          "$fn": "waitForFreeze"
+        }
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": false,
+              "errors": [
+                "Witness record is Missing for d1"
+              ],
+              "proposalDigest": null,
+              "frozenDigest": null,
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          }
+        ],
+        "waitForFreeze": [
+          {
+            "throw": "review server failed"
+          }
+        ]
+      }
+    },
+    {
+      "id": "canceled-signal-existing-freeze-no-waiter",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "signal": {
+          "$signal": "sig",
+          "aborted": true
+        },
+        "waitForFreeze": {
+          "$fn": "waitForFreeze"
+        }
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "continue": [
+          {
+            "return": {
+              "status": "PROOF_BUNDLE_READY",
+              "next": [],
+              "unknownMember": {
+                "5": 5,
+                "é": [
+                  1,
+                  2
+                ],
+                "k": "v"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "canceled-signal-forwarded-to-waiter",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "signal": {
+          "$signal": "sig",
+          "aborted": true
+        },
+        "waitForFreeze": {
+          "$fn": "waitForFreeze"
+        }
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": false,
+              "errors": [
+                "Witness record is Missing for d1"
+              ],
+              "proposalDigest": null,
+              "frozenDigest": null,
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          }
+        ],
+        "waitForFreeze": [
+          {
+            "throw": "Guided investigate cancelled before freeze."
+          }
+        ]
+      }
+    },
+    {
+      "id": "invalid-frozen-witness-joined",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": false,
+              "errors": [
+                "bad one",
+                "bad two"
+              ],
+              "proposalDigest": null,
+              "frozenDigest": null,
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "valid-but-null-digest-not-missing",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": null,
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "retained-check-failure-joins-errors",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": false,
+              "errors": [
+                "e1",
+                "e2"
+              ],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MISMATCH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "retained-check-failure-status-fallback",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MISMATCH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "runtime-draft-image-conflicts-with-image-option",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "image": "other@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "runtime-draft-image-precedes-alias",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runtime": "go"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                },
+                "runtime": {
+                  "requested": "node",
+                  "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "continue": [
+          {
+            "return": {
+              "status": "PROOF_BUNDLE_READY",
+              "next": [
+                "n"
+              ],
+              "unknownMember": {
+                "5": 5,
+                "é": [
+                  1,
+                  2
+                ],
+                "k": "v"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "runtime-image-option-precedes-alias",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "image": "opt@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "runtime": "go"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "continue": [
+          {
+            "return": {
+              "status": "INVESTIGATION_NOT_PROOF",
+              "next": [
+                "n"
+              ],
+              "unknownMember": {
+                "5": 5,
+                "é": [
+                  1,
+                  2
+                ],
+                "k": "v"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "runtime-alias-resolved",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "runtime": "python"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "resolveRuntime": [
+          {
+            "return": {
+              "requested": "python",
+              "image": "py@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            }
+          }
+        ],
+        "continue": [
+          {
+            "return": {
+              "status": "INVESTIGATION_NOT_PROOF",
+              "next": [],
+              "unknownMember": {
+                "5": 5,
+                "é": [
+                  1,
+                  2
+                ],
+                "k": "v"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "runtime-alias-resolve-throws",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "runtime": "python"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "resolveRuntime": [
+          {
+            "throw": "curated runtime is not pulled"
+          }
+        ]
+      }
+    },
+    {
+      "id": "runtime-missing-error",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "docker-not-ready-without-runner-late",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "NOT_READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "runner-injected-with-docker-not-ready",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runner": {
+          "$fn": "runner"
+        },
+        "ledgerFile": "l.json",
+        "maxStates": 7,
+        "outputDirectory": ""
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "NOT_READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "continue": [
+          {
+            "return": {
+              "status": "INVESTIGATION_NOT_PROOF",
+              "next": [
+                "a",
+                "b"
+              ],
+              "unknownMember": {
+                "5": 5,
+                "é": [
+                  1,
+                  2
+                ],
+                "k": "v"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "continuation-throws",
+      "options": {
+        "repository": "$ROOT/repo",
+        "resumeId": "d1",
+        "image": "registry.example/fl@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "script": {
+        "doctor": [
+          {
+            "return": {
+              "schema": "doctor-fixture",
+              "diagnostics": [
+                {
+                  "id": "git",
+                  "status": "READY"
+                },
+                {
+                  "id": "node",
+                  "status": "READY"
+                }
+              ],
+              "dockerInvestigationPreflight": "READY"
+            }
+          }
+        ],
+        "readDraft": [
+          {
+            "return": {
+              "draft": {
+                "draftId": "d1",
+                "repository": "$ROOT/repo",
+                "command": "echo é☃ 😀",
+                "opaque": {
+                  "2": "two",
+                  "10": "ten",
+                  "z": [
+                    3,
+                    1,
+                    {
+                      "b": 1,
+                      "a": 2
+                    }
+                  ],
+                  "a": null,
+                  "über": "☃"
+                }
+              },
+              "path": "$ROOT/repo/.faultline/incidents/d1.json"
+            }
+          }
+        ],
+        "verify": [
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "NOT_PROVIDED"
+            }
+          },
+          {
+            "return": {
+              "valid": true,
+              "errors": [],
+              "proposalDigest": null,
+              "frozenDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "approval": null,
+              "externalDigestStatus": "MATCH"
+            }
+          }
+        ],
+        "continue": [
+          {
+            "throw": "continuation boom"
+          }
+        ]
+      }
+    }
+  ]
+}

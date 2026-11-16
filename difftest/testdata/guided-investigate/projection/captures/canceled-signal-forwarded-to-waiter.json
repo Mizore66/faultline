@@ -1,0 +1,89 @@
+{
+  "id": "canceled-signal-forwarded-to-waiter",
+  "outcome": {
+    "kind": "error",
+    "message": "Guided investigate cancelled before freeze."
+  },
+  "events": [
+    {
+      "kind": "phase",
+      "args": [
+        "PREFLIGHT"
+      ]
+    },
+    {
+      "kind": "doctor",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "repository",
+              "$ROOT/repo"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "INTAKE",
+        "resume d1"
+      ]
+    },
+    {
+      "kind": "readDraft",
+      "args": [
+        "$ROOT/repo/.faultline/incidents",
+        "d1"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "WITNESS_REVIEW"
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        {
+          "$t": "undefined"
+        }
+      ]
+    },
+    {
+      "kind": "waitForFreeze",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "proposalId",
+              "d1"
+            ],
+            [
+              "witnessStore",
+              "$ROOT/repo/.faultline/witnesses"
+            ],
+            [
+              "draftStore",
+              "$ROOT/repo/.faultline/incidents"
+            ],
+            [
+              "signal",
+              {
+                "$t": "signal",
+                "id": "sig",
+                "aborted": true
+              }
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

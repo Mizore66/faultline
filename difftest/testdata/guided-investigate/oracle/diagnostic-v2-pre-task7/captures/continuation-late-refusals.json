@@ -1,0 +1,194 @@
+{
+  "schema": "faultline.guided-investigate-capture.v1",
+  "caseId": "continuation-late-refusals",
+  "group": "continuation",
+  "replay": "PENDING_LOCALIZATION_GRAPH",
+  "fixture": {
+    "commits": [
+      "b48d9d2ed9f254c586ec97923fb8552575c7103d",
+      "eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+    ],
+    "inputTreeSha256": "b415b5318d555f9e49660f36cb8c5f5be6977a84e2b479039ef40a69ee6a0510"
+  },
+  "templates": [],
+  "steps": [
+    {
+      "name": "freeze with an image",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "{SLOT}/in/ci.log",
+        "--repo",
+        "{SLOT}/repo",
+        "--id",
+        "late-1",
+        "--image",
+        "node@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "--port",
+        "0"
+      ],
+      "exit": 0,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (ci-log)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine local witness review: http://127.0.0.1:{PORT}\nApprove, then Freeze (separate clicks). This command continues automatically after freeze. Press Ctrl+C to cancel and resume later with --resume <id>.\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\nFaultLine guided investigate: PROOF_EXPORT\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "35324587552a91febf645aa51b51556444d0a45dfd66b5b590397e2b8b6d17c9",
+      "actions": [
+        {
+          "do": "ready"
+        },
+        {
+          "do": "get",
+          "path": "/",
+          "status": 200
+        },
+        {
+          "do": "post",
+          "path": "/approve-freeze",
+          "status": 200
+        }
+      ],
+      "toolCounts": {
+        "docker": 8,
+        "git": 101,
+        "node": 1
+      },
+      "treeSha256": ""
+    },
+    {
+      "name": "missing ledger",
+      "args": [
+        "investigate",
+        "--resume",
+        "late-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--image",
+        "node@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "--ledger",
+        "{SLOT}/in/no-ledger.json"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume late-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\nFaultLine error: Unable to read lifecycle ledger {SLOT}/in/no-ledger.json: ENOENT: no such file or directory, open '{SLOT}/in/no-ledger.json'\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "6151c92f373f71937451c53eebc29540e03582610afcc1bf045fe46462cffba9",
+      "actions": [],
+      "toolCounts": {
+        "docker": 2,
+        "git": 3,
+        "node": 1
+      },
+      "treeSha256": ""
+    },
+    {
+      "name": "output outside the managed root",
+      "args": [
+        "investigate",
+        "--resume",
+        "late-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--image",
+        "node@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "--output",
+        "{SLOT}/outside-bundle"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume late-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\nFaultLine error: Git proof bundle output must be a child directory of {SLOT}/repo/.faultline/git-proof-bundles\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "c9467a938b7d2c2864b92fb04156ba6ea23030197f8dfacf7a291ecfc3f06764",
+      "actions": [],
+      "toolCounts": {
+        "docker": 8,
+        "git": 53,
+        "node": 1
+      },
+      "treeSha256": ""
+    },
+    {
+      "name": "non-numeric max states",
+      "args": [
+        "investigate",
+        "--resume",
+        "late-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--image",
+        "node@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "--max-states",
+        "abc"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume late-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "9cf35d1dfbe9cda36b82fca5d20128b7381597bf23e473ef3226a538ef2db8bb",
+      "actions": [],
+      "toolCounts": {
+        "docker": 2,
+        "git": 3,
+        "node": 1
+      },
+      "treeSha256": ""
+    },
+    {
+      "name": "zero max states",
+      "args": [
+        "investigate",
+        "--resume",
+        "late-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--image",
+        "node@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "--max-states",
+        "0"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume late-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "9cf35d1dfbe9cda36b82fca5d20128b7381597bf23e473ef3226a538ef2db8bb",
+      "actions": [],
+      "toolCounts": {
+        "docker": 2,
+        "git": 3,
+        "node": 1
+      },
+      "treeSha256": ""
+    },
+    {
+      "name": "malformed image",
+      "args": [
+        "investigate",
+        "--resume",
+        "late-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--image",
+        "not a digest"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume late-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine guided investigate: LOCALIZATION\nFaultLine error: [\n  {\n    \"validation\": \"regex\",\n    \"code\": \"invalid_string\",\n    \"message\": \"expected a digest-pinned image reference\",\n    \"path\": []\n  }\n]\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "1f40956654782b67bb5b3684c364ab40cb2cabb98e3e411737f2f96bcaebdd84",
+      "actions": [],
+      "toolCounts": {
+        "docker": 2,
+        "git": 27,
+        "node": 1
+      },
+      "treeSha256": ""
+    }
+  ],
+  "finalTree": [],
+  "finalTreeSha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+}

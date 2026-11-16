@@ -1,0 +1,99 @@
+{
+  "schema": "faultline.guided-investigate-oracle.v1",
+  "source": {
+    "commit": "ce99a793af0b020bf1b9cf21114f8d7897b37207",
+    "srcTree": "47b50ed83511d5e7c27e42e587f03d3c9d637bb7",
+    "frozenManifestVersion": "0.1.3",
+    "manifestVersion": "0.1.4",
+    "cliVersion": "FaultLine 0.1.4"
+  },
+  "node": {
+    "version": "v22.22.2"
+  },
+  "generator": {
+    "path": "difftest/gen/gen-guided-investigate.mjs",
+    "mode": "capture"
+  },
+  "inputs": {
+    "cases.json": "0602f262ad773a86c900c3c50e91e43005c8b32f365fc8534b2072747b8f7160",
+    "clock.mjs": "fbec39db655adf05e1770597cdce6ebdc1f57b0ac4c28356e68d14ea1ea3c586",
+    "fakebox/main.go": "2c116468940f536a1f7b3fbb6ce1612b4ff1bbd1183b4c34e26393a796418669",
+    "gen-guided.mjs": "1e9b93aaee680927a0e464980221ba6685ff9344c74ce762cd51cc2248eb82db",
+    "seed.mjs": "1fe0de0965968dc8398e03f203fd327c4fe8ac31ad625fd5930a8445fe750002",
+    "package.json.cli": "0.1.4"
+  },
+  "seed": "guided-investigate-oracle-v1",
+  "caseIds": [
+    "route-git-conflict",
+    "mode-and-range-refusals",
+    "resume-empty-and-equals-spelling",
+    "preflight-blocked-old-node",
+    "preflight-blocked-no-node",
+    "intake-input-refusals",
+    "intake-runtime-docker-absent",
+    "intake-head-unreadable",
+    "intake-partial-draft-store-blocked",
+    "intake-witness-store-blocked",
+    "intake-symptom-selection",
+    "intake-utf16-and-whitespace",
+    "intake-command-and-range",
+    "intake-curated-runtime",
+    "review-cancel-then-resume-atomic",
+    "review-two-step",
+    "review-token-and-form-refusals",
+    "review-frozen-fast-path",
+    "review-expected-digest",
+    "review-resume-repository-mismatch",
+    "review-custom-stores",
+    "continuation-runtime-conflicts",
+    "continuation-fakebox-dirty-resume",
+    "continuation-fakebox-clean-resume",
+    "continuation-late-refusals",
+    "continuation-docker-daemon-down",
+    "continuation-configured-image",
+    "signals-sigterm-default-death",
+    "signals-sigint-resume"
+  ],
+  "counts": {
+    "cases": 29,
+    "steps": 75
+  },
+  "captures": {
+    "route-git-conflict": "a43691fc2c9a8fc4e7999ea958dbdca2606cfcb003fb844008a1eae4bbbadbd9",
+    "mode-and-range-refusals": "4b7f795ebd62d3744f2b3c467cc350cdd1a7cd21c2ffa75513288eeb2fa7dce1",
+    "resume-empty-and-equals-spelling": "78cefb2c2896221de6d32cd2b9ba9ca831f2ca22f0f579eec613587e212c21c6",
+    "preflight-blocked-old-node": "89f6a3be7ee482d5f34d3598ba59b9484390f4b1978d4e0a9a0fb0019021dc73",
+    "preflight-blocked-no-node": "9fde15b463e2fa997eaae2af00df9eeaa632d7bcd3d9e8737a48b852cf43bce1",
+    "intake-input-refusals": "3f4277c605687823b31470688aa2a58d24c049fe49b71a8dd58fac40101c5468",
+    "intake-runtime-docker-absent": "c3dfbec3db9505a29cd25e78d4a4f19fb6b03e4b0aa7b84dc9b0792f91eba152",
+    "intake-head-unreadable": "1f292e1bc869c697328f13c1a0173c701a0e0c535e34cd75421afe4501a536ef",
+    "intake-partial-draft-store-blocked": "ff37f52b9427566b88d9c46e54de7e0ea22db663ce81c576e29f778f1fe65791",
+    "intake-witness-store-blocked": "d263b8bd13681b4a52f1b5ed0d36fd5df4f2b24b1202f4176ee7df7ec8d5471b",
+    "intake-symptom-selection": "6b9d3a57bb8d8d0559d2ee526092bf9d4009502bf8722c0b2159b34619f9f6ba",
+    "intake-utf16-and-whitespace": "4998ca8d34ddc8e5c02f4cb4697406aa253029045ebdae5e91d5ba7235597d0c",
+    "intake-command-and-range": "20c3935332a49956637f0bc40e349d07ed423639ef9f4ee776d4c4559ce48270",
+    "intake-curated-runtime": "96d4900f0855eb8b213094cb8fcec4e46314ccdd5d7d10db043ad608c4f64b56",
+    "review-cancel-then-resume-atomic": "496d53969dd1bdc8e56e9da61833d4de56cc15937f46f142d2e5f915ce4a2e10",
+    "review-two-step": "c9cf4429e308c0c3be6945d6c7ef60a9e0ea2ca78b1ff89f127615148f08fe36",
+    "review-token-and-form-refusals": "e3b53dca13ab1044ad441a6ee88b03e5cc8f58bd5daba12160623211a8a1e364",
+    "review-frozen-fast-path": "ab5a043adb4221449ffe5bc65b5588abfc89900bdf2acc173a1eefd768ec45e7",
+    "review-expected-digest": "44c452a9757c4ede60da646c092db55e72c1a777b951f5366022f890d8a8f0c2",
+    "review-resume-repository-mismatch": "eb68896ec19949e6a3be2bcfd7853148723d4e7a4194bec7b8269f31762ba335",
+    "review-custom-stores": "06220d3df0cf18c8ce42542fca004d5c16b345a6210342c02f67260e981da148",
+    "continuation-runtime-conflicts": "2606ec283f81b24109f7f11ad4da5f07ba4408ca23e7edc26d0a276ae165a844",
+    "continuation-fakebox-dirty-resume": "d2381608e12f3f988e1d7474f0c12541c6357b80c2c9df64bc25c905f9820dec",
+    "continuation-fakebox-clean-resume": "8bb9ee62b8a9f694c280cfc83c02e8e2350a2d9f72ad799edcab0fccf8210665",
+    "continuation-late-refusals": "ba0e735eabb1384913c879445b25c6dd601f441578fd7ce11a5dd5553276e66d",
+    "continuation-docker-daemon-down": "463643a4994778b59c30e96fd2aab7ff8f189d1130f0190b2dfb4d87f81e16df",
+    "continuation-configured-image": "27038380727e4156cc535814ca9557de06b0389ba6edac1cb4fef104ba9f0a51",
+    "signals-sigterm-default-death": "5e416c928ce68c12bc4d96b95a11fb4cc5d64c8d35272db6c42d73314255f6c4",
+    "signals-sigint-resume": "f5a1a4791b50d1280033fda0ea05700bcc929ef3711a31c9f026d5f68647c477"
+  },
+  "platform": {
+    "goos": "windows",
+    "goarch": "arm64",
+    "nodePlatform": "win32",
+    "nodeArch": "arm64",
+    "pathSeparator": "\\"
+  }
+}

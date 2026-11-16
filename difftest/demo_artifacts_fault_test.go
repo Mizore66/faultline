@@ -377,7 +377,9 @@ func runDemo(t *testing.T, e demoEnv, side demoSide, req demoartifactstest.Reque
 	}
 	// -q (not -qq) keeps the per-tid normal exit notices the parser uses as
 	// positive terminal evidence.
-	args := []string{"-D", "-f", "-q", "-s", "4096", "-o", trace}
+	// Decode each descriptor's kernel path: Go can migrate between OS
+	// threads between open and write/close, even within one operation.
+	args := []string{"-D", "-f", "-q", "-y", "-s", "4096", "-o", trace}
 	pset := map[string]bool{}
 	addP := func(p string) {
 		if !pset[p] {
@@ -430,7 +432,7 @@ func runDemo(t *testing.T, e demoEnv, side demoSide, req demoartifactstest.Reque
 	if err != nil {
 		t.Fatalf("%s: strace log unreadable: %v", side.name, err)
 	}
-	parsed, lifecycle, err := parseStraceLifecycle(strings.ReplaceAll(string(tb), "\r", ""))
+	parsed, lifecycle, err := parseStraceRecords(strings.ReplaceAll(string(tb), "\r", ""), true)
 	if err != nil {
 		t.Fatalf("%s: strace log unparsable: %v\n%s", side.name, err, tb)
 	}

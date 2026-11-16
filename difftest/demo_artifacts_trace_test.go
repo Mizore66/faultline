@@ -86,6 +86,66 @@ func TestParseStracePaddedPidFdResolution(t *testing.T) {
 	}
 }
 
+// A Go goroutine may open a file on one OS thread and write/close it on
+// another. Only strace's descriptor annotation establishes the fd's path at
+// that call; sharing a global numeric-fd map would conflate separate processes.
+func TestParseStraceAnnotatedCrossThreadFDPaths(t *testing.T) {
+	trace := strings.Join([]string{
+		`406109 openat(AT_FDCWD</r>, "/r/out.html", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 4</r/out.html>`,
+		`500 openat(AT_FDCWD</r>, "/r/other.html", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 4</r/other.html>`,
+		`406115 write(4</r/out.html>, "/not/the/path", 13) = -1 EIO (Input/output error) (INJECTED)`,
+		`501 write(4</r/other.html>, "x", 1) = 1`,
+		`406116 close(4</r/out.html>) = -1 EIO (Input/output error) (INJECTED)`,
+	}, "\n")
+	calls, err := parseStrace(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 5 {
+		t.Fatalf("got %d calls, want 5", len(calls))
+	}
+	for i, want := range []string{"/r/out.html", "/r/other.html", "/r/out.html", "/r/other.html", "/r/out.html"} {
+		if calls[i].Path != want {
+			t.Errorf("call %d path %q, want %q", i, calls[i].Path, want)
+		}
+	}
+	if err := validateInjections(calls, []wantFault{
+		{Group: "write", Errno: "EIO", Path: "/r/out.html"},
+		{Group: "close", Errno: "EIO", Path: "/r/out.html"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Live fault receipts must not reconstruct an unannotated descriptor from
+// stale per-thread history. Missing or malformed kernel path evidence fails.
+func TestParseStraceRequiredFDPaths(t *testing.T) {
+	for _, fd := range []string{"4", "4<>", "4</r/out.html", "4</r/a>b>"} {
+		t.Run(fd, func(t *testing.T) {
+			trace := `10 openat(AT_FDCWD, "/r/stale.html", O_WRONLY) = 4` + "\n" +
+				`10 write(` + fd + `, "x", 1) = -1 EIO (Input/output error) (INJECTED)`
+			if _, _, err := parseStraceRecords(trace, true); err == nil {
+				t.Fatal("accepted fd call without an unambiguous path annotation")
+			}
+		})
+	}
+	trace := strings.Join([]string{
+		`10 openat(AT_FDCWD</r>, "/r/stale.html", O_WRONLY) = 4</r/stale.html>`,
+		`11 close(4</r/stale.html>) = 0`,
+		`11 openat(AT_FDCWD</r>, "/r/a\076b.html", O_WRONLY) = 4</r/a\076b.html>`,
+		`10 write(4</r/a\076b.html>, "x", 1 <unfinished ...>`,
+		`10 <... write resumed>) = -1 EIO (Input/output error) (INJECTED)`,
+		`12 close(4</r/a\076b.html>) = -1 EIO (Input/output error) (INJECTED)`,
+	}, "\n")
+	calls, _, err := parseStraceRecords(trace, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 5 || calls[3].Path != `/r/a\076b.html` || calls[4].Path != `/r/a\076b.html` {
+		t.Fatalf("annotated path did not override stale thread-local history: %+v", calls)
+	}
+}
+
 // Ruling A. A recursive mkdir of an absent stage that fails with EIO is reported
 // by Node (and the Go port) as the ENOENT of the follow-up stat; only EACCES,
 // ENOSPC, ENOTDIR and EPERM are returned directly. The expectations below are
@@ -571,9 +631,10 @@ type straceCall struct {
 var (
 	straceHead     = regexp.MustCompile(`^\s*(\d+)\s+([a-z0-9_]+)\((.*)$`)
 	straceResumed  = regexp.MustCompile(`^\s*(\d+)\s+<\.\.\. ([a-z0-9_]+) resumed>(.*)$`)
-	straceResult   = regexp.MustCompile(`\) += (-?\d+|\?)(?: (E[A-Z0-9]+) \([^)]*\))?(?: \(INJECTED\))?\s*$`)
+	straceResult   = regexp.MustCompile(`\) += (-?\d+|\?)(?:<(?:[^<>\\]|\\.)*>)?(?: (E[A-Z0-9]+) \([^)]*\))?(?: \(INJECTED\))?\s*$`)
 	straceQuoted   = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 	straceFirstInt = regexp.MustCompile(`^\s*(\d+)`)
+	straceFDPath   = regexp.MustCompile(`^\s*\d+<((?:[^<>\\]|\\.)+)>(?:,|$)`)
 )
 
 var fdCalls = map[string]bool{"write": true, "writev": true, "pwrite64": true, "pwritev": true, "pwritev2": true, "close": true, "fsync": true, "fdatasync": true}
@@ -605,6 +666,13 @@ func parseStrace(trace string) ([]straceCall, error) {
 // notices, detached records, named detached or never-resumed calls, and every
 // other line are errors.
 func parseStraceLifecycle(trace string) ([]straceCall, []string, error) {
+	return parseStraceRecords(trace, false)
+}
+
+// Live -y traces require descriptor paths at each fd-based syscall, so Go
+// thread migration cannot lose paths and fd reuse cannot borrow stale ones.
+// Legacy synthetic fixtures may still exercise same-thread open resolution.
+func parseStraceRecords(trace string, requireFDPaths bool) ([]straceCall, []string, error) {
 	var out []straceCall
 	var notes []string
 	pending := map[string]string{} // pid+name -> text before <unfinished ...>
@@ -704,9 +772,16 @@ func parseStraceLifecycle(trace string) ([]straceCall, []string, error) {
 		// capture up to the result, with no offset arithmetic on the padding.
 		args := strings.TrimLeft(m[3][:res[0]-(len(line)-len(m[3]))], " ")
 		if fdCalls[call.Name] {
+			if path := straceFDPath.FindStringSubmatch(args); path != nil {
+				call.Path = path[1]
+			} else if requireFDPaths {
+				return nil, nil, fmt.Errorf("trace line %d: fd call lacks a path annotation: %q", n+1, line)
+			}
 			if f := straceFirstInt.FindStringSubmatch(args); f != nil {
 				key := m[1] + " " + f[1]
-				call.Path = fds[key]
+				if call.Path == "" {
+					call.Path = fds[key]
+				}
 				if call.Name == "close" {
 					delete(fds, key)
 				}

@@ -1,0 +1,371 @@
+{
+  "schema": "faultline.guided-investigate-capture.v1",
+  "caseId": "review-expected-digest",
+  "group": "review",
+  "fixture": {
+    "commits": [
+      "b48d9d2ed9f254c586ec97923fb8552575c7103d",
+      "eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+    ],
+    "inputTreeSha256": "74c513f6aa05a9bcb8e9931a318e2f7805bec4501fadf0a8b30b36b5e67dd97e"
+  },
+  "steps": [
+    {
+      "name": "freeze",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "{SLOT}/in/ci.log",
+        "--repo",
+        "{SLOT}/repo",
+        "--id",
+        "dig-1",
+        "--port",
+        "0"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (ci-log)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine local witness review: http://127.0.0.1:{PORT}\nApprove, then Freeze (separate clicks). This command continues automatically after freeze. Press Ctrl+C to cancel and resume later with --resume <id>.\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine error: Guided investigate needs a digest-pinned runtime before localization. Pass --runtime <node|python|go> after pulling the curated tag, or --image <digest-pinned-image>.\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "b054317aa164bca1e14b9af27ac4211b0544368344edd963a3cf337160e6f95c",
+      "actions": [
+        {
+          "do": "ready"
+        },
+        {
+          "do": "get",
+          "path": "/",
+          "status": 200
+        },
+        {
+          "do": "post",
+          "path": "/approve-freeze",
+          "status": 200
+        }
+      ],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-C\u001f{SLOT}/repo\u001fshow\u001f-s\u001f--format=%H%n%P\u001fHEAD",
+          "-C\u001f{SLOT}/repo\u001frev-list\u001f--count\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001fdiff-tree\u001f--no-commit-id\u001f--name-only\u001f-r\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001flog\u001f--format=%H%x09%an%x09%aI%x09%s\u001f--no-decorate\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001frev-list\u001f--count\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001fdiff-tree\u001f--no-commit-id\u001f--name-only\u001f-r\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001flog\u001f--format=%H%x09%an%x09%aI%x09%s\u001f--no-decorate\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001frev-list\u001f--count\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001fdiff-tree\u001f--no-commit-id\u001f--name-only\u001f-r\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0",
+          "-C\u001f{SLOT}/repo\u001flog\u001f--format=%H%x09%an%x09%aI%x09%s\u001f--no-decorate\u001fb48d9d2ed9f254c586ec97923fb8552575c7103d..eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+        ],
+        "node": [
+          "--version"
+        ]
+      },
+      "treeSha256": "8ba39d01d8cb4ec87d61006843aa18915f9f0314b8489f3394525a3894380fe4"
+    },
+    {
+      "name": "wrong expected digest",
+      "args": [
+        "investigate",
+        "--resume",
+        "dig-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--expect-digest",
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume dig-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine error: Guided investigate cannot continue with an invalid frozen witness: externally supplied frozen digest does not match\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "cbcfade451363c7be5e32f0badb51d77c4db937928d372b9b84cfead5e76f4ec",
+      "actions": [],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z"
+        ],
+        "node": [
+          "--version"
+        ]
+      },
+      "treeSha256": "8ba39d01d8cb4ec87d61006843aa18915f9f0314b8489f3394525a3894380fe4"
+    },
+    {
+      "name": "malformed expected digest",
+      "args": [
+        "investigate",
+        "--resume",
+        "dig-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--expect-digest",
+        "nonsense"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume dig-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine error: Guided investigate cannot continue with an invalid frozen witness: expected frozen digest is not a valid sha256 digest\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "f16816d57c89e2cefda5ac64b99124e056b0cbb2a90d9811a60b49b10f41a3a9",
+      "actions": [],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z"
+        ],
+        "node": [
+          "--version"
+        ]
+      },
+      "treeSha256": "8ba39d01d8cb4ec87d61006843aa18915f9f0314b8489f3394525a3894380fe4"
+    },
+    {
+      "name": "correct expected digest binds the session",
+      "args": [
+        "investigate",
+        "--resume",
+        "dig-1",
+        "--repo",
+        "{SLOT}/repo",
+        "--expect-digest",
+        "sha256:8b9a1a1e82321d6c29c1e1f6fd7711b0526ad127b46fb7bcfecbdb1e0c74422f"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume dig-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine error: Guided investigate needs a digest-pinned runtime before localization. Pass --runtime <node|python|go> after pulling the curated tag, or --image <digest-pinned-image>.\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "34aab91b61510bb1856a7425dcba78abb9c59284be9c726172ab4caef1a22807",
+      "actions": [],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z"
+        ],
+        "node": [
+          "--version"
+        ]
+      },
+      "treeSha256": "8ba39d01d8cb4ec87d61006843aa18915f9f0314b8489f3394525a3894380fe4"
+    },
+    {
+      "name": "resume inherits the bound digest",
+      "args": [
+        "investigate",
+        "--resume",
+        "dig-1",
+        "--repo",
+        "{SLOT}/repo"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume dig-1)\nFaultLine guided investigate: WITNESS_REVIEW\nFaultLine guided investigate: RUNTIME_SELECTION\nFaultLine error: Guided investigate needs a digest-pinned runtime before localization. Pass --runtime <node|python|go> after pulling the curated tag, or --image <digest-pinned-image>.\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "34aab91b61510bb1856a7425dcba78abb9c59284be9c726172ab4caef1a22807",
+      "actions": [],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z"
+        ],
+        "node": [
+          "--version"
+        ]
+      },
+      "treeSha256": "8ba39d01d8cb4ec87d61006843aa18915f9f0314b8489f3394525a3894380fe4"
+    }
+  ],
+  "finalTree": [
+    {
+      "path": "in",
+      "kind": "dir",
+      "mode": "755",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "in/ci.log",
+      "kind": "file",
+      "mode": "644",
+      "size": 13,
+      "sha256": "17745d9cf62cff0ebf1e82e95e07ba19e771a76202148440e63e4015ecdb68b8",
+      "target": "",
+      "content": "FAIL: digest\n",
+      "base64": ""
+    },
+    {
+      "path": "repo",
+      "kind": "dir",
+      "mode": "755",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/incidents",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/incidents/drafts",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/incidents/drafts/dig-1.json",
+      "kind": "file",
+      "mode": "600",
+      "size": 1081,
+      "sha256": "f01679b048b442bbaeb51dce086b6ed7c5da4ed4de0100181dc11a4c4a3078ee",
+      "target": "",
+      "content": "{\"command\":\"node -e \\\"console.log('Replace this command with the failing CI predicate after human review'); process.exit(1)\\\"\",\"commandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"createdAt\":\"2026-07-16T12:00:00.000Z\",\"draftDigest\":\"sha256:fe780eeb1e9e545bc0b1f12f39ff63e54cd4e44170882834216099737a4e6df0\",\"draftId\":\"dig-1\",\"range\":{\"ancestor\":\"b48d9d2ed9f254c586ec97923fb8552575c7103d\",\"descendant\":\"eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0\",\"source\":\"LOCAL_HEAD_PARENT\"},\"repository\":\"{SLOT}/repo\",\"review\":{\"autoFreeze\":false,\"freezeState\":\"NOT_FROZEN\",\"proposal\":{\"commandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"incidentPacketDigest\":\"sha256:832ef7d99eea2b9d7f3eb1febcab05e0c18ad659584efbde83c061fa0b0c92a8\",\"proposalDigest\":\"sha256:60dbc16ee29a512df7ddc14eec6551eedde45526a9e2343f550d45fe92d704cb\",\"proposalId\":\"dig-1\"},\"required\":true,\"state\":\"PENDING_HUMAN_REVIEW\",\"witnessState\":\"PROPOSED\"},\"schemaVersion\":\"faultline.incident-draft.v1\",\"status\":\"DRAFT_REQUIRES_HUMAN_REVIEW\"}\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/approvals",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/approvals/dig-1.json",
+      "kind": "file",
+      "mode": "600",
+      "size": 640,
+      "sha256": "22d652c8b6eae1dad07f1d8c546e0e7e9a37e441d6e1518a3ec4a50fdaf5781b",
+      "target": "",
+      "content": "{\"approvalDigest\":\"sha256:f99300374a99cc81b474e3dbacb645579539f89d6661c4b0c3090679550b05d1\",\"approvedAt\":\"2026-07-16T12:00:00.002Z\",\"approvedBy\":\"Oracle Reviewer\",\"incidentPacketDigest\":\"sha256:832ef7d99eea2b9d7f3eb1febcab05e0c18ad659584efbde83c061fa0b0c92a8\",\"proposalDigest\":\"sha256:60dbc16ee29a512df7ddc14eec6551eedde45526a9e2343f550d45fe92d704cb\",\"proposalId\":\"dig-1\",\"reviewedCommandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"reviewedOverlayDigest\":\"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"reviewerType\":\"HUMAN\",\"schemaVersion\":\"faultline.witness-approval.v1\"}\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/frozen",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/frozen/dig-1.json",
+      "kind": "file",
+      "mode": "600",
+      "size": 2081,
+      "sha256": "ffe2d1b80e39ad12737a2ab328e826f785d1f0cc70145158f2fc42d601879ac7",
+      "target": "",
+      "content": "{\"approval\":{\"approvalDigest\":\"sha256:f99300374a99cc81b474e3dbacb645579539f89d6661c4b0c3090679550b05d1\",\"approvedAt\":\"2026-07-16T12:00:00.002Z\",\"approvedBy\":\"Oracle Reviewer\",\"incidentPacketDigest\":\"sha256:832ef7d99eea2b9d7f3eb1febcab05e0c18ad659584efbde83c061fa0b0c92a8\",\"proposalDigest\":\"sha256:60dbc16ee29a512df7ddc14eec6551eedde45526a9e2343f550d45fe92d704cb\",\"proposalId\":\"dig-1\",\"reviewedCommandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"reviewedOverlayDigest\":\"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"reviewerType\":\"HUMAN\",\"schemaVersion\":\"faultline.witness-approval.v1\"},\"frozenAt\":\"2026-07-16T12:00:00.003Z\",\"frozenDigest\":\"sha256:8b9a1a1e82321d6c29c1e1f6fd7711b0526ad127b46fb7bcfecbdb1e0c74422f\",\"proposal\":{\"incidentPacket\":{\"ciLog\":\"FAIL: digest\\n\",\"repositoryLanguage\":\"Unknown\",\"repositorySummary\":\"Guided CI-log intake for local range b48d9d2ed9f254c586ec97923fb8552575c7103d → eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0. Review-only until human approval and freeze; nothing executed at intake.\",\"symptom\":\"FAIL: digest\"},\"incidentPacketDigest\":\"sha256:832ef7d99eea2b9d7f3eb1febcab05e0c18ad659584efbde83c061fa0b0c92a8\",\"proposalDigest\":\"sha256:60dbc16ee29a512df7ddc14eec6551eedde45526a9e2343f550d45fe92d704cb\",\"proposalId\":\"dig-1\",\"proposalOrigin\":\"HUMAN\",\"proposedAt\":\"2026-07-16T12:00:00.001Z\",\"schemaVersion\":\"faultline.witness-proposal.v1\",\"witness\":{\"behavior\":\"The human-supplied command must exit successfully at the selected immutable Git states.\",\"command\":\"node -e \\\"console.log('Replace this command with the failing CI predicate after human review'); process.exit(1)\\\"\",\"commandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"overlayDigest\":\"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"overlays\":[],\"policy\":{\"credentials\":\"redacted\",\"network\":\"disabled\",\"timeoutSeconds\":300}}},\"schemaVersion\":\"faultline.frozen-witness.v1\",\"witnessDigest\":\"sha256:485febee4a75f8558d299450fba4f817a1c09357a80db1918434cf5029b2f912\"}\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/proposals",
+      "kind": "dir",
+      "mode": "700",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/.faultline/witnesses/proposals/dig-1.json",
+      "kind": "file",
+      "mode": "600",
+      "size": 1154,
+      "sha256": "1084b869734d09d6ca1bd07ba59467c3d8f8659def567de6b4bffab96e1e04a1",
+      "target": "",
+      "content": "{\"incidentPacket\":{\"ciLog\":\"FAIL: digest\\n\",\"repositoryLanguage\":\"Unknown\",\"repositorySummary\":\"Guided CI-log intake for local range b48d9d2ed9f254c586ec97923fb8552575c7103d → eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0. Review-only until human approval and freeze; nothing executed at intake.\",\"symptom\":\"FAIL: digest\"},\"incidentPacketDigest\":\"sha256:832ef7d99eea2b9d7f3eb1febcab05e0c18ad659584efbde83c061fa0b0c92a8\",\"proposalDigest\":\"sha256:60dbc16ee29a512df7ddc14eec6551eedde45526a9e2343f550d45fe92d704cb\",\"proposalId\":\"dig-1\",\"proposalOrigin\":\"HUMAN\",\"proposedAt\":\"2026-07-16T12:00:00.001Z\",\"schemaVersion\":\"faultline.witness-proposal.v1\",\"witness\":{\"behavior\":\"The human-supplied command must exit successfully at the selected immutable Git states.\",\"command\":\"node -e \\\"console.log('Replace this command with the failing CI predicate after human review'); process.exit(1)\\\"\",\"commandDigest\":\"sha256:47fc5222271d464f21c9fa413cf209b37253aa6803a473c2d917ae1c47711149\",\"overlayDigest\":\"sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"overlays\":[],\"policy\":{\"credentials\":\"redacted\",\"network\":\"disabled\",\"timeoutSeconds\":300}}}\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/README.md",
+      "kind": "file",
+      "mode": "644",
+      "size": 14,
+      "sha256": "81253e9217f239713c3a381a9ad4a81af64cc4062be75dc2ba0e53021ca2db7d",
+      "target": "",
+      "content": "guided oracle\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/state.txt",
+      "kind": "file",
+      "mode": "644",
+      "size": 4,
+      "sha256": "1d7a363ce12430881ec56c9cf1409c49c491043618e598c356e2959040872f5a",
+      "target": "",
+      "content": "bad\n",
+      "base64": ""
+    }
+  ],
+  "finalTreeSha256": "8ba39d01d8cb4ec87d61006843aa18915f9f0314b8489f3394525a3894380fe4"
+}

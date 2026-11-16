@@ -1,0 +1,73 @@
+{
+  "id": "docker-not-ready-without-runner-late",
+  "outcome": {
+    "kind": "error",
+    "message": "Guided investigate requires a READY Docker investigation preflight. Run `fl doctor --repo .` and start Docker before continuing."
+  },
+  "events": [
+    {
+      "kind": "phase",
+      "args": [
+        "PREFLIGHT"
+      ]
+    },
+    {
+      "kind": "doctor",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "repository",
+              "$ROOT/repo"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "INTAKE",
+        "resume d1"
+      ]
+    },
+    {
+      "kind": "readDraft",
+      "args": [
+        "$ROOT/repo/.faultline/incidents",
+        "d1"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "WITNESS_REVIEW"
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        {
+          "$t": "undefined"
+        }
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "RUNTIME_SELECTION"
+      ]
+    }
+  ]
+}

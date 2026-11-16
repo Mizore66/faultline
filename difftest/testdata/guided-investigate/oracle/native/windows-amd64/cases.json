@@ -1,0 +1,301 @@
+{
+  "schema": "faultline.guided-investigate-oracle-cases.v1",
+  "seed": "guided-investigate-oracle-v1",
+  "approvedBy": "Oracle Reviewer",
+  "groups": ["refusals", "intake", "review", "continuation", "signals"],
+  "fixtures": {
+    "ignored": {
+      "gitExclude": [".faultline/"],
+      "commits": [
+        {"message": "good", "files": {"README.md": "guided oracle\n", "state.txt": "good\n"}},
+        {"message": "bad", "files": {"state.txt": "bad\n"}}
+      ]
+    },
+    "std": {
+      "commits": [
+        {"message": "good", "files": {"README.md": "guided oracle\n", "state.txt": "good\n"}},
+        {"message": "bad", "files": {"state.txt": "bad\n"}}
+      ]
+    }
+  },
+  "images": {
+    "pinned": "node@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+    "other": "node@sha256:0000000000000000000000000000000000000000000000000000000000000002"
+  },
+  "cases": [
+    {
+      "id": "route-git-conflict", "group": "refusals", "fixture": "std",
+      "steps": [
+        {"name": "git+resume", "args": ["investigate", "git", "--resume", "x"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cannot be combined with `fl investigate git` or `fl investigate turns`"]}},
+        {"name": "turns+ci-log", "args": ["investigate", "turns", "--ci-log", "{IN}/ci.log"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cannot be combined with `fl investigate git` or `fl investigate turns`"]}}
+      ],
+      "files": {"ci.log": "FAIL\n"}
+    },
+    {
+      "id": "mode-and-range-refusals", "group": "refusals", "fixture": "std",
+      "files": {"ci.log": "FAIL\n"},
+      "steps": [
+        {"name": "both modes", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--resume", "r1", "--repo", "{REPO}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["either --ci-log <file> or --resume <incident-id>, not both"]}},
+        {"name": "from without to", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--from", "{C1}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["--from and --to together"]}},
+        {"name": "to without from", "args": ["investigate", "--resume", "r1", "--repo", "{REPO}", "--to", "{C2}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["--from and --to together"]}}
+      ]
+    },
+    {
+      "id": "resume-empty-and-equals-spelling", "group": "refusals", "fixture": "std",
+      "files": {"ci.log": "FAIL\n"},
+      "steps": [
+        {"name": "resume empty id", "args": ["investigate", "--resume", "", "--repo", "{REPO}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}},
+        {"name": "resume equals", "args": ["investigate", "--resume=x", "--repo", "{REPO}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Usage: fl investigate"]}},
+        {"name": "ci-log equals", "args": ["investigate", "--ci-log={IN}/ci.log", "--repo", "{REPO}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Usage: fl investigate"]}}
+      ]
+    },
+    {
+      "id": "preflight-blocked-old-node", "group": "refusals", "fixture": "std",
+      "tools": {"nodeVersion": "v20.11.0\n"},
+      "files": {"ci.log": "FAIL\n"},
+      "steps": [
+        {"name": "blocked ci-log", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "blocked-1"], "expect": {"exit": 1, "stdoutContains": ["\"status\": \"PREFLIGHT_BLOCKED\""], "stderrContains": ["FaultLine guided investigate: PREFLIGHT\n"]}},
+        {"name": "blocked empty ci-log", "args": ["investigate", "--ci-log", "", "--repo", "{REPO}"], "expect": {"exit": 1, "stdoutContains": ["\"status\": \"PREFLIGHT_BLOCKED\""]}},
+        {"name": "blocked resume", "args": ["investigate", "--resume", "nothing", "--repo", "{REPO}"], "expect": {"exit": 1, "stdoutContains": ["\"status\": \"PREFLIGHT_BLOCKED\""]}}
+      ]
+    },
+    {
+      "id": "preflight-blocked-no-node", "group": "refusals", "fixture": "std",
+      "tools": {"noNode": true},
+      "files": {"ci.log": "FAIL\n"},
+      "steps": [
+        {"name": "blocked no node", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}"], "expect": {"exit": 1, "stdoutContains": ["\"status\": \"PREFLIGHT_BLOCKED\""]}}
+      ]
+    },
+    {
+      "id": "intake-input-refusals", "group": "refusals", "fixture": "std",
+      "files": {"ci.log": "FAIL\n"},
+      "steps": [
+        {"name": "empty ci-log is cwd", "args": ["investigate", "--ci-log", "", "--repo", "{REPO}"], "cwd": "{REPO}", "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}},
+        {"name": "missing ci-log file", "args": ["investigate", "--ci-log", "{IN}/absent.log", "--repo", "{REPO}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}},
+        {"name": "resume missing draft", "args": ["investigate", "--resume", "no-such-draft", "--repo", "{REPO}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}},
+        {"name": "unsafe id", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "../escape"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}},
+        {"name": "unknown runtime", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--runtime", "fortran", "--id", "rt-bad"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}}
+      ]
+    },
+    {
+      "id": "intake-runtime-docker-absent", "group": "refusals", "fixture": "std",
+      "tools": {"noDocker": true},
+      "files": {"ci.log": "FAIL\n"},
+      "steps": [
+        {"name": "runtime without docker", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--runtime", "node", "--id", "rt-nodocker"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}}
+      ]
+    },
+    {
+      "id": "intake-head-unreadable", "group": "refusals", "fixture": "std",
+      "tools": {"showFails": true},
+      "files": {"ci.log": "FAIL\n"},
+      "steps": [
+        {"name": "head unreadable", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "no-head"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["could not read a local Git HEAD"]}}
+      ]
+    },
+    {
+      "id": "intake-partial-draft-store-blocked", "group": "refusals", "fixture": "std",
+      "repoFiles": {".faultline/incidents": "not a directory\n"},
+      "files": {"ci.log": "FAIL: partial\n"},
+      "steps": [
+        {"name": "draft store is a file", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "partial-1"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}}
+      ]
+    },
+    {
+      "id": "intake-witness-store-blocked", "group": "refusals", "fixture": "std",
+      "files": {"ci.log": "FAIL: store\n", "store-file": "regular file\n"},
+      "steps": [
+        {"name": "witness store is a file", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "ws-blocked", "--store", "{IN}/store-file"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}}
+      ]
+    },
+
+    {
+      "id": "intake-symptom-selection", "group": "intake", "fixture": "std",
+      "files": {
+        "match.log": "step one\nERROR: first\nstep two\nAssertion mismatch here\nclean tail\n",
+        "nomatch.log": "alpha\n\n  beta  \n",
+        "empty.log": "",
+        "blank.log": "\n \n\t\n",
+        "crlf.log": "ok\r\nfailed: crlf case\r\ntail\r\n",
+        "long.log": [{"text": "fail "}, {"repeat": "x", "count": 600}, {"text": "\n"}]
+      },
+      "steps": [
+        {"name": "last matching line", "args": ["investigate", "--ci-log", "{IN}/match.log", "--repo", "{REPO}", "--id", "sym-match", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["INTAKE (ci-log)", "cancelled before freeze"]}},
+        {"name": "no match uses last line", "args": ["investigate", "--ci-log", "{IN}/nomatch.log", "--repo", "{REPO}", "--id", "sym-none", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "empty log refused by packet schema", "args": ["investigate", "--ci-log", "{IN}/empty.log", "--repo", "{REPO}", "--id", "sym-empty", "--port", "0"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["String must contain at least 1 character(s)"]}},
+        {"name": "blank-only log fallback", "args": ["investigate", "--ci-log", "{IN}/blank.log", "--repo", "{REPO}", "--id", "sym-blank", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "crlf lines", "args": ["investigate", "--ci-log", "{IN}/crlf.log", "--repo", "{REPO}", "--id", "sym-crlf", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "symptom limited to 500 units", "args": ["investigate", "--ci-log", "{IN}/long.log", "--repo", "{REPO}", "--id", "sym-long", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}}
+      ]
+    },
+    {
+      "id": "intake-utf16-and-whitespace", "group": "intake", "fixture": "std",
+      "files": {
+        "boundary.log": [{"repeat": "a", "count": 3999}, {"text": "\ud83d\ude00 tail error\n"}],
+        "boundary-before.log": [{"repeat": "a", "count": 3998}, {"text": "\ud83d\ude00 tail\n"}],
+        "invalid-utf8.log": [{"text": "bad "}, {"hex": "ff"}, {"text": " byte failure\n"}],
+        "js-space.log": [{"text": "\u00a0\u2028error \u3000 spaced\u2029\ufeff\n"}]
+      },
+      "steps": [
+        {"name": "split surrogate at 4000", "args": ["investigate", "--ci-log", "{IN}/boundary.log", "--repo", "{REPO}", "--id", "u16-split", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "whole pair at 3998", "args": ["investigate", "--ci-log", "{IN}/boundary-before.log", "--repo", "{REPO}", "--id", "u16-whole", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "invalid utf-8 byte", "args": ["investigate", "--ci-log", "{IN}/invalid-utf8.log", "--repo", "{REPO}", "--id", "u16-badbyte", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "js whitespace trimming", "args": ["investigate", "--ci-log", "{IN}/js-space.log", "--repo", "{REPO}", "--id", "u16-space", "--command", "\u00a0\ufeff echo \u00e9\u3000 ", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}}
+      ]
+    },
+    {
+      "id": "intake-command-and-range", "group": "intake", "fixture": "std",
+      "files": {"ci.log": "FAIL: range\n"},
+      "steps": [
+        {"name": "explicit range and command", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "range-1", "--from", "{C1}", "--to", "{C2}", "--command", "  node check.mjs  ", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "empty command takes default", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "range-2", "--command", "", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "empty from and to", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "range-3", "--from", "", "--to", "", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "same id again", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "range-1", "--port", "0"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}},
+        {"name": "unresolvable range accepted at intake", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "range-4", "--from", "not-a-commit", "--to", "{C2}", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}}
+      ]
+    },
+    {
+      "id": "intake-curated-runtime", "group": "intake", "fixture": "std",
+      "files": {"ci.log": "FAIL: runtime\n"},
+      "steps": [
+        {"name": "runtime node recorded", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "rt-1", "--runtime", "node", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}}
+      ]
+    },
+
+    {
+      "id": "review-cancel-then-resume-atomic", "group": "review", "fixture": "std",
+      "files": {"ci.log": "FAIL: expected USD received EUR\n"},
+      "steps": [
+        {"name": "start and cancel", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "atomic-1", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "resume and approve-freeze", "args": ["investigate", "--resume", "atomic-1", "--repo", "{REPO}", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200, "message": "Approved and frozen as a write-once record."}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}},
+        {"name": "resume finds the freeze", "args": ["investigate", "--resume", "atomic-1", "--repo", "{REPO}", "--port", "0"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}}
+      ]
+    },
+    {
+      "id": "review-two-step", "group": "review", "fixture": "std",
+      "env": {"FAULTLINE_WITNESS_TWO_STEP": "1"},
+      "files": {"ci.log": "FAIL: two step\n"},
+      "steps": [
+        {"name": "approve then cancel", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "two-1", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve", "expect": 200, "message": "Human approval was recorded."}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "resume and freeze", "args": ["investigate", "--resume", "two-1", "--repo", "{REPO}", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 404}, {"do": "post", "path": "/freeze", "expect": 200, "message": "The approved witness is now frozen as a write-once record."}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}}
+      ]
+    },
+    {
+      "id": "review-token-and-form-refusals", "group": "review", "fixture": "std",
+      "files": {"ci.log": "FAIL: forms\n"},
+      "steps": [
+        {"name": "forms refused then cancel", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "forms-1", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "token": "wrong", "expect": 403}, {"do": "post", "path": "/approve-freeze", "omit": "acknowledged", "expect": 409}, {"do": "post", "path": "/freeze", "expect": 409}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}}
+      ]
+    },
+    {
+      "id": "review-frozen-fast-path", "group": "review", "fixture": "std",
+      "files": {"ci.log": "FAIL: fast path\n"},
+      "steps": [
+        {"name": "freeze", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "fast-1", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}},
+        {"name": "invalid port ignored", "args": ["investigate", "--resume", "fast-1", "--repo", "{REPO}", "--port", "not-a-port"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}},
+        {"name": "out of range port ignored", "args": ["investigate", "--resume", "fast-1", "--repo", "{REPO}", "--port", "99999"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}},
+        {"name": "id flag on resume is the resume id", "args": ["investigate", "--resume", "fast-1", "--id", "ignored-id", "--repo", "{REPO}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}}
+      ]
+    },
+    {
+      "id": "review-expected-digest", "group": "review", "fixture": "std",
+      "files": {"ci.log": "FAIL: digest\n"},
+      "steps": [
+        {"name": "freeze", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "dig-1", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}},
+        {"name": "wrong expected digest", "args": ["investigate", "--resume", "dig-1", "--repo", "{REPO}", "--expect-digest", "sha256:0000000000000000000000000000000000000000000000000000000000000000"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}},
+        {"name": "malformed expected digest", "args": ["investigate", "--resume", "dig-1", "--repo", "{REPO}", "--expect-digest", "nonsense"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}},
+        {"name": "correct expected digest binds the session", "args": ["investigate", "--resume", "dig-1", "--repo", "{REPO}", "--expect-digest", "{DIGEST:dig-1}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}},
+        {"name": "resume inherits the bound digest", "args": ["investigate", "--resume", "dig-1", "--repo", "{REPO}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}}
+      ]
+    },
+    {
+      "id": "review-resume-repository-mismatch", "group": "review", "fixture": "std", "extraRepos": ["other"],
+      "files": {"ci.log": "FAIL: mismatch\n"},
+      "steps": [
+        {"name": "create draft", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "mm-1", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "resume from another repository", "args": ["investigate", "--resume", "mm-1", "--repo", "{OTHER}", "--draft-store", "{REPO}/.faultline/incidents"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["--repo value that differs"]}}
+      ]
+    },
+    {
+      "id": "review-custom-stores", "group": "review", "fixture": "std",
+      "files": {"ci.log": "FAIL: stores\n"},
+      "steps": [
+        {"name": "custom witness and draft stores", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "st-1", "--store", "{SLOT}/witnesses", "--draft-store", "{SLOT}/drafts", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}}
+      ]
+    },
+
+    {
+      "id": "continuation-runtime-conflicts", "group": "continuation", "fixture": "ignored",
+      "tools": {},
+      "files": {"ci.log": "FAIL: conflict\n"},
+      "steps": [
+        {"name": "freeze with recorded runtime", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "cf-1", "--runtime", "node", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200}], "expect": {"exit": null, "stdoutContains": ["\"status\": \"GUIDED_"]}},
+        {"name": "image conflicts with the draft runtime", "args": ["investigate", "--resume", "cf-1", "--repo", "{REPO}", "--image", "{IMAGE:other}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["--image must match the digest-pinned runtime"]}},
+        {"name": "runtime alias on resume is not a conflict", "args": ["investigate", "--resume", "cf-1", "--repo", "{REPO}", "--runtime", "python"], "expect": {}}
+      ]
+    },
+    {
+      "id": "continuation-fakebox-dirty-resume", "group": "continuation", "fixture": "std",
+      "files": {"ci.log": "FAIL: fake docker flow\n"},
+      "steps": [
+        {"name": "freeze then localize with an image", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "fd-1", "--image", "{IMAGE:pinned}", "--command", "node check.mjs", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200}], "expect": {"exit": null, "stdoutContains": ["\"status\": \"GUIDED_"]}},
+        {"name": "resume after the run dirtied the worktree", "args": ["investigate", "--resume", "fd-1", "--repo", "{REPO}", "--image", "{IMAGE:pinned}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["READY Docker investigation preflight"]}}
+      ]
+    },
+    {
+      "id": "continuation-fakebox-clean-resume", "group": "continuation", "fixture": "ignored",
+      "files": {"ci.log": "FAIL: clean resume\n"},
+      "steps": [
+        {"name": "freeze then fakebox localization", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "cr-1", "--image", "{IMAGE:pinned}", "--command", "node check.mjs", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200}], "expect": {"exit": null, "stdoutContains": ["\"status\": \"GUIDED_"]}},
+        {"name": "resume again with the same image", "args": ["investigate", "--resume", "cr-1", "--repo", "{REPO}", "--image", "{IMAGE:pinned}"], "expect": {"exit": null, "stdoutContains": ["\"status\": \"GUIDED_"]}},
+        {"name": "resume with a different image hits the deterministic bundle name", "args": ["investigate", "--resume", "cr-1", "--repo", "{REPO}", "--image", "{IMAGE:other}"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Git proof bundle output already exists and will not be replaced"]}}
+      ]
+    },
+    {
+      "id": "continuation-late-refusals", "group": "continuation", "fixture": "ignored",
+      "files": {"ci.log": "FAIL: late\n"},
+      "steps": [
+        {"name": "freeze with an image", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "late-1", "--image", "{IMAGE:pinned}", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200}], "expect": {"exit": null, "stdoutContains": ["\"status\": \"GUIDED_"]}},
+        {"name": "missing ledger", "args": ["investigate", "--resume", "late-1", "--repo", "{REPO}", "--image", "{IMAGE:pinned}", "--ledger", "{IN}/no-ledger.json"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}},
+        {"name": "output outside the managed root", "args": ["investigate", "--resume", "late-1", "--repo", "{REPO}", "--image", "{IMAGE:pinned}", "--output", "{SLOT}/outside-bundle"], "expect": {"exit": null}},
+        {"name": "non-numeric max states", "args": ["investigate", "--resume", "late-1", "--repo", "{REPO}", "--image", "{IMAGE:pinned}", "--max-states", "abc"], "expect": {"exit": null}},
+        {"name": "zero max states", "args": ["investigate", "--resume", "late-1", "--repo", "{REPO}", "--image", "{IMAGE:pinned}", "--max-states", "0"], "expect": {"exit": null}},
+        {"name": "malformed image", "args": ["investigate", "--resume", "late-1", "--repo", "{REPO}", "--image", "not a digest"], "expect": {"exit": 1, "stdout": "", "stderrContains": ["FaultLine error:"]}}
+      ]
+    },
+    {
+      "id": "continuation-docker-daemon-down", "group": "continuation", "fixture": "ignored",
+      "tools": {"dockerDown": true},
+      "files": {"ci.log": "FAIL: daemon\n"},
+      "steps": [
+        {"name": "daemon unreachable after the freeze", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "down-1", "--image", "{IMAGE:pinned}", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["READY Docker investigation preflight"]}}
+      ]
+    },
+    {
+      "id": "continuation-configured-image", "group": "continuation", "fixture": "ignored",
+      "repoFiles": {".faultline/config.json": "{\"schemaVersion\":\"faultline.config.v1\",\"image\":\"node@sha256:0000000000000000000000000000000000000000000000000000000000000001\",\"snapshot\":{\"trackedFilesOnly\":false},\"stores\":{\"incidents\":\"{REPO}/.faultline/incidents\",\"witnesses\":\"{REPO}/.faultline/witnesses\",\"recordings\":\"{REPO}/.faultline/recordings\"}}\n"},
+      "files": {"ci.log": "FAIL: configured\n"},
+      "steps": [
+        {"name": "configured image is used", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "cfg-1", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200}], "expect": {"exit": null}}
+      ]
+    },
+
+    {
+      "id": "signals-sigterm-default-death", "group": "signals", "fixture": "std",
+      "files": {"ci.log": "FAIL: sigterm\n"},
+      "steps": [
+        {"name": "sigterm during the wait", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "term-1", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigterm"}], "expect": {"exitOrSignal": true, "stdout": ""}}
+      ]
+    },
+    {
+      "id": "signals-sigint-resume", "group": "signals", "fixture": "std",
+      "files": {"ci.log": "FAIL: sigint\n"},
+      "steps": [
+        {"name": "first sigint", "args": ["investigate", "--ci-log", "{IN}/ci.log", "--repo", "{REPO}", "--id", "int-1", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "resume then sigint again", "args": ["investigate", "--resume", "int-1", "--repo", "{REPO}", "--port", "0"], "script": [{"do": "ready"}, {"do": "sigint"}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["cancelled before freeze"]}},
+        {"name": "freeze by form after two cancellations", "args": ["investigate", "--resume", "int-1", "--repo", "{REPO}", "--port", "0"], "script": [{"do": "ready"}, {"do": "get", "expect": 200}, {"do": "post", "path": "/approve-freeze", "expect": 200}], "expect": {"exit": 1, "stdout": "", "stderrContains": ["Guided investigate needs a digest-pinned runtime"]}}
+      ]
+    }
+  ]
+}

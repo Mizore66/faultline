@@ -1,0 +1,224 @@
+{
+  "schema": "faultline.guided-investigate-capture.v1",
+  "caseId": "intake-input-refusals",
+  "group": "refusals",
+  "fixture": {
+    "commits": [
+      "b48d9d2ed9f254c586ec97923fb8552575c7103d",
+      "eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+    ],
+    "inputTreeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+  },
+  "steps": [
+    {
+      "name": "empty ci-log is cwd",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "",
+        "--repo",
+        "{SLOT}/repo"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (ci-log)\nFaultLine error: EISDIR: illegal operation on a directory, read\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "34e6f0a4598a5f0dc658e77273af0f25ecb42ebeb8b6b5ebb5742f9784195697",
+      "actions": [],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z"
+        ],
+        "node": [
+          "--version"
+        ]
+      },
+      "treeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+    },
+    {
+      "name": "missing ci-log file",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "{SLOT}/in/absent.log",
+        "--repo",
+        "{SLOT}/repo"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (ci-log)\nFaultLine error: ENOENT: no such file or directory, open '{SLOT}/in/absent.log'\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "feafb200cbf07a532953178029b0f6ae479f337f6846f563cdff966be312261a",
+      "actions": [],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z"
+        ],
+        "node": [
+          "--version"
+        ]
+      },
+      "treeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+    },
+    {
+      "name": "resume missing draft",
+      "args": [
+        "investigate",
+        "--resume",
+        "no-such-draft",
+        "--repo",
+        "{SLOT}/repo"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (resume no-such-draft)\nFaultLine error: Incident draft store directory does not exist: {SLOT}/repo/.faultline\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "3515ebdea7a7d74edac1f738e72be1b0e2d92b1e5a5d6acd805f33e98c3feba6",
+      "actions": [],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z"
+        ],
+        "node": [
+          "--version"
+        ]
+      },
+      "treeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+    },
+    {
+      "name": "unsafe id",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "{SLOT}/in/ci.log",
+        "--repo",
+        "{SLOT}/repo",
+        "--id",
+        "../escape"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine error: [\n  {\n    \"validation\": \"regex\",\n    \"code\": \"invalid_string\",\n    \"message\": \"draftId must be a safe identifier\",\n    \"path\": []\n  }\n]\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e2e1a40d1fb2333faea1d0ca462d93b96ca0dc5589a34550c6db07b355479200",
+      "actions": [],
+      "tools": {
+        "docker": [],
+        "git": [],
+        "node": []
+      },
+      "treeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+    },
+    {
+      "name": "unknown runtime",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "{SLOT}/in/ci.log",
+        "--repo",
+        "{SLOT}/repo",
+        "--runtime",
+        "fortran",
+        "--id",
+        "rt-bad"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\nFaultLine guided investigate: INTAKE (ci-log)\nFaultLine error: Unknown curated runtime \"fortran\". Choose node, python, or go.\nNext: pnpm fl help\n",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "833ba99c1618c10452448dd7f29ea72606ee5fa78ac099d9652a1d7acb29b005",
+      "actions": [],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z"
+        ],
+        "node": [
+          "--version"
+        ]
+      },
+      "treeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+    }
+  ],
+  "finalTree": [
+    {
+      "path": "in",
+      "kind": "dir",
+      "mode": "755",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "in/ci.log",
+      "kind": "file",
+      "mode": "644",
+      "size": 5,
+      "sha256": "4f8e9e45f8a9e1843b81eaf3bdf52a6b778d415d23bf985774a9d34a43f69bd5",
+      "target": "",
+      "content": "FAIL\n",
+      "base64": ""
+    },
+    {
+      "path": "repo",
+      "kind": "dir",
+      "mode": "755",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/README.md",
+      "kind": "file",
+      "mode": "644",
+      "size": 14,
+      "sha256": "81253e9217f239713c3a381a9ad4a81af64cc4062be75dc2ba0e53021ca2db7d",
+      "target": "",
+      "content": "guided oracle\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/state.txt",
+      "kind": "file",
+      "mode": "644",
+      "size": 4,
+      "sha256": "1d7a363ce12430881ec56c9cf1409c49c491043618e598c356e2959040872f5a",
+      "target": "",
+      "content": "bad\n",
+      "base64": ""
+    }
+  ],
+  "finalTreeSha256": "ae3c1dd60d0c50fd4fdcde797e404ed2ab32739c6ee64c1c179f9094ebbb8ac2"
+}

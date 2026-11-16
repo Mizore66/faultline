@@ -253,7 +253,12 @@ func relativeAgeFromISO(iso string, nowMs float64) string {
 
 // tryGit runs git with the frozen five-second timeout and 2 MiB buffer and
 // returns the trimmed stdout, or false on any failure.
-func tryGit(repository string, args ...string) (string, bool) {
+func tryGit(repository string, args ...string) (string, bool) { return reviewGit(repository, args...) }
+
+// reviewGit is the read-only git runner behind tryGit; tests replace it.
+var reviewGit = execReviewGit
+
+func execReviewGit(repository string, args ...string) (string, bool) {
 	out, err := nodeproc.ExecFileSync("git", append([]string{"-C", repository}, args...),
 		nodeproc.SpawnSyncOptions{Timeout: 5 * time.Second, MaxBuffer: 2 << 20})
 	if err != nil {
@@ -458,7 +463,12 @@ func RenderWitnessReviewHTML(review jsjson.Value, draft *jsjson.Value, credentia
 }
 
 func renderWitnessReviewPage(review jsjson.Value, draft *jsjson.Value, token string, twoStep bool, state witnessReviewPageState) string {
-	view := buildWitnessReviewView(review, draft, state)
+	return renderWitnessReviewPageWithView(review, buildWitnessReviewView(review, draft, state), token, twoStep, state)
+}
+
+// renderWitnessReviewPageWithView renders an already humanized view, so a
+// caller that humanized while reading state does not humanize again.
+func renderWitnessReviewPageWithView(review jsjson.Value, view witnessReviewView, token string, twoStep bool, state witnessReviewPageState) string {
 	e := EscapeHTML
 	noticeHTML := ""
 	if state.Notice != nil {

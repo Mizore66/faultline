@@ -110,10 +110,7 @@ func investigateCommand(e *env, args []string) error {
 	_, ciLog := option(args, "--ci-log")
 	_, resume := option(args, "--resume")
 	if ciLog || resume {
-		if first == "git" || first == "turns" {
-			return fail("Guided investigate (--ci-log / --resume) cannot be combined with `fl investigate git` or `fl investigate turns`.")
-		}
-		return fail("not yet ported: investigate --ci-log/--resume")
+		return guidedInvestigateCommand(e, args)
 	}
 	if first == "turns" {
 		return turnsCommand(e, args)

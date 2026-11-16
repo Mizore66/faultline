@@ -1,0 +1,99 @@
+{
+  "schema": "faultline.guided-investigate-capture.v1",
+  "caseId": "preflight-blocked-no-node",
+  "group": "refusals",
+  "replay": "FULL",
+  "fixture": {
+    "commits": [
+      "b48d9d2ed9f254c586ec97923fb8552575c7103d",
+      "eebd738dc93aa99cb2b487c5d2b0dc6e9f1dc3a0"
+    ],
+    "inputTreeSha256": "344ceb3eef9bfba3bef9b35fa188e3e3769f6215681fd96a4796fe717a1aacdc"
+  },
+  "templates": [],
+  "steps": [
+    {
+      "name": "blocked no node",
+      "args": [
+        "investigate",
+        "--ci-log",
+        "{SLOT}/in/ci.log",
+        "--repo",
+        "{SLOT}/repo"
+      ],
+      "exit": 1,
+      "signal": null,
+      "stdout": "{\n  \"status\": \"PREFLIGHT_BLOCKED\",\n  \"doctor\": {\n    \"schemaVersion\": \"faultline.doctor.v1\",\n    \"repository\": \"{SLOT}/repo\",\n    \"repositoryRoot\": \"{SLOT}/repo\",\n    \"diagnostics\": [\n      {\n        \"id\": \"git\",\n        \"status\": \"READY\",\n        \"summary\": \"Git is available.\",\n        \"observation\": \"git version 2.99.0\",\n        \"remediation\": null\n      },\n      {\n        \"id\": \"repository\",\n        \"status\": \"READY\",\n        \"summary\": \"A Git repository was detected.\",\n        \"observation\": \"{SLOT}/repo\",\n        \"remediation\": null\n      },\n      {\n        \"id\": \"worktree\",\n        \"status\": \"READY\",\n        \"summary\": \"The Git worktree is clean.\",\n        \"observation\": \"No tracked or untracked changes reported by Git.\",\n        \"remediation\": null\n      },\n      {\n        \"id\": \"node\",\n        \"status\": \"UNAVAILABLE\",\n        \"summary\": \"Node.js is unavailable to FaultLine.\",\n        \"observation\": \"The command could not be started or did not return an exit code.\",\n        \"remediation\": \"Install Node.js 22 or newer and make it available on PATH, then run fl doctor again.\"\n      },\n      {\n        \"id\": \"docker-cli\",\n        \"status\": \"READY\",\n        \"summary\": \"The Docker CLI is available.\",\n        \"observation\": \"Docker version 27.0.0, build fake\",\n        \"remediation\": null\n      },\n      {\n        \"id\": \"docker-daemon\",\n        \"status\": \"READY\",\n        \"summary\": \"The Docker daemon is reachable.\",\n        \"observation\": \"27.0.0\",\n        \"remediation\": null\n      },\n      {\n        \"id\": \"runtime\",\n        \"status\": \"INAPPLICABLE\",\n        \"summary\": \"FaultLine could not infer a likely runtime family from conventional root markers.\",\n        \"observation\": null,\n        \"remediation\": \"Choose an explicit digest-pinned image and witness command; automatic image selection is deliberately not attempted.\"\n      }\n    ],\n    \"likelyRuntime\": {\n      \"kind\": \"UNKNOWN\",\n      \"markers\": [],\n      \"imageFamily\": null\n    },\n    \"imageSelection\": \"NOT_CHECKED\",\n    \"dockerInvestigationPreflight\": \"UNAVAILABLE\",\n    \"limitations\": [\n      \"This is a local prerequisite check, not a proof of behavior or provenance.\",\n      \"FaultLine did not pull or inspect a container image, execute a witness, access the network, or write to the repository.\",\n      \"Likely runtime detection uses root-file markers only; choose and digest-pin the actual image explicitly.\"\n    ]\n  },\n  \"proofReady\": false,\n  \"draft\": null,\n  \"draftPath\": null,\n  \"reviewUrl\": null,\n  \"retainedFrozenDigest\": null,\n  \"continuation\": null,\n  \"nextCommands\": [\n    \"Install Node.js 22+\",\n    \"fl doctor --repo .\"\n  ],\n  \"note\": \"Local CLI preflight failed; fix Node before continuing the guided investigate flow.\"\n}\n",
+      "stderr": "FaultLine guided investigate: PREFLIGHT\n",
+      "stdoutSha256": "bf27bd861aeab3d2c5a13b5a393c5f2cbaf06e1d0746c877063471ebbe6ecd29",
+      "stderrSha256": "c0cfe1962b6e65762b45bf5a97034aea22eb62f4cf456187d6443f565e77017e",
+      "actions": [],
+      "tools": {
+        "docker": [
+          "--version",
+          "info\u001f--format\u001f{{.ServerVersion}}"
+        ],
+        "git": [
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f--version",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001frev-parse\u001f--show-toplevel",
+          "-c\u001fcore.hooksPath=/nonexistent/faultline-hooks\u001f-c\u001fcore.fsmonitor=false\u001f-c\u001fcore.useBuiltinFSMonitor=false\u001f-c\u001fcore.untrackedCache=false\u001f-c\u001fcore.preloadIndex=false\u001f-c\u001ffilter.lfs.process=\u001f-c\u001ffilter.lfs.smudge=\u001f-c\u001ffilter.lfs.required=false\u001f-c\u001fdiff.external=\u001f-c\u001fsubmodule.recurse=false\u001f-c\u001ffetch.recurseSubmodules=false\u001f-c\u001fprotocol.allow=never\u001f-c\u001fprotocol.file.allow=never\u001f-c\u001fprotocol.ext.allow=never\u001f-c\u001fprotocol.git.allow=never\u001f-c\u001fprotocol.ssh.allow=never\u001f-c\u001fprotocol.http.allow=never\u001f-c\u001fprotocol.https.allow=never\u001f-c\u001fcore.autocrlf=false\u001f-C\u001f{SLOT}/repo\u001fstatus\u001f--porcelain=v1\u001f--untracked-files=all\u001f-z"
+        ],
+        "node": []
+      },
+      "treeSha256": "344ceb3eef9bfba3bef9b35fa188e3e3769f6215681fd96a4796fe717a1aacdc"
+    }
+  ],
+  "finalTree": [
+    {
+      "path": "in",
+      "kind": "dir",
+      "mode": "755",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "in/ci.log",
+      "kind": "file",
+      "mode": "644",
+      "size": 5,
+      "sha256": "4f8e9e45f8a9e1843b81eaf3bdf52a6b778d415d23bf985774a9d34a43f69bd5",
+      "target": "",
+      "content": "FAIL\n",
+      "base64": ""
+    },
+    {
+      "path": "repo",
+      "kind": "dir",
+      "mode": "755",
+      "size": 0,
+      "sha256": "",
+      "target": "",
+      "content": "",
+      "base64": ""
+    },
+    {
+      "path": "repo/README.md",
+      "kind": "file",
+      "mode": "644",
+      "size": 14,
+      "sha256": "81253e9217f239713c3a381a9ad4a81af64cc4062be75dc2ba0e53021ca2db7d",
+      "target": "",
+      "content": "guided oracle\n",
+      "base64": ""
+    },
+    {
+      "path": "repo/state.txt",
+      "kind": "file",
+      "mode": "644",
+      "size": 4,
+      "sha256": "1d7a363ce12430881ec56c9cf1409c49c491043618e598c356e2959040872f5a",
+      "target": "",
+      "content": "bad\n",
+      "base64": ""
+    }
+  ],
+  "finalTreeSha256": "344ceb3eef9bfba3bef9b35fa188e3e3769f6215681fd96a4796fe717a1aacdc"
+}

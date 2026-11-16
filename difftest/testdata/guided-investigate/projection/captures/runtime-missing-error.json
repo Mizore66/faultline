@@ -1,0 +1,73 @@
+{
+  "id": "runtime-missing-error",
+  "outcome": {
+    "kind": "error",
+    "message": "Guided investigate needs a digest-pinned runtime before localization. Pass --runtime <node|python|go> after pulling the curated tag, or --image <digest-pinned-image>."
+  },
+  "events": [
+    {
+      "kind": "phase",
+      "args": [
+        "PREFLIGHT"
+      ]
+    },
+    {
+      "kind": "doctor",
+      "args": [
+        {
+          "$t": "object",
+          "members": [
+            [
+              "repository",
+              "$ROOT/repo"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "INTAKE",
+        "resume d1"
+      ]
+    },
+    {
+      "kind": "readDraft",
+      "args": [
+        "$ROOT/repo/.faultline/incidents",
+        "d1"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "WITNESS_REVIEW"
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        {
+          "$t": "undefined"
+        }
+      ]
+    },
+    {
+      "kind": "verify",
+      "args": [
+        "$ROOT/repo/.faultline/witnesses",
+        "d1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "kind": "phase",
+      "args": [
+        "RUNTIME_SELECTION"
+      ]
+    }
+  ]
+}

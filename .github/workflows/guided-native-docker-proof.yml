@@ -1,0 +1,237 @@
+name: Guided native Docker proof
+
+# Narrow Linux/Docker qualification of the ordinary Go `fl investigate --ci-log` flow: the real ordinary binary,
+# the real Docker daemon and the digest-pinned node:22-alpine image, a real loopback human review/freeze, six
+# native sandbox executions, a portable proof bundle and an independent second `fl verify`. It runs ONLY on
+# pushes to the isolated proof branch that touch its inputs (and by manual dispatch once the file is on the
+# default branch). It is not a PR/main workflow, changes no existing check, uses no secrets and writes nothing
+# back to the repository. A missing Docker/image, a skipped or unnamed test, or any failed receipt fails the job.
+#
+# Evidence: RUNNER_TEMP/gnp/evidence is written by the test itself (fixture repository, streams, approval
+# and frozen chain, complete proof bundle, ROOT, Docker/version receipts, container inventory, outcome receipt).
+# RUNNER_TEMP/gnp/receipts holds the workflow's own logs, exit codes and per-step outcomes. Both are
+# uploaded on success, failure and cancellation.
+
+on:
+  push:
+    branches: [go-guided-linux-proof-20261115]
+    paths:
+      - ".github/workflows/guided-native-docker-proof.yml"
+      - ".github/scripts/check-skips.sh"
+      - "internal/cli/**"
+      - "internal/guided/**"
+      - "internal/proofview/**"
+      - "internal/bundle/**"
+      - "internal/witness/**"
+      - "internal/incident/**"
+      - "internal/gitinv/**"
+      - "internal/sandbox/**"
+      - "internal/doctor/**"
+      - "difftest/servefixture/**"
+      - "cmd/fl/**"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guided-native-docker-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROOF_IMAGE: node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+  PROOF_DIGEST: sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+  PROOF_TEST: TestNativeGuidedInvestigateDocker
+
+jobs:
+  native-docker-proof:
+    name: native Linux Docker guided proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Prepare owned evidence and receipt directories
+        id: base
+        # Runs before any tool setup so receipts, checksums and the upload exist even if setup-go/setup-node fail.
+        run: |
+          set -euo pipefail
+          base="$RUNNER_TEMP/gnp"
+          test ! -e "$base"
+          mkdir -p "$base/receipts"
+          # The evidence directory is created (empty) by the test's own requirement; it must not pre-exist.
+          echo "GNP_BASE=$base" >> "$GITHUB_ENV"
+          echo "RC=$base/receipts" >> "$GITHUB_ENV"
+          echo "FAULTLINE_NATIVE_PROOF_EVIDENCE=$base/evidence" >> "$GITHUB_ENV"
+          git rev-parse HEAD | tee "$base/receipts/source-head.txt"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf 'run=%s attempt=%s event=%s ref=%s sha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$GITHUB_SHA" | tee "$base/receipts/run.txt"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.27.4"
+      # Plain Node: the repository's packageManager field must not trigger setup-node's package-manager cache (hosted attempt 1).
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22.22.2
+          package-manager-cache: false
+
+      - name: Preflight Docker, Git, Node, Go and the exact image
+        id: preflight
+        run: |
+          set -euo pipefail
+          # A missing prerequisite fails here; nothing is skipped.
+          node --version | tee "$RC/node-version.txt"
+          test "$(node --version)" = "v22.22.2"
+          go version | tee "$RC/go-version.txt"
+          case "$(go version)" in *"go1.27.4 linux/"*) ;; *) echo "::error title=go::unexpected go: $(go version)"; exit 1;; esac
+          git --version | tee "$RC/git-version.txt"
+          command -v docker | tee "$RC/docker-path.txt"
+          docker --version | tee "$RC/docker-cli-version.txt"
+          docker version | tee "$RC/docker-version.txt"
+          if grep -qi podman "$RC/docker-version.txt"; then echo "::error title=docker::Podman is not Docker"; exit 1; fi
+          docker info | tee "$RC/docker-info.txt"
+          uname -srm | tee "$RC/uname.txt"
+          docker pull "$PROOF_IMAGE" 2>&1 | tee "$RC/docker-pull.log"
+          docker image inspect "$PROOF_IMAGE" > "$RC/image-inspect.json"
+          docker image inspect --format '{{.Id}}' "$PROOF_IMAGE" | tee "$RC/image-id.txt"
+          docker image inspect --format '{{json .RepoDigests}}' "$PROOF_IMAGE" | tee "$RC/image-repodigests.json"
+          grep -q "@$PROOF_DIGEST" "$RC/image-repodigests.json"
+          docker ps -a --no-trunc --format '{{.ID}}|{{.Names}}|{{.Image}}' | sort | tee "$RC/containers-preflight.txt"
+
+      - name: Enumerate the exact named test under the native tag
+        id: enumerate
+        run: |
+          set -euo pipefail
+          go test -tags faultline_native_docker -list '^TestNativeGuidedInvestigateDocker$' ./internal/cli > "$RC/enumerate.out"
+          cat "$RC/enumerate.out"
+          grep -E '^Test' "$RC/enumerate.out" > "$RC/native.list"
+          test "$(cat "$RC/native.list")" = "$PROOF_TEST"
+          test "$(wc -l < "$RC/native.list")" = 1
+          # The ordinary and faultline_test builds must not contain the native test.
+          go test -list '^TestNativeGuidedInvestigateDocker$' ./internal/cli > "$RC/enumerate-ordinary.out"
+          if grep -q '^TestNativeGuidedInvestigateDocker$' "$RC/enumerate-ordinary.out"; then echo "::error title=eligibility::native test is in the ordinary build"; exit 1; fi
+
+      - name: Run the native guided proof
+        id: run
+        run: |
+          set -uo pipefail
+          status=0
+          go test -tags faultline_native_docker -count=1 -p 1 -timeout=195s -v \
+            -run '^TestNativeGuidedInvestigateDocker$' ./internal/cli > "$RC/native-test.log" 2>&1 || status=$?
+          echo "$status" > "$RC/native-test.exit"
+          cat "$RC/native-test.log"
+          exit "$status"
+
+      - name: Terminal guard (named PASS, final PASS, exit 0, no FAIL or SKIP)
+        id: guard
+        if: always()
+        run: |
+          set -euo pipefail
+          test -s "$RC/native-test.log"
+          test "$(tr -d '[:space:]' < "$RC/native-test.exit")" = 0
+          .github/scripts/check-skips.sh "$RC/native-test.log" '^$' "$RC/native.list"
+          grep -qE -- "^--- PASS: $PROOF_TEST " "$RC/native-test.log"
+          grep -qx 'PASS' "$RC/native-test.log"
+          grep -qE '^ok[[:space:]]+github.com/Mizore66/faultline/internal/cli[[:space:]]' "$RC/native-test.log"
+          if grep -E -- '^(FAIL|SKIP)|--- (FAIL|SKIP):' "$RC/native-test.log"; then echo "::error title=native proof::FAIL or SKIP in log"; exit 1; fi
+          test -s "$FAULTLINE_NATIVE_PROOF_EVIDENCE/outcome-receipt.json"
+          grep -q '"passed": true' "$FAULTLINE_NATIVE_PROOF_EVIDENCE/outcome-receipt.json"
+          test -s "$FAULTLINE_NATIVE_PROOF_EVIDENCE/ROOT.expected.txt"
+          test -d "$FAULTLINE_NATIVE_PROOF_EVIDENCE/proof-bundle"
+          grep -qx 'Integrity: VALID' "$FAULTLINE_NATIVE_PROOF_EVIDENCE/receipts/fl-verify.stdout"
+          grep -qx 'External root: MATCH' "$FAULTLINE_NATIVE_PROOF_EVIDENCE/receipts/fl-verify.stdout"
+
+      - name: Container inventory after the run
+        id: after
+        if: always()
+        run: |
+          set -euo pipefail
+          docker ps -a --no-trunc --format '{{.ID}}|{{.Names}}|{{.Image}}' | sort | tee "$RC/containers-after.txt"
+          # Only containers absent from the preflight inventory matter; unrelated runner containers are not judged.
+          comm -13 <(cut -d'|' -f1 "$RC/containers-preflight.txt") <(cut -d'|' -f1 "$RC/containers-after.txt") > "$RC/containers-new-ids.txt"
+          test ! -s "$RC/containers-new-ids.txt"
+
+      - name: Write the run receipt and status
+        id: receipt
+        if: always()
+        env:
+          O_BASE: ${{ steps.base.outcome }}
+          O_PREFLIGHT: ${{ steps.preflight.outcome }}
+          O_ENUMERATE: ${{ steps.enumerate.outcome }}
+          O_RUN: ${{ steps.run.outcome }}
+          O_GUARD: ${{ steps.guard.outcome }}
+          O_AFTER: ${{ steps.after.outcome }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RC"
+          {
+            printf '{\n'
+            printf '  "workflow": "guided-native-docker-proof",\n'
+            printf '  "sourceSha": "%s",\n' "$GITHUB_SHA"
+            printf '  "runId": "%s",\n  "runAttempt": "%s",\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf '  "image": "%s",\n' "$PROOF_IMAGE"
+            printf '  "jobStatusAtReceipt": "%s",\n' "$JOB_STATUS"
+            printf '  "outcomes": {"base": "%s", "preflight": "%s", "enumerate": "%s", "run": "%s", "guard": "%s", "after": "%s"},\n' \
+              "$O_BASE" "$O_PREFLIGHT" "$O_ENUMERATE" "$O_RUN" "$O_GUARD" "$O_AFTER"
+            printf '  "nativeTestExit": "%s"\n' "$(tr -d '[:space:]' < "$RC/native-test.exit" 2>/dev/null || echo absent)"
+            printf '}\n'
+          } > "$RC/status.json"
+          cat "$RC/status.json"
+
+      # Hashing or retention failure fails this step (and the job); the upload below still runs.
+      - name: Checksum list of the retained evidence (does not list itself)
+        id: hashes
+        if: always()
+        run: |
+          set -euo pipefail
+          test -d "$GNP_BASE"
+          cd "$GNP_BASE"
+          # The list is staged outside the hashed tree, so it never lists itself or a temporary.
+          stage="$RUNNER_TEMP/gnp-sha256sums.staging"
+          test ! -e "$stage"
+          find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > "$stage"
+          test -s "$stage"
+          mv "$stage" "$RC/sha256sums.txt"
+          # Self-validation of the retained list against the filesystem (the list is not in itself).
+          if grep -q 'sha256sums' "$RC/sha256sums.txt"; then echo "::error title=checksums::list names itself or a temporary"; exit 1; fi
+          sha256sum -c --strict "$RC/sha256sums.txt" > "$RC/sha256sums.check.log"
+          test -d "$FAULTLINE_NATIVE_PROOF_EVIDENCE"
+
+      - name: Upload logs and the native evidence root
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: guided-native-docker-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gnp
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Final verdict (every stage must have succeeded)
+        if: always()
+        env:
+          O_BASE: ${{ steps.base.outcome }}
+          O_PREFLIGHT: ${{ steps.preflight.outcome }}
+          O_ENUMERATE: ${{ steps.enumerate.outcome }}
+          O_RUN: ${{ steps.run.outcome }}
+          O_GUARD: ${{ steps.guard.outcome }}
+          O_AFTER: ${{ steps.after.outcome }}
+          O_RECEIPT: ${{ steps.receipt.outcome }}
+          O_HASHES: ${{ steps.hashes.outcome }}
+          O_UPLOAD: ${{ steps.upload.outcome }}
+        run: |
+          set -eu
+          for o in "$O_BASE" "$O_PREFLIGHT" "$O_ENUMERATE" "$O_RUN" "$O_GUARD" "$O_AFTER" "$O_RECEIPT" "$O_HASHES" "$O_UPLOAD"; do
+            if [ "$o" != success ]; then
+              echo "::error title=native proof not accepted::stage outcomes: base=$O_BASE preflight=$O_PREFLIGHT enumerate=$O_ENUMERATE run=$O_RUN guard=$O_GUARD after=$O_AFTER receipt=$O_RECEIPT hashes=$O_HASHES upload=$O_UPLOAD"
+              exit 1
+            fi
+          done
+          echo "native Linux Docker guided proof accepted for $GITHUB_SHA"
