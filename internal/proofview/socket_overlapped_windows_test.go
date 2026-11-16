@@ -923,30 +923,10 @@ func ovPostOwned(r *ovRun, name string, rc syscall.RawConn, seed int, cuts []int
 	return op, hex.EncodeToString(h[:]), len(data), err
 }
 
-// ovScenarioPin is a SMOKE test only. The op keeps strong references to the
-// payload and Go's heap does not move objects, so a missing pin would NOT make
-// this fail; it is not proof of pin correctness. The pending and sync paths are
-// reported as observed or UNKNOWN.
-func ovScenarioPin(r *ovRun) error {
-	pr, err := r.newPair()
-	if err != nil {
-		return err
-	}
-	rc, err := pr.w.SyscallConn()
-	if err != nil {
-		return err
-	}
-	if _, err := newSocketTryWriter(pr.w); err != nil {
-		return fmt.Errorf("newSocketTryWriter: %w", err)
-	}
-	gate := make(chan struct{})
-	readCh := r.startReader(pr.p, gate)
-	op, wantSHA, wantLen, err := ovPostOwned(r, "pin", rc, 5, []int{1<<20 + 13, 3<<20 + 13, 3<<20 + 13 + 512<<10 + 7, 8 << 20})
-	r.ev.event("submit_returned")
-	if err != nil {
-		return err
-	}
-	for i := 0; i < 8; i++ {
+// ovGCRounds is the existing GC/churn loop of the pin child, unchanged.
+func ovGCRounds() int {
+	const rounds = 8
+	for i := 0; i < rounds; i++ {
 		runtime.GC()
 		churn := make([][]byte, 0, 16)
 		for k := 0; k < 16; k++ {
@@ -956,16 +936,146 @@ func ovScenarioPin(r *ovRun) error {
 		}
 		_ = churn
 	}
+	return rounds
+}
+
+// ovStillPending is a non-waiting observation: native997 at post, event not
+// signaled, event not closed/released, done not closed.
+func ovStillPending(op *ovOp) (bool, bool, error) {
+	sig, rel, err := op.peekSignaled()
+	if err != nil {
+		return false, sig, err
+	}
+	return op.postClass == "native997" && !sig && !rel && !ovClosed(op.done), sig, nil
+}
+
+// ovScenarioPin is a pin-lifetime/pending-completion SMOKE test. The op keeps
+// strong references to the payload and Go's heap does not move objects, so a
+// missing pin would NOT make this fail; it is not proof of pin correctness.
+// It uses the same reviewed unbuffered diagnostic configuration as the paused
+// child and the original single 8MiB payload (no retry, enlargement or sleep).
+// It directly requires: (1) pending (native997, unsignaled) before reader
+// release, (2) an exact ordinary Go READ of a peer-written marker on the
+// custom-write-owned socket while that send is still pending (no ordinary Go
+// write on that socket), (3) GC rounds while still pending with the payload
+// pins unreleased, then (4) full successful native completion after the reader
+// is released. A missing condition fails INCONCLUSIVE. This does not claim the
+// API guarantees a pending outcome.
+func ovScenarioPin(r *ovRun) error {
+	pr, err := r.newPair()
+	if err != nil {
+		return err
+	}
+	rc, err := pr.w.SyscallConn()
+	if err != nil {
+		return err
+	}
+	if err := ovConfigureUnbuffered(r, pr); err != nil {
+		return err
+	}
+	if _, err := newSocketTryWriter(pr.w); err != nil {
+		return fmt.Errorf("newSocketTryWriter: %w", err)
+	}
+	gate := make(chan struct{})
+	readCh := r.startReader(pr.p, gate)
+	marker := []byte("PIN-CLIENT-MARKER-20")
+	srvCh := make(chan ovRead, 1)
+	r.spawn(func() { // ordinary bounded Go READ on the custom-write-owned socket
+		if err := pr.w.SetReadDeadline(time.Now().Add(ovReadDeadline)); err != nil {
+			srvCh <- ovRead{err: err}
+			return
+		}
+		m := make([]byte, len(marker))
+		_, err := io.ReadFull(pr.w, m)
+		srvCh <- ovRead{b: m, err: err}
+	})
+	op, wantSHA, wantLen, err := ovPostOwned(r, "pin", rc, 5, []int{1<<20 + 13, 3<<20 + 13, 3<<20 + 13 + 512<<10 + 7, 8 << 20})
+	r.ev.event("submit_returned")
+	if err != nil {
+		return err
+	}
+	r.ev.set("post_class_at_post", op.postClass)
+	r.ev.set("native_class", op.postClass)
+	pending, sig, perr := ovStillPending(op)
+	if perr != nil {
+		return fmt.Errorf("peek event: %w", perr)
+	}
+	r.ev.set("event_signaled_at_peek", sig)
+	r.ev.set("pending_observed", pending)
+	r.ev.set("go_read_while_pending", false)
+	r.ev.set("pending_after_go_read", false)
+	r.ev.set("gc_while_pending", false)
+	r.ev.set("pending_after_gc", false)
+	r.ev.set("completed_before_reader_release", ovClosed(op.done))
+	if !pending {
+		r.ev.set("coverage_pending_pin_path", "UNKNOWN: pending path not observed")
+		return fmt.Errorf("INCONCLUSIVE sizing: no pending overlapped operation observed (post=%s signaled=%v); pending completion not qualified, no retry/enlargement", op.postClass, sig)
+	}
+
+	// (2) Ordinary Go read of an exact peer-written marker while still pending.
+	if err := pr.p.SetWriteDeadline(time.Now().Add(ovReadDeadline)); err != nil {
+		return fmt.Errorf("peer SetWriteDeadline: %w", err)
+	}
+	if k, err := pr.p.Write(marker); err != nil || k != len(marker) {
+		return fmt.Errorf("peer marker write: n=%d err=%v", k, err)
+	}
+	sr, err := ovRecv(srvCh, "server marker read")
+	if err != nil {
+		return err
+	}
+	r.ev.event("go_read_marker_while_pending")
+	if sr.err != nil || !bytes.Equal(sr.b, marker) {
+		return fmt.Errorf("go read marker: err=%v data=%q", sr.err, sr.b)
+	}
+	r.ev.set("go_read_marker_len", len(sr.b))
+	pendingAfterRead, _, perr := ovStillPending(op)
+	if perr != nil {
+		return fmt.Errorf("peek event after read: %w", perr)
+	}
+	r.ev.set("pending_after_go_read", pendingAfterRead)
+	r.ev.set("go_read_while_pending", pendingAfterRead)
+	if !pendingAfterRead {
+		return errors.New("INCONCLUSIVE coverage: custom send no longer pending after Go read; marker read not proven concurrent, no retry")
+	}
+
+	// (3) Existing GC rounds while the op is pending and its pins are held.
+	pinsBefore, closedBefore := r.pinsReleased.Load(), r.eventsClosed.Load()
+	rounds := ovGCRounds()
 	r.ev.event("gc_rounds_done")
+	pendingAfterGC, _, perr := ovStillPending(op)
+	if perr != nil {
+		return fmt.Errorf("peek event after gc: %w", perr)
+	}
+	pinsAfter, closedAfter := r.pinsReleased.Load(), r.eventsClosed.Load()
+	r.ev.set("gc_rounds", rounds)
+	r.ev.set("pending_after_gc", pendingAfterGC)
+	r.ev.set("pins_released_before_reader_release", pinsAfter)
+	r.ev.set("events_closed_before_reader_release", closedAfter)
+	pinsHeld := pinsBefore == 0 && pinsAfter == 0 && closedBefore == 0 && closedAfter == 0
+	r.ev.set("pins_held_during_gc", pinsHeld)
+	r.ev.set("gc_while_pending", pendingAfterGC && pinsHeld)
 	doneBeforeRelease := ovClosed(op.done)
+	r.ev.set("completed_before_reader_release", doneBeforeRelease)
+	if !pendingAfterGC || !pinsHeld || doneBeforeRelease {
+		return fmt.Errorf("INCONCLUSIVE coverage: GC rounds not proven during pending with pins held (pending=%v pinsHeld=%v done=%v), no retry", pendingAfterGC, pinsHeld, doneBeforeRelease)
+	}
+	r.ev.set("coverage_pending_pin_path", "observed: native997 pending across Go read and 8 GC rounds with caller refs dropped and pins held")
+
+	// (4) Release the peer reader; require full successful native completion.
 	close(gate)
 	r.ev.event("reader_released")
 	if err := r.waitDone(op); err != nil {
 		return err
 	}
+	r.ev.set("completion_after_reader_release", true)
+	r.ev.set("custom_send", op.describe())
 	if err := op.requireFull(); err != nil {
 		return err
 	}
+	if !(op.seqFence > 0 && op.seqFence < op.seqUnpin && op.seqUnpin < op.seqClose) {
+		return fmt.Errorf("order violation: fence=%d unpin=%d close_event=%d", op.seqFence, op.seqUnpin, op.seqClose)
+	}
+	r.ev.set("order_fence_unpin_closeevent", []int{op.seqFence, op.seqUnpin, op.seqClose})
 	if err := pr.w.CloseWrite(); err != nil {
 		return fmt.Errorf("CloseWrite: %w", err)
 	}
@@ -977,19 +1087,6 @@ func ovScenarioPin(r *ovRun) error {
 		return fmt.Errorf("peer read: %w", rd.err)
 	}
 	gotSHA := ovSum(rd.b)
-	r.ev.set("custom_send", op.describe())
-	r.ev.set("native_class", op.postClass)
-	r.ev.set("completed_before_reader_release", doneBeforeRelease)
-	if op.postClass == "native997" && !doneBeforeRelease {
-		r.ev.set("coverage_pending_pin_path", "observed: op still pending after 8 GC rounds with caller refs dropped")
-	} else {
-		r.ev.set("coverage_pending_pin_path", "UNKNOWN: pending path not observed")
-	}
-	if op.postClass == "native0" {
-		r.ev.set("coverage_sync_success_path", "observed")
-	} else {
-		r.ev.set("coverage_sync_success_path", "UNKNOWN: not observed")
-	}
 	r.ev.set("want_len", wantLen)
 	r.ev.set("got_len", len(rd.b))
 	r.ev.set("want_sha256", wantSHA)
@@ -1002,25 +1099,12 @@ func ovScenarioPin(r *ovRun) error {
 
 // ---- scenario 3: paused reader, cancel + close ----
 
-func ovAcceptedCloseReadErr(err error) bool {
-	if err == nil {
-		return true
-	}
-	var en syscall.Errno
-	return errors.As(err, &en) && (en == ovWSAECONNRESET || en == ovWSAECONNABORTED)
-}
-
-func ovScenarioPausedClose(r *ovRun) error {
-	pr, err := r.newPair()
-	if err != nil {
-		return err
-	}
-	rc, err := pr.w.SyscallConn()
-	if err != nil {
-		return err
-	}
-	// This child alone uses documented unbuffered socket options as a
-	// diagnostic pending-I/O fixture, never as production/Node socket policy.
+// ovConfigureUnbuffered applies the reviewed test-only zero-buffer diagnostic
+// configuration and reads back the effective values. It is shared by the
+// paused-reader-close and pin-lifetime-completion children only.
+func ovConfigureUnbuffered(r *ovRun, pr *ovPair) error {
+	// Only the paused-reader-close and pin-lifetime-completion children use
+	// documented unbuffered socket options as a diagnostic pending-I/O fixture, never as production/Node socket policy.
 	// The former 4096-byte requests did not bound transport acceptance: the
 	// entire 24MiB operation completed immediately on both architectures.
 	// Keep one original-size post; even this mode must fail inconclusive if
@@ -1062,6 +1146,29 @@ func ovScenarioPausedClose(r *ovRun) error {
 		if value != 0 {
 			return fmt.Errorf("%s=%d: unbuffered diagnostic requires zero", opt.name, value)
 		}
+	}
+	return nil
+}
+
+func ovAcceptedCloseReadErr(err error) bool {
+	if err == nil {
+		return true
+	}
+	var en syscall.Errno
+	return errors.As(err, &en) && (en == ovWSAECONNRESET || en == ovWSAECONNABORTED)
+}
+
+func ovScenarioPausedClose(r *ovRun) error {
+	pr, err := r.newPair()
+	if err != nil {
+		return err
+	}
+	rc, err := pr.w.SyscallConn()
+	if err != nil {
+		return err
+	}
+	if err := ovConfigureUnbuffered(r, pr); err != nil {
+		return err
 	}
 	if _, err := newSocketTryWriter(pr.w); err != nil {
 		return fmt.Errorf("newSocketTryWriter: %w", err)
@@ -1345,6 +1452,86 @@ func ovParse(stdout string) (map[string]any, int) {
 	return res, count
 }
 
+// ovCheckPinReceipt strictly validates the pin-lifetime-completion details. It
+// uses only checked type assertions and exact comparisons, so a missing or
+// wrong-typed field fails (never panics, never passes). JSON numbers decode as
+// float64.
+func ovCheckPinReceipt(details any) error {
+	d, ok := details.(map[string]any)
+	if !ok {
+		return fmt.Errorf("pin receipt: details missing or not an object: %T", details)
+	}
+	const mib8 = float64(8 << 20)
+	for k, want := range map[string]any{
+		"socket_configuration":                "unbuffered-diagnostic",
+		"requested_send_buffer":               float64(0),
+		"requested_receive_buffer":            float64(0),
+		"effective_send_buffer":               float64(0),
+		"effective_receive_buffer":            float64(0),
+		"post_class_at_post":                  "native997",
+		"native_class":                        "native997",
+		"pending_observed":                    true,
+		"event_signaled_at_peek":              false,
+		"go_read_marker_len":                  float64(20),
+		"pending_after_go_read":               true,
+		"go_read_while_pending":               true,
+		"gc_rounds":                           float64(8),
+		"pins_held_during_gc":                 true,
+		"pending_after_gc":                    true,
+		"gc_while_pending":                    true,
+		"pins_released_before_reader_release": float64(0),
+		"events_closed_before_reader_release": float64(0),
+		"completed_before_reader_release":     false,
+		"completion_after_reader_release":     true,
+		"want_len":                            mib8,
+		"got_len":                             mib8,
+	} {
+		got, present := d[k]
+		if !present || got != want {
+			return fmt.Errorf("pin receipt: %s=%v (present=%v) want %v", k, got, present, want)
+		}
+	}
+	ws, wok := d["want_sha256"].(string)
+	gs, gok := d["got_sha256"].(string)
+	if !wok || !gok || len(ws) != 64 || ws != gs {
+		return fmt.Errorf("pin receipt: want_sha256=%v got_sha256=%v must be equal 64-char strings", d["want_sha256"], d["got_sha256"])
+	}
+	cs, ok := d["custom_send"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("pin receipt: custom_send missing or not an object: %T", d["custom_send"])
+	}
+	for k, want := range map[string]any{
+		"post_class":  "native997",
+		"post_errno":  float64(syscall.ERROR_IO_PENDING),
+		"final_class": "complete_full",
+		"final_n":     mib8,
+		"bytes":       mib8,
+		"final_errno": float64(0),
+		"control_err": "",
+	} {
+		got, present := cs[k]
+		if !present || got != want {
+			return fmt.Errorf("pin receipt: custom_send.%s=%v (present=%v) want %v", k, got, present, want)
+		}
+	}
+	ord, ok := d["order_fence_unpin_closeevent"].([]any)
+	if !ok || len(ord) != 3 {
+		return fmt.Errorf("pin receipt: order_fence_unpin_closeevent missing or not 3 elements: %v", d["order_fence_unpin_closeevent"])
+	}
+	var seq [3]float64
+	for i, v := range ord {
+		f, fok := v.(float64)
+		if !fok {
+			return fmt.Errorf("pin receipt: order element %d not a number: %T", i, v)
+		}
+		seq[i] = f
+	}
+	if !(seq[0] > 0 && seq[0] < seq[1] && seq[1] < seq[2]) {
+		return fmt.Errorf("pin receipt: want 0 < fence < unpin < event-close, got %v", seq)
+	}
+	return nil
+}
+
 // TestWindowsOverlappedTailGoInterop spawns exactly four bounded native child
 // processes (one per scenario). It is evidence gathering only; it is not
 // production policy and not Node parity approval.
@@ -1415,6 +1602,11 @@ func TestWindowsOverlappedTailGoInterop(t *testing.T) {
 					if d[k] != want {
 						t.Fatalf("child %s: %s=%v want %v", spec, k, d[k], want)
 					}
+				}
+			}
+			if spec == "pin-lifetime-completion" {
+				if err := ovCheckPinReceipt(res["details"]); err != nil {
+					t.Fatalf("child %s: %v", spec, err)
 				}
 			}
 			// Parent-side equality of the stream hash/length pairs the children
