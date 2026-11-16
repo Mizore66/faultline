@@ -2,37 +2,36 @@
 
 package proofview
 
-// STATIC, UNEXECUTED, TEST-ONLY prototype (future overlay target:
-// internal/proofview/socket_overlapped_windows_test.go).
+// STATIC, UNEXECUTED, TEST-ONLY proposal (TDD stage, revision 2).
 //
-// It probes whether a test-local, event-based OVERLAPPED WSASend can be posted
-// directly inside RawConn.Write on a Go-owned, IOCP-associated TCP socket,
-// return to the caller after the native post but before any peer read, and be
-// fenced by its own event without disturbing Go's netpoller.
+// This file drives the four existing Windows native children THROUGH the
+// not-yet-implemented production physical helper
 //
-// Nothing here is production code and nothing here has been compiled or run.
-// Every claim about native behavior is UNKNOWN until the existing Windows CI
-// executes it.
+//	submitWindowsSocketWrite(raw syscall.RawConn, parts [][]byte)
+//	    (*windowsSocketWrite, error)
 //
-// Facts relied on (all primary documentation relayed by the parent, or Go
-// 1.27.4 source read):
-//   - OVERLAPPED.hEvent: a VALID event handle with the low-order bit set
-//     suppresses the completion packet for an IOCP-associated handle; wait on
-//     and close the ORIGINAL handle (GetQueuedCompletionStatus docs).
-//   - WSASend: return 0 = completed immediately; WSA_IO_PENDING (997) = started;
-//     any other error = no completion will occur. lpNumberOfBytesSent must be
-//     NULL when lpOverlapped is non-NULL. The OVERLAPPED, the WSABUF array (kept
-//     conservatively) and every referenced byte array must stay valid until
-//     completion. All I/O initiated by a thread is canceled when it exits.
-//   - closesocket returning is NOT a completion fence; the handle may be reused.
-//   - WSAGetOverlappedResult(fWait=FALSE): FALSE means pending OR failed OR bad
-//     parameters; the transfer count is not updated on FALSE.
-//   - Go 1.27.4 syscall.SyscallN runs SetLastError(0) before the call and reads
-//     the thread's last error right after it, so the errno returned by
-//     Proc.Call / syscall.WSASend is the post-call thread last error. A separate
-//     WSAGetLastError call through SyscallN would observe a zeroed value, so it
-//     is NOT used; WSAGetLastError==GetLastError aliasing is not independently
-//     proven here and is recorded as such in the evidence.
+// (see CONTRACT.md beside this file). The earlier test-local native algorithm
+// (CreateEventW/WSASend/WaitForSingleObject/WSAGetOverlappedResult/CancelIoEx,
+// runtime.Pinner, release ordering) was REMOVED from this file on purpose; it
+// now lives only in the helper. What remains here is harness: fixtures,
+// scenarios, strict classification of the helper's reported physical facts,
+// receipts, failure-only guards and the test-only processExit on an
+// unfenceable operation.
+//
+// Until the helper exists this file does not compile (expected RED: undefined
+// helper symbols only). Nothing here has been compiled or run, and it is not
+// native proof or approval.
+//
+// Facts relied on (unchanged, now owned by the helper contract):
+//   - OVERLAPPED.hEvent with the low-order bit set suppresses the IOCP packet;
+//     wait on and close the ORIGINAL handle.
+//   - WSASend: 0 = completed immediately; WSA_IO_PENDING (997) = started; any
+//     other error = no completion will occur. The OVERLAPPED, WSABUF array and
+//     every referenced byte array stay valid until the fence. All I/O started
+//     by a thread is canceled when that thread exits, so the caller keeps the
+//     submitting goroutine LockOSThread'd until the native fence.
+//   - closesocket returning is NOT a completion fence.
+//   - WSAGetOverlappedResult(fWait=FALSE) FALSE means pending OR failed.
 
 import (
 	"bytes"
@@ -54,7 +53,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-	"unsafe"
 )
 
 const (
@@ -64,7 +62,9 @@ const (
 	ovSource    = "faultline-windows-overlapped-probe-v1"
 	ovResultTag = "OV_EVIDENCE "
 
-	// Failure-only guards; none is used as a behavior heuristic.
+	// Failure-only guards; none is used as a behavior heuristic. The 64MiB cap
+	// is a TEST guard applied by the adapter before the helper is called; the
+	// production helper has no such cap (its only size domain is total<=DWORD).
 	ovPayloadCap = 64 << 20
 	// Bounds: the parent context (<= 50s) and the cmd.WaitDelay (5s) run in
 	// sequence, so a child is gone by <= 55s. The child's own -test.timeout
@@ -100,7 +100,19 @@ var (
 	}
 	ovEmitted atomic.Bool
 	ovActive  atomic.Pointer[ovRun]
+
+	// Harness-only: the OS thread id of the locked submitter, to assert the
+	// caller-owned LockOSThread precondition held for the whole child.
+	ovGetCurrentThreadID = syscall.NewLazyDLL("kernel32.dll").NewProc("GetCurrentThreadId")
 )
+
+func ovThreadID() (uint32, error) {
+	if err := ovGetCurrentThreadID.Find(); err != nil {
+		return 0, fmt.Errorf("resolve GetCurrentThreadId: %w", err)
+	}
+	r1, _, _ := ovGetCurrentThreadID.Call()
+	return uint32(r1), nil
+}
 
 // ---- evidence ----
 
@@ -146,7 +158,6 @@ func (e *ovEvidence) faultCount() int {
 type ovRun struct {
 	spec, nonce string
 	ev          ovEvidence
-	procs       *ovProcs
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -156,12 +167,11 @@ type ovRun struct {
 	ops     []*ovOp
 	closers []io.Closer
 
-	eventsCreated atomic.Int32
-	eventsClosed  atomic.Int32
-	pinsReleased  atomic.Int32
-	opsPosted     atomic.Int32
-	goroutines    atomic.Int32
+	// goroutines counts goroutines spawned by THIS HARNESS (readers, closers).
+	// The helper's own waiter is not counted here.
+	goroutines atomic.Int32
 
+	threadID   uint32 // locked submitter OS thread
 	cleanupErr string
 }
 
@@ -184,6 +194,7 @@ func (r *ovRun) emit(ok bool, errText string) {
 	if !ovEmitted.CompareAndSwap(false, true) {
 		return
 	}
+	cnt := windowsSocketWriteCounters() // helper-owned process-wide counters
 	r.ev.mu.Lock()
 	out := map[string]any{
 		"source": ovSource, "nonce": r.nonce, "scenario": r.spec,
@@ -192,11 +203,13 @@ func (r *ovRun) emit(ok bool, errText string) {
 		"faults":  append([]string{}, r.ev.faults...),
 		"details": r.ev.fields,
 		"cleanup": map[string]any{
-			"events_created": r.eventsCreated.Load(), "events_closed": r.eventsClosed.Load(),
-			"pins_released": r.pinsReleased.Load(), "ops_posted": r.opsPosted.Load(),
-			"goroutines_spawned": r.goroutines.Load(), "error": r.cleanupErr,
+			"events_created": cnt.EventsCreated, "events_closed": cnt.EventsClosed,
+			"pins_released": cnt.UnpinOps, "ops_posted": cnt.OpsPosted, // pins_released == UnpinOps: once per op
+			"harness_goroutines_spawned": r.goroutines.Load(), "error": r.cleanupErr, // harness-only; helper waiter not counted
 		},
-		"errno_mapping": "SyscallN last-error after the call (SetLastError(0) precedes it); separate WSAGetLastError call not used; aliasing to GetLastError not independently proven",
+		// The order fields in details are HELPER-ATTESTED (see CONTRACT.md); the
+		// harness cannot independently observe native ordering.
+		"order_source": "helper_attested",
 	}
 	if errText != "" {
 		out["error"] = errText
@@ -209,91 +222,36 @@ func (r *ovRun) emit(ok bool, errText string) {
 	fmt.Printf("%s%s\n", ovResultTag, b)
 }
 
-// fatalUnfenced is the only exit when a possibly kernel-owned operation cannot
-// be fenced (or the child budget is exhausted). It never unpins or frees: the
-// process exit reclaims everything, and the parent fails on the exit code.
+// fatalUnfenced is the TEST-HARNESS processExit used when a possibly
+// kernel-owned operation cannot be fenced (or the child budget is exhausted).
+// The production helper never exits; it retains ownership and reports
+// FenceFailed(). The harness never unpins or frees; process exit reclaims
+// everything and the parent fails on the exit code.
 func (r *ovRun) fatalUnfenced(reason string) {
 	r.ev.fault("FATAL unfenced/budget: " + reason)
 	r.emit(false, "FATAL unfenced/budget: "+reason)
 	os.Exit(ovExitUnfenced)
 }
 
-// ---- dynamic system procs ----
+// ---- strict classification of the helper's reported physical result ----
 
-type ovProcs struct {
-	createEvent *syscall.LazyProc
-	getResult   *syscall.LazyProc
-}
-
-// ovResolve resolves every needed proc before any I/O. syscall.LoadDLL loads
-// names registered by the syscall package ("kernel32.dll", "ws2_32.dll") with
-// LOAD_LIBRARY_SEARCH_SYSTEM32 only; there is no other DLL fallback.
-func ovResolve() (*ovProcs, error) {
-	p := &ovProcs{
-		createEvent: syscall.NewLazyDLL("kernel32.dll").NewProc("CreateEventW"),
-		getResult:   syscall.NewLazyDLL("ws2_32.dll").NewProc("WSAGetOverlappedResult"),
-	}
-	for _, pr := range []*syscall.LazyProc{p.createEvent, p.getResult} {
-		if err := pr.Find(); err != nil {
-			return nil, fmt.Errorf("resolve %s: %w", pr.Name, err)
-		}
-	}
-	return p, nil
-}
-
-// newEvent creates an unnamed manual-reset, initially non-signaled event.
-func (p *ovProcs) newEvent() (syscall.Handle, error) {
-	r1, _, e := p.createEvent.Call(0, 1, 0, 0)
-	if r1 == 0 {
-		var en syscall.Errno
-		if x, ok := e.(syscall.Errno); ok {
-			en = x
-		}
-		return 0, fmt.Errorf("CreateEventW failed: errno=%d", uint32(en))
-	}
-	return syscall.Handle(r1), nil
-}
-
-type ovQuery struct {
-	OK    bool
-	N     uint32
-	Flags uint32
-	Errno syscall.Errno
-}
-
-// result is one non-waiting WSAGetOverlappedResult. The transfer count is only
-// returned when the call reports TRUE; on FALSE it is never read. It must be
-// called inside a RawConn callback so the socket identity is protected.
-func (p *ovProcs) result(h syscall.Handle, ov *syscall.Overlapped) ovQuery {
-	var n, flags uint32
-	r1, _, e := p.getResult.Call(uintptr(h), uintptr(unsafe.Pointer(ov)), uintptr(unsafe.Pointer(&n)), 0, uintptr(unsafe.Pointer(&flags)))
-	if uint32(r1) != 0 { // BOOL is 32 bits
-		return ovQuery{OK: true, N: n, Flags: flags}
-	}
-	var en syscall.Errno
-	if x, ok := e.(syscall.Errno); ok {
-		en = x
-	}
-	return ovQuery{Errno: en}
-}
-
-// ovClassify maps a completed-operation query to a strict class. closeIssued is
-// true only when this probe has already issued CancelIoEx/Close for the
-// operation. Every errno that is not a named, explained consequence of that
-// local cancel/close (including wrong handle, bad parameter and mode errors) is
-// a fault and can never pass.
-func ovClassify(q ovQuery, total int, closeIssued bool) (class string, fault bool) {
-	if q.OK {
+// ovClassify maps a queried (post_query or fence_query) helper result to a
+// strict class. closeIssued is true only when this harness has already issued
+// Cancel/Close for the operation. Every errno that is not a named, explained
+// consequence of that local cancel/close (including wrong handle, bad
+// parameter and mode errors) is a fault and can never pass.
+func ovClassify(res windowsSocketWriteResult, total int, closeIssued bool) (class string, fault bool) {
+	if res.OK {
 		switch {
-		case int64(q.N) == int64(total):
+		case int64(res.N) == int64(total):
 			return "complete_full", false
-		case int64(q.N) < int64(total):
+		case int64(res.N) < int64(total):
 			return "complete_short", false
 		default:
 			return "fault_count_overrun", true
 		}
 	}
-	switch q.Errno {
+	switch res.Errno {
 	case 0:
 		return "fault_false_without_errno", true
 	case ovWSAIOIncomplete, syscall.ERROR_IO_PENDING:
@@ -313,7 +271,7 @@ func ovClassify(q ovQuery, total int, closeIssued bool) (class string, fault boo
 	}
 }
 
-// ---- overlapped operation ----
+// ---- thin adapter over the production helper ----
 
 type ovFinal struct {
 	Class      string
@@ -322,276 +280,272 @@ type ovFinal struct {
 	ControlErr string
 }
 
+// ovOp is a thin adapter. It deliberately keeps NO reference to the payload
+// regions: after submit the helper's owned operation must be the only strong
+// reference (the pin child drops every caller reference and GCs).
 type ovOp struct {
-	run     *ovRun
-	name    string
-	rc      syscall.RawConn
-	regions [][]byte // strong refs to the exact payload backers
-	total   int
+	run   *ovRun
+	name  string
+	w     *windowsSocketWrite
+	total int
+	parts int
+	post  string // helper Snapshot().Post captured at submit return
 
-	ov   *syscall.Overlapped
-	bufs []syscall.WSABuf
-	ev   syscall.Handle // ORIGINAL handle: waited on and closed
-	pin  runtime.Pinner
+	closeIssued atomic.Bool // set by this harness before Cancel / Close
 
-	postClass string // not_posted | native0 | native997 | native_error
-	postErrno uint32
-	syncQ     ovQuery // native0 only
-
-	done  chan struct{} // closed after fence, release and final are all set
-	final ovFinal
-
-	mu       sync.Mutex
-	released bool
-	evClosed bool
-
-	closeIssued atomic.Bool // set before CancelIoEx / Close is issued
-
-	seqFence, seqUnpin, seqClose int
+	mu         sync.Mutex
+	finalDone  bool
+	final      ovFinal
+	snap       windowsSocketWriteSnapshot // valid once finalDone
+	faultsSeen int
 }
 
-type ovPostError struct{ Errno syscall.Errno }
-
-func (e *ovPostError) Error() string {
-	return fmt.Sprintf("WSASend post error errno=%d (no completion will occur)", uint32(e.Errno))
-}
-
-// submit posts one event-based OVERLAPPED WSASend of regions directly inside
-// RawConn.Write (callback always returns true). It returns after the native
-// post and never waits for the peer. The caller's goroutine MUST be the locked
-// submitter thread and MUST keep it locked until op.done is closed.
-//
-// Contract: payload memory is not read or modified by this code after the post
-// until the fence. A nil op is returned only when nothing was posted and all
-// resources were released.
+// submit applies the harness-only payload cap, checks the locked-thread
+// precondition, then calls the production helper. A nil op means the helper
+// reported nothing posted and everything released. A non-nil op with a non-nil
+// error is a native_error post (no completion will occur, already released).
 func (r *ovRun) submit(name string, rc syscall.RawConn, regions [][]byte) (*ovOp, error) {
 	total := 0
 	for _, g := range regions {
-		if len(g) == 0 {
-			return nil, errors.New("submit: empty region")
-		}
 		total += len(g)
 	}
-	if total == 0 || total > ovPayloadCap {
-		return nil, fmt.Errorf("submit: total %d outside (0,%d]", total, ovPayloadCap)
+	if total > ovPayloadCap { // test guard only
+		return nil, fmt.Errorf("submit: total %d exceeds the test payload cap %d", total, ovPayloadCap)
 	}
-	o := &ovOp{run: r, name: name, rc: rc, regions: regions, total: total, done: make(chan struct{}), postClass: "not_posted"}
-	h, err := r.procs.newEvent()
+	tid, err := ovThreadID()
 	if err != nil {
 		return nil, err
 	}
-	r.eventsCreated.Add(1)
-	o.ev = h
-	o.ov = new(syscall.Overlapped)
-	o.ov.HEvent = syscall.Handle(uintptr(h) | 1) // low bit: suppress the IOCP packet
-	o.bufs = make([]syscall.WSABuf, 0, len(regions))
-	for _, g := range regions {
-		o.bufs = append(o.bufs, syscall.WSABuf{Len: uint32(len(g)), Buf: &g[0]})
+	if tid != r.threadID {
+		return nil, fmt.Errorf("submit: caller is not on the locked submitter thread (have %d want %d)", tid, r.threadID)
 	}
-	// Pin the actual OVERLAPPED, the WSABUF backing array and every referenced
-	// byte array (not slice headers). Released only after the fence.
-	o.pin.Pin(o.ov)
-	o.pin.Pin(&o.bufs[0])
-	for _, g := range regions {
-		o.pin.Pin(&g[0])
-	}
-	r.mu.Lock()
-	r.ops = append(r.ops, o)
-	r.mu.Unlock()
-
-	called := false
-	var postErr error
-	werr := rc.Write(func(fd uintptr) bool {
-		called = true
-		hd := syscall.Handle(fd)
-		postErr = syscall.WSASend(hd, &o.bufs[0], uint32(len(o.bufs)), nil, 0, o.ov, nil)
-		switch {
-		case postErr == nil:
-			o.postClass = "native0"
-			// Completed immediately: obtain the real count with a non-waiting
-			// query inside this protected callback.
-			o.syncQ = r.procs.result(hd, o.ov)
-		case postErr == syscall.ERROR_IO_PENDING:
-			o.postClass = "native997"
-			o.postErrno = uint32(syscall.ERROR_IO_PENDING)
-		default:
-			o.postClass = "native_error"
-			var en syscall.Errno
-			if errors.As(postErr, &en) {
-				o.postErrno = uint32(en)
-			}
-		}
-		return true
-	})
-	if !called {
-		// RawConn.Write refused (closed/closing): nothing was posted.
-		o.release()
-		close(o.done)
-		if werr == nil {
-			err := errors.New("internal fault: RawConn.Write returned nil without running its callback; nothing was posted")
+	w, err := submitWindowsSocketWrite(rc, regions)
+	if w == nil {
+		if err == nil {
+			err = errors.New("helper returned nil operation and nil error")
 			r.ev.fault(err.Error())
-			return nil, err
 		}
-		return nil, werr
+		return nil, err
 	}
-	if werr != nil {
-		r.ev.fault("RawConn.Write returned an error after its callback ran: " + werr.Error())
-	}
-	r.opsPosted.Add(1)
-	switch o.postClass {
-	case "native0":
-		o.seqFence = r.ev.event("fence_native0:" + name)
-		class, f := ovClassify(o.syncQ, total, o.closeIssued.Load())
-		if f || class != "complete_full" && class != "complete_short" {
-			r.ev.fault(fmt.Sprintf("%s: native0 confirmed-result query class=%s errno=%d", name, class, uint32(o.syncQ.Errno)))
+	o := &ovOp{run: r, name: name, w: w, total: total, parts: len(regions)}
+	s0 := w.Snapshot()
+	o.post = string(s0.Post)
+	r.mu.Lock()
+	r.ops = append(r.ops, o) // registered BEFORE any further check: ownership may be retained
+	r.mu.Unlock()
+	o.drainFaults(s0)
+	// Return-shape assertions. A helper wrapper/query/internal anomaly may
+	// legitimately return (op, err) with Faults while a pending native997 stays
+	// owned; those Faults already fail the child via drainFaults, and cleanup
+	// still cancels and fences the retained op. Without any Fault the shape is exact.
+	if len(s0.Faults) == 0 {
+		if (err != nil) != (s0.Post == windowsSocketPostError) {
+			r.ev.fault(fmt.Sprintf("%s: return shape err=%v with post=%s (want err iff native_error)", name, err, s0.Post))
 		}
-		o.final = ovFinal{Class: class, N: o.syncQ.N, Errno: uint32(o.syncQ.Errno)}
-		o.release() // return 0 means the operation is complete
-		close(o.done)
-	case "native997":
-		r.spawn(func() { r.waiter(o) })
-	default:
-		o.final = ovFinal{Class: "native_error_no_completion", Errno: o.postErrno}
-		o.release() // no completion will occur
-		close(o.done)
-		return o, &ovPostError{Errno: syscall.Errno(o.postErrno)}
+		var en syscall.Errno
+		if s0.Post == windowsSocketPostError && (!errors.As(err, &en) || en != s0.PostErrno || en == 0) {
+			r.ev.fault(fmt.Sprintf("%s: native_error err=%v does not wrap Snapshot.PostErrno=%d", name, err, uint32(s0.PostErrno)))
+		}
+		if s0.Post == windowsSocketPostNative997 && s0.PostErrno != syscall.ERROR_IO_PENDING {
+			r.ev.fault(fmt.Sprintf("%s: native997 PostErrno=%d want 997", name, uint32(s0.PostErrno)))
+		}
 	}
-	return o, nil
+	if s0.Post != windowsSocketPostNative997 && !ovClosed(w.Done()) {
+		r.ev.fault(fmt.Sprintf("%s: post=%s but Done not closed on return", name, s0.Post))
+	}
+	if s0.Post != windowsSocketPostNative997 && !(s0.Unpinned && s0.EventClosed) {
+		r.ev.fault(fmt.Sprintf("%s: post=%s but not released on return", name, s0.Post))
+	}
+	return o, err
 }
 
-// waiter is the single waiter for a native997 op. It never runs application
-// callbacks; it only fences, classifies, releases and signals o.done.
-func (r *ovRun) waiter(o *ovOp) {
-	st, werr := syscall.WaitForSingleObject(o.ev, syscall.INFINITE)
-	if werr != nil || st != syscall.WAIT_OBJECT_0 {
-		// Completion NOT observed: never release.
-		r.fatalUnfenced(fmt.Sprintf("%s: WaitForSingleObject st=%d err=%v", o.name, st, werr))
-		return
-	}
-	o.seqFence = r.ev.event("fence_event:" + o.name)
-	var q ovQuery
-	ran := false
-	cerr := o.rc.Control(func(fd uintptr) {
-		ran = true
-		q = r.procs.result(syscall.Handle(fd), o.ov)
-	})
-	switch {
-	case cerr != nil && !ran && errors.Is(cerr, net.ErrClosed):
-		o.final = ovFinal{Class: "unknown_closed", ControlErr: cerr.Error()}
-	case cerr != nil || !ran:
-		r.ev.fault(fmt.Sprintf("%s: Control fault ran=%v err=%v", o.name, ran, cerr))
-		o.final = ovFinal{Class: "fault_control", ControlErr: fmt.Sprint(cerr)}
-	default:
-		class, f := ovClassify(q, o.total, o.closeIssued.Load())
-		if f {
-			r.ev.fault(fmt.Sprintf("%s: result query class=%s errno=%d", o.name, class, uint32(q.Errno)))
-		}
-		o.final = ovFinal{Class: class, N: q.N, Errno: uint32(q.Errno)}
-	}
-	o.release() // strictly after the fence: Unpin, then CloseHandle
-	close(o.done)
-}
-
-// release unpins and then closes the event. The caller guarantees the fence
-// (native0 return, event observed, or nothing posted).
-func (o *ovOp) release() {
+// drainFaults copies helper-reported faults into the harness evidence once.
+func (o *ovOp) drainFaults(s windowsSocketWriteSnapshot) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.released {
-		return
+	for ; o.faultsSeen < len(s.Faults); o.faultsSeen++ {
+		o.run.ev.fault(o.name + ": helper fault: " + s.Faults[o.faultsSeen])
 	}
-	o.released = true
-	o.pin.Unpin()
-	o.run.pinsReleased.Add(1)
-	o.seqUnpin = o.run.ev.event("unpin:" + o.name)
-	if err := syscall.CloseHandle(o.ev); err != nil {
-		o.run.ev.fault(fmt.Sprintf("%s: CloseHandle: %v", o.name, err))
-	}
-	o.evClosed = true
-	o.run.eventsClosed.Add(1)
-	o.seqClose = o.run.ev.event("close_event:" + o.name)
-	runtime.KeepAlive(o.regions)
-	runtime.KeepAlive(o.bufs)
 }
 
-// peekSignaled does one zero-timeout poll of the event while it is guaranteed
-// not to be closed (guarded by o.mu against release).
-func (o *ovOp) peekSignaled() (signaled bool, released bool, err error) {
+// finalize classifies the helper's physical result. It is only valid after
+// Done() is closed; before that it returns Class "not_done" without caching.
+func (o *ovOp) finalize() ovFinal {
+	if !ovClosed(o.w.Done()) {
+		return ovFinal{Class: "not_done"}
+	}
 	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.evClosed {
-		return false, true, nil
+	if o.finalDone {
+		defer o.mu.Unlock()
+		return o.final
 	}
-	st, werr := syscall.WaitForSingleObject(o.ev, 0)
-	if werr != nil {
-		return false, false, werr
+	o.mu.Unlock()
+	s := o.w.Snapshot()
+	o.drainFaults(s)
+	var f ovFinal
+	res := s.Result
+	switch res.Source {
+	case windowsSocketResultNone:
+		f = ovFinal{Class: "native_error_no_completion", Errno: uint32(s.PostErrno)}
+	case windowsSocketResultControlClosed:
+		f = ovFinal{Class: "unknown_closed", ControlErr: res.ControlErr}
+	case windowsSocketResultControlFault:
+		o.run.ev.fault(fmt.Sprintf("%s: control fault: %s", o.name, res.ControlErr))
+		f = ovFinal{Class: "fault_control", ControlErr: res.ControlErr}
+	case windowsSocketResultPostQuery, windowsSocketResultFenceQuery:
+		class, bad := ovClassify(res, o.total, o.closeIssued.Load())
+		if bad {
+			o.run.ev.fault(fmt.Sprintf("%s: result query class=%s errno=%d", o.name, class, uint32(res.Errno)))
+		}
+		if s.Post == windowsSocketPostNative0 && class != "complete_full" && class != "complete_short" {
+			o.run.ev.fault(fmt.Sprintf("%s: native0 confirmed-result query class=%s errno=%d", o.name, class, uint32(res.Errno)))
+		}
+		if (s.Post == windowsSocketPostNative0) != (res.Source == windowsSocketResultPostQuery) {
+			o.run.ev.fault(fmt.Sprintf("%s: result source %q inconsistent with post %q", o.name, res.Source, s.Post))
+		}
+		f = ovFinal{Class: class, N: res.N, Errno: uint32(res.Errno)}
+	default:
+		o.run.ev.fault(fmt.Sprintf("%s: unknown result source %q", o.name, res.Source))
+		f = ovFinal{Class: "fault_unknown_result_source"}
 	}
-	switch st {
-	case syscall.WAIT_OBJECT_0:
-		return true, false, nil
-	case syscall.WAIT_TIMEOUT:
-		return false, false, nil
+	// Helper-level invariants that do not depend on the scenario.
+	// Helper-attested ordering. Fence is taken after the wait returns
+	// WAIT_OBJECT_0 (or after a native0 WSASend returns 0) and BEFORE the result
+	// query; native_error performed no I/O so FenceSeq must be 0.
+	if !s.Unpinned || !s.EventClosed {
+		o.run.ev.fault(fmt.Sprintf("%s: Done closed before release (unpinned=%v eventClosed=%v)", o.name, s.Unpinned, s.EventClosed))
 	}
-	return false, false, fmt.Errorf("WaitForSingleObject(0) unexpected status %d", st)
+	if s.Post == windowsSocketPostError {
+		if s.FenceSeq != 0 || !(0 < s.UnpinSeq && s.UnpinSeq < s.EventCloseSeq && s.EventCloseSeq < s.DoneSeq) {
+			o.run.ev.fault(fmt.Sprintf("%s: native_error order fence=%d unpin=%d close_event=%d done=%d (want fence=0, 0<unpin<close<done)", o.name, s.FenceSeq, s.UnpinSeq, s.EventCloseSeq, s.DoneSeq))
+		}
+	} else if !(0 < s.FenceSeq && s.FenceSeq < s.UnpinSeq && s.UnpinSeq < s.EventCloseSeq && s.EventCloseSeq < s.DoneSeq) {
+		o.run.ev.fault(fmt.Sprintf("%s: order violation fence=%d unpin=%d close_event=%d done=%d", o.name, s.FenceSeq, s.UnpinSeq, s.EventCloseSeq, s.DoneSeq))
+	}
+	if s.WSASendCalls != 1 {
+		o.run.ev.fault(fmt.Sprintf("%s: helper issued %d WSASend calls (no automatic repost allowed)", o.name, s.WSASendCalls))
+	}
+	if s.Parts != o.parts || s.Bytes != uint64(o.total) || s.PinCalls != 2+o.parts {
+		o.run.ev.fault(fmt.Sprintf("%s: helper accounting parts=%d bytes=%d pincalls=%d want parts=%d bytes=%d pincalls=%d", o.name, s.Parts, s.Bytes, s.PinCalls, o.parts, o.total, 2+o.parts))
+	}
+	o.run.ev.event("harness_observed_done:" + o.name) // harness observation, not a native event
+	o.mu.Lock()
+	o.final, o.snap, o.finalDone = f, s, true
+	o.mu.Unlock()
+	return f
 }
 
-// cancel issues CancelIoEx on this operation's OVERLAPPED inside Control.
-// ERROR_NOT_FOUND may mean the operation already completed (race).
+// pendingObserved is one non-waiting observation: native997 at post, event
+// unsignaled and unclosed, Done not closed. The event poll is performed by the
+// helper inside Snapshot while the event is guaranteed not closed.
+func (o *ovOp) pendingObserved() (pending, signaled, released bool, err error) {
+	s := o.w.Snapshot()
+	o.drainFaults(s)
+	if s.EventPollErr != "" {
+		return false, s.EventSignaled, s.EventClosed, errors.New(s.EventPollErr)
+	}
+	pending = s.Post == windowsSocketPostNative997 && !s.EventSignaled && !s.EventClosed && !ovClosed(o.w.Done())
+	return pending, s.EventSignaled, s.EventClosed, nil
+}
+
+// cancel records the local cancel intent first (so a later 995 is explained),
+// then asks the helper to CancelIoEx. It never closes the socket.
 func (o *ovOp) cancel() string {
-	o.closeIssued.Store(true) // before the cancel, so a later query sees it
-	select {
-	case <-o.done:
-		return "already_done"
-	default:
+	res := string(o.w.Cancel())
+	// Only a cancel that reached CancelIoEx explains a later 995. Set before
+	// any finalize (same goroutine, and Done is waited after cancel returns).
+	switch res {
+	case "cancel_issued", "not_found_completed_race":
+		o.closeIssued.Store(true)
 	}
-	var cerr error
-	ran := false
-	err := o.rc.Control(func(fd uintptr) {
-		ran = true
-		cerr = syscall.CancelIoEx(syscall.Handle(fd), o.ov)
-	})
-	switch {
-	case err != nil && !ran && errors.Is(err, net.ErrClosed):
-		return "control_closed_no_cancel"
-	case err != nil || !ran:
-		o.run.ev.fault(fmt.Sprintf("%s: cancel Control fault ran=%v err=%v", o.name, ran, err))
-		return "fault_control"
-	case cerr == nil:
-		return "cancel_issued"
-	case cerr == syscall.ERROR_NOT_FOUND:
-		return "not_found_completed_race"
+	return res
+}
+
+// ovCancelOK reports the non-fault Cancel result states (idempotent re-cancel).
+func ovCancelOK(res string) bool {
+	switch res {
+	case "cancel_issued", "not_found_completed_race", "already_done":
+		return true
 	}
-	o.run.ev.fault(fmt.Sprintf("%s: CancelIoEx: %v", o.name, cerr))
-	return "fault_cancel"
+	return false
 }
 
 // requireFull demands a fully completed send (used by non-cancel scenarios).
 func (o *ovOp) requireFull() error {
-	if o.final.Class != "complete_full" {
-		return fmt.Errorf("%s: send final class=%s n=%d errno=%d control=%q (want complete_full)", o.name, o.final.Class, o.final.N, o.final.Errno, o.final.ControlErr)
+	f := o.finalize()
+	if f.Class != "complete_full" {
+		return fmt.Errorf("%s: send final class=%s n=%d errno=%d control=%q (want complete_full)", o.name, f.Class, f.N, f.Errno, f.ControlErr)
 	}
-	if int(o.final.N) != o.total {
-		return fmt.Errorf("%s: send count %d != %d", o.name, o.final.N, o.total)
+	if int(f.N) != o.total {
+		return fmt.Errorf("%s: send count %d != %d", o.name, f.N, o.total)
 	}
 	return nil
 }
 
 func (o *ovOp) describe() map[string]any {
+	f := o.finalize()
+	o.mu.Lock()
+	s := o.snap
+	o.mu.Unlock()
 	return map[string]any{
-		"post_class": o.postClass, "post_errno": o.postErrno, "bytes": o.total,
-		"final_class": o.final.Class, "final_n": o.final.N, "final_errno": o.final.Errno,
-		"control_err": o.final.ControlErr,
+		"post_class": o.post, "post_errno": uint32(s.PostErrno), "bytes": o.total,
+		"final_class": f.Class, "final_n": f.N, "final_errno": f.Errno,
+		"control_err": f.ControlErr,
 	}
+}
+
+// orderSeqs returns the helper's own monotonic sequence numbers (fence, unpin,
+// event-close, done). They are HELPER-ATTESTED: the helper stamps them itself;
+// the harness cannot independently prove native ordering (that needs a
+// helper-package test with an injected syscall seam).
+func (o *ovOp) orderSeqs() []uint64 {
+	o.finalize()
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return []uint64{o.snap.FenceSeq, o.snap.UnpinSeq, o.snap.EventCloseSeq, o.snap.DoneSeq}
+}
+
+func (r *ovRun) waitDone(o *ovOp) error {
+	select {
+	case <-o.w.Done():
+		o.finalize()
+		return nil
+	case <-o.w.FenceFailed():
+		r.fatalUnfenced("helper reported fence failure for " + o.name)
+	case <-o.w.ReleaseFailed():
+		// Native retirement is proven; cleanup may have stopped before Unpin or
+		// after event closure. Read actual flags, never infer an event-only leak.
+		// Ordinary test failure, never wait on Done or retry cleanup.
+		return o.releaseFailure()
+	case <-time.After(ovGuard):
+		r.fatalUnfenced("completion not delivered for " + o.name)
+	}
+	return nil
+}
+
+// releaseFailure records the leak as a fault and returns it as an ordinary error.
+func (o *ovOp) releaseFailure() error {
+	s := o.w.Snapshot()
+	o.drainFaults(s)
+	msg := fmt.Sprintf("%s: ReleaseFailed (cleanup interrupted): retired=%v fenceProven=%v ReleaseErr=%q unpinned=%v eventClosed=%v", o.name, s.Retired, s.FenceProven, s.ReleaseErr, s.Unpinned, s.EventClosed)
+	if !s.Retired || s.ReleaseErr == "" || s.DoneSeq != 0 || ovClosed(o.w.Done()) || ovClosed(o.w.FenceFailed()) {
+		msg += " [terminal-state contract violation: want Retired, ReleaseErr set, DoneSeq 0, Done/FenceFailed open]"
+	}
+	o.run.ev.fault(msg)
+	return errors.New(msg)
 }
 
 // ---- cleanup (runs on the still-locked submitter thread) ----
 
 func (r *ovRun) cleanup() {
 	r.stopOnce.Do(func() { close(r.stop) })
+	if tid, err := ovThreadID(); err != nil || tid != r.threadID {
+		r.ev.fault(fmt.Sprintf("cleanup: submitter OS thread changed (have %d err=%v want %d)", tid, err, r.threadID))
+	}
 	r.mu.Lock()
 	ops := append([]*ovOp(nil), r.ops...)
 	r.mu.Unlock()
-	// 1. cancel while the submitter thread is alive.
+	// 1. cancel while the submitter thread is alive (never closes the socket).
 	for _, o := range ops {
 		o.cancel()
 	}
@@ -608,15 +562,20 @@ func (r *ovRun) cleanup() {
 			r.ev.fault(fmt.Sprintf("cleanup: unexpected Close error on owned closer %d: %v", i, err))
 		}
 	}
-	// 3. fence every op; an unfenceable op kills the child, never unpins.
+	// 3. fence every op; an unfenceable op ends the child, never unpins.
 	for _, o := range ops {
 		select {
-		case <-o.done:
+		case <-o.w.Done():
+			o.finalize()
+		case <-o.w.FenceFailed():
+			r.fatalUnfenced("helper reported fence failure for " + o.name)
+		case <-o.w.ReleaseFailed():
+			o.releaseFailure() // fault recorded; cleanup continues (no fatal exit, no retry)
 		case <-time.After(ovGuard):
 			r.fatalUnfenced("fence not observed for " + o.name)
 		}
 	}
-	// 4. join goroutines.
+	// 4. join harness goroutines.
 	joined := make(chan struct{})
 	go func() {
 		r.wg.Wait()
@@ -628,15 +587,18 @@ func (r *ovRun) cleanup() {
 		r.fatalUnfenced("goroutine join timeout")
 	}
 	var leaks []string
-	if c, e := r.eventsCreated.Load(), r.eventsClosed.Load(); c != e {
-		leaks = append(leaks, fmt.Sprintf("events created %d closed %d", c, e))
+	// Counter semantics (CONTRACT.md): each counter moves once per op that
+	// reached the protected Write callback; adapter-registered ops are exactly
+	// those. Equal-and-positive, never merely 0==0.
+	if c := windowsSocketWriteCounters(); c.EventsCreated != int64(len(ops)) || c.EventsClosed != c.EventsCreated || c.UnpinOps != c.EventsCreated || c.OpsPosted != c.EventsCreated {
+		leaks = append(leaks, fmt.Sprintf("counters %+v want all equal to registered ops %d", c, len(ops)))
 	}
 	for _, o := range ops {
-		o.mu.Lock()
-		if !o.released || !o.evClosed {
+		s := o.w.Snapshot()
+		o.drainFaults(s)
+		if !s.Unpinned || !s.EventClosed {
 			leaks = append(leaks, o.name+" not released")
 		}
-		o.mu.Unlock()
 	}
 	if len(leaks) > 0 {
 		r.cleanupErr = strings.Join(leaks, "; ")
@@ -734,16 +696,6 @@ func ovRecv[T any](ch chan T, what string) (T, error) {
 	case <-time.After(ovGuard):
 		var z T
 		return z, fmt.Errorf("guard timeout waiting for %s", what)
-	}
-}
-
-func (r *ovRun) waitDone(o *ovOp) error {
-	select {
-	case <-o.done:
-		return nil
-	case <-time.After(ovGuard):
-		r.fatalUnfenced("completion not delivered for " + o.name)
-		return nil
 	}
 }
 
@@ -845,7 +797,7 @@ func ovScenarioHealthy(r *ovRun) error {
 		return err
 	}
 	r.ev.event("server_marker_read")
-	pendingAtMarker := !ovClosed(op.done)
+	pendingAtMarker := !ovClosed(op.w.Done())
 	if sr.err != nil || !bytes.Equal(sr.b, clientMarker) {
 		return fmt.Errorf("server marker read: err=%v data=%q", sr.err, sr.b)
 	}
@@ -892,7 +844,7 @@ func ovScenarioHealthy(r *ovRun) error {
 	r.ev.set("try_b_wouldblock", bwb)
 	r.ev.set("batch_total", total)
 	r.ev.set("custom_send", op.describe())
-	r.ev.set("native_class", op.postClass)
+	r.ev.set("native_class", op.post)
 	r.ev.set("server_marker_read_while_custom_pending", pendingAtMarker)
 	r.ev.set("want_len", wantLen)
 	r.ev.set("got_len", len(rd.b))
@@ -907,7 +859,8 @@ func ovScenarioHealthy(r *ovRun) error {
 // ---- scenario 2: pin lifetime / completion ----
 
 // ovPostOwned builds and posts a payload whose only remaining references after
-// return are the operation's own strong refs (the caller's locals are dead).
+// return are the helper-owned operation's own strong refs (the caller's locals
+// are dead and the adapter retains none).
 //
 //go:noinline
 func ovPostOwned(r *ovRun, name string, rc syscall.RawConn, seed int, cuts []int) (*ovOp, string, int, error) {
@@ -939,24 +892,14 @@ func ovGCRounds() int {
 	return rounds
 }
 
-// ovStillPending is a non-waiting observation: native997 at post, event not
-// signaled, event not closed/released, done not closed.
-func ovStillPending(op *ovOp) (bool, bool, error) {
-	sig, rel, err := op.peekSignaled()
-	if err != nil {
-		return false, sig, err
-	}
-	return op.postClass == "native997" && !sig && !rel && !ovClosed(op.done), sig, nil
-}
-
-// ovScenarioPin is a pin-lifetime/pending-completion SMOKE test. The op keeps
-// strong references to the payload and Go's heap does not move objects, so a
-// missing pin would NOT make this fail; it is not proof of pin correctness.
-// It uses the same reviewed unbuffered diagnostic configuration as the paused
-// child and the original single 8MiB payload (no retry, enlargement or sleep).
-// It directly requires: (1) pending (native997, unsignaled) before reader
-// release, (2) an exact ordinary Go READ of a peer-written marker on the
-// custom-write-owned socket while that send is still pending (no ordinary Go
+// ovScenarioPin is a pin-lifetime/pending-completion SMOKE test. The helper
+// keeps strong references to the payload and Go's heap does not move objects,
+// so a missing pin would NOT make this fail; it is not proof of pin
+// correctness. It uses the same reviewed unbuffered diagnostic configuration as
+// the paused child and the original single 8MiB payload (no retry, enlargement
+// or sleep). It directly requires: (1) pending (native997, unsignaled) before
+// reader release, (2) an exact ordinary Go READ of a peer-written marker on the
+// helper-write-owned socket while that send is still pending (no ordinary Go
 // write on that socket), (3) GC rounds while still pending with the payload
 // pins unreleased, then (4) full successful native completion after the reader
 // is released. A missing condition fails INCONCLUSIVE. This does not claim the
@@ -980,7 +923,7 @@ func ovScenarioPin(r *ovRun) error {
 	readCh := r.startReader(pr.p, gate)
 	marker := []byte("PIN-CLIENT-MARKER-20")
 	srvCh := make(chan ovRead, 1)
-	r.spawn(func() { // ordinary bounded Go READ on the custom-write-owned socket
+	r.spawn(func() { // ordinary bounded Go READ on the helper-write-owned socket
 		if err := pr.w.SetReadDeadline(time.Now().Add(ovReadDeadline)); err != nil {
 			srvCh <- ovRead{err: err}
 			return
@@ -994,9 +937,9 @@ func ovScenarioPin(r *ovRun) error {
 	if err != nil {
 		return err
 	}
-	r.ev.set("post_class_at_post", op.postClass)
-	r.ev.set("native_class", op.postClass)
-	pending, sig, perr := ovStillPending(op)
+	r.ev.set("post_class_at_post", op.post)
+	r.ev.set("native_class", op.post)
+	pending, sig, _, perr := op.pendingObserved()
 	if perr != nil {
 		return fmt.Errorf("peek event: %w", perr)
 	}
@@ -1006,10 +949,10 @@ func ovScenarioPin(r *ovRun) error {
 	r.ev.set("pending_after_go_read", false)
 	r.ev.set("gc_while_pending", false)
 	r.ev.set("pending_after_gc", false)
-	r.ev.set("completed_before_reader_release", ovClosed(op.done))
+	r.ev.set("completed_before_reader_release", ovClosed(op.w.Done()))
 	if !pending {
 		r.ev.set("coverage_pending_pin_path", "UNKNOWN: pending path not observed")
-		return fmt.Errorf("INCONCLUSIVE sizing: no pending overlapped operation observed (post=%s signaled=%v); pending completion not qualified, no retry/enlargement", op.postClass, sig)
+		return fmt.Errorf("INCONCLUSIVE sizing: no pending overlapped operation observed (post=%s signaled=%v); pending completion not qualified, no retry/enlargement", op.post, sig)
 	}
 
 	// (2) Ordinary Go read of an exact peer-written marker while still pending.
@@ -1028,33 +971,36 @@ func ovScenarioPin(r *ovRun) error {
 		return fmt.Errorf("go read marker: err=%v data=%q", sr.err, sr.b)
 	}
 	r.ev.set("go_read_marker_len", len(sr.b))
-	pendingAfterRead, _, perr := ovStillPending(op)
+	pendingAfterRead, _, _, perr := op.pendingObserved()
 	if perr != nil {
 		return fmt.Errorf("peek event after read: %w", perr)
 	}
 	r.ev.set("pending_after_go_read", pendingAfterRead)
 	r.ev.set("go_read_while_pending", pendingAfterRead)
 	if !pendingAfterRead {
-		return errors.New("INCONCLUSIVE coverage: custom send no longer pending after Go read; marker read not proven concurrent, no retry")
+		return errors.New("INCONCLUSIVE coverage: helper send no longer pending after Go read; marker read not proven concurrent, no retry")
 	}
 
 	// (3) Existing GC rounds while the op is pending and its pins are held.
-	pinsBefore, closedBefore := r.pinsReleased.Load(), r.eventsClosed.Load()
+	cb := windowsSocketWriteCounters()
 	rounds := ovGCRounds()
 	r.ev.event("gc_rounds_done")
-	pendingAfterGC, _, perr := ovStillPending(op)
+	pendingAfterGC, _, _, perr := op.pendingObserved()
 	if perr != nil {
 		return fmt.Errorf("peek event after gc: %w", perr)
 	}
-	pinsAfter, closedAfter := r.pinsReleased.Load(), r.eventsClosed.Load()
+	ca := windowsSocketWriteCounters()
 	r.ev.set("gc_rounds", rounds)
 	r.ev.set("pending_after_gc", pendingAfterGC)
-	r.ev.set("pins_released_before_reader_release", pinsAfter)
-	r.ev.set("events_closed_before_reader_release", closedAfter)
-	pinsHeld := pinsBefore == 0 && pinsAfter == 0 && closedBefore == 0 && closedAfter == 0
+	r.ev.set("pins_released_before_reader_release", ca.UnpinOps)
+	r.ev.set("events_closed_before_reader_release", ca.EventsClosed)
+	r.ev.set("events_created_while_pending", ca.EventsCreated)
+	r.ev.set("ops_posted_while_pending", ca.OpsPosted)
+	one := windowsSocketCounters{EventsCreated: 1, OpsPosted: 1}
+	pinsHeld := cb == one && ca == one // created 1, posted 1, closed 0, unpinned 0 before and after GC
 	r.ev.set("pins_held_during_gc", pinsHeld)
 	r.ev.set("gc_while_pending", pendingAfterGC && pinsHeld)
-	doneBeforeRelease := ovClosed(op.done)
+	doneBeforeRelease := ovClosed(op.w.Done())
 	r.ev.set("completed_before_reader_release", doneBeforeRelease)
 	if !pendingAfterGC || !pinsHeld || doneBeforeRelease {
 		return fmt.Errorf("INCONCLUSIVE coverage: GC rounds not proven during pending with pins held (pending=%v pinsHeld=%v done=%v), no retry", pendingAfterGC, pinsHeld, doneBeforeRelease)
@@ -1072,10 +1018,11 @@ func ovScenarioPin(r *ovRun) error {
 	if err := op.requireFull(); err != nil {
 		return err
 	}
-	if !(op.seqFence > 0 && op.seqFence < op.seqUnpin && op.seqUnpin < op.seqClose) {
-		return fmt.Errorf("order violation: fence=%d unpin=%d close_event=%d", op.seqFence, op.seqUnpin, op.seqClose)
+	ord := op.orderSeqs()
+	if !(ord[0] > 0 && ord[0] < ord[1] && ord[1] < ord[2] && ord[2] < ord[3]) {
+		return fmt.Errorf("order violation: fence=%d unpin=%d close_event=%d done=%d", ord[0], ord[1], ord[2], ord[3])
 	}
-	r.ev.set("order_fence_unpin_closeevent", []int{op.seqFence, op.seqUnpin, op.seqClose})
+	r.ev.set("helper_attested_order_fence_unpin_closeevent_done", ord)
 	if err := pr.w.CloseWrite(); err != nil {
 		return fmt.Errorf("CloseWrite: %w", err)
 	}
@@ -1092,7 +1039,7 @@ func ovScenarioPin(r *ovRun) error {
 	r.ev.set("want_sha256", wantSHA)
 	r.ev.set("got_sha256", gotSHA)
 	if len(rd.b) != wantLen || gotSHA != wantSHA {
-		return fmt.Errorf("pin stream mismatch: got %d sha %s want %d sha %s", len(rd.b), gotSHA, wantLen, wantSHA)
+		return fmt.Errorf("pin stream mismatch: got %d bytes sha %s want %d sha %s", len(rd.b), gotSHA, wantLen, wantSHA)
 	}
 	return nil
 }
@@ -1182,17 +1129,48 @@ func ovScenarioPausedClose(r *ovRun) error {
 	if err != nil {
 		return err
 	}
-	sig, rel, perr := op.peekSignaled()
+	pending, sig, rel, perr := op.pendingObserved()
 	if perr != nil {
 		return fmt.Errorf("peek event: %w", perr)
 	}
-	pending := op.postClass == "native997" && !sig && !rel && !ovClosed(op.done)
 	r.ev.set("pending_observed", pending)
-	r.ev.set("post_class_at_post", op.postClass)
+	r.ev.set("post_class_at_post", op.post)
 	r.ev.set("event_signaled_at_peek", sig)
 	cancelClass := op.cancel()
 	r.ev.event("cancel_issued:" + cancelClass)
+	// Cancel must NOT close or invalidate the socket: the caller-owned conn is
+	// still usable through RawConn.Control after Cancel returns.
+	ranAfterCancel := false
+	if cerr := rc.Control(func(uintptr) { ranAfterCancel = true }); cerr != nil || !ranAfterCancel {
+		return fmt.Errorf("Cancel closed or invalidated the socket: ran=%v err=%v", ranAfterCancel, cerr)
+	}
+	r.ev.set("socket_open_after_cancel", true)
+	// Cancel is idempotent and concurrency-safe: repeat it sequentially and from
+	// two goroutines; every result must be a non-fault state.
+	again := []string{op.cancel()}
+	cc := make(chan string, 2)
+	for i := 0; i < 2; i++ {
+		r.spawn(func() { cc <- string(op.w.Cancel()) })
+	}
+	for i := 0; i < 2; i++ {
+		v, rerr := ovRecv(cc, "concurrent Cancel")
+		if rerr != nil {
+			r.fatalUnfenced(rerr.Error())
+		}
+		again = append(again, v)
+	}
+	for _, v := range again {
+		if !ovCancelOK(v) {
+			return fmt.Errorf("repeat Cancel returned fault state %q (all: %v)", v, again)
+		}
+	}
+	r.ev.set("repeat_cancel_results", again)
 	op.closeIssued.Store(true)
+	// NATIVE-MECHANISM EVIDENCE ONLY: this immediate caller Close right after
+	// Cancel (before the completion is processed) probes the Windows kernel
+	// behavior. It is NOT Node parity and NOT production policy; Node's physical
+	// close ordering (cancel, process write completion, then close) remains the
+	// caller/actor policy decided later.
 	closeCh := make(chan error, 1)
 	r.spawn(func() { closeCh <- pr.w.Close() })
 	cerr, err := ovRecv(closeCh, "Close return")
@@ -1215,6 +1193,7 @@ func ovScenarioPausedClose(r *ovRun) error {
 	if err != nil {
 		return err
 	}
+	fin := op.finalize()
 	r.ev.set("cancel_class", cancelClass)
 	r.ev.set("custom_send", op.describe())
 	r.ev.set("received_bytes", len(rd.b))
@@ -1225,17 +1204,18 @@ func ovScenarioPausedClose(r *ovRun) error {
 	if len(rd.b) > len(data) || !bytes.Equal(rd.b, data[:len(rd.b)]) { // data read only after the fence
 		return fmt.Errorf("received %d bytes are not a valid prefix of the payload", len(rd.b))
 	}
-	if !(op.seqFence > 0 && op.seqFence < op.seqUnpin && op.seqUnpin < op.seqClose) {
-		return fmt.Errorf("order violation: fence=%d unpin=%d close_event=%d", op.seqFence, op.seqUnpin, op.seqClose)
+	ord := op.orderSeqs()
+	if !(ord[0] > 0 && ord[0] < ord[1] && ord[1] < ord[2] && ord[2] < ord[3]) {
+		return fmt.Errorf("order violation: fence=%d unpin=%d close_event=%d done=%d", ord[0], ord[1], ord[2], ord[3])
 	}
-	r.ev.set("order_fence_unpin_closeevent", []int{op.seqFence, op.seqUnpin, op.seqClose})
-	switch op.final.Class {
+	r.ev.set("helper_attested_order_fence_unpin_closeevent_done", ord)
+	switch fin.Class {
 	case "aborted", "peer_abort_reset", "unknown_closed", "complete_short", "complete_full":
 	default:
-		return fmt.Errorf("unexpected final class %s", op.final.Class)
+		return fmt.Errorf("unexpected final class %s", fin.Class)
 	}
 	if !pending {
-		return fmt.Errorf("INCONCLUSIVE sizing: no pending overlapped operation observed (post=%s signaled=%v released=%v); cancellation not qualified, no retry/enlargement", op.postClass, sig, rel)
+		return fmt.Errorf("INCONCLUSIVE sizing: no pending overlapped operation observed (post=%s signaled=%v released=%v); cancellation not qualified, no retry/enlargement", op.post, sig, rel)
 	}
 	if cancelClass != "cancel_issued" {
 		return fmt.Errorf("INCONCLUSIVE cancellation race: %s; no successful cancellation request observed, no retry", cancelClass)
@@ -1270,8 +1250,27 @@ func ovScenarioClosedIdentity(r *ovRun) error {
 	if !errors.As(cerr, &coe) || coe.Op != "raw-control" {
 		return fmt.Errorf("constructor error is not raw-control OpError: %v", cerr)
 	}
+	// (b0) helper domain: invalid part lists are rejected BEFORE any resource is
+	// created or any RawConn call is made (so the closed fd does not mask them).
+	for i, bad := range [][][]byte{nil, {}, {nil}, {{}}, {ovBytes(2, 8), {}}} {
+		d0 := windowsSocketWriteCounters()
+		if d0 != (windowsSocketCounters{}) {
+			return fmt.Errorf("domain case %d: counters not zero before: %+v", i, d0)
+		}
+		w, derr := submitWindowsSocketWrite(rc, bad)
+		d1 := windowsSocketWriteCounters()
+		if w != nil || derr == nil || !errors.Is(derr, errWindowsSocketWriteDomain) || errors.Is(derr, net.ErrClosed) {
+			return fmt.Errorf("domain case %d: op=%v err=%v (want nil op, errWindowsSocketWriteDomain only)", i, w != nil, derr)
+		}
+		if d1 != d0 {
+			return fmt.Errorf("domain case %d allocated or released resources: before=%+v after=%+v", i, d0, d1)
+		}
+	}
 	// (b) post on a closed fd: zero ownership.
-	c0, k0, p0 := r.eventsCreated.Load(), r.eventsClosed.Load(), r.pinsReleased.Load()
+	c0 := windowsSocketWriteCounters()
+	if c0 != (windowsSocketCounters{}) {
+		return fmt.Errorf("closed-post: counters not zero before: %+v", c0)
+	}
 	op, perr := r.submit("closed", rc, [][]byte{ovBytes(3, 4096)})
 	if op != nil || perr == nil || !errors.Is(perr, net.ErrClosed) {
 		return fmt.Errorf("post on closed fd: op=%v err=%v (want nil op, net.ErrClosed)", op != nil, perr)
@@ -1280,9 +1279,10 @@ func ovScenarioClosedIdentity(r *ovRun) error {
 	if !errors.As(perr, &poe) || poe.Op != "raw-write" {
 		return fmt.Errorf("post error is not raw-write OpError: %v", perr)
 	}
-	dc, dk, dp := r.eventsCreated.Load()-c0, r.eventsClosed.Load()-k0, r.pinsReleased.Load()-p0
-	if dc != dk || dk != dp || r.opsPosted.Load() != 0 {
-		return fmt.Errorf("closed-post resource delta created=%d closed=%d unpinned=%d posted=%d", dc, dk, dp, r.opsPosted.Load())
+	c1 := windowsSocketWriteCounters()
+	dc, dk, dp, dq := c1.EventsCreated-c0.EventsCreated, c1.EventsClosed-c0.EventsClosed, c1.UnpinOps-c0.UnpinOps, c1.OpsPosted-c0.OpsPosted
+	if dc != 0 || dk != 0 || dp != 0 || dq != 0 {
+		return fmt.Errorf("closed-post exact deltas created=%d closed=%d unpinned=%d posted=%d (all must be 0)", dc, dk, dp, dq)
 	}
 	// (c) old fd is never usable outside callbacks: Control must refuse.
 	ran := false
@@ -1336,7 +1336,7 @@ func ovScenarioClosedIdentity(r *ovRun) error {
 			if rd.err != nil || len(rd.b) != len(data) || ovSum(rd.b) != want {
 				return fmt.Errorf("fresh stream mismatch: len=%d err=%v", len(rd.b), rd.err)
 			}
-			freshNative = fop.postClass
+			freshNative = fop.post
 		}
 		if err := b.w.Close(); err != nil {
 			return err
@@ -1352,7 +1352,12 @@ func ovScenarioClosedIdentity(r *ovRun) error {
 	r.ev.set("fresh_stream_native_class", freshNative)
 	r.ev.set("constructor_closed_error", cerr.Error())
 	r.ev.set("post_closed_error", perr.Error())
-	r.ev.set("closed_post_resource_delta", map[string]int32{"created": dc, "closed": dk, "unpinned": dp})
+	r.ev.set("closed_post_resource_delta", map[string]int64{"created": dc, "closed": dk, "unpinned": dp, "posted": dq})
+	fc := windowsSocketWriteCounters()
+	r.ev.set("fresh_op_counters", map[string]int64{"created": fc.EventsCreated, "closed": fc.EventsClosed, "unpinned": fc.UnpinOps, "posted": fc.OpsPosted})
+	if fc != (windowsSocketCounters{EventsCreated: 1, EventsClosed: 1, UnpinOps: 1, OpsPosted: 1}) {
+		return fmt.Errorf("fresh-native counters %+v want all 1", fc)
+	}
 	return nil
 }
 
@@ -1370,9 +1375,11 @@ func ovRunChild(t *testing.T, spec string) {
 	defer wd.Stop()
 	failure := ""
 	func() {
-		// The scenario goroutine is the submitter: it stays locked to one OS
-		// thread until every operation it posted is fenced. Deferred order is
-		// LIFO: recover, then cleanup (cancel/fence/join), then Unlock.
+		// PRECONDITION OWNED BY THE CALLER, NOT THE HELPER: the scenario
+		// goroutine is the submitter and stays locked to one OS thread until
+		// every operation it posted is fenced (the helper cannot verify this).
+		// Deferred order is LIFO: recover, then cleanup (cancel/fence/join),
+		// then Unlock.
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 		defer r.cleanup()
@@ -1381,16 +1388,25 @@ func ovRunChild(t *testing.T, spec string) {
 				failure = fmt.Sprintf("panic: %v", x)
 			}
 		}()
-		procs, err := ovResolve()
+		tid, err := ovThreadID()
 		if err != nil {
 			failure = err.Error()
 			return
 		}
-		r.procs = procs
+		r.threadID = tid
+		if c := windowsSocketWriteCounters(); c != (windowsSocketCounters{}) {
+			failure = fmt.Sprintf("helper counters not zero at child start: %+v", c)
+			return
+		}
 		if err := fn(r); err != nil {
 			failure = err.Error()
 		}
 	}()
+	// Every child's total is exactly one op that reached the protected callback
+	// (closed-identity: only the fresh op; refused/domain/closed leave zero).
+	if c := windowsSocketWriteCounters(); failure == "" && c != (windowsSocketCounters{EventsCreated: 1, EventsClosed: 1, UnpinOps: 1, OpsPosted: 1}) {
+		failure = fmt.Sprintf("final helper counters %+v want created=closed=unpin=posted=1", c)
+	}
 	if failure == "" && r.ev.faultCount() > 0 {
 		failure = "faults recorded"
 	}
@@ -1480,6 +1496,8 @@ func ovCheckPinReceipt(details any) error {
 		"pending_after_gc":                    true,
 		"gc_while_pending":                    true,
 		"pins_released_before_reader_release": float64(0),
+		"events_created_while_pending":        float64(1),
+		"ops_posted_while_pending":            float64(1),
 		"events_closed_before_reader_release": float64(0),
 		"completed_before_reader_release":     false,
 		"completion_after_reader_release":     true,
@@ -1514,11 +1532,11 @@ func ovCheckPinReceipt(details any) error {
 			return fmt.Errorf("pin receipt: custom_send.%s=%v (present=%v) want %v", k, got, present, want)
 		}
 	}
-	ord, ok := d["order_fence_unpin_closeevent"].([]any)
-	if !ok || len(ord) != 3 {
-		return fmt.Errorf("pin receipt: order_fence_unpin_closeevent missing or not 3 elements: %v", d["order_fence_unpin_closeevent"])
+	ord, ok := d["helper_attested_order_fence_unpin_closeevent_done"].([]any)
+	if !ok || len(ord) != 4 {
+		return fmt.Errorf("pin receipt: helper_attested_order_fence_unpin_closeevent_done missing or not 4 elements: %v", d["helper_attested_order_fence_unpin_closeevent_done"])
 	}
-	var seq [3]float64
+	var seq [4]float64
 	for i, v := range ord {
 		f, fok := v.(float64)
 		if !fok {
@@ -1526,8 +1544,8 @@ func ovCheckPinReceipt(details any) error {
 		}
 		seq[i] = f
 	}
-	if !(seq[0] > 0 && seq[0] < seq[1] && seq[1] < seq[2]) {
-		return fmt.Errorf("pin receipt: want 0 < fence < unpin < event-close, got %v", seq)
+	if !(seq[0] > 0 && seq[0] < seq[1] && seq[1] < seq[2] && seq[2] < seq[3]) {
+		return fmt.Errorf("pin receipt: want 0 < fence < unpin < event-close < done (helper-attested), got %v", seq)
 	}
 	return nil
 }
@@ -1580,8 +1598,16 @@ func TestWindowsOverlappedTailGoInterop(t *testing.T) {
 			if cl, ok := res["cleanup"].(map[string]any); !ok || cl["error"] != "" {
 				t.Fatalf("child %s: cleanup must exist with empty error, got %v", spec, res["cleanup"])
 			}
-			if ec, ok1 := res["cleanup"].(map[string]any)["events_created"].(float64); !ok1 || ec != res["cleanup"].(map[string]any)["events_closed"] {
-				t.Fatalf("child %s: events created/closed mismatch: %v", spec, res["cleanup"])
+			if res["order_source"] != "helper_attested" {
+				t.Fatalf("child %s: order_source=%v want helper_attested", spec, res["order_source"])
+			}
+			// Exact positive counter gates for all four children: one op reached
+			// the protected callback, created=closed=unpinned=posted=1.
+			cl := res["cleanup"].(map[string]any)
+			for _, k := range []string{"events_created", "events_closed", "pins_released", "ops_posted"} {
+				if v, vok := cl[k].(float64); !vok || v != 1 {
+					t.Fatalf("child %s: cleanup.%s=%v want exactly 1", spec, k, cl[k])
+				}
 			}
 			if spec == "paused-reader-close" {
 				d, ok := res["details"].(map[string]any)
@@ -1597,6 +1623,7 @@ func TestWindowsOverlappedTailGoInterop(t *testing.T) {
 					"pending_observed":                 true,
 					"post_class_at_post":               "native997",
 					"cancel_class":                     "cancel_issued",
+					"socket_open_after_cancel":         true,
 					"completion_before_reader_release": true,
 				} {
 					if d[k] != want {
