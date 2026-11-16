@@ -1019,11 +1019,49 @@ func ovScenarioPausedClose(r *ovRun) error {
 	if err != nil {
 		return err
 	}
-	if err := pr.w.SetWriteBuffer(4096); err != nil {
+	// This child alone uses documented unbuffered socket options as a
+	// diagnostic pending-I/O fixture, never as production/Node socket policy.
+	// The former 4096-byte requests did not bound transport acceptance: the
+	// entire 24MiB operation completed immediately on both architectures.
+	// Keep one original-size post; even this mode must fail inconclusive if
+	// no pending operation is observed, rather than retry or enlarge it.
+	r.ev.set("socket_configuration", "unbuffered-diagnostic")
+	r.ev.set("requested_send_buffer", 0)
+	r.ev.set("requested_receive_buffer", 0)
+	r.ev.set("writer_endpoint", pr.w.LocalAddr().String())
+	r.ev.set("peer_endpoint", pr.p.LocalAddr().String())
+	if err := pr.w.SetWriteBuffer(0); err != nil {
 		return fmt.Errorf("SetWriteBuffer: %w", err)
 	}
-	if err := pr.p.SetReadBuffer(4096); err != nil {
+	if err := pr.p.SetReadBuffer(0); err != nil {
 		return fmt.Errorf("SetReadBuffer: %w", err)
+	}
+	for _, opt := range []struct {
+		conn *net.TCPConn
+		name string
+		kind int
+	}{
+		{pr.w, "effective_send_buffer", syscall.SO_SNDBUF},
+		{pr.p, "effective_receive_buffer", syscall.SO_RCVBUF},
+	} {
+		raw, err := opt.conn.SyscallConn()
+		if err != nil {
+			return fmt.Errorf("%s SyscallConn: %w", opt.name, err)
+		}
+		var value int
+		var queryErr error
+		if err := raw.Control(func(fd uintptr) {
+			value, queryErr = syscall.GetsockoptInt(syscall.Handle(fd), syscall.SOL_SOCKET, opt.kind)
+		}); err != nil {
+			return fmt.Errorf("%s Control: %w", opt.name, err)
+		}
+		if queryErr != nil {
+			return fmt.Errorf("%s getsockopt: %w", opt.name, queryErr)
+		}
+		r.ev.set(opt.name, value)
+		if value != 0 {
+			return fmt.Errorf("%s=%d: unbuffered diagnostic requires zero", opt.name, value)
+		}
 	}
 	if _, err := newSocketTryWriter(pr.w); err != nil {
 		return fmt.Errorf("newSocketTryWriter: %w", err)
@@ -1058,11 +1096,14 @@ func ovScenarioPausedClose(r *ovRun) error {
 	if cerr != nil {
 		return fmt.Errorf("Close: %w", cerr)
 	}
-	close(gate) // application read starts only after cancel and Close
-	r.ev.event("reader_released")
+	// Test the fence without allowing application reads to rescue it. This
+	// wait is a bounded test observer, not a production response-close hold.
 	if err := r.waitDone(op); err != nil {
 		return err
 	}
+	r.ev.set("completion_before_reader_release", true)
+	close(gate)
+	r.ev.event("reader_released")
 	rd, err := ovRecv(readCh, "peer read")
 	if err != nil {
 		return err
@@ -1088,6 +1129,9 @@ func ovScenarioPausedClose(r *ovRun) error {
 	}
 	if !pending {
 		return fmt.Errorf("INCONCLUSIVE sizing: no pending overlapped operation observed (post=%s signaled=%v released=%v); cancellation not qualified, no retry/enlargement", op.postClass, sig, rel)
+	}
+	if cancelClass != "cancel_issued" {
+		return fmt.Errorf("INCONCLUSIVE cancellation race: %s; no successful cancellation request observed, no retry", cancelClass)
 	}
 	return nil
 }
@@ -1351,6 +1395,27 @@ func TestWindowsOverlappedTailGoInterop(t *testing.T) {
 			}
 			if ec, ok1 := res["cleanup"].(map[string]any)["events_created"].(float64); !ok1 || ec != res["cleanup"].(map[string]any)["events_closed"] {
 				t.Fatalf("child %s: events created/closed mismatch: %v", spec, res["cleanup"])
+			}
+			if spec == "paused-reader-close" {
+				d, ok := res["details"].(map[string]any)
+				if !ok {
+					t.Fatalf("child %s: missing details", spec)
+				}
+				for k, want := range map[string]any{
+					"socket_configuration":             "unbuffered-diagnostic",
+					"requested_send_buffer":            float64(0),
+					"requested_receive_buffer":         float64(0),
+					"effective_send_buffer":            float64(0),
+					"effective_receive_buffer":         float64(0),
+					"pending_observed":                 true,
+					"post_class_at_post":               "native997",
+					"cancel_class":                     "cancel_issued",
+					"completion_before_reader_release": true,
+				} {
+					if d[k] != want {
+						t.Fatalf("child %s: %s=%v want %v", spec, k, d[k], want)
+					}
+				}
 			}
 			// Parent-side equality of the stream hash/length pairs the children
 			// report (the child's own checks are unchanged).
