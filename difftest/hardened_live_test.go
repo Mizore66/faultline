@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Mizore66/faultline/difftest/oracle"
 	"github.com/Mizore66/faultline/internal/gitinv"
@@ -211,7 +212,9 @@ func TestLiveHardenedGit(t *testing.T) {
 				wg.Add(1)
 				go func() { defer wg.Done(); got = gitinv.RunHardenedGit(tc.args, tc.opts) }()
 			}
+			diagOracleStart := time.Now()
 			res, err := o.Call("runHardenedGit", string(req))
+			diagOracleElapsed := time.Since(diagOracleStart)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -224,6 +227,7 @@ func TestLiveHardenedGit(t *testing.T) {
 			} else {
 				got = gitinv.RunHardenedGit(tc.args, tc.opts)
 			}
+			t.Logf("HARDENED_DIAG case=%q oracle_elapsed=%s oracle_error=%q oracle_stdout_len=%d oracle_stderr_len=%d go_error=%q go_stdout_len=%d go_stderr_len=%d", tc.name, diagOracleElapsed, deref(want.Error), want.Stdout.Length, want.Stderr.Length, got.Error, len(got.Stdout), len(got.Stderr))
 			gotErr := deref(want.Error)
 			if msg := wantErrorMismatch(tc.wantError, gotErr, got.Error); msg != "" {
 				t.Fatal(msg)
