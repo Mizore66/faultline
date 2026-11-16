@@ -1,4 +1,4 @@
-//go:build windows
+//go:build linux || darwin || windows
 
 package proofview
 
@@ -19,16 +19,18 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"reflect"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
-	"unsafe"
 	"weak"
 )
 
@@ -36,7 +38,8 @@ const (
 	hxWaitObject0 = 0
 	hxWaitTimeout = 258
 	hxWaitFailed  = 0xFFFFFFFF
-	hxGuard       = 10 * time.Second // failure-only guard, never a behavior heuristic
+	hxIOPending   = syscall.Errno(997) // independent of the core constant on purpose
+	hxGuard       = 10 * time.Second   // failure-only guard, never a behavior heuristic
 )
 
 // ---- fake pinner (pure ownership model; no runtime.Pinner) ----
@@ -47,15 +50,18 @@ type hxPinner struct {
 	unpins int
 }
 
-func (p *hxPinner) Pin(x any) error {
+func (p *hxPinner) Pin(x any) windowsSocketPinResult {
 	p.set.mu.Lock()
 	defer p.set.mu.Unlock()
 	p.set.pinCalls++
 	if p.set.failAt != 0 && p.set.pinCalls == p.set.failAt {
-		return errors.New("fake pin failure")
+		if p.set.failPanic {
+			return windowsSocketPinResult{Panic: "fake pin panic", Panicked: true}
+		}
+		return windowsSocketPinResult{Err: errors.New("fake pin failure")}
 	}
 	p.pinned = append(p.pinned, reflect.ValueOf(x).Pointer())
-	return nil
+	return windowsSocketPinResult{}
 }
 
 func (p *hxPinner) Unpin() {
@@ -67,7 +73,8 @@ func (p *hxPinner) Unpin() {
 
 type hxPins struct {
 	mu         sync.Mutex
-	failAt     int // 1-based Pin call that fails; 0 = never
+	failAt     int  // 1-based Pin call that fails; 0 = never
+	failPanic  bool // the failing Pin reports a recovered panic value instead of an error
 	pinCalls   int
 	unpinCalls int
 	made       []*hxPinner
@@ -101,48 +108,109 @@ type hxNative struct {
 	closeErr, cancelErr             error
 	result                          windowsSocketNativeResult
 	waitCh                          chan hxWait
-	next                            syscall.Handle
+	resolveName                     string
+	next                            windowsSocketHandle
 	resolves, creates, sends, waits int
 	polls, results, cancels, closes int
+	newPosts                        int
+	postTagged                      []uintptr
+	postPartLens                    [][]uint32
 	sendBufLens                     [][]uint32
+	sendN                           []int
+	badNewPost                      func(tagged uintptr, parts [][]byte) (any, []any)
+	madePosts                       map[*hxPost]bool
+	sentPost                        *hxPost
+	badPost                         []string // post-identity violations at Send/Result/CancelIoEx
 	sendOVTagged                    bool
 	cancelUnpinsAtCall              []int
-	closedHandles                   []syscall.Handle
+	closedHandles                   []windowsSocketHandle
 	cancelHook                      func()
 }
 
-func (f *hxNative) Resolve() error {
+// hxPost is the fake opaque post object. The two marker bytes stand in for the
+// OVERLAPPED and WSABUF[0] pin targets; the stable pointer identity of the post
+// itself is what Send/Result/CancelIoEx receive.
+type hxPost struct {
+	tagged   uintptr
+	parts    [][]byte // the "WSABUF array": lengths are derived from this at Send, not at NewPost
+	ovMark   byte
+	bufsMark byte
+}
+
+// checkPost records a violation unless post is exactly a post this fake made
+// (and, after Send, exactly the one Send received). Caller holds f.mu.
+func (f *hxNative) checkPost(op string, post any) *hxPost {
+	p, ok := post.(*hxPost)
+	switch {
+	case !ok || p == nil:
+		f.badPost = append(f.badPost, op+": not an *hxPost or nil")
+		return nil
+	case !f.madePosts[p]:
+		f.badPost = append(f.badPost, op+": post not created by NewPost")
+	case op != "Send" && f.sentPost != nil && p != f.sentPost:
+		f.badPost = append(f.badPost, op+": post differs from the one Send received")
+	}
+	return p
+}
+
+func (f *hxNative) Resolve() (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resolves++
-	return f.resolveErr
+	return f.resolveName, f.resolveErr
 }
 
-func (f *hxNative) CreateEvent() (syscall.Handle, error) {
+func (f *hxNative) CreateEvent() (windowsSocketHandle, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.createErr != nil {
-		return 0, f.createErr
+		return 0, false, f.createErr
 	}
 	f.creates++
 	f.next += 4
-	return 0x1000 + f.next, nil
+	return 0x1000 + f.next, true, nil
 }
 
-func (f *hxNative) Send(h syscall.Handle, bufs *syscall.WSABuf, n uint32, ov *syscall.Overlapped) error {
+func (f *hxNative) NewPost(tagged uintptr, parts [][]byte) (any, []any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.newPosts++
+	if f.badNewPost != nil {
+		return f.badNewPost(tagged, parts)
+	}
+	f.postTagged = append(f.postTagged, tagged)
+	lens := make([]uint32, 0, len(parts))
+	for _, p := range parts {
+		lens = append(lens, uint32(len(p)))
+	}
+	f.postPartLens = append(f.postPartLens, lens)
+	post := &hxPost{tagged: tagged, parts: append([][]byte(nil), parts...)}
+	if f.madePosts == nil {
+		f.madePosts = map[*hxPost]bool{}
+	}
+	f.madePosts[post] = true
+	return post, []any{&post.ovMark, &post.bufsMark}
+}
+
+func (f *hxNative) Send(h windowsSocketHandle, post any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sends++
-	lens := make([]uint32, 0, n)
-	for _, b := range unsafe.Slice(bufs, n) {
-		lens = append(lens, b.Len)
+	if p := f.checkPost("Send", post); p != nil {
+		// Lengths are read from the post's own state at Send time.
+		lens := make([]uint32, 0, len(p.parts))
+		for _, b := range p.parts {
+			lens = append(lens, uint32(len(b)))
+		}
+		f.sendBufLens = append(f.sendBufLens, lens)
+		f.sendN = append(f.sendN, len(p.parts))
+		f.sendOVTagged = p.tagged&1 == 1
+		f.sentPost = p
 	}
-	f.sendBufLens = append(f.sendBufLens, lens)
-	f.sendOVTagged = uintptr(ov.HEvent)&1 == 1
 	return f.sendErr
 }
 
-func (f *hxNative) WaitEvent(ev syscall.Handle) (uint32, error) {
+func (f *hxNative) WaitEvent(ev windowsSocketHandle) (uint32, error) {
 	f.mu.Lock()
 	f.waits++
 	ch := f.waitCh
@@ -151,23 +219,25 @@ func (f *hxNative) WaitEvent(ev syscall.Handle) (uint32, error) {
 	return r.status, r.err
 }
 
-func (f *hxNative) PollEvent(ev syscall.Handle) (uint32, error) {
+func (f *hxNative) PollEvent(ev windowsSocketHandle) (uint32, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.polls++
 	return hxWaitTimeout, nil
 }
 
-func (f *hxNative) Result(h syscall.Handle, ov *syscall.Overlapped) windowsSocketNativeResult {
+func (f *hxNative) Result(h windowsSocketHandle, post any) windowsSocketNativeResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.results++
+	f.checkPost("Result", post)
 	return f.result
 }
 
-func (f *hxNative) CancelIoEx(h syscall.Handle, ov *syscall.Overlapped) error {
+func (f *hxNative) CancelIoEx(h windowsSocketHandle, post any) error {
 	f.mu.Lock()
 	f.cancels++
+	f.checkPost("CancelIoEx", post)
 	hook := f.cancelHook
 	f.cancelUnpinsAtCall = append(f.cancelUnpinsAtCall, f.pins.unpins())
 	err := f.cancelErr
@@ -178,7 +248,7 @@ func (f *hxNative) CancelIoEx(h syscall.Handle, ov *syscall.Overlapped) error {
 	return err
 }
 
-func (f *hxNative) CloseEvent(ev syscall.Handle) error {
+func (f *hxNative) CloseEvent(ev windowsSocketHandle) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closes++
@@ -261,7 +331,7 @@ func newHxRig() *hxRig {
 
 func (r *hxRig) setHook(f func(*windowsSocketWrite, string)) { r.hook.Store(&f) }
 
-func (r *hxRig) pending() { r.api.sendErr = syscall.ERROR_IO_PENDING }
+func (r *hxRig) pending() { r.api.sendErr = hxIOPending }
 
 func hxOK(t *testing.T, mode string) *hxRaw { t.Helper(); return &hxRaw{mode: "run"} }
 
@@ -301,6 +371,12 @@ func hxTotal(p [][]byte) uint64 {
 
 func hxCounters(t *testing.T, rig *hxRig, want windowsSocketCounters) {
 	t.Helper()
+	rig.api.mu.Lock()
+	bad := append([]string(nil), rig.api.badPost...)
+	rig.api.mu.Unlock()
+	if len(bad) != 0 {
+		t.Fatalf("post identity violations: %v", bad)
+	}
 	if got := rig.rt.Counters(); got != want {
 		t.Fatalf("counters %+v want %+v", got, want)
 	}
@@ -731,7 +807,7 @@ func TestWindowsHelperT10OuterErrorAfterCallback(t *testing.T) {
 		sendErr error
 		post    windowsSocketPost
 	}{
-		{"native997", syscall.ERROR_IO_PENDING, windowsSocketPostNative997},
+		{"native997", hxIOPending, windowsSocketPostNative997},
 		{"native0", nil, windowsSocketPostNative0},
 	} {
 		rig := newHxRig()
@@ -746,7 +822,7 @@ func TestWindowsHelperT10OuterErrorAfterCallback(t *testing.T) {
 			t.Fatalf("%s: classification or fault lost: %+v", tc.name, s)
 		}
 		if tc.post == windowsSocketPostNative997 {
-			if s.PostErrno != syscall.ERROR_IO_PENDING || hxClosed(op.Done()) || hxClosed(op.FenceFailed()) || s.Unpinned || rig.pins.unpins() != 0 || rig.rt.LiveCount() != 1 {
+			if s.PostErrno != hxIOPending || hxClosed(op.Done()) || hxClosed(op.FenceFailed()) || s.Unpinned || rig.pins.unpins() != 0 || rig.rt.LiveCount() != 1 {
 				t.Fatalf("%s: pending op released because of outer error: %+v", tc.name, s)
 			}
 			rig.api.waitCh <- hxWait{status: hxWaitObject0}
@@ -1085,5 +1161,254 @@ func TestWindowsHelperCloseEventErrorReleaseFailed(t *testing.T) {
 			t.Fatalf("pend=%v: Cancel re-attempted close or completed the op", pend)
 		}
 		// Quarantined fake event owner is deliberately left (synthetic handle, OPEN-1).
+	}
+}
+
+// ---- raw-value classification now owned by the core (reachable per instance) ----
+
+func TestWindowsHelperCoreCreateEventClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		callErr error
+		want    string
+		wantEn  syscall.Errno
+	}{
+		{"no errno", nil, "windows socket write: CreateEvent: CreateEventW failed without errno", 0},
+		{"non-errno error", errors.New("opaque"), "windows socket write: CreateEvent: CreateEventW failed without errno", 0},
+		{"errno", syscall.Errno(5), "", 5},
+	} {
+		rig := newHxRig()
+		rig.api.createErr = tc.callErr
+		if tc.callErr == nil {
+			rig.api.createErr = errors.New("placeholder")
+		}
+		if tc.name == "no errno" {
+			rig.api.createErr = syscall.Errno(0)
+		}
+		if tc.wantEn != 0 {
+			rig.api.createErr = tc.wantEn
+		}
+		op, err := rig.rt.Submit(hxOK(t, ""), hxParts(8))
+		if op != nil || err == nil {
+			t.Fatalf("%s: op=%v err=%v", tc.name, op != nil, err)
+		}
+		var en syscall.Errno
+		if tc.wantEn != 0 {
+			if !errors.As(err, &en) || en != tc.wantEn {
+				t.Fatalf("%s: err=%v want wrapped errno %d", tc.name, err, tc.wantEn)
+			}
+		} else if err.Error() != tc.want {
+			t.Fatalf("%s: err=%q want %q", tc.name, err.Error(), tc.want)
+		}
+		hxCounters(t, rig, windowsSocketCounters{})
+	}
+}
+
+func TestWindowsHelperCoreResolveNamesProc(t *testing.T) {
+	rig := newHxRig()
+	rig.api.resolveName = "CreateEventW"
+	rig.api.resolveErr = syscall.Errno(127)
+	_, err := rig.rt.Submit(hxOK(t, ""), hxParts(8))
+	var en syscall.Errno
+	if err == nil || !errors.As(err, &en) || en != 127 || err.Error() != "windows socket write: resolve: resolve CreateEventW: "+syscall.Errno(127).Error() {
+		t.Fatalf("resolve err=%v", err)
+	}
+}
+
+func TestWindowsHelperCorePinPanicFormatting(t *testing.T) {
+	rig := newHxRig()
+	rig.pins.failAt, rig.pins.failPanic = 2, true
+	op, err := rig.rt.Submit(hxOK(t, ""), hxParts(8))
+	if op == nil || err == nil || err.Error() != "windows socket write: pin: runtime.Pinner.Pin panic: fake pin panic" {
+		t.Fatalf("op=%v err=%v", op != nil, err)
+	}
+	s := op.Snapshot()
+	if len(s.Faults) != 1 || s.Faults[0] != err.Error() || s.Post != windowsSocketPostNotPosted {
+		t.Fatalf("snapshot %+v", s)
+	}
+}
+
+// Pin target order and tag are core-visible: adapter targets first (OVERLAPPED,
+// WSABUF[0]), then one target per payload part; the core tags the event low bit.
+func TestWindowsHelperCorePinTargetsAndTag(t *testing.T) {
+	rig := newHxRig()
+	rig.api.result = windowsSocketNativeResult{OK: true, N: 8}
+	parts := hxParts(5, 7)
+	op, err := rig.rt.Submit(hxOK(t, ""), parts)
+	if err != nil || op == nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if len(rig.api.postTagged) != 1 || rig.api.postTagged[0]&1 != 1 || rig.api.postTagged[0] != uintptr(0x1000+4)|1 {
+		t.Fatalf("tagged event %#v", rig.api.postTagged)
+	}
+	closed := rig.api.closedHandles
+	if len(closed) != 1 || closed[0] != 0x1000+4 {
+		t.Fatalf("CloseEvent must receive the ORIGINAL untagged handle: %v", closed)
+	}
+	pinned := rig.pins.made[0].pinned
+	if len(pinned) != 4 || pinned[2] != reflect.ValueOf(parts[0]).Pointer() || pinned[3] != reflect.ValueOf(parts[1]).Pointer() {
+		t.Fatalf("pin order wrong: %v", pinned)
+	}
+}
+
+func TestWindowsHelperCoreDefaultFactoryUsed(t *testing.T) {
+	rt := newWindowsSocketWriteRuntime(windowsSocketWriteDeps{})
+	if rt.deps.API == nil || rt.deps.NewPinner == nil || rt.deps.NewPinner() == nil {
+		t.Fatal("default factories not installed")
+	}
+}
+
+// ---- B1: malformed NewPost output is a certain no-I/O setup fault ----
+
+func TestWindowsHelperBadNewPostShapes(t *testing.T) {
+	var nilPost *hxPost
+	var nilByte *byte
+	b1, b2, b3 := new(byte), new(byte), new(byte)
+	good := &hxPost{}
+	for _, tc := range []struct {
+		name string
+		post any
+		pins []any
+	}{
+		{"nil post", nil, []any{b1, b2}},
+		{"typed nil post", nilPost, []any{b1, b2}},
+		{"scalar post", 7, []any{b1, b2}},
+		{"zero pins", good, nil},
+		{"one pin", good, []any{b1}},
+		{"three pins", good, []any{b1, b2, b3}},
+		{"nil pin 0", good, []any{nil, b2}},
+		{"nil pin 1", good, []any{b1, nil}},
+		{"typed nil pin", good, []any{nilByte, b2}},
+		{"scalar pin", good, []any{b1, 5}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newHxRig()
+			rig.pending() // a pending Send would be a real-I/O hazard if reached
+			rig.api.badNewPost = func(uintptr, [][]byte) (any, []any) { return tc.post, tc.pins }
+			raw := &hxRaw{mode: "run"}
+			op, err := rig.rt.Submit(raw, hxParts(8, 8))
+			if op == nil || err == nil {
+				t.Fatalf("op=%v err=%v want diagnostic op and error", op != nil, err)
+			}
+			s := op.Snapshot()
+			if rig.api.sends != 0 || s.WSASendCalls != 0 || s.Post != windowsSocketPostNotPosted || s.PinCalls != 0 {
+				t.Fatalf("Send/Pin reached: sends=%d snap=%+v", rig.api.sends, s)
+			}
+			if len(s.Faults) != 1 || s.Faults[0] != err.Error() || !strings.Contains(err.Error(), "windows socket write: invalid native post: ") {
+				t.Fatalf("fault/err wrong: faults=%v err=%v", s.Faults, err)
+			}
+			if !hxClosed(op.Done()) || hxClosed(op.FenceFailed()) || hxClosed(op.ReleaseFailed()) || !s.EventClosed || s.Unpinned || !s.Retired || s.FenceProven {
+				t.Fatalf("not an exact no-IO rollback: %+v", s)
+			}
+			if rig.api.waits != 0 || rig.api.results != 0 || rig.api.cancels != 0 || rig.rt.LiveCount() != 0 {
+				t.Fatalf("waits=%d results=%d cancels=%d live=%d", rig.api.waits, rig.api.results, rig.api.cancels, rig.rt.LiveCount())
+			}
+			rig.pins.mu.Lock()
+			made, pinCalls := len(rig.pins.made), rig.pins.pinCalls
+			rig.pins.mu.Unlock()
+			if made != 0 || pinCalls != 0 || rig.pins.unpins() != 0 {
+				t.Fatalf("pinner leaked or used: made=%d pins=%d unpins=%d", made, pinCalls, rig.pins.unpins())
+			}
+			if len(raw.cbRets) != 1 || !raw.cbRets[0] {
+				t.Fatalf("callback must run once and return true: %v", raw.cbRets)
+			}
+			if got := op.Cancel(); got != "already_done" || rig.api.cancels != 0 {
+				t.Fatalf("Cancel after rollback = %q", got)
+			}
+			hxCounters(t, rig, windowsSocketCounters{EventsCreated: 1, EventsClosed: 1, UnpinOps: 0, OpsPosted: 0})
+		})
+	}
+}
+
+// The same post value flows to Send, the post-query/fence-query Result and
+// CancelIoEx; Send derives its lengths from the post, not from NewPost capture.
+func TestWindowsHelperPostIdentityAndSendLengths(t *testing.T) {
+	for _, pend := range []bool{false, true} {
+		rig := newHxRig()
+		rig.api.result = windowsSocketNativeResult{OK: true, N: 12}
+		if pend {
+			rig.pending()
+		}
+		op, err := rig.rt.Submit(hxOK(t, ""), hxParts(5, 7))
+		if err != nil || op == nil {
+			t.Fatalf("pend=%v submit: %v", pend, err)
+		}
+		if pend {
+			if got := op.Cancel(); got != "cancel_issued" {
+				t.Fatalf("Cancel = %q", got)
+			}
+			rig.api.waitCh <- hxWait{status: hxWaitObject0}
+		}
+		hxAwait(t, op.Done(), "Done")
+		rig.api.mu.Lock()
+		if len(rig.api.madePosts) != 1 || rig.api.sentPost == nil || !rig.api.madePosts[rig.api.sentPost] ||
+			len(rig.api.sendN) != 1 || rig.api.sendN[0] != 2 ||
+			len(rig.api.sendBufLens[0]) != 2 || rig.api.sendBufLens[0][0] != 5 || rig.api.sendBufLens[0][1] != 7 ||
+			rig.api.results != 1 || (pend && rig.api.cancels != 1) {
+			t.Fatalf("pend=%v: posts=%d sent=%v n=%v lens=%v results=%d cancels=%d", pend, len(rig.api.madePosts), rig.api.sentPost != nil, rig.api.sendN, rig.api.sendBufLens, rig.api.results, rig.api.cancels)
+		}
+		rig.api.mu.Unlock()
+		hxCounters(t, rig, windowsSocketCounters{1, 1, 1, 1}) // also fails on any identity violation
+	}
+}
+
+// ---- fix2: numeric post enum and typed domain sentinel keep their public text ----
+
+func TestWindowsHelperPostEnumRenderedNames(t *testing.T) {
+	for _, tc := range []struct {
+		p    windowsSocketPost
+		want string
+	}{
+		{windowsSocketPostNotPosted, "not_posted"},
+		{windowsSocketPostNative0, "native0"},
+		{windowsSocketPostNative997, "native997"},
+		{windowsSocketPostError, "native_error"},
+		{windowsSocketPostUnclassified, "native_unclassified"},
+		{windowsSocketPost(200), "windowsSocketPost(200)"},
+	} {
+		if got := tc.p.String(); got != tc.want {
+			t.Fatalf("String(%d)=%q want %q", uint8(tc.p), got, tc.want)
+		}
+		if got := fmt.Sprintf("%s|%q|%v", tc.p, tc.p, tc.p); got != tc.want+"|"+strconv.Quote(tc.want)+"|"+tc.want {
+			t.Fatalf("formatted %d = %q", uint8(tc.p), got)
+		}
+	}
+	var zero windowsSocketPost
+	if zero != windowsSocketPostNotPosted {
+		t.Fatal("zero value must be not_posted")
+	}
+}
+
+// A real native_error post renders its public name through the snapshot.
+func TestWindowsHelperPostEnumNativeErrorThroughSnapshot(t *testing.T) {
+	rig := newHxRig()
+	rig.api.sendErr = syscall.Errno(10054)
+	op, _ := rig.rt.Submit(hxOK(t, ""), hxParts(8))
+	if op == nil {
+		t.Fatal("nil op")
+	}
+	if got := op.Snapshot().Post.String(); got != "native_error" {
+		t.Fatalf("Post renders %q want native_error", got)
+	}
+}
+
+func TestWindowsHelperDomainSentinelTypedIdentity(t *testing.T) {
+	const text = "windows socket write: invalid part list"
+	if errWindowsSocketWriteDomain.Error() != text {
+		t.Fatalf("sentinel text %q", errWindowsSocketWriteDomain.Error())
+	}
+	cases := map[string][]uint64{"no parts": nil, "empty part": {1, 0}, "single over": {1 << 33}, "total over": {1 << 31, 1 << 31, 1 << 31}}
+	for name, lens := range cases {
+		_, err := windowsSocketWriteDomain(lens)
+		if !errors.Is(err, errWindowsSocketWriteDomain) || !strings.HasPrefix(err.Error(), text+": ") {
+			t.Fatalf("%s: err=%v", name, err)
+		}
+		var typed *windowsSocketDomainError
+		if !errors.As(err, &typed) || error(typed) != errWindowsSocketWriteDomain {
+			t.Fatalf("%s: not the single sentinel pointer", name)
+		}
+	}
+	if errors.Is(errors.New(text), errWindowsSocketWriteDomain) || errors.Is(&windowsSocketDomainError{}, errWindowsSocketWriteDomain) {
+		t.Fatal("identity must be the one var pointer, not text or type equality")
 	}
 }

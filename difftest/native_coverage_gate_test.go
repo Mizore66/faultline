@@ -4,9 +4,13 @@ package difftest
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -126,6 +130,108 @@ func TestNativeCoverageEvents(t *testing.T) {
 		}},
 		{"proofview-non-diagnostic-emitter", func(e []map[string]any) []map[string]any {
 			return append(e, map[string]any{"Action": "output", "Package": nativeProofviewPkg, "Test": "TestIncidentServerClose", "Output": "NATIVE-DIAGNOSTIC \"x\"\n"})
+		}},
+		{"socket-parent-missing", func(e []map[string]any) []map[string]any {
+			return nativeWithoutTest(e, nativeSocketOverlappedParent)
+		}},
+		{"socket-parent-without-children", func(e []map[string]any) []map[string]any {
+			for _, child := range nativeSocketChildren {
+				e = nativeWithoutTest(e, nativeSocketOverlappedParent+"/"+child)
+			}
+			return e
+		}},
+		{"socket-child-run-event-missing", func(e []map[string]any) []map[string]any {
+			// Only run is removed; output/pass remain and must be rejected.
+			for i, x := range e {
+				if x["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[0] && x["Action"] == "run" {
+					return append(e[:i], e[i+1:]...)
+				}
+			}
+			return e
+		}},
+		{"socket-child-without-record", func(e []map[string]any) []map[string]any {
+			for i, x := range e {
+				if x["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[1] && x["Output"] != nil {
+					return append(e[:i], e[i+1:]...)
+				}
+			}
+			return e
+		}},
+		{"socket-duplicate-record", func(e []map[string]any) []map[string]any {
+			for i, x := range e {
+				if x["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[0] && x["Output"] != nil {
+					return append(e[:i], append([]map[string]any{x}, e[i:]...)...)
+				}
+			}
+			return e
+		}},
+		{"socket-parent-level-emitter", func(e []map[string]any) []map[string]any {
+			for _, x := range e {
+				if x["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[0] && x["Output"] != nil {
+					x["Test"] = nativeSocketOverlappedParent
+					break
+				}
+			}
+			return e
+		}},
+		{"socket-record-from-non-diagnostic-parent", func(e []map[string]any) []map[string]any {
+			for i, x := range e {
+				if x["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[0] && x["Output"] != nil {
+					x["Test"] = "TestIncidentServerClose/" + nativeSocketChildren[0]
+					run := map[string]any{"Action": "run", "Package": nativeProofviewPkg, "Test": "TestIncidentServerClose/" + nativeSocketChildren[0]}
+					return append(e[:i], append([]map[string]any{run}, e[i:]...)...)
+				}
+			}
+			return e
+		}},
+		{"socket-wrong-package-owner", func(e []map[string]any) []map[string]any {
+			for _, x := range e {
+				if x["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[0] && x["Output"] != nil {
+					x["Package"] = nativeGuidedPkg
+				}
+			}
+			return e
+		}},
+		{"socket-child-skip", func(e []map[string]any) []map[string]any {
+			for _, x := range e {
+				if x["Action"] == "pass" && x["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[2] {
+					x["Action"] = "skip"
+				}
+			}
+			return e
+		}},
+		{"socket-child-fail", func(e []map[string]any) []map[string]any {
+			for _, x := range e {
+				if x["Action"] == "pass" && x["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[2] {
+					x["Action"] = "fail"
+				}
+			}
+			return e
+		}},
+		{"socket-parent-skip", func(e []map[string]any) []map[string]any {
+			for _, x := range e {
+				if x["Action"] == "pass" && x["Test"] == nativeSocketOverlappedParent {
+					x["Action"] = "skip"
+				}
+			}
+			return e
+		}},
+		{"socket-truncated-record", func(e []map[string]any) []map[string]any {
+			for _, x := range e {
+				if x["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[1] && x["Output"] != nil {
+					x["Output"] = strings.TrimSuffix(x["Output"].(string), "\n")
+					x["Output"] = strings.TrimSuffix(x["Output"].(string), "\"")
+				}
+			}
+			return e
+		}},
+		{"socket-truncated-marker", func(e []map[string]any) []map[string]any {
+			for _, x := range e {
+				if x["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[1] && x["Output"] != nil {
+					x["Output"] = "    test.go:1: NATIVE-DIAGN"
+				}
+			}
+			return e
 		}},
 		{"cli-parent-without-children", func(e []map[string]any) []map[string]any {
 			return nativeWithoutTest(nativeWithoutTest(e, "TestJudgeDemoNativeDiagnostics/server"), "TestJudgeDemoNativeDiagnostics/generated-bundle-invalid")
@@ -270,6 +376,10 @@ func TestNativeCoverageEvents(t *testing.T) {
 	}
 }
 
+// nativeSocketChildren are synthetic stand-ins for the producer's children; the
+// real parent has 41 dynamic children and none is pinned by name here.
+var nativeSocketChildren = []string{"domain-no-parts", "submit-nil-rawconn", "rawconn-callback-twice"}
+
 const (
 	nativeDemofixturePkg = "github.com/Mizore66/faultline/internal/demofixture"
 	nativeCLIPkg         = "github.com/Mizore66/faultline/internal/cli"
@@ -341,6 +451,14 @@ func nativeCoverageEvents() []map[string]any {
 				name := parent + "/" + child
 				add(nativeProofviewPkg, "run", name)
 				diagnostic(nativeProofviewPkg, name, `"proofview: interactive incident `+child+`"`)
+				add(nativeProofviewPkg, "pass", name)
+			}
+		}
+		if parent == nativeSocketOverlappedParent {
+			for _, child := range nativeSocketChildren {
+				name := parent + "/" + child
+				add(nativeProofviewPkg, "run", name)
+				diagnostic(nativeProofviewPkg, name, `"windows socket write: `+child+`"`)
 				add(nativeProofviewPkg, "pass", name)
 			}
 		}
@@ -436,7 +554,7 @@ func TestNativeCoverageProfile(t *testing.T) {
 		profile += "github.com/Mizore66/faultline/" + file + ":1.1,300.2 1 1\n"
 	}
 	blocks, err := nativeProfile([]byte(profile))
-	if err != nil || len(blocks) != 11 {
+	if err != nil || len(blocks) != 12 {
 		t.Fatalf("valid native profile: %v", err)
 	}
 	for _, file := range []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"} {
@@ -514,6 +632,7 @@ func TestNativeCoverageOwnedFiles(t *testing.T) {
 		"internal/guided/intake.go",
 		"internal/guided/guided.go",
 		"internal/guided/freeze.go",
+		"internal/proofview/socket_overlapped.go",
 	}
 	if strings.Join(nativeCoverageFiles, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("native files: %v", nativeCoverageFiles)
@@ -526,7 +645,8 @@ func TestNativeCoverageOwnedFiles(t *testing.T) {
 			t.Fatalf("%s not natively owned: %q", file, got)
 		}
 	}
-	for _, file := range []string{"internal/guided/projection.go", "internal/guided/guided_test.go", "internal/guided/freeze.go.bak", "internal/cli/judge_preview.go", "internal/cli/judge_demo_test.go", "internal/bundle/demo/write.go", "internal/bundle/demo/native_evidence.go.bak"} {
+	for _, file := range []string{"internal/guided/projection.go", "internal/guided/guided_test.go", "internal/guided/freeze.go.bak", "internal/cli/judge_preview.go", "internal/cli/judge_demo_test.go", "internal/bundle/demo/write.go", "internal/bundle/demo/native_evidence.go.bak",
+		"internal/proofview/socket_overlapped_windows.go", "internal/proofview/socket_overlapped_unix.go", "internal/proofview/socket_writer.go", "internal/proofview/socket_overlapped.go.bak"} {
 		pos := filepath.Join(repo, filepath.FromSlash(file)) + ":10:2"
 		if got := nativeLiteralOutputs(repo, pos, "CLI golden", native); got != "CLI golden" {
 			t.Fatalf("native output satisfied neighbour %s", file)
@@ -651,12 +771,13 @@ func TestNativeCoverageNoWaiverBypass(t *testing.T) {
 
 // nativeOutputsFrom is text produced only by the package that owns file.
 func nativeOutputsFrom(file, text string) map[string]string {
-	return map[string]string{nativeOwner(file): text}
+	return map[string]string{nativeTextKey(file): text}
 }
 
 // nativeAllOutputs is the same text produced by every owning package.
 func nativeAllOutputs(text string) map[string]string {
-	return map[string]string{nativeDemofixturePkg: text, nativeCLIPkg: text, nativeDemoPkg: text, nativeProofviewPkg: text, nativeGuidedPkg: text}
+	return map[string]string{nativeDemofixturePkg: text, nativeCLIPkg: text, nativeDemoPkg: text, nativeProofviewPkg: text, nativeGuidedPkg: text,
+		nativeFreshTextKeys[nativeSocketOverlappedFile]: text}
 }
 
 // Diagnostic text is owned by the package that produced it, in both the literal
@@ -772,7 +893,7 @@ func TestNativeCoverageProfileSubsets(t *testing.T) {
 		proofviewOnly += line(file, 1)
 	}
 	proofview, err := nativeProfileFor([]byte("mode: set\n"+incidentalDemofixture+incidentalExport+proofviewOnly), nativeProofviewFiles)
-	if err != nil || len(proofview) != 3 || proofview[nativeExportFiles[0]] != nil || proofview[nativeDemofixtureFiles[0]] != nil {
+	if err != nil || len(proofview) != 4 || proofview[nativeExportFiles[0]] != nil || proofview[nativeDemofixtureFiles[0]] != nil {
 		t.Fatalf("proofview subset: %v %v", proofview, err)
 	}
 	for _, missing := range nativeProofviewFiles {
@@ -812,7 +933,7 @@ func TestNativeCoverageProfileSubsets(t *testing.T) {
 	if err == nil {
 		merged, err = mergeDisjointNativeProfiles(merged, guided)
 	}
-	if err != nil || len(merged) != 11 || len(native) != 3 || len(export) != 2 || len(proofview) != 3 {
+	if err != nil || len(merged) != 12 || len(native) != 3 || len(export) != 2 || len(proofview) != 4 {
 		t.Fatalf("disjoint merge: %v %d", err, len(merged))
 	}
 	original := native[nativeDemofixtureFiles[0]][0].count
@@ -835,7 +956,7 @@ func TestNativeEvidenceCommands(t *testing.T) {
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/b.txt",
 			"-run=^(TestJudgeDemoNativeDiagnostics|TestNativeEvidenceDiagnostics)$", "./internal/cli", "./internal/bundle/demo"},
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/c.txt",
-			"-run=^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose|TestPlainDemoServerClose)$", "./internal/proofview"},
+			"-run=^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose|TestPlainDemoServerClose|TestSocketOverlappedNativeDiagnostics)$", "./internal/proofview"},
 		{"test", "-json", "-count=1", "-timeout=150s", "-coverprofile=/tmp/d.txt",
 			"-run=^TestGuidedNativeDiagnostics$", "-p=1", "./internal/guided"},
 	}
@@ -884,5 +1005,421 @@ func TestNativeKnownDifferencesNoWaiver(t *testing.T) {
 	text := string(data)
 	if strings.Contains(text, "nativeExport"+"Waivers") || !strings.Contains(text, "produced diagnostic text and a positive counter") {
 		t.Fatal("KNOWN_DIFFERENCES.md misstates native export coverage")
+	}
+}
+
+// ---- Portable overlapped-socket core (internal/proofview/socket_overlapped.go) ----
+
+// socketRegions are synthetic site positions, one per region of the core. Each
+// needs its own positive counter and its own produced text.
+var socketRegions = []struct {
+	name string
+	line int
+	text string
+}{
+	{"domain", 20, "synthetic domain refusal text"},
+	{"submit", 120, "synthetic submit refusal text"},
+	{"post", 220, "synthetic post refusal text"},
+	{"fence", 320, "synthetic fence refusal text"},
+	{"cancel", 420, "synthetic cancel refusal text"},
+	{"release", 520, "synthetic release refusal text"},
+}
+
+func socketSites(repo string) []errorSite {
+	var sites []errorSite
+	for _, r := range socketRegions {
+		sites = append(sites, errorSite{text: r.text, file: filepath.Join(repo, filepath.FromSlash(nativeSocketOverlappedFile)), line: r.line})
+	}
+	return sites
+}
+
+func socketProduced() string {
+	var out strings.Builder
+	for _, r := range socketRegions {
+		out.WriteString(strconv.Quote(r.text) + "\n")
+	}
+	return out.String()
+}
+
+// Narrow one-line blocks: a counter at one position never covers another.
+func socketBlocks(zeroLine int) map[string][]coverBlock {
+	out := map[string][]coverBlock{}
+	for _, name := range nativeCoverageFiles {
+		out[name] = []coverBlock{{1, 5, 1}}
+	}
+	out[nativeSocketOverlappedFile] = nil
+	for _, r := range socketRegions {
+		count := 1
+		if r.line == zeroLine {
+			count = 0
+		}
+		out[nativeSocketOverlappedFile] = append(out[nativeSocketOverlappedFile], coverBlock{r.line - 2, r.line + 2, count})
+	}
+	return out
+}
+
+func TestNativeSocketOverlappedPositions(t *testing.T) {
+	repo := t.TempDir()
+	sites := socketSites(repo)
+	good := nativeEvidence{outputs: nativeOutputsFrom(nativeSocketOverlappedFile, socketProduced()), blocks: socketBlocks(-1)}
+	if err := validateNativeEvidence(repo, sites, good, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*nativeEvidence)
+	}{
+		{"file-blocks-absent", func(e *nativeEvidence) { delete(e.blocks, nativeSocketOverlappedFile) }},
+		{"file-blocks-empty", func(e *nativeEvidence) { e.blocks[nativeSocketOverlappedFile] = nil }},
+		{"all-zero-hit", func(e *nativeEvidence) { e.blocks[nativeSocketOverlappedFile] = []coverBlock{{1, 600, 0}} }},
+		{"site-outside-every-block", func(e *nativeEvidence) {
+			e.blocks[nativeSocketOverlappedFile] = []coverBlock{{1, 5, 1}}
+		}},
+		{"text-absent-despite-positive-counters", func(e *nativeEvidence) { e.outputs = map[string]string{} }},
+		{"text-only-in-sibling-proofview-key", func(e *nativeEvidence) {
+			e.outputs = map[string]string{nativeProofviewPkg: socketProduced()}
+		}},
+		{"expected-text-borrowed-from-package-key", func(e *nativeEvidence) {
+			// The package-wide key also carries committed expected text; it must not count.
+			e.outputs[nativeProofviewPkg] = socketProduced()
+			delete(e.outputs, nativeTextKey(nativeSocketOverlappedFile))
+		}},
+		{"text-only-in-other-package", func(e *nativeEvidence) {
+			e.outputs = map[string]string{nativeGuidedPkg: socketProduced(), nativeCLIPkg: socketProduced()}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := nativeEvidence{outputs: maps.Clone(good.outputs), blocks: socketBlocks(-1)}
+			tc.change(&e)
+			if err := validateNativeEvidence(repo, sites, e, nil); err == nil {
+				t.Fatal("invalid socket evidence accepted")
+			}
+		})
+	}
+	for _, r := range socketRegions {
+		t.Run("single-zero-hit-"+r.name, func(t *testing.T) {
+			e := nativeEvidence{outputs: maps.Clone(good.outputs), blocks: socketBlocks(r.line)}
+			if err := validateNativeEvidence(repo, sites, e, nil); err == nil {
+				t.Fatalf("zero-hit %s position accepted although every text is produced", r.name)
+			}
+		})
+		t.Run("single-text-absent-"+r.name, func(t *testing.T) {
+			text := strings.Replace(socketProduced(), strconv.Quote(r.text)+"\n", "", 1)
+			e := nativeEvidence{outputs: nativeOutputsFrom(nativeSocketOverlappedFile, text), blocks: socketBlocks(-1)}
+			if err := validateNativeEvidence(repo, sites, e, nil); err == nil {
+				t.Fatalf("absent %s text accepted although every counter is positive", r.name)
+			}
+		})
+		t.Run("exemption-never-hides-"+r.name, func(t *testing.T) {
+			if err := validateNativeEvidence(repo, sites, good, map[string]string{r.text: "claimed unreachable"}); err == nil {
+				t.Fatal("exemption of a reached core site accepted")
+			}
+		})
+	}
+	// A neighbour file's counter or text cannot satisfy the core.
+	for _, neighbour := range []string{"internal/proofview/socket_overlapped_windows.go", "internal/proofview/socket_writer.go", "internal/proofview/incident_server.go"} {
+		t.Run("neighbour-"+filepath.Base(neighbour), func(t *testing.T) {
+			e := nativeEvidence{outputs: maps.Clone(good.outputs), blocks: socketBlocks(-1)}
+			e.blocks[nativeSocketOverlappedFile] = nil
+			e.blocks[neighbour] = []coverBlock{{1, 600, 1}}
+			if err := validateNativeEvidence(repo, sites, e, nil); err == nil {
+				t.Fatalf("counter of %s satisfied the core", neighbour)
+			}
+		})
+	}
+}
+
+// Committed proofview expected text and the other parents' records live under
+// the package key only; they must never satisfy the core, and the core's own
+// records must never satisfy the legacy proofview files.
+func TestNativeSocketOverlappedTextIsolation(t *testing.T) {
+	repo := t.TempDir()
+	const same = "approval must match the proposal and record a canonical time"
+	coreKey := nativeTextKey(nativeSocketOverlappedFile)
+	if coreKey == nativeProofviewPkg || nativeOwner(nativeSocketOverlappedFile) != nativeProofviewPkg {
+		t.Fatalf("core key %q owner %q", coreKey, nativeOwner(nativeSocketOverlappedFile))
+	}
+	for _, file := range nativeProofviewFiles {
+		if file != nativeSocketOverlappedFile && nativeTextKey(file) != nativeProofviewPkg {
+			t.Fatalf("legacy owner changed for %s: %q", file, nativeTextKey(file))
+		}
+	}
+	blocks := map[string][]coverBlock{}
+	for _, name := range nativeCoverageFiles {
+		blocks[name] = []coverBlock{{1, 300, 1}}
+	}
+	site := func(file string) []errorSite {
+		return []errorSite{{text: same, file: filepath.Join(repo, filepath.FromSlash(file)), line: 10}}
+	}
+	pkgOnly := nativeEvidence{outputs: map[string]string{nativeProofviewPkg: strconv.Quote(same) + "\n"}, blocks: blocks}
+	if err := validateNativeEvidence(repo, site(nativeSocketOverlappedFile), pkgOnly, nil); err == nil {
+		t.Fatal("package-wide proofview text satisfied the core")
+	}
+	if err := validateNativeEvidence(repo, site("internal/proofview/incident_server.go"), pkgOnly, nil); err != nil {
+		t.Fatalf("legacy proofview owner weakened: %v", err)
+	}
+	// Decode a real event fixture whose core child collides with a legacy site.
+	// Do not hand-build the isolated map: the old decoder leaked this record
+	// into the package key and would incorrectly accept the legacy sites below.
+	events := nativeCoverageEvents()
+	for _, event := range events {
+		if event["Test"] == nativeSocketOverlappedParent+"/"+nativeSocketChildren[0] && event["Action"] == "output" {
+			event["Output"] = "NATIVE-DIAGNOSTIC " + strconv.Quote(same) + "\n"
+		}
+	}
+	decoded, err := nativeOutputs(nativeEventJSON(t, events), []string{"ordinary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreOnly := nativeEvidence{outputs: decoded, blocks: blocks}
+	if err := validateNativeEvidence(repo, site(nativeSocketOverlappedFile), coreOnly, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range nativeProofviewFiles {
+		if file == nativeSocketOverlappedFile {
+			continue
+		}
+		if err := validateNativeEvidence(repo, site(file), coreOnly, nil); err == nil {
+			t.Fatalf("core-parent text satisfied legacy file %s", file)
+		}
+	}
+}
+
+// An entirely absent dynamic child is accepted by the event decoder while other
+// checked children remain. The full validator must still require its unique
+// site's text and counter; redundant children are not a pinned manifest.
+func TestNativeSocketOverlappedWholeChildRemoval(t *testing.T) {
+	repo := t.TempDir()
+	var sites []errorSite
+	blocks := map[string][]coverBlock{}
+	for _, file := range nativeCoverageFiles {
+		blocks[file] = []coverBlock{{1, 5, 1}}
+	}
+	blocks[nativeSocketOverlappedFile] = nil
+	for i, child := range nativeSocketChildren {
+		line := 20 + 100*i
+		sites = append(sites, errorSite{
+			text: "windows socket write: " + child,
+			file: filepath.Join(repo, filepath.FromSlash(nativeSocketOverlappedFile)), line: line,
+		})
+		blocks[nativeSocketOverlappedFile] = append(blocks[nativeSocketOverlappedFile], coverBlock{line, line, 1})
+	}
+	complete, err := nativeOutputs(nativeEventJSON(t, nativeCoverageEvents()), []string{"ordinary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateNativeEvidence(repo, sites, nativeEvidence{outputs: complete, blocks: blocks}, nil); err != nil {
+		t.Fatalf("complete child evidence rejected: %v", err)
+	}
+	removed := nativeWithoutTest(nativeCoverageEvents(), nativeSocketOverlappedParent+"/"+nativeSocketChildren[0])
+	decoded, err := nativeOutputs(nativeEventJSON(t, removed), []string{"ordinary"})
+	if err != nil {
+		t.Fatalf("decoder must accept an entirely absent unpinned child: %v", err)
+	}
+	if err := validateNativeEvidence(repo, sites, nativeEvidence{outputs: decoded, blocks: blocks}, nil); err == nil {
+		t.Fatal("whole-child removal accepted despite uniquely required text being absent")
+	}
+	// Restore only the missing text to distinguish counter enforcement from
+	// text enforcement. These counters are synthetic, not measured execution.
+	textRestored := maps.Clone(decoded)
+	textRestored[nativeTextKey(nativeSocketOverlappedFile)] += strconv.Quote(sites[0].text) + "\n"
+	if err := validateNativeEvidence(repo, sites, nativeEvidence{outputs: textRestored, blocks: blocks}, nil); err != nil {
+		t.Fatalf("restored text with positive counters rejected: %v", err)
+	}
+	for _, missingBlock := range []bool{false, true} {
+		name := "unique-counter-zero"
+		if missingBlock {
+			name = "unique-counter-absent"
+		}
+		t.Run(name, func(t *testing.T) {
+			withoutCounter := maps.Clone(blocks)
+			coreBlocks := slices.Clone(blocks[nativeSocketOverlappedFile])
+			if missingBlock {
+				coreBlocks = coreBlocks[1:]
+			} else {
+				coreBlocks[0].count = 0
+			}
+			withoutCounter[nativeSocketOverlappedFile] = coreBlocks
+			if err := validateNativeEvidence(repo, sites, nativeEvidence{outputs: textRestored, blocks: withoutCounter}, nil); err == nil {
+				t.Fatal("whole-child removal accepted without its unique counter despite restored text")
+			}
+		})
+	}
+}
+
+// Records of the new parent land only under the isolated key; records of the
+// other proofview parents land only under the legacy package key.
+func TestNativeSocketOverlappedOutputsSplit(t *testing.T) {
+	out, err := nativeOutputs(nativeEventJSON(t, nativeCoverageEvents()), []string{"ordinary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core, pkg := out[nativeTextKey(nativeSocketOverlappedFile)], out[nativeProofviewPkg]
+	if !strings.Contains(core, `"windows socket write: domain-no-parts"`) || strings.Contains(core, "interactive incident") {
+		t.Fatalf("isolated core text: %q", core)
+	}
+	if strings.Contains(pkg, "windows socket write") || !strings.Contains(pkg, "interactive incident") {
+		t.Fatalf("package text: %q", pkg)
+	}
+	for other, text := range out {
+		if other != nativeProofviewPkg && other != nativeTextKey(nativeSocketOverlappedFile) && strings.Contains(text, "windows socket write") {
+			t.Fatalf("core text leaked into %s", other)
+		}
+	}
+}
+
+// The expected-text join stays proofview-only and never mentions the core.
+func TestNativeSocketOverlappedNoExpectedTextJoin(t *testing.T) {
+	data, err := os.ReadFile("native_coverage_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(data)
+	if strings.Count(src, "outputs[nativeProofviewPackage.importPath] += proofviewExpected") != 1 || strings.Count(src, "proofviewExpected") != 2 {
+		t.Fatal("proofview expected text is used somewhere new")
+	}
+	expected, err := nativeProofviewExpectedText(repoRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(expected, "windows socket write") {
+		t.Fatal("helper text joined into the committed proofview expected text")
+	}
+}
+
+// Real-source structure, static only. The Windows ABI adapter has zero
+// message-flow sites; the portable core's sites are all owned and unwaived.
+func TestNativeSocketOverlappedRealSourceStructure(t *testing.T) {
+	repo := repoRoot(t)
+	dir := filepath.Join(repo, "internal", "proofview")
+	sites, err := errorSites(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreSites := 0
+	for _, site := range sites {
+		rel, err := filepath.Rel(repo, site.file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rel = filepath.ToSlash(rel)
+		if strings.HasPrefix(rel, "internal/proofview/socket_overlapped") && rel != nativeSocketOverlappedFile {
+			t.Fatalf("%s:%d: %q is a message site outside the portable core", rel, site.line, site.text)
+		}
+		if rel != nativeSocketOverlappedFile {
+			continue
+		}
+		coreSites++
+		if _, ok := unreachableLiterals[site.text]; ok {
+			t.Fatalf("core text %q is waived in unreachableLiterals", site.text)
+		}
+		if _, ok := unreachableSites[siteKey{rel, site.text}]; ok {
+			t.Fatalf("core text %q is waived in unreachableSites", site.text)
+		}
+		if _, ok := liveOnlyUnreachable[site.text]; ok {
+			t.Fatalf("core text %q is waived in liveOnlyUnreachable", site.text)
+		}
+	}
+	if coreSites == 0 {
+		t.Fatal("the portable core has no message sites; the file is not being judged")
+	}
+	if liveGatedFiles[nativeSocketOverlappedFile] != "" || !slices.Contains(nativeCoverageFiles, nativeSocketOverlappedFile) || !slices.Contains(nativeProofviewFiles, nativeSocketOverlappedFile) {
+		t.Fatal("core file must be natively owned and not live-gated")
+	}
+	for _, adapter := range []string{"socket_overlapped_windows.go"} {
+		if slices.Contains(nativeCoverageFiles, "internal/proofview/"+adapter) || liveGatedFiles["internal/proofview/"+adapter] != "" {
+			t.Fatalf("%s must stay outside native ownership", adapter)
+		}
+	}
+	core, err := os.ReadFile(filepath.Join(dir, "socket_overlapped.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := string(core)
+	if i := strings.Index(head, "\npackage "); i >= 0 {
+		head = head[:i]
+	}
+	if strings.Contains(head, "windows") && !strings.Contains(head, "linux || darwin || windows") {
+		t.Fatalf("core build constraint is not portable: %q", head)
+	}
+	forbidden, err := socketForbiddenDependencies(core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(forbidden) != 0 {
+		t.Fatalf("portable core uses forbidden dependencies: %v", forbidden)
+	}
+}
+
+// Inspect syntax, not raw source: explanatory comments and string literals are
+// not dependencies. Import aliases and dot imports must not hide Windows ABI use.
+func socketForbiddenDependencies(source []byte) ([]string, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), "socket_overlapped.go", source, 0)
+	if err != nil {
+		return nil, err
+	}
+	var forbidden []string
+	syscallNames := map[string]bool{}
+	dotSyscall := false
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			return nil, err
+		}
+		if path == "unsafe" || path == "windows" || strings.HasSuffix(path, "/windows") {
+			forbidden = append(forbidden, "import "+path)
+		}
+		if path == "syscall" {
+			name := "syscall"
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			dotSyscall = dotSyscall || name == "."
+			syscallNames[name] = true
+		}
+	}
+	windowsABI := func(name string) bool {
+		return name == "Handle" || name == "Overlapped" || name == "WSABuf"
+	}
+	ast.Inspect(file, func(node ast.Node) bool {
+		switch node := node.(type) {
+		case *ast.SelectorExpr:
+			if pkg, ok := node.X.(*ast.Ident); ok && syscallNames[pkg.Name] && windowsABI(node.Sel.Name) {
+				forbidden = append(forbidden, pkg.Name+"."+node.Sel.Name)
+			}
+		case *ast.Ident:
+			if node.Name == "ERROR_IO_PENDING" || dotSyscall && windowsABI(node.Name) {
+				forbidden = append(forbidden, node.Name)
+			}
+		}
+		return true
+	})
+	return forbidden, nil
+}
+
+func TestNativeSocketOverlappedForbiddenDependencies(t *testing.T) {
+	for _, tc := range []struct {
+		name, source string
+		forbidden    bool
+	}{
+		{"comment-and-literal", "package core\nimport \"syscall\"\n// ERROR_IO_PENDING syscall.Handle syscall.Overlapped syscall.WSABuf unsafe\nconst pending = syscall.Errno(997)\nconst explanation = \"ERROR_IO_PENDING syscall.Handle unsafe\"\n", false},
+		{"unsafe-import", "package core\nimport _ \"unsafe\"\n", true},
+		{"windows-import", "package core\nimport _ \"golang.org/x/sys/windows\"\n", true},
+		{"handle", "package core\nimport \"syscall\"\nvar value syscall.Handle\n", true},
+		{"overlapped", "package core\nimport \"syscall\"\nvar value syscall.Overlapped\n", true},
+		{"wsabuf", "package core\nimport \"syscall\"\nvar value syscall.WSABuf\n", true},
+		{"aliased-abi", "package core\nimport abi \"syscall\"\nvar value abi.Overlapped\n", true},
+		{"dot-import-abi", "package core\nimport . \"syscall\"\nvar value WSABuf\n", true},
+		{"pending-identifier", "package core\nvar value = ERROR_IO_PENDING\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			found, err := socketForbiddenDependencies([]byte(tc.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(found) != 0) != tc.forbidden {
+				t.Fatalf("forbidden dependencies = %v, want rejection %v", found, tc.forbidden)
+			}
+		})
 	}
 }

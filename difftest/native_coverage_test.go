@@ -35,6 +35,7 @@ var nativeCoverageFiles = []string{
 	"internal/guided/intake.go",
 	"internal/guided/guided.go",
 	"internal/guided/freeze.go",
+	"internal/proofview/socket_overlapped.go",
 }
 
 // nativeEvidencePackage is one exact package allowed to produce native evidence.
@@ -45,6 +46,10 @@ type nativeEvidencePackage struct {
 	sourceDirectory   string
 	parents           []string
 	diagnosticParents []string
+	// isolatedParents are diagnostic parents whose produced records are kept
+	// only under importPath+"#"+parent, never under the legacy package key.
+	// Their files cannot borrow sibling records or committed expected text.
+	isolatedParents []string
 }
 
 var (
@@ -75,9 +80,10 @@ var (
 		parents: []string{
 			"TestInteractiveIncidentPage", "TestInteractiveIncidentReplaceOnceDrift", "TestInteractiveIncidentListenerDrift",
 			"TestIncidentServerHTTP", "TestIncidentServerSingleFlight", "TestIncidentServerClose",
-			"TestPlainDemoServerClose",
+			"TestPlainDemoServerClose", nativeSocketOverlappedParent,
 		},
-		diagnosticParents: []string{"TestInteractiveIncidentListenerDrift"},
+		diagnosticParents: []string{"TestInteractiveIncidentListenerDrift", nativeSocketOverlappedParent},
+		isolatedParents:   []string{nativeSocketOverlappedParent},
 	}
 	// Guided investigate: every error literal of the three owned files is
 	// executed by a child of the one diagnostic parent, each emitting one record.
@@ -95,7 +101,7 @@ var (
 		"internal/demofixture/native_witness.go",
 	}
 	nativeExportFiles    = []string{"internal/cli/judge_demo.go", "internal/bundle/demo/native_evidence.go"}
-	nativeProofviewFiles = []string{"internal/proofview/incident.go", "internal/proofview/incident_server.go", "internal/proofview/demo_server.go"}
+	nativeProofviewFiles = []string{"internal/proofview/incident.go", "internal/proofview/incident_server.go", "internal/proofview/demo_server.go", nativeSocketOverlappedFile}
 	nativeGuidedFiles    = []string{"internal/guided/intake.go", "internal/guided/guided.go", "internal/guided/freeze.go"}
 
 	// Committed, independently reviewed proofview expectations. They are read
@@ -109,6 +115,29 @@ var (
 		"difftest/testdata/incident-renderer/interactive-disabled.html",
 	}
 )
+
+// The portable overlapped-socket core runs on every gate host with fake native
+// I/O. Its text half comes only from the records of its own diagnostic parent;
+// the committed proofview expected text and the other proofview parents never
+// reach it. The Windows ABI adapter beside it owns no message flow.
+const (
+	nativeSocketOverlappedFile   = "internal/proofview/socket_overlapped.go"
+	nativeSocketOverlappedParent = "TestSocketOverlappedNativeDiagnostics"
+)
+
+// nativeFreshTextKeys maps a file to the outputs key holding only the records
+// of its own diagnostic parent.
+var nativeFreshTextKeys = map[string]string{
+	nativeSocketOverlappedFile: "github.com/Mizore66/faultline/internal/proofview#" + nativeSocketOverlappedParent,
+}
+
+// nativeTextKey is the outputs key whose text may satisfy file.
+func nativeTextKey(file string) string {
+	if key, ok := nativeFreshTextKeys[file]; ok {
+		return key
+	}
+	return nativeOwner(file)
+}
 
 // nativeOwner names the one package whose fresh diagnostics may satisfy an owned
 // file: demofixture text only the original three files, CLI text only
@@ -127,7 +156,7 @@ func nativeLiteralOutputs(repo, pos, goldens string, evidence nativeEvidence) st
 	if err == nil {
 		file, _, _ := strings.Cut(filepath.ToSlash(rel), ":")
 		if slices.Contains(nativeCoverageFiles, file) {
-			return evidence.outputs[nativeOwner(file)]
+			return evidence.outputs[nativeTextKey(file)]
 		}
 	}
 	return goldens
@@ -618,8 +647,13 @@ func nativeOutputsFor(data []byte, cases []string, allowed []nativeEvidencePacka
 			if !st.passed[name] {
 				return nil, fmt.Errorf("native diagnostic case %s never passed", name)
 			}
+			top, _, _ := strings.Cut(name, "/")
+			key := pkg.importPath
+			if slices.Contains(pkg.isolatedParents, top) {
+				key += "#" + top
+			}
 			for _, message := range st.diagnostic[name] {
-				outputs[pkg.importPath] += strconv.Quote(message) + "\n"
+				outputs[key] += strconv.Quote(message) + "\n"
 			}
 		}
 	}
@@ -654,7 +688,7 @@ func nativeEvidenceCommands(repo, nativeProfile, exportProfile, proofviewProfile
 			packages: []nativeEvidencePackage{nativeCLIPackage, nativeDemoPackage},
 		},
 		{
-			args: append(base(proofviewProfile, "^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose|TestPlainDemoServerClose)$"),
+			args: append(base(proofviewProfile, "^(TestInteractiveIncidentPage|TestInteractiveIncidentReplaceOnceDrift|TestInteractiveIncidentListenerDrift|TestIncidentServerHTTP|TestIncidentServerSingleFlight|TestIncidentServerClose|TestPlainDemoServerClose|TestSocketOverlappedNativeDiagnostics)$"),
 				"./internal/proofview"),
 			profile:  proofviewProfile,
 			packages: []nativeEvidencePackage{nativeProofviewPackage},
@@ -764,7 +798,7 @@ func validateNativeEvidence(repo string, sites []errorSite, evidence nativeEvide
 		reached := true
 		for _, fragment := range messageFragments(site.text) {
 			quoted := strconv.Quote(fragment)
-			reached = reached && strings.Contains(evidence.outputs[nativeOwner(rel)], quoted[1:len(quoted)-1])
+			reached = reached && strings.Contains(evidence.outputs[nativeTextKey(rel)], quoted[1:len(quoted)-1])
 		}
 		if reason, exempt := exemptions[site.text]; exempt {
 			if strings.TrimSpace(reason) == "" || covered || reached {

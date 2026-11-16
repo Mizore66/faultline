@@ -329,7 +329,7 @@ func (r *ovRun) submit(name string, rc syscall.RawConn, regions [][]byte) (*ovOp
 	}
 	o := &ovOp{run: r, name: name, w: w, total: total, parts: len(regions)}
 	s0 := w.Snapshot()
-	o.post = string(s0.Post)
+	o.post = s0.Post.String()
 	r.mu.Lock()
 	r.ops = append(r.ops, o) // registered BEFORE any further check: ownership may be retained
 	r.mu.Unlock()
